@@ -17,7 +17,13 @@ class OCREngine:
 
 
 class EasyOCREngine(OCREngine):
-    """EasyOCR implementation."""
+    """EasyOCR implementation.
+    
+    Args:
+        languages: List of language codes to use for OCR. Defaults to Config.OCR_LANGUAGES.
+        gpu: Whether to use GPU acceleration. Defaults to False.
+        confidence_threshold: Minimum confidence score (0.0-1.0) to accept text. Defaults to 0.3.
+    """
     
     def __init__(self, languages: List[str] = None, gpu: bool = False, confidence_threshold: float = 0.3):
         from ..utils.config import Config

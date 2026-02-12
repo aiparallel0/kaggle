@@ -41,9 +41,9 @@ class ReceiptParser:
         
         # Try to find capitalized words at the top
         for line in lines[:5]:
-            words = line.strip().split()
+            words = [w for w in line.strip().split() if w]  # Filter empty strings
             if words and len(words) <= 3:
-                if all(word[0].isupper() if word else False for word in words):
+                if all(word[0].isupper() for word in words):
                     return ' '.join(words)
         
         return None

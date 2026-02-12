@@ -30,16 +30,18 @@ def run_demo():
     
     # Test 1: Generate comparison chart
     logger.info("\n[1/3] Testing Comparison Chart Generation...")
+    # Note: 'speed' is a normalized score (0-1) representing relative performance
+    # Before: 0.06 = 6% of optimal, After: 0.50 = 50% of optimal (8.3x improvement)
     before_data = {
-        'accuracy': 0.75,
-        'speed': 0.06,  # 0.06 images/second (slow)
-        'completeness': 0.65
+        'accuracy': 0.75,      # 75% accuracy
+        'speed': 0.06,         # 6% of optimal speed
+        'completeness': 0.65   # 65% completeness
     }
     
     after_data = {
-        'accuracy': 0.92,
-        'speed': 0.50,  # 0.50 images/second (8.3x improvement)
-        'completeness': 0.88
+        'accuracy': 0.92,      # 92% accuracy
+        'speed': 0.50,         # 50% of optimal speed (8.3x improvement)
+        'completeness': 0.88   # 88% completeness
     }
     
     output_path = Config.OUTPUT_DIR / "comparison_before_after.png"

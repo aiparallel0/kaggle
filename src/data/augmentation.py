@@ -114,9 +114,9 @@ class ImageProcessor:
         mean_brightness = np.mean(img_array)
         std_brightness = np.std(img_array)
         
-        # Simple sharpness metric
-        # In production, use more sophisticated algorithms
-        laplacian_var = np.var(img_array)
+        # Simple sharpness metric using variance
+        # In production, consider using Laplacian-based methods for better accuracy
+        image_variance = np.var(img_array)
         
         # Determine quality
         quality = "good"
@@ -124,14 +124,14 @@ class ImageProcessor:
             quality = "poor_lighting"
         elif std_brightness < 30:
             quality = "low_contrast"
-        elif laplacian_var < 100:
+        elif image_variance < 100:
             quality = "blurry"
         
         return {
             'quality': quality,
             'brightness': float(mean_brightness),
             'contrast': float(std_brightness),
-            'sharpness': float(laplacian_var)
+            'sharpness': float(image_variance)
         }
     
     @staticmethod
