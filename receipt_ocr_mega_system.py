@@ -2984,7 +2984,7 @@ class ReceiptTemplateEngine:
         # Extract receipt number
         if 'receipt_number_patterns' in template:
             for pattern in template['receipt_number_patterns']:
-                match = re.search(pattern, text_upper):
+                match = re.search(pattern, text_upper)
                 if match:
                     extracted['receipt_number'] = match.group(1)
                     break
