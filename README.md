@@ -1,8 +1,26 @@
-# OCR Receipt Analysis System - Modular Architecture
+# OCR Receipt Analysis System
 
 ## 🎯 Overview
 
-This is a production-ready OCR receipt processing system refactored from a monolithic 4,564-line file into a clean, modular architecture. The system extracts structured data from receipt images using OCR, machine learning classification, and intelligent text parsing.
+A production-ready OCR receipt processing system available in **two versions**:
+
+### 🚀 Single File Version (For Kaggle)
+**File**: `kaggle_receipt_ocr.py` (577 lines, 20KB)
+- ✅ Perfect for Kaggle notebooks
+- ✅ Easy upload - just one file
+- ✅ All essential features included
+- ✅ No complex setup required
+
+👉 **[See KAGGLE_README.md for Kaggle usage](KAGGLE_README.md)**
+
+### 🏗️ Modular Version (For Production)
+**Directory**: `src/` (14 modules, 1,569 lines)
+- ✅ Clean architecture
+- ✅ Team development ready
+- ✅ Independently testable
+- ✅ Scalable for large projects
+
+This README covers the **modular version**. For Kaggle, use `kaggle_receipt_ocr.py`.
 
 ## ✨ Key Features
 
@@ -279,9 +297,45 @@ KNOWN_STORES = [
 
 MIT License - See LICENSE file for details.
 
+## 📌 Version Comparison
+
+This repository provides **two versions** to suit different needs:
+
+### Single File Version (`kaggle_receipt_ocr.py`)
+**Best for**: Kaggle, experiments, quick sharing
+
+| Feature | Details |
+|---------|---------|
+| Files | 1 file |
+| Lines | 577 lines |
+| Size | 20 KB |
+| Upload | ✅ Easy (drag & drop) |
+| Setup | ✅ Simple (one file) |
+| Kaggle | ✅ Perfect |
+| Sharing | ✅ Send one file |
+| Use Case | Kaggle notebooks, experiments, learning |
+
+### Modular Version (`src/`)
+**Best for**: Production, teams, large projects
+
+| Feature | Details |
+|---------|---------|
+| Files | 14 modules |
+| Lines | 1,569 lines |
+| Structure | ✅ Organized |
+| Testing | ✅ Independent modules |
+| Team Dev | ✅ Parallel work |
+| Maintenance | ✅ Easy updates |
+| Scalability | ✅ Add features easily |
+| Use Case | Production apps, team projects, large systems |
+
+**Choose based on your needs:**
+- 🚀 **Kaggle/Quick Start** → Use `kaggle_receipt_ocr.py`
+- 🏗️ **Production/Teams** → Use `src/` directory
+
 ## 🙏 Acknowledgments
 
-Refactored from monolithic OCR Receipt Analysis Mega System to production-ready modular architecture.
+Refactored from monolithic OCR Receipt Analysis Mega System to production-ready modular architecture, with single-file Kaggle version for convenience.
 
 ## 📞 Support
 
