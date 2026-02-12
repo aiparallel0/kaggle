@@ -1,0 +1,20 @@
+2026-02-12 13:24:19,004 - INFO - 📁 Scanning directory: /kaggle/input/datasets/trainingdatapro/ocr-receipts-text-detection/images/
+2026-02-12 13:24:19,034 - INFO - 📁 Scanning directory: /kaggle/input/datasets/jenswalter/receipts/
+2026-02-12 13:24:22,614 - INFO - 🚀 Initializing EasyOCR with languages: ['en']
+2026-02-12 13:24:22,619 - WARNING - Neither CUDA nor MPS are available - defaulting to CPU. Note: This module is much faster with a GPU.
+2026-02-12 13:24:25,949 - INFO - ✅ OCR reader initialized successfully
+2026-02-12 13:26:44,553 - INFO - ✅ Processed 10 images, extracted 707 text elements
+2026-02-12 13:26:44,575 - INFO - 🧹 Cleaning data...
+2026-02-12 13:26:44,595 - INFO - ✅ Cleaned data: removed 109 entries, kept 598
+2026-02-12 13:26:45,422 - INFO - 🏷️  Creating training data...
+2026-02-12 13:26:45,468 - INFO - ✅ Created 598 labeled samples
+2026-02-12 13:26:45,474 - INFO - 🎓 Training classifier...
+2026-02-12 13:26:45,769 - INFO - ✅ Model trained - Accuracy: 93.33%
+2026-02-12 13:26:45,820 - INFO - 💾 Model saved to ./receipt_classifier.pkl
+2026-02-12 13:26:45,821 - INFO - 📊 Creating analysis charts...
+2026-02-12 13:26:47,850 - INFO - ✅ Charts saved to ./receipt_analysis_charts.png
+2026-02-12 13:27:07,933 - INFO - 🖼️  Creating annotated receipt...
+2026-02-12 13:27:11,013 - INFO - ✅ Annotated receipt saved to ./sample_receipt_annotated.png
+2026-02-12 13:27:11,015 - INFO - 🚀 Initializing EasyOCR with languages: ['en']
+2026-02-12 13:27:11,016 - WARNING - Neither CUDA nor MPS are available - defaulting to CPU. Note: This module is much faster with a GPU.
+2026-02-12 13:27:13,718 - INFO - ✅ OCR reader initialized successfully
