@@ -178,7 +178,7 @@ def cleanup_test_files():
     try:
         if Path("test_output").exists():
             shutil.rmtree("test_output")
-    except:
+    except Exception:
         pass
 
 
