@@ -577,4 +577,4 @@ if __name__ == "__main__":
     # in Kaggle notebooks and interactive environments.
     # The return value indicates success (True) or failure (False)
     # but is not used for exit codes to maintain notebook compatibility.
-    _ = main()  # Return value intentionally ignored for notebook compatibility
+    _ = main()
