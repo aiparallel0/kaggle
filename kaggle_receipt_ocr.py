@@ -157,11 +157,11 @@ class Config:
         # German
         'januar': 1, 'februar': 2, 'mär': 3, 'märz': 3,
         'mai': 5, 'juni': 6, 'juli': 7, 'okt': 10, 'oktober': 10, 'dez': 12, 'dezember': 12,
-        # Spanish
-        'ene': 1, 'enero': 1, 'feb': 2, 'febrero': 2, 'marzo': 3,
+        # Spanish (full names only, abbreviations overlap with English)
+        'ene': 1, 'enero': 1, 'febrero': 2, 'marzo': 3,
         'abr': 4, 'abril': 4, 'mayo': 5, 'junio': 6,
         'julio': 7, 'ago': 8, 'agosto': 8, 'septiembre': 9,
-        'octubre': 10, 'noviembre': 11, 'dic': 12, 'diciembre': 12,
+        'octubre': 10, 'noviembre': 11, 'diciembre': 12,
         # French
         'janv': 1, 'janvier': 1, 'févr': 2, 'février': 2, 'mars': 3,
         'avr': 4, 'avril': 4, 'juin': 6,
@@ -545,7 +545,7 @@ class ReceiptParser:
         for line in lines[:5]:
             words = [w for w in line.strip().split() if w]
             if words and len(words) <= 3:
-                if all(word[0].isupper() for word in words if word):
+                if all(len(word) > 0 and word[0].isupper() for word in words):
                     return ' '.join(words)
         
         return None
@@ -555,18 +555,31 @@ class ReceiptParser:
         lines = text.split('\n')
         candidates = []
         
-        # Strategy 1: Try each enhanced date pattern with original text
-        for pattern in Config.DATE_FORMATS:
+        # Separate standard patterns from OCR error tolerance patterns
+        standard_patterns = Config.DATE_FORMATS[:3]  # First 3 are standard
+        ocr_tolerant_patterns = Config.DATE_FORMATS[3:6]  # Next 3 are OCR tolerant
+        other_patterns = Config.DATE_FORMATS[6:]  # Rest are specialized
+        
+        # Strategy 1: Try standard date patterns first (higher confidence)
+        for pattern in standard_patterns + other_patterns:
             matches = re.findall(pattern, text, re.IGNORECASE)
             for match in matches:
                 normalized = self._normalize_date_format(match)
                 if normalized and self._validate_date_string(normalized):
                     candidates.append((normalized, 1.0, 'regex'))
         
+        # Strategy 1b: Try OCR tolerant patterns (lower confidence)
+        for pattern in ocr_tolerant_patterns:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            for match in matches:
+                normalized = self._normalize_date_format(match)
+                if normalized and self._validate_date_string(normalized):
+                    # Lower confidence for OCR tolerant patterns
+                    candidates.append((normalized, 0.7, 'ocr_tolerant_regex'))
+        
         # Strategy 2: Apply OCR error correction and retry
-        for line in lines[:20]:  # Focus on top portion of receipt
+        for line_idx, line in enumerate(lines[:20]):  # Focus on top portion of receipt
             # Get context from surrounding text
-            line_idx = lines.index(line)
             context = ' '.join(lines[max(0, line_idx-1):min(len(lines), line_idx+2)])
             
             # Apply error correction
