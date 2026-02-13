@@ -1,0 +1,2 @@
+store_name,date,time,total,tax,subtotal,receipt_type,confidence,ocr_raw_text,processing_time
+,,,,,,unknown,0.5,,0.3560523986816406
