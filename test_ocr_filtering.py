@@ -5,7 +5,6 @@ Tests store name filtering, date extraction improvements, and total validation.
 """
 
 import sys
-from pathlib import Path
 
 # Import from the single-file module
 import kaggle_receipt_ocr as kro
@@ -171,7 +170,7 @@ Date: 01/01/2024
 TOTAL: $37642.00"""
         result = parser.extract_total(text_high)
         assert result is None, f"Should reject amounts > $10,000, got ${result}"
-        print(f"  ✅ High amount rejected: ${37642.00} -> None")
+        print(f"  ✅ High amount rejected: $37642 -> None")
         
         # Test case 2: Valid amount
         text_valid = """Store Name
