@@ -392,6 +392,20 @@ class ReceiptParser:
         """Initialize the parser with an OCR error corrector."""
         self.ocr_corrector = OCRErrorCorrector()
     
+    def _is_valid_date_range(self, year: int, month: int, day: int) -> bool:
+        """
+        Check if date components are within valid ranges.
+        
+        Args:
+            year: Year (2010-2027)
+            month: Month (1-12)
+            day: Day (1-31)
+            
+        Returns:
+            True if all components are valid
+        """
+        return 2010 <= year <= 2027 and 1 <= month <= 12 and 1 <= day <= 31
+    
     def validate_and_normalize_date(self, date_str: str) -> Optional[str]:
         """
         Parse and validate date, normalizing to ISO format (YYYY-MM-DD).
@@ -433,7 +447,7 @@ class ReceiptParser:
                     year = int(year)
                     
                     # Validate ranges
-                    if 2010 <= year <= 2027 and 1 <= month <= 12 and 1 <= day <= 31:
+                    if self._is_valid_date_range(year, month, day):
                         return f"{year:04d}-{month:02d}-{day:02d}"
                 except ValueError:
                     pass
@@ -449,7 +463,7 @@ class ReceiptParser:
                     # YYYY-MM-DD or YYYY/MM/DD
                     if p1 > 1000:
                         year, month, day = p1, p2, p3
-                        if 2010 <= year <= 2027 and 1 <= month <= 12 and 1 <= day <= 31:
+                        if self._is_valid_date_range(year, month, day):
                             return f"{year:04d}-{month:02d}-{day:02d}"
                     # DD-MM-YYYY or MM-DD-YYYY (when p3 > 1000)
                     elif p3 > 1000:
@@ -457,12 +471,12 @@ class ReceiptParser:
                         # Try MM/DD/YYYY (US format)
                         if p1 <= 12 and p2 <= 31:
                             month, day = p1, p2
-                            if 2010 <= year <= 2027 and 1 <= month <= 12 and 1 <= day <= 31:
+                            if self._is_valid_date_range(year, month, day):
                                 return f"{year:04d}-{month:02d}-{day:02d}"
                         # Try DD/MM/YYYY (European format)
                         if p2 <= 12 and p1 <= 31:
                             day, month = p1, p2
-                            if 2010 <= year <= 2027 and 1 <= month <= 12 and 1 <= day <= 31:
+                            if self._is_valid_date_range(year, month, day):
                                 return f"{year:04d}-{month:02d}-{day:02d}"
                     # MM/DD/YY or DD/MM/YY
                     elif p3 < 100:
@@ -471,11 +485,11 @@ class ReceiptParser:
                         # Try both interpretations
                         if p1 <= 12 and p2 <= 31:
                             month, day = p1, p2
-                            if 2010 <= year <= 2027 and 1 <= month <= 12 and 1 <= day <= 31:
+                            if self._is_valid_date_range(year, month, day):
                                 return f"{year:04d}-{month:02d}-{day:02d}"
                         elif p2 <= 12 and p1 <= 31:
                             day, month = p1, p2
-                            if 2010 <= year <= 2027 and 1 <= month <= 12 and 1 <= day <= 31:
+                            if self._is_valid_date_range(year, month, day):
                                 return f"{year:04d}-{month:02d}-{day:02d}"
                 except (ValueError, IndexError):
                     continue
@@ -618,25 +632,28 @@ class ReceiptParser:
         Returns:
             True if the amount pattern resembles a phone/registration number
         """
-        amt_str = str(int(amount))
+        # Check for amounts that are very high (likely registration numbers)
+        # Since we already filter by max $1000, this catches anything that slips through
+        if amount >= 10000:
+            return True
         
-        # Values less than $1000 are unlikely to be phone numbers
-        if len(amt_str) < 4:
+        # For amounts with cents like 123.45, check the full amount string
+        # not just the integer part, to avoid misclassification
+        amt_str = f"{amount:.2f}".replace('.', '')  # "123.45" -> "12345"
+        
+        # Very short amounts are clearly not phone numbers
+        if len(amt_str) <= 3:
             return False
         
-        # Check for patterns that suggest phone/registration numbers
+        # Check for patterns with too many repeated digits
+        # This catches things like 111.11, 222.22, etc.
         if len(amt_str) >= 5:
-            # Count digit occurrences
             digit_counts = Counter(amt_str)
             max_repeats = max(digit_counts.values())
             
-            # If too many repeated digits, likely not a price
-            if max_repeats >= len(amt_str) - 1:
-                return True
-            
-            # Check for amounts that are very high and have no decimal pattern
-            # Registration numbers like 37642 often have no cents
-            if amount >= 10000:
+            # Only flag if nearly all digits are the same (e.g., 11111, 22222)
+            # Allow amounts like 11.11 or 111.11 which have only 4-5 digits total
+            if max_repeats >= len(amt_str) - 1 and len(amt_str) >= 6:
                 return True
         
         return False
