@@ -651,9 +651,9 @@ class ReceiptParser:
             digit_counts = Counter(amt_str)
             max_repeats = max(digit_counts.values())
             
-            # Only flag if nearly all digits are the same (e.g., 11111, 22222)
-            # Allow amounts like 11.11 or 111.11 which have only 4-5 digits total
-            if max_repeats >= len(amt_str) - 1 and len(amt_str) >= 6:
+            # Use a ratio threshold: flag if > 85% of digits are the same
+            # This avoids false positives on amounts like $111.10
+            if max_repeats / len(amt_str) > 0.85 and len(amt_str) >= 6:
                 return True
         
         return False
