@@ -137,7 +137,7 @@ class Config:
     DATE_FORMATS = [
         # OCR error-tolerant patterns
         r'[O0]\d[/\\-][O0]\d[/\\-][O02]\d{3}',  # O1/15/2O24 → 01/15/2024
-        r'\d{1,2}[/\\-.][O0]\d[/\\-.]\d{2,4}',
+        r'\d{1,2}[/\\.O0-][O0]\d[/\\.O0-]\d{2,4}',
         
         # Multi-language labels with dates
         r'(?i)(date|datum|fecha|data|tarikh)[:\s]+(\d{1,2}[/\-.]\d{1,2}[/\-.]\d{2,4})',
@@ -160,17 +160,17 @@ class Config:
         r'\d{1,2}/\d{1,2}/\d{2,4}',
         
         # Additional patterns for better date extraction
-        r'\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}',
-        r'\d{4}[-/.]\d{1,2}[-/.]\d{1,2}',
+        r'\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4}',
+        r'\d{4}[/.\-]\d{1,2}[/.\-]\d{1,2}',
         
         # Full or abbreviated month names
         r'(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2},?\s+\d{4}',
         
         # Reverse order - year first with various separators
-        r'\d{4}[/\-.]\d{2}[/\-.]\d{2}',
+        r'\d{4}[/.\-]\d{2}[/.\-]\d{2}',
         
         # With optional leading zeros and various separators
-        r'\d{1,2}[/\-\.]\d{1,2}[/\-\.]\d{2}',
+        r'\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2}',
         
         # DD Month YYYY format
         r'\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}',
@@ -449,9 +449,21 @@ class ReceiptParser:
                     # YYYY-MM-DD or YYYY/MM/DD
                     if p1 > 1000:
                         year, month, day = p1, p2, p3
-                    # DD-MM-YYYY or DD/MM/YYYY (European)
+                        if 2010 <= year <= 2027 and 1 <= month <= 12 and 1 <= day <= 31:
+                            return f"{year:04d}-{month:02d}-{day:02d}"
+                    # DD-MM-YYYY or MM-DD-YYYY (when p3 > 1000)
                     elif p3 > 1000:
-                        day, month, year = p1, p2, p3
+                        year = p3
+                        # Try MM/DD/YYYY (US format)
+                        if p1 <= 12 and p2 <= 31:
+                            month, day = p1, p2
+                            if 2010 <= year <= 2027 and 1 <= month <= 12 and 1 <= day <= 31:
+                                return f"{year:04d}-{month:02d}-{day:02d}"
+                        # Try DD/MM/YYYY (European format)
+                        if p2 <= 12 and p1 <= 31:
+                            day, month = p1, p2
+                            if 2010 <= year <= 2027 and 1 <= month <= 12 and 1 <= day <= 31:
+                                return f"{year:04d}-{month:02d}-{day:02d}"
                     # MM/DD/YY or DD/MM/YY
                     elif p3 < 100:
                         # Assume 21st century
@@ -459,16 +471,12 @@ class ReceiptParser:
                         # Try both interpretations
                         if p1 <= 12 and p2 <= 31:
                             month, day = p1, p2
+                            if 2010 <= year <= 2027 and 1 <= month <= 12 and 1 <= day <= 31:
+                                return f"{year:04d}-{month:02d}-{day:02d}"
                         elif p2 <= 12 and p1 <= 31:
                             day, month = p1, p2
-                        else:
-                            continue
-                    else:
-                        continue
-                    
-                    # Validate ranges
-                    if 2010 <= year <= 2027 and 1 <= month <= 12 and 1 <= day <= 31:
-                        return f"{year:04d}-{month:02d}-{day:02d}"
+                            if 2010 <= year <= 2027 and 1 <= month <= 12 and 1 <= day <= 31:
+                                return f"{year:04d}-{month:02d}-{day:02d}"
                 except (ValueError, IndexError):
                     continue
         
@@ -611,17 +619,26 @@ class ReceiptParser:
             True if the amount pattern resembles a phone/registration number
         """
         amt_str = str(int(amount))
+        
+        # Values less than $1000 are unlikely to be phone numbers
+        if len(amt_str) < 4:
+            return False
+        
+        # Check for patterns that suggest phone/registration numbers
         if len(amt_str) >= 5:
             # Count digit occurrences
             digit_counts = Counter(amt_str)
             max_repeats = max(digit_counts.values())
+            
             # If too many repeated digits, likely not a price
             if max_repeats >= len(amt_str) - 1:
                 return True
-            # Check for common phone number patterns (e.g., 37642 might be registration)
-            # Phone numbers often have sequential or patterned digits
-            if len(amt_str) >= 5 and amt_str.count('0') >= 2:
+            
+            # Check for amounts that are very high and have no decimal pattern
+            # Registration numbers like 37642 often have no cents
+            if amount >= 10000:
                 return True
+        
         return False
     
     def extract_total(self, text: str) -> Optional[float]:
