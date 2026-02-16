@@ -27,6 +27,47 @@ License: MIT
 ================================================================================
 """
 
+# ================================================================================
+# AUTO-INSTALL DEPENDENCIES
+# ================================================================================
+import subprocess
+import sys
+
+def install_dependencies():
+    """Auto-install required packages if not available."""
+    required_packages = {
+        'numpy': 'numpy',
+        'matplotlib': 'matplotlib', 
+        'PIL': 'Pillow',
+        'easyocr': 'easyocr',
+        'pandas': 'pandas',
+    }
+    
+    missing = []
+    for module, package in required_packages.items():
+        try:
+            __import__(module)
+        except ImportError:
+            missing.append(package)
+    
+    if missing:
+        print(f"Installing missing packages: {', '.join(missing)}")
+        try:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "-q"] + missing)
+            print("✓ Dependencies installed successfully")
+        except subprocess.CalledProcessError as e:
+            print(f"Warning: Could not auto-install dependencies: {e}")
+            print("Please manually install: pip install numpy matplotlib pillow easyocr pandas")
+        except Exception as e:
+            print(f"Warning: Could not auto-install dependencies: {e}")
+            print("Please manually install: pip install numpy matplotlib pillow easyocr pandas")
+
+# Auto-install on import (but catch and continue if it fails)
+try:
+    install_dependencies()
+except Exception as e:
+    print(f"Warning: Dependency check failed: {e}")
+
 import os
 import sys
 import re
@@ -499,6 +540,245 @@ class ReceiptProcessor:
             writer.writerow(receipt.to_dict())
         
         logger.info(f"✅ Results saved to {output_path}")
+    
+    def process_batch(self, image_paths: List[Union[str, Path]], output_dir: Path) -> List[ReceiptData]:
+        """Process multiple receipts and auto-generate visualization."""
+        import pandas as pd
+        
+        results = []
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        logger.info(f"Processing {len(image_paths)} receipts...")
+        
+        for idx, img_path in enumerate(image_paths, 1):
+            logger.info(f"[{idx}/{len(image_paths)}] Processing {Path(img_path).name}")
+            try:
+                receipt = self.process_receipt(img_path)
+                results.append(receipt)
+            except Exception as e:
+                logger.error(f"Failed to process {img_path}: {e}")
+                # Add empty result
+                receipt = ReceiptData()
+                receipt.processing_time = 0.0
+                results.append(receipt)
+        
+        # Save all results to CSV
+        csv_path = output_dir / f"receipt_results_{int(time.time())}.csv"
+        df = pd.DataFrame([r.to_dict() for r in results])
+        df.to_csv(csv_path, index=False)
+        logger.info(f"✅ Results saved to {csv_path}")
+        
+        # Auto-generate visualization
+        viz_path = output_dir / f"receipt_visualization_{int(time.time())}.png"
+        visualizer = ResultsVisualizer(df)
+        visualizer.create_comprehensive_visualization(viz_path)
+        
+        return results
+
+
+# ================================================================================
+# VISUALIZATION MODULE
+# ================================================================================
+
+class ResultsVisualizer:
+    """Generate comprehensive visualizations for processed receipt results."""
+    
+    def __init__(self, results_df):
+        """Initialize with pandas DataFrame of results."""
+        import pandas as pd
+        import matplotlib.pyplot as plt
+        import numpy as np
+        
+        self.df = results_df
+        self.total = len(results_df)
+        self.plt = plt
+        self.np = np
+        
+    def create_comprehensive_visualization(self, output_path: Path):
+        """Create a comprehensive multi-panel visualization."""
+        # Calculate metrics
+        stores_found = self.df['store_name'].notna().sum()
+        dates_found = self.df['date'].notna().sum()
+        totals_found = (self.df['total'].notna() & (self.df['total'] > 0)).sum()
+        
+        # Determine grid size based on number of receipts
+        if self.total <= 10:
+            figsize = (16, 10)
+            num_rows, num_cols = 2, 3
+        elif self.total <= 50:
+            figsize = (20, 12)
+            num_rows, num_cols = 3, 4
+        else:
+            figsize = (24, 14)
+            num_rows, num_cols = 4, 4
+        
+        fig = self.plt.figure(figsize=figsize)
+        gs = fig.add_gridspec(num_rows, num_cols, hspace=0.35, wspace=0.35)
+        fig.suptitle(f'Receipt OCR Analysis - {self.total} Receipts Processed', 
+                     fontsize=20, fontweight='bold', y=0.98)
+        
+        # 1. Extraction Success Rates
+        ax1 = fig.add_subplot(gs[0, 0:2])
+        self._plot_extraction_rates(ax1, stores_found, dates_found, totals_found)
+        
+        # 2. Processing Time Distribution
+        if 'processing_time' in self.df.columns:
+            ax2 = fig.add_subplot(gs[0, 2:] if num_cols >= 4 else gs[0, 2])
+            self._plot_processing_times(ax2)
+        
+        # 3. Amount Distribution
+        ax3 = fig.add_subplot(gs[1, 0:2])
+        self._plot_amount_distribution(ax3)
+        
+        # 4. Top Stores
+        ax4 = fig.add_subplot(gs[1, 2:] if num_cols >= 4 else gs[1, 2])
+        self._plot_top_stores(ax4)
+        
+        # 5. Data Completeness
+        ax5 = fig.add_subplot(gs[2, 0] if num_rows >= 3 else gs[1, 0])
+        self._plot_data_completeness(ax5)
+        
+        # 6. Summary Statistics
+        ax6 = fig.add_subplot(gs[2, 1:3] if num_rows >= 3 else gs[1, 1:3])
+        self._plot_summary_stats(ax6, stores_found, dates_found, totals_found)
+        
+        # Save
+        self.plt.savefig(output_path, dpi=150, bbox_inches='tight', facecolor='white')
+        self.plt.close()
+        logger.info(f"✅ Visualization saved to {output_path}")
+        
+    def _plot_extraction_rates(self, ax, stores_found, dates_found, totals_found):
+        """Plot extraction success rates."""
+        fields = ['Stores', 'Dates', 'Totals']
+        counts = [stores_found, dates_found, totals_found]
+        rates = [x/self.total*100 for x in counts]
+        colors = ['#3498db', '#9b59b6', '#2ecc71']
+        
+        bars = ax.bar(fields, rates, color=colors, alpha=0.85, edgecolor='black', linewidth=2)
+        ax.set_ylabel('Success Rate (%)', fontsize=13, fontweight='bold')
+        ax.set_title('Field Extraction Success Rates', fontsize=15, fontweight='bold')
+        ax.set_ylim([0, 105])
+        ax.axhline(y=80, color='red', linestyle='--', linewidth=2, label='Target: 80%')
+        ax.legend(fontsize=11)
+        ax.grid(axis='y', alpha=0.3)
+        
+        for bar, rate, count in zip(bars, rates, counts):
+            ax.text(bar.get_x() + bar.get_width()/2., rate + 2,
+                   f'{rate:.1f}%\n({count}/{self.total})',
+                   ha='center', va='bottom', fontsize=11, fontweight='bold')
+    
+    def _plot_processing_times(self, ax):
+        """Plot processing time distribution."""
+        times = self.df['processing_time'].dropna()
+        if len(times) > 0:
+            ax.hist(times, bins=min(20, max(5, len(times)//5)), 
+                   color='#3498db', edgecolor='black', alpha=0.7)
+            ax.axvline(times.mean(), color='red', linestyle='--', linewidth=2,
+                      label=f'Mean: {times.mean():.1f}s')
+            ax.set_xlabel('Time (seconds)', fontsize=11)
+            ax.set_ylabel('Frequency', fontsize=11)
+            ax.set_title('Processing Time Distribution', fontsize=13, fontweight='bold')
+            ax.legend()
+            ax.grid(alpha=0.3)
+    
+    def _plot_amount_distribution(self, ax):
+        """Plot receipt amount distribution."""
+        valid_totals = self.df[(self.df['total'] > 0) & (self.df['total'] < 1000)]['total']
+        if len(valid_totals) > 0:
+            ax.hist(valid_totals, bins=min(25, max(5, len(valid_totals)//3)), 
+                   color='#2ecc71', edgecolor='black', alpha=0.7)
+            ax.axvline(valid_totals.mean(), color='red', linestyle='--', linewidth=2,
+                      label=f'Mean: ${valid_totals.mean():.2f}')
+            ax.set_xlabel('Amount ($)', fontsize=11)
+            ax.set_ylabel('Frequency', fontsize=11)
+            ax.set_title('Receipt Amount Distribution', fontsize=13, fontweight='bold')
+            ax.legend()
+            ax.grid(alpha=0.3)
+        else:
+            ax.text(0.5, 0.5, 'No valid totals', ha='center', va='center',
+                   transform=ax.transAxes, fontsize=14)
+    
+    def _plot_top_stores(self, ax):
+        """Plot top detected stores."""
+        stores = self.df[self.df['store_name'].notna()]['store_name'].value_counts().head(10)
+        if len(stores) > 0:
+            y_pos = self.np.arange(len(stores))
+            ax.barh(y_pos, stores.values, color='#e67e22', alpha=0.8, edgecolor='black')
+            ax.set_yticks(y_pos)
+            ax.set_yticklabels(stores.index, fontsize=10)
+            ax.invert_yaxis()
+            ax.set_xlabel('Count', fontsize=11)
+            ax.set_title('Top Detected Stores', fontsize=13, fontweight='bold')
+            ax.grid(axis='x', alpha=0.3)
+            
+            for i, count in enumerate(stores.values):
+                ax.text(count + 0.3, i, str(count), va='center', fontsize=10, fontweight='bold')
+        else:
+            ax.text(0.5, 0.5, 'No stores detected', ha='center', va='center',
+                   transform=ax.transAxes, fontsize=14)
+    
+    def _plot_data_completeness(self, ax):
+        """Plot data completeness pie chart."""
+        complete = (self.df['store_name'].notna() & self.df['date'].notna() & 
+                   (self.df['total'] > 0)).sum()
+        partial = ((self.df['store_name'].notna() | self.df['date'].notna() | 
+                   (self.df['total'] > 0))).sum() - complete
+        none = self.total - complete - partial
+        
+        sizes = [complete, partial, none]
+        labels = [f'Complete\n{complete}', f'Partial\n{partial}', f'None\n{none}']
+        colors = ['#2ecc71', '#f39c12', '#e74c3c']
+        
+        ax.pie(sizes, labels=labels, colors=colors, autopct='%1.1f%%',
+              startangle=90, textprops={'fontsize': 10, 'weight': 'bold'})
+        ax.set_title('Data Completeness', fontsize=12, fontweight='bold')
+    
+    def _plot_summary_stats(self, ax, stores_found, dates_found, totals_found):
+        """Plot summary statistics text box."""
+        ax.axis('off')
+        
+        overall = (stores_found + dates_found + totals_found) / (self.total * 3) * 100
+        valid_totals = self.df[(self.df['total'] > 0) & (self.df['total'] < 1000)]['total']
+        
+        avg_time = self.df['processing_time'].mean() if 'processing_time' in self.df.columns else 0
+        
+        summary = f"""
+╔══════════════════════════════════╗
+║     PROCESSING SUMMARY            ║
+╚══════════════════════════════════╝
+
+Total:      {self.total} receipts
+{f'Time:       {avg_time:.1f}s avg' if avg_time > 0 else ''}
+
+EXTRACTION:
+  Stores:   {stores_found}/{self.total} ({stores_found/self.total*100:.1f}%)
+  Dates:    {dates_found}/{self.total} ({dates_found/self.total*100:.1f}%)
+  Totals:   {totals_found}/{self.total} ({totals_found/self.total*100:.1f}%)
+
+{f'AMOUNTS:\n  Mean:     ${valid_totals.mean():.2f}\n  Range:    ${valid_totals.min():.2f} - ${valid_totals.max():.2f}' if len(valid_totals) > 0 else ''}
+
+OVERALL:    {overall:.1f}%
+STATUS:     {'✓ GOOD' if overall >= 70 else '⚠ IMPROVE'}
+"""
+        
+        status_color = '#d4edda' if overall >= 70 else '#fff3cd'
+        ax.text(0.05, 0.95, summary, transform=ax.transAxes,
+               fontsize=10, verticalalignment='top', family='monospace',
+               bbox=dict(boxstyle='round', facecolor=status_color,
+                        edgecolor='black', linewidth=2, alpha=0.8, pad=1.5))
+
+
+def create_visualization_from_csv(csv_path: Path, output_path: Path):
+    """Create visualization from saved CSV results."""
+    try:
+        import pandas as pd
+        df = pd.read_csv(csv_path)
+        visualizer = ResultsVisualizer(df)
+        visualizer.create_comprehensive_visualization(output_path)
+        return True
+    except Exception as e:
+        logger.error(f"Error creating visualization: {e}")
+        return False
 
 
 # ================================================================================
@@ -577,12 +857,67 @@ def main():
         
         elif command == "process":
             if len(sys.argv) < 3:
-                print("Usage: python kaggle_receipt_ocr.py process <image_path>")
+                print("Usage: python kaggle_receipt_ocr.py process <image_path> [-o output_dir]")
                 return False
             image_path = sys.argv[2]
-            output_dir = sys.argv[3] if len(sys.argv) > 3 else "output"
+            output_dir = sys.argv[4] if len(sys.argv) > 4 and sys.argv[3] == '-o' else "output"
             process_image(image_path, output_dir)
             return True
+        
+        elif command == "batch":
+            if len(sys.argv) < 3:
+                print("Usage: python kaggle_receipt_ocr.py batch <directory> [-o output_dir] [-n num_images]")
+                return False
+            
+            import glob
+            directory = sys.argv[2]
+            output_dir = "output"
+            limit = None
+            
+            # Parse optional arguments
+            i = 3
+            while i < len(sys.argv):
+                if sys.argv[i] == '-o' and i + 1 < len(sys.argv):
+                    output_dir = sys.argv[i + 1]
+                    i += 2
+                elif sys.argv[i] == '-n' and i + 1 < len(sys.argv):
+                    try:
+                        limit = int(sys.argv[i + 1])
+                    except ValueError:
+                        print(f"Error: -n requires an integer, got '{sys.argv[i + 1]}'")
+                        return False
+                    i += 2
+                else:
+                    i += 1
+            
+            # Find all images
+            image_patterns = ['*.jpg', '*.jpeg', '*.png', '*.JPG', '*.JPEG', '*.PNG']
+            image_paths = []
+            for pattern in image_patterns:
+                image_paths.extend(glob.glob(os.path.join(directory, pattern)))
+            
+            if not image_paths:
+                print(f"No images found in {directory}")
+                return False
+            
+            # Apply limit if specified
+            if limit is not None and limit > 0:
+                image_paths = image_paths[:limit]
+                print(f"Processing first {len(image_paths)} images (limit: {limit})")
+            
+            processor = ReceiptProcessor()
+            processor.process_batch(image_paths, Path(output_dir))
+            return True
+        
+        elif command == "visualize":
+            if len(sys.argv) < 3:
+                print("Usage: python kaggle_receipt_ocr.py visualize <results.csv> [-o output.png]")
+                return False
+            
+            csv_path = Path(sys.argv[2])
+            output_path = Path(sys.argv[4]) if len(sys.argv) > 4 and sys.argv[3] == '-o' else Path("visualization.png")
+            
+            return create_visualization_from_csv(csv_path, output_path)
         
         elif command == "comparison":
             Config.setup_directories()
@@ -594,15 +929,19 @@ def main():
         else:
             print(f"Unknown command: {command}")
             print("\nAvailable commands:")
-            print("  demo                           - Run demonstration")
-            print("  process <image_path> [output]  - Process receipt image")
-            print("  comparison                     - Generate comparison chart")
+            print("  demo                                      - Run demonstration")
+            print("  process <image> [-o output]               - Process single receipt")
+            print("  batch <directory> [-o output] [-n num]    - Process receipts in directory")
+            print("  visualize <results.csv> [-o output]       - Create visualization from CSV")
+            print("  comparison                                - Generate comparison chart")
             return False
     else:
         print("Kaggle OCR Receipt Analysis - Single File Version")
         print("\nUsage:")
         print("  python kaggle_receipt_ocr.py demo")
         print("  python kaggle_receipt_ocr.py process receipt.jpg")
+        print("  python kaggle_receipt_ocr.py batch /path/to/receipts/ [-n 10]")
+        print("  python kaggle_receipt_ocr.py visualize results.csv")
         print("  python kaggle_receipt_ocr.py comparison")
         print("\nFor Kaggle:")
         print("  1. Upload this file to Kaggle")
