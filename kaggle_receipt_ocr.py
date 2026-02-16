@@ -96,9 +96,9 @@ class Config:
         r'\d{2}/\d{2}/\d{4}',
         r'\d{1,2}/\d{1,2}/\d{2,4}',
         # Additional patterns for better date extraction
-        r'\d{1,2}[-/\.]\d{1,2}[-/\.]\d{2,4}',  # Various separators
-        r'\d{4}[-/\.]\d{1,2}[-/\.]\d{1,2}',    # YYYY-MM-DD variants
-        r'(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]* \d{1,2},? \d{4}',  # Month names
+        r'\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}',  # Various separators
+        r'\d{4}[-/.]\d{1,2}[-/.]\d{1,2}',    # YYYY-MM-DD variants
+        r'(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-zA-Z]* \d{1,2},? \d{4}',  # Month names
     ]
     
     TOTAL_PATTERNS = [
