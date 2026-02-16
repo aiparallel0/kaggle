@@ -742,6 +742,11 @@ class ResultsVisualizer:
         
         avg_time = self.df['processing_time'].mean() if 'processing_time' in self.df.columns else 0
         
+        # Build amounts section if we have valid totals
+        amounts_section = ''
+        if len(valid_totals) > 0:
+            amounts_section = f'AMOUNTS:\n  Mean:     ${valid_totals.mean():.2f}\n  Range:    ${valid_totals.min():.2f} - ${valid_totals.max():.2f}'
+        
         summary = f"""
 ╔══════════════════════════════════╗
 ║     PROCESSING SUMMARY            ║
@@ -755,7 +760,7 @@ EXTRACTION:
   Dates:    {dates_found}/{self.total} ({dates_found/self.total*100:.1f}%)
   Totals:   {totals_found}/{self.total} ({totals_found/self.total*100:.1f}%)
 
-{f'AMOUNTS:\n  Mean:     ${valid_totals.mean():.2f}\n  Range:    ${valid_totals.min():.2f} - ${valid_totals.max():.2f}' if len(valid_totals) > 0 else ''}
+{amounts_section}
 
 OVERALL:    {overall:.1f}%
 STATUS:     {'✓ GOOD' if overall >= 70 else '⚠ IMPROVE'}
@@ -901,9 +906,12 @@ def main():
                 return False
             
             # Apply limit if specified
-            if limit is not None and limit > 0:
-                image_paths = image_paths[:limit]
-                print(f"Processing first {len(image_paths)} images (limit: {limit})")
+            if limit is not None:
+                if limit <= 0:
+                    print(f"Warning: -n must be positive, got {limit}. Processing all images.")
+                else:
+                    image_paths = image_paths[:limit]
+                    print(f"Processing first {len(image_paths)} images (limit: {limit})")
             
             processor = ReceiptProcessor()
             processor.process_batch(image_paths, Path(output_dir))
