@@ -98,7 +98,7 @@ class Config:
     
     # Application settings
     APP_NAME = "Kaggle OCR Receipt Analysis"
-    VERSION = "3.0.0"
+    VERSION = "3.2.0"
     
     # Directories
     BASE_DIR = Path.cwd()
@@ -128,18 +128,52 @@ class Config:
     STORE_EXCLUDE_WORDS = [
         'GST', 'TAX', 'TOTAL', 'SUBTOTAL', 'RECEIPT', 'SECURITY',
         'REGISTRATION', 'NO', 'DATE', 'TIME', 'QTY', 'QUANTITY',
-        'PRICE', 'AMOUNT', 'CASH', 'CHANGE', 'PAYMENT'
+        'PRICE', 'AMOUNT', 'CASH', 'CHANGE', 'PAYMENT',
+        'TEL', 'PHONE', 'ADDRESS', 'STREET', 'INVOICE', 'COUNTER',
+        'EMAIL', 'WEBSITE', 'WWW', 'HTTP'
     ]
     
     # Patterns for extraction
     DATE_FORMATS = [
+        # OCR error-tolerant patterns
+        r'[O0]\d[/\\-][O0]\d[/\\-][O02]\d{3}',  # O1/15/2O24 → 01/15/2024
+        r'\d{1,2}[/\\-.][O0]\d[/\\-.]\d{2,4}',
+        
+        # Multi-language labels with dates
+        r'(?i)(date|datum|fecha|data|tarikh)[:\s]+(\d{1,2}[/\-.]\d{1,2}[/\-.]\d{2,4})',
+        
+        # Month names (English, Malay, German, Spanish, French)
+        r'\d{1,2}\s+(Jan(?:uary)?|Feb(?:ruary)?|Mac|Apr(?:il)?|Mei|Jun(?:e)?|Jul(?:y)?|Ogos|Sep(?:tember)?|Okt(?:ober)?|Nov(?:ember)?|Dis)\s+\d{4}',
+        r'(?i)\d{1,2}\s+(january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{4}',
+        
+        # European formats
+        r'\d{1,2}\.\d{1,2}\.\d{4}',
+        r'\d{1,2}\.\d{1,2}\.\d{2}',
+        
+        # ISO with time
+        r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}',
+        r'\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}',
+        
+        # Standard patterns
         r'\d{4}-\d{2}-\d{2}',
         r'\d{2}/\d{2}/\d{4}',
         r'\d{1,2}/\d{1,2}/\d{2,4}',
+        
         # Additional patterns for better date extraction
-        r'\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}',  # Various separators (overlaps with above for /, but also adds - and .)
-        r'\d{4}[-/.]\d{1,2}[-/.]\d{1,2}',    # YYYY-MM-DD variants
-        r'(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2},?\s+\d{4}',  # Full or abbreviated month names
+        r'\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}',
+        r'\d{4}[-/.]\d{1,2}[-/.]\d{1,2}',
+        
+        # Full or abbreviated month names
+        r'(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2},?\s+\d{4}',
+        
+        # Reverse order - year first with various separators
+        r'\d{4}[/\-.]\d{2}[/\-.]\d{2}',
+        
+        # With optional leading zeros and various separators
+        r'\d{1,2}[/\-\.]\d{1,2}[/\-\.]\d{2}',
+        
+        # DD Month YYYY format
+        r'\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}',
     ]
     
     TOTAL_PATTERNS = [
@@ -309,11 +343,136 @@ class OCREngine:
 
 
 # ================================================================================
+# OCR ERROR CORRECTOR
+# ================================================================================
+
+class OCRErrorCorrector:
+    """Correct common OCR character misreads in dates and other text."""
+    
+    # Character mapping for OCR errors
+    OCR_ERROR_MAP = {
+        'O': '0', '0': 'O',
+        'I': '1', '1': 'I', 
+        'l': '1',
+        'S': '5', '5': 'S',
+        'Z': '2', '2': 'Z',
+        'B': '8', '8': 'B',
+        'G': '6', '6': 'G',
+        'T': '7', '7': 'T',
+    }
+    
+    def correct_date_text(self, text: str) -> List[Tuple[str, float]]:
+        """
+        Generate correction variants for text with confidence scores.
+        
+        Returns:
+            List of (corrected_text, confidence) tuples
+        """
+        variants = [(text, 1.0)]  # Original text with highest confidence
+        
+        # Generate single-character correction variants
+        for i, char in enumerate(text):
+            if char in self.OCR_ERROR_MAP:
+                corrected = text[:i] + self.OCR_ERROR_MAP[char] + text[i+1:]
+                # Confidence decreases with each correction
+                confidence = 0.85
+                variants.append((corrected, confidence))
+        
+        return variants
+
+
+# ================================================================================
 # RECEIPT PARSER
 # ================================================================================
 
 class ReceiptParser:
     """Extract structured information from OCR text."""
+    
+    def __init__(self):
+        """Initialize the parser with an OCR error corrector."""
+        self.ocr_corrector = OCRErrorCorrector()
+    
+    def validate_and_normalize_date(self, date_str: str) -> Optional[str]:
+        """
+        Parse and validate date, normalizing to ISO format (YYYY-MM-DD).
+        
+        Args:
+            date_str: Date string in various formats
+            
+        Returns:
+            Normalized date string in YYYY-MM-DD format, or None if invalid
+        """
+        if not date_str:
+            return None
+        
+        # Month name mappings for multiple languages
+        month_names = {
+            # English
+            'january': 1, 'jan': 1, 'february': 2, 'feb': 2,
+            'march': 3, 'mar': 3, 'april': 4, 'apr': 4,
+            'may': 5, 'june': 6, 'jun': 6, 'july': 7, 'jul': 7,
+            'august': 8, 'aug': 8, 'september': 9, 'sep': 9,
+            'october': 10, 'oct': 10, 'november': 11, 'nov': 11,
+            'december': 12, 'dec': 12,
+            # Malay
+            'mac': 3, 'mei': 5, 'ogos': 8, 'okt': 10, 'dis': 12,
+        }
+        
+        date_str_clean = date_str.strip()
+        
+        # Try parsing with month names
+        month_pattern = r'(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{4})'
+        match = re.search(month_pattern, date_str_clean)
+        if match:
+            day, month_name, year = match.groups()
+            month_name_lower = month_name.lower()
+            if month_name_lower in month_names:
+                try:
+                    month = month_names[month_name_lower]
+                    day = int(day)
+                    year = int(year)
+                    
+                    # Validate ranges
+                    if 2010 <= year <= 2027 and 1 <= month <= 12 and 1 <= day <= 31:
+                        return f"{year:04d}-{month:02d}-{day:02d}"
+                except ValueError:
+                    pass
+        
+        # Try common separators: /, -, .
+        for separator in ['/', '-', '.']:
+            parts = date_str_clean.split(separator)
+            if len(parts) == 3:
+                try:
+                    # Handle different formats
+                    p1, p2, p3 = [int(p) for p in parts]
+                    
+                    # YYYY-MM-DD or YYYY/MM/DD
+                    if p1 > 1000:
+                        year, month, day = p1, p2, p3
+                    # DD-MM-YYYY or DD/MM/YYYY (European)
+                    elif p3 > 1000:
+                        day, month, year = p1, p2, p3
+                    # MM/DD/YY or DD/MM/YY
+                    elif p3 < 100:
+                        # Assume 21st century
+                        year = 2000 + p3 if p3 < 50 else 1900 + p3
+                        # Try both interpretations
+                        if p1 <= 12 and p2 <= 31:
+                            month, day = p1, p2
+                        elif p2 <= 12 and p1 <= 31:
+                            day, month = p1, p2
+                        else:
+                            continue
+                    else:
+                        continue
+                    
+                    # Validate ranges
+                    if 2010 <= year <= 2027 and 1 <= month <= 12 and 1 <= day <= 31:
+                        return f"{year:04d}-{month:02d}-{day:02d}"
+                except (ValueError, IndexError):
+                    continue
+        
+        return None
     
     def extract_store_name(self, text: str) -> Optional[str]:
         """Extract store name from receipt text."""
@@ -332,7 +491,7 @@ class ReceiptParser:
             if not line_clean:
                 continue
                 
-            # Skip lines containing exclude words
+            # Skip lines containing exclude words (strict enforcement)
             line_upper = line_clean.upper()
             if any(exclude_word in line_upper for exclude_word in Config.STORE_EXCLUDE_WORDS):
                 continue
@@ -343,6 +502,20 @@ class ReceiptParser:
                     candidate = ' '.join(words)
                     # Remove trailing punctuation
                     candidate = candidate.rstrip(',.;:')
+                    
+                    # Enhanced validation
+                    # Reject if all digits (likely address/phone)
+                    if candidate.replace(' ', '').isdigit():
+                        continue
+                    
+                    # Reject single letters
+                    if len(candidate.replace(' ', '')) < 2:
+                        continue
+                    
+                    # Reject if looks like location (contains numbers and state names)
+                    if re.search(r'\d{5}|\bJohor\b|\bSelangor\b|\bMalaysia\b|\bPerak\b|\bKedah\b', candidate):
+                        continue
+                    
                     # Validate store name length (3-40 characters)
                     if 3 <= len(candidate) <= 40:
                         return candidate
@@ -350,38 +523,160 @@ class ReceiptParser:
         return None
     
     def extract_date(self, text: str) -> Optional[str]:
-        """Extract date from receipt text."""
+        """
+        Extract date from receipt text using multi-strategy ensemble approach.
+        
+        Strategies:
+        1. Standard pattern matching (confidence: 1.0)
+        2. Label-based contextual extraction (confidence: 1.2)
+        3. OCR error-tolerant patterns (confidence: 0.7)
+        4. Error correction + retry (confidence: 0.85)
+        """
+        candidates = []
+        
+        # Strategy 1: Standard pattern matching
         for pattern in Config.DATE_FORMATS:
-            match = re.search(pattern, text)
-            if match:
-                return match.group(0)
+            try:
+                # Check if pattern has groups (for label-based patterns)
+                if '(' in pattern and ')' in pattern:
+                    matches = list(re.finditer(pattern, text, re.IGNORECASE))
+                    for match in matches:
+                        # For patterns with multiple groups, extract the date part
+                        if len(match.groups()) > 1:
+                            date_str = match.group(2) if len(match.groups()) >= 2 else match.group(1)
+                            confidence = 1.2  # Higher confidence for label-based extraction
+                        else:
+                            date_str = match.group(0)
+                            confidence = 1.0
+                        
+                        normalized = self.validate_and_normalize_date(date_str)
+                        if normalized:
+                            candidates.append((normalized, confidence))
+                else:
+                    match = re.search(pattern, text)
+                    if match:
+                        date_str = match.group(0)
+                        normalized = self.validate_and_normalize_date(date_str)
+                        if normalized:
+                            candidates.append((normalized, 1.0))
+            except Exception:
+                continue
+        
+        # Strategy 2: OCR error correction + retry
+        # Generate correction variants for lines that might contain dates
+        lines = text.split('\n')
+        for line in lines[:15]:  # Check first 15 lines
+            if len(line) < 8 or len(line) > 50:  # Skip lines too short or too long
+                continue
+            
+            # Generate OCR correction variants
+            variants = self.ocr_corrector.correct_date_text(line)
+            
+            for variant_text, variant_conf in variants:
+                # Try simpler patterns on variants
+                simple_patterns = [
+                    r'\d{1,2}[/\-.]\d{1,2}[/\-.]\d{2,4}',
+                    r'\d{4}[/\-.]\d{1,2}[/\-.]\d{1,2}',
+                ]
+                
+                for pattern in simple_patterns:
+                    match = re.search(pattern, variant_text)
+                    if match:
+                        date_str = match.group(0)
+                        normalized = self.validate_and_normalize_date(date_str)
+                        if normalized:
+                            confidence = 0.85 * variant_conf  # Adjust by correction confidence
+                            candidates.append((normalized, confidence))
+        
+        # Aggregate candidates by normalized date and sum confidence scores
+        date_scores = defaultdict(float)
+        for date, conf in candidates:
+            date_scores[date] += conf
+        
+        # Select highest combined confidence score
+        if date_scores:
+            best_date = max(date_scores.items(), key=lambda x: x[1])
+            return best_date[0]
+        
         return None
     
+    def looks_like_phone_number(self, amount: float) -> bool:
+        """
+        Check if amount looks like a phone number or registration number.
+        
+        Args:
+            amount: The amount to check
+            
+        Returns:
+            True if the amount pattern resembles a phone/registration number
+        """
+        amt_str = str(int(amount))
+        if len(amt_str) >= 5:
+            # Count digit occurrences
+            digit_counts = Counter(amt_str)
+            max_repeats = max(digit_counts.values())
+            # If too many repeated digits, likely not a price
+            if max_repeats >= len(amt_str) - 1:
+                return True
+            # Check for common phone number patterns (e.g., 37642 might be registration)
+            # Phone numbers often have sequential or patterned digits
+            if len(amt_str) >= 5 and amt_str.count('0') >= 2:
+                return True
+        return False
+    
     def extract_total(self, text: str) -> Optional[float]:
-        """Extract total amount from receipt text."""
+        """
+        Extract total amount with contextual validation.
+        
+        Strategies:
+        1. Pattern-based extraction with proximity scoring
+        2. Contextual validation based on keywords
+        3. Filter out phone/registration numbers
+        """
+        candidates = []
+        
+        # Strategy 1: Pattern-based extraction with contextual scoring
         for pattern in Config.TOTAL_PATTERNS:
-            match = re.search(pattern, text)
-            if match:
+            for match in re.finditer(pattern, text, re.IGNORECASE):
                 try:
-                    total = float(match.group(1))
-                    # Validate reasonable receipt amounts
-                    if total < 0.01 or total > 10000:
-                        continue  # Skip unreasonable amounts, try next pattern
-                    return total
-                except:
+                    amount = float(match.group(1))
+                    # More realistic max: $1000 instead of $10000
+                    if 0.01 <= amount <= 1000:
+                        # Skip if looks like phone/registration number
+                        if self.looks_like_phone_number(amount):
+                            continue
+                        
+                        # Calculate confidence based on keyword proximity
+                        context = text[max(0, match.start()-20):match.end()+20].upper()
+                        confidence = 1.0
+                        if 'TOTAL' in context:
+                            confidence = 1.5
+                        elif 'AMOUNT' in context or 'BALANCE' in context:
+                            confidence = 1.2
+                        
+                        candidates.append((amount, confidence))
+                except (ValueError, IndexError):
                     continue
         
-        # Fallback: find largest monetary amount
+        # Strategy 2: Find largest reasonable amount as fallback
         amounts = re.findall(r'\$?(\d+\.\d{2})', text)
-        if amounts:
+        for amt_str in amounts:
             try:
-                total = max(float(amt) for amt in amounts)
-                # Validate reasonable receipt amounts
-                if total < 0.01 or total > 10000:
-                    return None  # Reject unreasonable amounts
-                return total
-            except:
-                pass
+                amount = float(amt_str)
+                if 0.01 <= amount <= 1000:
+                    # Skip if looks like phone/registration number
+                    if self.looks_like_phone_number(amount):
+                        continue
+                    
+                    # Lower confidence for fallback
+                    candidates.append((amount, 0.5))
+            except ValueError:
+                continue
+        
+        # Select best candidate by confidence
+        if candidates:
+            best_candidate = max(candidates, key=lambda x: x[1])
+            return best_candidate[0]
         
         return None
     
