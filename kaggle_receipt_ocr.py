@@ -75,7 +75,19 @@ class Config:
     KNOWN_STORES = [
         'WALMART', 'TARGET', 'COSTCO', 'KROGER', 'SAFEWAY', 'WHOLE FOODS',
         'TRADER JOES', 'ALDI', 'PUBLIX', 'CVS PHARMACY', 'WALGREENS',
-        'STARBUCKS', 'MCDONALDS', 'SUBWAY', 'AMAZON', 'BEST BUY'
+        'STARBUCKS', 'MCDONALDS', 'SUBWAY', 'AMAZON', 'BEST BUY',
+        # Malaysian stores for SROIE dataset
+        'HENG', 'PASARAYA BORONG PINTAR', 'TAMAN SRI SEGAMBUT', 
+        'SALON DU CHOCOLAT', 'AEON', 'GIANT', 'MYDIN', 'SPEEDMART',
+        'KK SUPER MART', 'JAYA GROCER', 'VILLAGE GROCER', 'TESCO',
+        'CARREFOUR', 'ECONSAVE', '99 SPEEDMART'
+    ]
+    
+    # Words to exclude from store name extraction
+    STORE_EXCLUDE_WORDS = [
+        'GST', 'TAX', 'TOTAL', 'SUBTOTAL', 'RECEIPT', 'SECURITY',
+        'REGISTRATION', 'NO', 'DATE', 'TIME', 'QTY', 'QUANTITY',
+        'PRICE', 'AMOUNT', 'CASH', 'CHANGE', 'PAYMENT'
     ]
     
     # Patterns for extraction
@@ -83,6 +95,10 @@ class Config:
         r'\d{4}-\d{2}-\d{2}',
         r'\d{2}/\d{2}/\d{4}',
         r'\d{1,2}/\d{1,2}/\d{2,4}',
+        # Additional patterns for better date extraction
+        r'\d{1,2}[-/\.]\d{1,2}[-/\.]\d{2,4}',  # Various separators
+        r'\d{4}[-/\.]\d{1,2}[-/\.]\d{1,2}',    # YYYY-MM-DD variants
+        r'(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]* \d{1,2},? \d{4}',  # Month names
     ]
     
     TOTAL_PATTERNS = [
@@ -271,10 +287,24 @@ class ReceiptParser:
         
         # Try to find capitalized words at the top
         for line in lines[:5]:
-            words = [w for w in line.strip().split() if w]
+            line_clean = line.strip()
+            if not line_clean:
+                continue
+                
+            # Skip lines containing exclude words
+            line_upper = line_clean.upper()
+            if any(exclude_word in line_upper for exclude_word in Config.STORE_EXCLUDE_WORDS):
+                continue
+            
+            words = [w for w in line_clean.split() if w]
             if words and len(words) <= 3:
                 if all(word[0].isupper() for word in words):
-                    return ' '.join(words)
+                    candidate = ' '.join(words)
+                    # Remove trailing punctuation
+                    candidate = candidate.rstrip(',.;:')
+                    # Validate store name length (3-40 characters)
+                    if 3 <= len(candidate) <= 40:
+                        return candidate
         
         return None
     
@@ -292,7 +322,11 @@ class ReceiptParser:
             match = re.search(pattern, text)
             if match:
                 try:
-                    return float(match.group(1))
+                    total = float(match.group(1))
+                    # Validate reasonable receipt amounts
+                    if total < 0.01 or total > 10000:
+                        continue  # Skip unreasonable amounts, try next pattern
+                    return total
                 except:
                     continue
         
@@ -300,7 +334,11 @@ class ReceiptParser:
         amounts = re.findall(r'\$?(\d+\.\d{2})', text)
         if amounts:
             try:
-                return max(float(amt) for amt in amounts)
+                total = max(float(amt) for amt in amounts)
+                # Validate reasonable receipt amounts
+                if total < 0.01 or total > 10000:
+                    return None  # Reject unreasonable amounts
+                return total
             except:
                 pass
         
