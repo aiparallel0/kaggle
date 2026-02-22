@@ -10,6 +10,9 @@ Returns lists of (image_path, ground_truth_dict) tuples.
 
 import json
 import os
+import sys
+import tarfile
+import urllib.request
 from pathlib import Path
 from typing import List, Tuple, Dict
 
@@ -78,76 +81,92 @@ def load_sroie_test() -> List[Sample]:
 # WildReceipt
 # ---------------------------------------------------------------------------
 
+# FIX (BUG 1): Old code used load_dataset("Theivaprakasham/wildreceipt") which
+# fails with "Dataset scripts are no longer supported" and silently returned [].
+# New code downloads the official OpenMMLab tar directly.
+_WILDRECEIPT_URL = "https://download.openmmlab.com/mmocr/data/wildreceipt.tar"
+
+# WildReceipt label index → SROIE field mapping.
+# Label indices from class_list.txt (0-indexed):
+#   1 = Store_name_value → company
+#   3 = Date_value       → date
+#   7 = Total_value      → total
+#  10 = Addr_value       → address
+_WILDRECEIPT_IDX_TO_FIELD = {
+    1: "company",
+    3: "date",
+    7: "total",
+    10: "address",
+}
+
+
 def _download_wildreceipt() -> Path:
-    """Download WildReceipt from the HuggingFace datasets hub."""
+    """Download WildReceipt from OpenMMLab tar (confirmed working URL)."""
     dest = _ensure_dir(DATASETS_DIR / "wildreceipt")
     marker = dest / ".downloaded"
     if marker.exists():
         return dest
 
+    url = _WILDRECEIPT_URL
+    tar_path = dest / "wildreceipt.tar"
     try:
-        from datasets import load_dataset  # type: ignore
-        ds = load_dataset("Theivaprakasham/wildreceipt")
-        ds.save_to_disk(str(dest / "hf_cache"))
+        print(f"[WildReceipt] Downloading from {url} ...")
+        urllib.request.urlretrieve(url, str(tar_path))
+        print("[WildReceipt] Extracting tar ...")
+        with tarfile.open(str(tar_path)) as tf:
+            tf.extractall(str(dest))
+        tar_path.unlink(missing_ok=True)
         marker.touch()
+        print("[WildReceipt] Download and extraction complete.")
     except Exception as exc:
-        print(f"[WildReceipt] Download failed: {exc}. Will return empty dataset.")
+        # FIX (BUG 1): Loud failure instead of silent empty return.
+        # Previously the exception was swallowed; now we print a FATAL warning.
+        print(
+            f"[WildReceipt] FATAL: Download failed from {url}: {exc}. "
+            "This experiment will have MISSING DATA.",
+            file=sys.stderr,
+        )
     return dest
 
 
-# WildReceipt string label → SROIE field mapping.
-# Labels per the Theivaprakasham/wildreceipt annotation schema:
-#   Store_name_value  → company
-#   Date_value        → date
-#   Total_value       → total
-# Address is not a standard WildReceipt category; left empty.
-_WILDRECEIPT_CAT_TO_FIELD = {
-    "Store_name_value": "company",
-    "Date_value": "date",
-    "Total_value": "total",
-}
-
-
 def load_wildreceipt() -> List[Sample]:
-    """Load WildReceipt and normalize to SROIE schema."""
+    """Load WildReceipt (OpenMMLab format) and normalize to SROIE schema."""
     dest = _download_wildreceipt()
-    hf_cache = dest / "hf_cache"
-    if not hf_cache.exists():
-        print("[WildReceipt] Cache not found — skipping.")
-        return []
-
-    try:
-        from datasets import load_from_disk  # type: ignore
-        ds = load_from_disk(str(hf_cache))
-    except Exception as exc:
-        print(f"[WildReceipt] Failed to load cache: {exc}")
+    # INTEGRITY: Only load train.txt to prevent test-set contamination.
+    # The tar contains both train.txt and test.txt; test.txt must not be used.
+    train_txt = dest / "wildreceipt" / "train.txt"
+    if not train_txt.exists():
+        print(
+            "[WildReceipt] *** WARNING: 'wildreceipt' returned 0 samples! "
+            "This experiment's results will NOT reflect this dataset. ***",
+            file=sys.stderr,
+        )
         return []
 
     samples: List[Sample] = []
-    img_dest_dir = _ensure_dir(dest / "images")
+    img_base = dest / "wildreceipt"
 
-    # Support both DatasetDict and Dataset
-    splits = list(ds.keys()) if hasattr(ds, "keys") else ["train"]
-    for split in splits:
-        split_ds = ds[split] if hasattr(ds, "keys") else ds
-        for item in split_ds:
+    with open(train_txt, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
             gt: Dict[str, str] = {k: "" for k in EMPTY_GT}
-            words = item.get("words", [])
-            for word in words:
-                label = str(word.get("label", ""))
-                text = str(word.get("text", "")).strip()
-                field = _WILDRECEIPT_CAT_TO_FIELD.get(label)
+            for ann in obj.get("annotations", []):
+                label_idx = int(ann.get("label", -1))
+                field = _WILDRECEIPT_IDX_TO_FIELD.get(label_idx)
+                text = str(ann.get("text", "")).strip()
                 if field and text:
-                    # Concatenate if multiple tokens for the same field
                     gt[field] = (gt[field] + " " + text).strip() if gt[field] else text
 
-            # Images are PIL objects in this dataset — save to disk
-            pil_image = item.get("image")
-            if pil_image is not None:
-                idx = len(samples)
-                img_path = img_dest_dir / f"{split}_{idx:06d}.jpg"
-                if not img_path.exists():
-                    pil_image.convert("RGB").save(img_path, "JPEG")
+            file_name = obj.get("file_name", "")
+            img_path = img_base / file_name
+            if img_path.exists():
                 samples.append((img_path, gt))
 
     return samples
@@ -157,22 +176,16 @@ def load_wildreceipt() -> List[Sample]:
 # SROIE-NER (darentang/sroie — token-level NER format)
 # ---------------------------------------------------------------------------
 
-def _download_sroie_ner() -> Path:
-    """Download SROIE-NER from the HuggingFace datasets hub."""
-    dest = _ensure_dir(DATASETS_DIR / "sroie_ner")
-    marker = dest / ".downloaded"
-    if marker.exists():
-        return dest
-
-    try:
-        from datasets import load_dataset  # type: ignore
-        ds = load_dataset("darentang/sroie")
-        ds.save_to_disk(str(dest / "hf_cache"))
-        marker.touch()
-    except Exception as exc:
-        print(f"[SROIE-NER] Download failed: {exc}. Will return empty dataset.")
-    return dest
-
+# FIX (BUG 2): Old code used load_dataset("darentang/sroie") which fails with
+# "Dataset scripts are no longer supported" and silently returned [].
+# New code uses huggingface_hub.snapshot_download to fetch parquet files
+# without invoking the deprecated loading script, then reads with pandas.
+_SROIE_NER_REPO = "darentang/sroie"
+_SROIE_NER_PARQUET = "data/train-00000-of-00001.parquet"
+_SROIE_NER_PARQUET_URL = (
+    "https://huggingface.co/datasets/darentang/sroie/resolve/main/"
+    "data/train-00000-of-00001.parquet"
+)
 
 # NER tag index → (SROIE field, is_begin) mapping.
 # Tag scheme: 0=O, 1=B-COMPANY, 2=I-COMPANY, 3=B-DATE, 4=I-DATE,
@@ -189,48 +202,100 @@ _NER_TAG_TO_FIELD = {
 }
 
 
+def _download_sroie_ner() -> Path:
+    """Download SROIE-NER parquet via huggingface_hub (no deprecated script)."""
+    dest = _ensure_dir(DATASETS_DIR / "sroie_ner")
+    marker = dest / ".downloaded"
+    if marker.exists():
+        return dest
+
+    parquet_dest = dest / "train.parquet"
+    try:
+        # Primary: snapshot_download bypasses the deprecated loading script
+        from huggingface_hub import snapshot_download  # type: ignore
+        local_dir = snapshot_download(
+            repo_id=_SROIE_NER_REPO, repo_type="dataset"
+        )
+        src = Path(local_dir) / _SROIE_NER_PARQUET
+        if src.exists():
+            import shutil
+            shutil.copy2(str(src), str(parquet_dest))
+        else:
+            raise FileNotFoundError(
+                f"Expected parquet not found in snapshot: {src}"
+            )
+    except Exception as exc_primary:
+        print(
+            f"[SROIE-NER] snapshot_download failed ({exc_primary}); "
+            "falling back to direct wget ...",
+            file=sys.stderr,
+        )
+        try:
+            urllib.request.urlretrieve(_SROIE_NER_PARQUET_URL, str(parquet_dest))
+        except Exception as exc_fallback:
+            # FIX (BUG 2): Loud failure instead of silent empty return.
+            print(
+                f"[SROIE-NER] FATAL: Download failed from {_SROIE_NER_PARQUET_URL}: "
+                f"{exc_fallback}. This experiment will have MISSING DATA.",
+                file=sys.stderr,
+            )
+            return dest
+
+    marker.touch()
+    return dest
+
+
 def load_sroie_ner() -> List[Sample]:
     """Load SROIE-NER (darentang/sroie) and normalize to SROIE schema."""
     dest = _download_sroie_ner()
-    hf_cache = dest / "hf_cache"
-    if not hf_cache.exists():
-        print("[SROIE-NER] Cache not found — skipping.")
+    parquet_path = dest / "train.parquet"
+    if not parquet_path.exists():
+        print("[SROIE-NER] Cache not found — skipping.", file=sys.stderr)
         return []
 
     try:
-        from datasets import load_from_disk  # type: ignore
-        ds = load_from_disk(str(hf_cache))
+        import pandas as pd  # type: ignore
+        df = pd.read_parquet(str(parquet_path))
     except Exception as exc:
-        print(f"[SROIE-NER] Failed to load cache: {exc}")
+        print(f"[SROIE-NER] Failed to load parquet: {exc}", file=sys.stderr)
         return []
 
     samples: List[Sample] = []
     img_dest_dir = _ensure_dir(dest / "images")
 
-    splits = list(ds.keys()) if hasattr(ds, "keys") else ["train"]
-    for split in splits:
-        if split == "test":
-            continue  # only use train/validation for augmentation
-        split_ds = ds[split] if hasattr(ds, "keys") else ds
-        for item in split_ds:
-            gt: Dict[str, str] = {k: "" for k in EMPTY_GT}
-            words = item.get("words", [])
-            ner_tags = item.get("ner_tags", [])
-            # Aggregate contiguous NER tags back into field-level strings
-            for word, tag in zip(words, ner_tags):
-                field = _NER_TAG_TO_FIELD.get(tag)
-                if field:
-                    text = str(word).strip()
-                    gt[field] = (gt[field] + " " + text).strip() if gt[field] else text
+    for row_idx, row in df.iterrows():
+        gt: Dict[str, str] = {k: "" for k in EMPTY_GT}
+        words = row.get("words", [])
+        ner_tags = row.get("ner_tags", [])
+        for word, tag in zip(words, ner_tags):
+            field = _NER_TAG_TO_FIELD.get(int(tag))
+            if field:
+                text = str(word).strip()
+                gt[field] = (gt[field] + " " + text).strip() if gt[field] else text
 
-            # Images are PIL objects in this dataset — save to disk
-            pil_image = item.get("image")
-            if pil_image is not None:
-                idx = len(samples)
-                img_path = img_dest_dir / f"{split}_{idx:06d}.jpg"
-                if not img_path.exists():
-                    pil_image.convert("RGB").save(img_path, "JPEG")
-                samples.append((img_path, gt))
+        # Images are stored as bytes in the parquet — save to disk
+        image_data = row.get("image")
+        if image_data is not None:
+            img_path = img_dest_dir / f"row_{row_idx:06d}.jpg"
+            if not img_path.exists():
+                try:
+                    from PIL import Image  # type: ignore
+                    import io
+                    if isinstance(image_data, dict) and "bytes" in image_data:
+                        raw = image_data["bytes"]
+                    elif isinstance(image_data, (bytes, bytearray)):
+                        raw = image_data
+                    else:
+                        raw = None
+                    if raw:
+                        Image.open(io.BytesIO(raw)).convert("RGB").save(
+                            img_path, "JPEG"
+                        )
+                    else:
+                        continue
+                except Exception:
+                    continue
+            samples.append((img_path, gt))
 
     return samples
 
@@ -271,8 +336,17 @@ def _cord_remap(ground_truth_str: str) -> Dict[str, str]:
             gt["total"] = str(total_info.get("total_price", "")).strip()
         elif isinstance(total_info, list) and len(total_info) > 0:
             gt["total"] = str(total_info[0].get("total_price", "")).strip()
-        # CORD has no standard date field
-        gt["date"] = ""
+        # FIX (BUG 7): CORD v2 DOES contain date annotations in gt_parse.
+        # Previously hardcoded to "" with incorrect comment "CORD has no standard date field".
+        date_info = gt_json.get("date", {})
+        if isinstance(date_info, dict):
+            gt["date"] = str(date_info.get("date_value", "")).strip()
+        elif isinstance(date_info, list) and len(date_info) > 0:
+            gt["date"] = str(date_info[0].get("date_value", "")).strip()
+        elif isinstance(date_info, str):
+            gt["date"] = date_info.strip()
+        else:
+            gt["date"] = ""
     except (json.JSONDecodeError, AttributeError):
         pass
     return gt
@@ -349,6 +423,14 @@ def get_combined_dataset(dataset_names: List[str]) -> List[Sample]:
         print(f"[dataset_loaders] Loading '{name}' ...")
         data = loader()
         print(f"[dataset_loaders] '{name}' → {len(data)} samples")
+        # FIX (BUG 9): Loud warning when a requested dataset returns 0 samples,
+        # so experiments silently degrading to fewer datasets are immediately visible.
+        if len(data) == 0:
+            print(
+                f"[dataset_loaders] *** WARNING: '{name}' returned 0 samples! "
+                f"This experiment's results will NOT reflect this dataset. ***",
+                file=sys.stderr,
+            )
         combined.extend(data)
     print(f"[dataset_loaders] Total combined samples: {len(combined)}")
     return combined

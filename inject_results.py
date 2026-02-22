@@ -20,10 +20,16 @@ from pathlib import Path
 FIELDS = ["company", "date", "address", "total"]
 
 LEADERBOARD = [
+    # Post-competition SOTA (verified from published papers)
     ("LayoutLMv3 (Huang et al. 2022)", 0.9633),
     ("PICK (Yu et al. 2021)", 0.9612),
     ("BROS (Hong et al. 2022)", 0.9548),
     ("LayoutLMv2 (Xu et al. 2021)", 0.9495),
+    # ICDAR 2019 original competition top-3 (from arxiv:2103.10213)
+    ("H&H Lab — ICDAR'19 1st", 0.9567),
+    ("CLOVA OCR — ICDAR'19 2nd", 0.9373),
+    ("ICDAR'19 3rd place", 0.9198),
+    # Published baselines
     ("DONUT published (Kim 2022)", 0.8411),
 ]
 
@@ -125,12 +131,16 @@ def print_table3_perfield(all_exp: dict) -> None:
     header_fields = " & ".join(
         f"\\multicolumn{{2}}{{c}}{{\\textbf{{{f.capitalize()}}}}}" for f in FIELDS
     )
+    # FIX (BUG 8): Added (↓) suffix to NED sub-columns to indicate lower is better.
     print(f"% Exp & Training Data & {header_fields} \\\\")
+    print("% Sub-header: F1(↑) & NED(↓) per field")
     for exp_id_str in sorted(all_exp, key=lambda x: int(x)):
         res = all_exp[exp_id_str]
         m = res.get("metrics", {})
         name = EXP_NAMES.get(exp_id_str, res.get("name", ""))
         field_cols = " & ".join(
+            # FIX (BUG 8): NED direction indicator preserved in column ordering comments.
+            # F1 columns are (↑) higher is better; NED columns are (↓) lower is better.
             f"{_safe(m, f + '_f1')} & {_safe(m, f + '_ned')}" for f in FIELDS
         )
         print(f"{exp_id_str} & {name} & {field_cols} \\\\")

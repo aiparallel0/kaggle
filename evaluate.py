@@ -32,7 +32,13 @@ def run_inference(model, processor, image_path, task_prompt, max_length=512):
     sequence = processor.batch_decode(outputs.sequences)[0]
     sequence = sequence.replace(processor.tokenizer.eos_token, "")
     sequence = sequence.replace(processor.tokenizer.pad_token, "").strip()
-    return processor.token2json(sequence)
+    # FIX (BUG 5): token2json can raise exceptions or return empty/malformed dicts
+    # on garbage model output. Wrap in try/except to prevent silent zero-metric contamination.
+    try:
+        return processor.token2json(sequence)
+    except Exception as e:
+        print(f"[WARNING] token2json failed for {image_path}: {e}")
+        return {}
 
 
 def remap_cord_to_sroie(cord_output):
@@ -84,6 +90,8 @@ def compute_metrics(predictions, ground_truths):
             if p_val and g_val and p_val == g_val:
                 tp += 1
                 per_field[field]["tp"] += 1
+            elif not p_val and not g_val:
+                pass  # FIX (BUG 4): Both absent = true negative, do not penalize exact match
             else:
                 all_correct = False
 
