@@ -17,9 +17,11 @@ results/experiment_N.json and a summary to results/all_experiments.json.
 import argparse
 import json
 import os
+import random
 from pathlib import Path
 from typing import List, Tuple, Dict
 
+import numpy as np
 import torch
 from PIL import Image
 from torch.utils.data import Dataset
@@ -36,7 +38,6 @@ from evaluate import compute_metrics, run_inference
 # ---------------------------------------------------------------------------
 
 RESULTS_DIR = Path("results")
-RESULTS_DIR.mkdir(exist_ok=True)
 
 BASE_MODEL = "naver-clova-ix/donut-base-finetuned-cord-v2"
 WORKSPACE = Path("/workspace")
@@ -44,6 +45,15 @@ FIELDS = ["company", "date", "address", "total"]
 MAX_LENGTH = 512
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".webp"}
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+SEED = 42
+
+# Hyperparameter config — stored in each result JSON for cache validation
+TRAIN_CONFIG = {
+    "num_train_epochs": 5,
+    "learning_rate": 5e-5,
+    "per_device_train_batch_size": 4,
+    "base_model": BASE_MODEL,
+}
 
 NEW_TOKENS = [
     "<s_sroie>", "</s_sroie>",
@@ -52,6 +62,17 @@ NEW_TOKENS = [
     "<s_address>", "</s_address>",
     "<s_total>",   "</s_total>",
 ]
+
+
+def set_seed(seed: int = SEED) -> None:
+    """Set random seeds for reproducibility."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
 
 # ---------------------------------------------------------------------------
 # Experiment definitions
@@ -135,6 +156,7 @@ class MultiDataset(Dataset):
 
 def train_experiment(exp_id: int, samples: List[Tuple[Path, Dict]], output_dir: Path) -> None:
     """Fine-tune DONUT on *samples* and save the model to *output_dir*."""
+    set_seed()
     print(f"\n[Exp {exp_id}] Training on {len(samples)} samples → {output_dir}")
 
     processor = DonutProcessor.from_pretrained(BASE_MODEL)
@@ -150,9 +172,9 @@ def train_experiment(exp_id: int, samples: List[Tuple[Path, Dict]], output_dir: 
 
     training_args = Seq2SeqTrainingArguments(
         output_dir=str(output_dir),
-        num_train_epochs=5,           # compromise across all experiment sizes (small and large datasets)
-        per_device_train_batch_size=4,
-        learning_rate=5e-5,
+        num_train_epochs=TRAIN_CONFIG["num_train_epochs"],
+        per_device_train_batch_size=TRAIN_CONFIG["per_device_train_batch_size"],
+        learning_rate=TRAIN_CONFIG["learning_rate"],
         warmup_steps=100,
         weight_decay=0.01,
         save_strategy="epoch",
@@ -162,6 +184,7 @@ def train_experiment(exp_id: int, samples: List[Tuple[Path, Dict]], output_dir: 
         logging_steps=20,
         dataloader_num_workers=4,
         remove_unused_columns=False,
+        seed=SEED,
     )
 
     trainer = Seq2SeqTrainer(
@@ -221,6 +244,7 @@ def evaluate_experiment(exp_id: int, model_dir: Path) -> Dict:
 
 def run_experiment(exp_id: int) -> Dict:
     """Run a single experiment: train, evaluate, save results."""
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     if exp_id not in EXPERIMENTS:
         raise ValueError(f"Unknown experiment ID {exp_id}. Valid: {list(EXPERIMENTS)}")
 
@@ -233,15 +257,14 @@ def run_experiment(exp_id: int) -> Dict:
 
     result_file = RESULTS_DIR / f"experiment_{exp_id}.json"
 
-    # Check if already done - FIX (BUG 3): validate cached result matches
-    # current experiment definition before reusing. Previously ANY cached file
-    # was returned without checking if datasets had changed, causing stale results.
+    # Check if already done - validate cached result matches current experiment
+    # definition (datasets AND hyperparameters) before reusing.
     if result_file.exists():
         with open(result_file) as fh:
             cached = json.load(fh)
-        if cached.get("datasets") != exp["datasets"]:
+        if cached.get("datasets") != exp["datasets"] or cached.get("config") != TRAIN_CONFIG:
             print(
-                f"[Exp {exp_id}] STALE result detected (datasets mismatch). "
+                f"[Exp {exp_id}] STALE result detected (datasets or config mismatch). "
                 "Deleting and re-running."
             )
             result_file.unlink()
@@ -257,6 +280,7 @@ def run_experiment(exp_id: int) -> Dict:
             "experiment_id": exp_id,
             "name": exp["name"],
             "datasets": exp["datasets"],
+            "config": TRAIN_CONFIG,
             "num_train_samples": 0,
             "metrics": {},
             "error": "No training samples available",
@@ -277,6 +301,7 @@ def run_experiment(exp_id: int) -> Dict:
         "experiment_id": exp_id,
         "name": exp["name"],
         "datasets": exp["datasets"],
+        "config": TRAIN_CONFIG,
         "num_train_samples": len(samples),
         "metrics": metrics,
     }
@@ -292,6 +317,7 @@ def run_experiment(exp_id: int) -> Dict:
 
 def save_summary() -> None:
     """Collect all individual result files into results/all_experiments.json."""
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     all_results = {}
     for exp_id in EXPERIMENTS:
         result_file = RESULTS_DIR / f"experiment_{exp_id}.json"

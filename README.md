@@ -29,23 +29,23 @@ on the SROIE test set, and generates a complete LaTeX paper with real results.
 ## Quick Start (vast.ai / Jupyter terminal)
 
 ```bash
-# 1. Install dependencies
-pip install -r requirements.txt
+# Install dependencies and run the full pipeline — SROIE data is auto-downloaded
+pip install -r requirements.txt && python run_all.py
 
-# 2. Place SROIE data at /workspace/ICDAR-2019-SROIE/data/
-#    Expected subdirs: img/, key/, test_img/, test_key/
-
-# 3. Run the full pipeline (all 7 experiments)
-python run_all.py
-
-# 4. Run a single experiment
+# Run a single experiment
 python run_all.py --experiment 2
 
-# 5. Force re-run (ignore cached results)
+# Force re-run (ignore cached results)
 python run_all.py --force
 
-# 6. Generate paper only (results must already exist)
+# Generate paper only (results must already exist)
 python run_all.py --paper-only
+
+# Skip SROIE auto-install (data already present)
+python run_all.py --skip-install
+
+# Skip pretrained baseline evaluation
+python run_all.py --skip-pretrained
 ```
 
 ## Experiment Definitions
@@ -62,8 +62,9 @@ python run_all.py --paper-only
 
 ## Dataset Sources
 
-- **SROIE**: Must be downloaded manually and placed at
-  `/workspace/ICDAR-2019-SROIE/data/`
+- **SROIE**: **Auto-downloaded** from `https://github.com/zzzDavid/ICDAR-2019-SROIE.git`
+  (shallow-cloned into the parent of `--sroie-dir`; last 100 images split into test set).
+  Use `--skip-install` if data is already present.
 - **WildReceipt**: Auto-downloaded from
   `https://download.openmmlab.com/mmocr/data/wildreceipt.tar`
 - **SROIE-NER**: Auto-downloaded from HuggingFace
@@ -82,7 +83,9 @@ Options:
   --experiment N      Run only experiment N (1–7)
   --force             Delete cached results and re-run from scratch
   --paper-only        Skip training; generate paper from existing results
+  --skip-install      Skip Stage 0 SROIE auto-install (data already present)
   --skip-download     Skip dataset download/verification stage
+  --skip-pretrained   Skip pretrained baseline evaluation step
   --sroie-dir PATH    Path to SROIE data (default: /workspace/ICDAR-2019-SROIE/data)
   --workspace PATH    Workspace root for model checkpoints (default: /workspace)
   --paper-template F  LaTeX template to fill (default: paper.tex)

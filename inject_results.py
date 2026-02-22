@@ -30,11 +30,12 @@ LEADERBOARD = [
     ("CLOVA OCR — ICDAR'19 2nd", 0.9373),
     ("ICDAR'19 3rd place", 0.9198),
     # Published baselines
-    ("DONUT published (Kim 2022)", 0.8411),
+    # Zero-shot F1 from Table 1 of "OCR-free Document Understanding Transformer" (Kim et al., ECCV 2022)
+    ("DONUT zero-shot (Kim et al. 2022)", 0.8411),
 ]
 
 # Published DONUT zero-shot F1 on SROIE (Kim et al. 2022)
-DONUT_PUBLISHED_F1 = 0.8411
+DONUT_ZEROSHOT_F1 = 0.8411
 
 EXP_NAMES = {
     "1": "SROIE only",
@@ -90,15 +91,26 @@ def _safe(metrics: dict, key: str, fmt: str = ".4f") -> str:
     return format(val, fmt)
 
 
-def print_table1_dataset_stats() -> None:
-    """Print Table 1: Dataset Statistics LaTeX rows."""
+def print_table1_dataset_stats(actual_counts: dict = None) -> None:
+    """Print Table 1: Dataset Statistics LaTeX rows.
+
+    Parameters
+    ----------
+    actual_counts : dict, optional
+        Mapping of dataset name to actual sample count, e.g.
+        ``{"sroie_train": 526, "sroie_test": 100, ...}``.
+        When provided, overrides the hardcoded fallback values.
+    """
     print("% === TABLE 1: Dataset Statistics ===")
+    # Fallback values match the expected split (526 train + 100 test) defined
+    # in stage_install(); actual counts passed from run_all.py when available.
+    _c = actual_counts or {}
     rows = [
-        ("SROIE (train)",  526,    4,    "EN",    "Receipts"),
-        ("SROIE (test)",   100,    4,    "EN",    "Receipts"),
-        ("WildReceipt",   1740,   25,   "EN",    "Receipts"),
-        ("SROIE-NER",      526,    4,   "EN",    "Receipts"),
-        ("CORD v2",        900,  "30+", "ID",    "Receipts"),
+        ("SROIE (train)",  _c.get("sroie_train",  526),    4,    "EN",    "Receipts"),
+        ("SROIE (test)",   _c.get("sroie_test",   100),    4,    "EN",    "Receipts"),
+        ("WildReceipt",    _c.get("wildreceipt",  1740),   25,   "EN",    "Receipts"),
+        ("SROIE-NER",      _c.get("sroie_ner",    526),    4,   "EN",    "Receipts"),
+        ("CORD v2",        _c.get("cord",          900),  "30+", "ID",    "Receipts"),
     ]
     for name, n, nf, lang, domain in rows:
         n_str = f"{n:,}" if isinstance(n, int) else str(n)
@@ -226,7 +238,7 @@ def build_var_map(all_exp: dict) -> dict:
         exp1_f1 = all_exp.get("1", {}).get("metrics", {}).get("global_f1", 0.0)
         exp4_f1 = all_exp.get("4", {}).get("metrics", {}).get("global_f1", 0.0)
         var_map["gain_1_4"] = f"{(exp4_f1 - exp1_f1):+.4f}"
-        var_map["gain_over_published"] = f"{(best_f1 - DONUT_PUBLISHED_F1):+.4f}"
+        var_map["gain_over_published"] = f"{(best_f1 - DONUT_ZEROSHOT_F1):+.4f}"
     except Exception:
         var_map["gain_1_4"] = "N/A"
         var_map["gain_over_published"] = "N/A"

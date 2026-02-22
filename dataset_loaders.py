@@ -18,7 +18,7 @@ from typing import List, Tuple, Dict
 
 # Where auxiliary datasets are stored
 DATASETS_DIR = Path("/workspace/datasets")
-SROIE_DIR = Path("/workspace/ICDAR-2019-SROIE/data")
+SROIE_DIR = Path(os.environ.get("SROIE_DATA_DIR", "/workspace/ICDAR-2019-SROIE/data"))
 
 # Type alias
 Sample = Tuple[Path, Dict[str, str]]
@@ -296,6 +296,12 @@ def load_sroie_ner() -> List[Sample]:
                 except Exception:
                     continue
             samples.append((img_path, gt))
+
+    # Prevent test-set leakage: exclude any images that match SROIE test stems
+    test_img_dir = SROIE_DIR / "test_img"
+    if test_img_dir.exists():
+        test_stems = {p.stem for p in test_img_dir.iterdir() if p.is_file()}
+        samples = [(p, gt) for p, gt in samples if p.stem not in test_stems]
 
     return samples
 
