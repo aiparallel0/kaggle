@@ -2,14 +2,15 @@
 dataset_loaders.py — Multi-dataset download & normalization module.
 
 Provides functions to download each auxiliary dataset (WildReceipt,
-SROIE-NER, CORD) and normalize their annotations to the SROIE schema:
-{"company": "...", "date": "...", "address": "...", "total": "..."}.
+SROIE-NER, CORD, Invoices-DONUT) and normalize their annotations to the
+SROIE schema: {"company": "...", "date": "...", "address": "...", "total": ""}.
 
 Returns lists of (image_path, ground_truth_dict) tuples.
 """
 
 import json
 import os
+import re
 import sys
 import tarfile
 import time
@@ -553,6 +554,109 @@ def load_cord() -> List[Sample]:
 
 
 # ---------------------------------------------------------------------------
+# Invoices-DONUT (katanaml-org/invoices-donut-data-v1)
+# ---------------------------------------------------------------------------
+
+def _download_invoices_donut() -> Path:
+    """Download Invoices-DONUT from the HuggingFace datasets hub."""
+    dest = _ensure_dir(DATASETS_DIR / "invoices_donut")
+    marker = dest / ".downloaded"
+    if marker.exists():
+        return dest
+
+    try:
+        from datasets import load_dataset  # type: ignore
+        ds = load_dataset("katanaml-org/invoices-donut-data-v1")
+        ds.save_to_disk(str(dest / "hf_cache"))
+        marker.touch()
+    except Exception as exc:
+        print(f"[Invoices-DONUT] Download failed: {exc}. Will return empty dataset.")
+    return dest
+
+
+def _invoices_donut_remap(ground_truth_str: str) -> Dict[str, str]:
+    """Parse Invoices-DONUT ground_truth JSON and remap to SROIE schema.
+
+    Field mapping rationale:
+    - company: seller name from gt_parse.header.seller (full string; the
+      model learns to extract just the company name portion).
+    - date:    invoice date from gt_parse.header.invoice_date.
+    - address: empty string — invoices don't have a single address field
+      that reliably maps to SROIE's "store address".
+    - total:   total gross worth from gt_parse.summary.total_gross_worth,
+      with any leading currency symbol (e.g. '$') stripped.
+    """
+    gt: Dict[str, str] = {k: "" for k in EMPTY_GT}
+    try:
+        obj = json.loads(ground_truth_str) if isinstance(ground_truth_str, str) else ground_truth_str
+        gt_parse = obj.get("gt_parse", obj)
+
+        header = gt_parse.get("header", {})
+        if isinstance(header, dict):
+            # Seller → company: the full seller string is used here because the
+            # dataset doesn't split company name from address.  The DONUT decoder
+            # will learn to emit only the company name portion during fine-tuning.
+            gt["company"] = str(header.get("seller", "")).strip()
+            # Invoice date → date
+            gt["date"] = str(header.get("invoice_date", "")).strip()
+
+        # address: no reliable single-address field in invoice schema
+        gt["address"] = ""
+
+        summary = gt_parse.get("summary", {})
+        if isinstance(summary, dict):
+            raw_total = str(summary.get("total_gross_worth", "")).strip()
+            # Strip any leading currency symbol (e.g. '$', '€', '£', '¥', '₹', '₩')
+            # using a regex so all Unicode currency prefixes are handled uniformly.
+            gt["total"] = re.sub(r"^[\$€£¥₹₩\u20ac\u00a3\u00a5]+", "", raw_total).strip()
+    except (json.JSONDecodeError, AttributeError):
+        pass
+    return gt
+
+
+def load_invoices_donut() -> List[Sample]:
+    """Load Invoices-DONUT and normalize to SROIE schema."""
+    dest = _download_invoices_donut()
+    hf_cache = dest / "hf_cache"
+    if not hf_cache.exists():
+        print("[Invoices-DONUT] Cache not found — skipping.")
+        return []
+
+    try:
+        from datasets import load_from_disk  # type: ignore
+        ds = load_from_disk(str(hf_cache))
+    except Exception as exc:
+        print(f"[Invoices-DONUT] Failed to load cache: {exc}")
+        return []
+
+    samples: List[Sample] = []
+    splits = list(ds.keys()) if hasattr(ds, "keys") else ["train"]
+    for split in splits:
+        if split == "test":
+            continue  # skip test split to avoid contamination
+        split_ds = ds[split] if hasattr(ds, "keys") else ds
+        for idx, item in enumerate(split_ds):
+            gt = _invoices_donut_remap(item.get("ground_truth", "{}"))
+            # Invoices-DONUT images are PIL Images embedded in the HF dataset
+            pil_image = item.get("image")
+            if pil_image is not None:
+                # Save to disk so the path-based training pipeline can load them
+                img_dest_dir = _ensure_dir(dest / "images")
+                img_path = img_dest_dir / f"{split}_{idx:06d}.jpg"
+                if not img_path.exists():
+                    pil_image.convert("RGB").save(img_path, "JPEG")
+                samples.append((img_path, gt))
+
+    if not samples:
+        print(
+            "[Invoices-DONUT] *** WARNING: 'invoices_donut' returned 0 samples! "
+            "This experiment's results will NOT reflect this dataset. ***",
+            file=sys.stderr,
+        )
+    return samples
+
+
+# ---------------------------------------------------------------------------
 # Combined dataset loader
 # ---------------------------------------------------------------------------
 
@@ -561,6 +665,7 @@ _LOADERS = {
     "wildreceipt": load_wildreceipt,
     "sroie_ner": load_sroie_ner,
     "cord": load_cord,
+    "invoices_donut": load_invoices_donut,
 }
 
 

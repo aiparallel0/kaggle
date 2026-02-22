@@ -59,6 +59,7 @@ python run_all.py --skip-pretrained
 | 5   | SROIE + WildReceipt + CORD    | Combined receipt datasets            |
 | 6   | SROIE + SROIE-NER + CORD      | NER view + CORD                      |
 | 7   | SROIE + All                   | All four datasets combined           |
+| 8   | SROIE + Invoices-DONUT        | +~800 invoice images (cross-domain) |
 
 ## Dataset Sources
 
@@ -71,6 +72,8 @@ python run_all.py --skip-pretrained
   (`darentang/sroie` via `huggingface_hub.snapshot_download`)
 - **CORD**: Auto-downloaded from HuggingFace
   (`naver-clova-ix/cord-v2`)
+- **Invoices-DONUT**: Auto-downloaded from HuggingFace
+  (`katanaml-org/invoices-donut-data-v1`)
 
 ## CLI Reference
 

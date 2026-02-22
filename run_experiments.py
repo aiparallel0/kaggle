@@ -114,6 +114,11 @@ EXPERIMENTS: Dict[int, Dict] = {
         "datasets": ["sroie", "wildreceipt", "sroie_ner", "cord"],
         "description": "Combine all four available datasets.",
     },
+    8: {
+        "name": "SROIE + Invoices-DONUT",
+        "datasets": ["sroie", "invoices_donut"],
+        "description": "Add ~800 structured invoice images (cross-domain transfer from invoices to receipts).",
+    },
 }
 
 # ---------------------------------------------------------------------------
@@ -348,9 +353,9 @@ def save_summary() -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run DONUT SROIE experiments")
     group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument("--all", action="store_true", help="Run all 7 experiments sequentially")
+    group.add_argument("--all", action="store_true", help="Run all 8 experiments sequentially")
     group.add_argument("--experiment", type=int, metavar="N",
-                       help="Run a single experiment (1-7)")
+                       help="Run a single experiment (1-8)")
     # FIX (BUG 3): --force deletes all cached result files so every experiment
     # is re-run from scratch regardless of cached state.
     parser.add_argument("--force", action="store_true",
