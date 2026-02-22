@@ -52,9 +52,16 @@ def run_inference(model, processor, image_path, task_prompt, max_length=512):
 
 
 def remap_cord_to_sroie(cord_output):
-    """Map CORD schema fields to SROIE field names (best effort)."""
+    """Map CORD schema fields to SROIE field names (best effort).
+
+    Handles the 'cord-v2' top-level wrapper that the pretrained CORD model
+    may emit (e.g. {"cord-v2": {...}}).
+    """
     result = {}
     if isinstance(cord_output, dict):
+        # Unwrap the "cord-v2" top-level key if present
+        if "cord-v2" in cord_output and isinstance(cord_output["cord-v2"], dict):
+            cord_output = cord_output["cord-v2"]
         store_info = cord_output.get("store_info", {})
         if isinstance(store_info, dict):
             result["company"] = store_info.get("store_name", "")
@@ -77,6 +84,14 @@ def remap_cord_to_sroie(cord_output):
 
 
 def normalized_edit_distance(pred, gt):
+    """Compute Normalized Edit Distance (NED) between pred and gt strings.
+
+    NED = editdistance(pred, gt) / max(len(pred), len(gt))
+
+    Convention: NED is in [0, 1] where 0 means identical and 1 means maximally
+    different. This formulation uses max(len(pred), len(gt)) as the denominator,
+    ensuring NED <= 1.0. Lower is better.
+    """
     pred, gt = str(pred).lower().strip(), str(gt).lower().strip()
     if len(gt) == 0:
         return 0.0 if len(pred) == 0 else 1.0
@@ -88,9 +103,19 @@ def compute_metrics(predictions, ground_truths):
     Official SROIE Task 3 metric: global F1 over all (image, field) pairs.
     A pair is TP if predicted string == ground truth string (case-insensitive, stripped).
     """
+    import sys as _sys
     tp, total_pred, total_gt = 0, 0, 0
     per_field = {f: {"tp": 0, "pred": 0, "gt": 0, "ned": []} for f in FIELDS}
     exact_match_all = []
+
+    # Check for total prediction failure: all predictions are empty dicts
+    all_empty = all(not any(str(pred.get(f, "")).strip() for f in FIELDS) for pred in predictions)
+    if all_empty and predictions:
+        print(
+            "CRITICAL WARNING: ALL predictions are empty (token2json total failure). "
+            "F1 will be 0.0 — check model output and token2json compatibility.",
+            file=_sys.stderr,
+        )
 
     for pred, gt in zip(predictions, ground_truths):
         all_correct = True
@@ -216,8 +241,10 @@ def main():
 
     # Load fine-tuned
     print("Loading fine-tuned model...")
-    ft_processor = DonutProcessor.from_pretrained("/workspace/donut-sroie-finetuned")
-    ft_model = VisionEncoderDecoderModel.from_pretrained("/workspace/donut-sroie-finetuned").to(DEVICE)
+    workspace = os.environ.get("DONUT_WORKSPACE", "/workspace")
+    ft_model_dir = os.path.join(workspace, "donut-sroie-finetuned")
+    ft_processor = DonutProcessor.from_pretrained(ft_model_dir)
+    ft_model = VisionEncoderDecoderModel.from_pretrained(ft_model_dir).to(DEVICE)
     ft_model.eval()
 
     pretrained_preds = []
@@ -254,9 +281,10 @@ def main():
             for p, gt, pp, fp in zip(image_paths, ground_truths, pretrained_preds, finetuned_preds)
         ]
     }
-    with open("/workspace/evaluation_results.json", "w") as f:
+    output_file = os.path.join(workspace, "evaluation_results.json")
+    with open(output_file, "w") as f:
         json.dump(output, f, indent=2, default=str)
-    print("Saved → /workspace/evaluation_results.json")
+    print(f"Saved → {output_file}")
 
 
 if __name__ == "__main__":
