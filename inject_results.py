@@ -45,6 +45,7 @@ EXP_NAMES = {
     "5": "+WildReceipt+CORD",
     "6": "+SROIE-NER+CORD",
     "7": "+All",
+    "8": "+Invoices-DONUT",
 }
 
 
@@ -106,11 +107,12 @@ def print_table1_dataset_stats(actual_counts: dict = None) -> None:
     # in stage_install(); actual counts passed from run_all.py when available.
     _c = actual_counts or {}
     rows = [
-        ("SROIE (train)",  _c.get("sroie_train",  526),    4,    "EN",    "Receipts"),
-        ("SROIE (test)",   _c.get("sroie_test",   100),    4,    "EN",    "Receipts"),
-        ("WildReceipt",    _c.get("wildreceipt",  1740),   25,   "EN",    "Receipts"),
-        ("SROIE-NER",      _c.get("sroie_ner",    526),    4,   "EN",    "Receipts"),
-        ("CORD v2",        _c.get("cord",          900),  "30+", "ID",    "Receipts"),
+        ("SROIE (train)",    _c.get("sroie_train",    526),    4,    "EN",    "Receipts"),
+        ("SROIE (test)",     _c.get("sroie_test",     100),    4,    "EN",    "Receipts"),
+        ("WildReceipt",      _c.get("wildreceipt",   1740),   25,   "EN",    "Receipts"),
+        ("SROIE-NER",        _c.get("sroie_ner",      526),    4,   "EN",    "Receipts"),
+        ("CORD v2",          _c.get("cord",            900),  "30+", "ID",    "Receipts"),
+        ("Invoices-DONUT",   _c.get("invoices_donut",  800),  "7+",  "EN",    "Invoices"),
     ]
     for name, n, nf, lang, domain in rows:
         n_str = f"{n:,}" if isinstance(n, int) else str(n)

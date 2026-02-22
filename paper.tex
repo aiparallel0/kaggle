@@ -216,6 +216,7 @@ SROIE (test)     & 100   & 4 & EN & Receipts \\
 WildReceipt      & 1\,740 & 25 & EN & Receipts \\
 SROIE-NER        & 526   & 4 & EN & Receipts \\
 CORD v2          & 900   & 30+ & ID & Receipts \\
+Invoices-DONUT   & 800   & 7+ & EN & Invoices \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -238,6 +239,7 @@ CORD v2          & 900   & 30+ & ID & Receipts \\
 5 & +WildReceipt+CORD    & \VAR{exp5_n} & \VAR{exp5_prec} & \VAR{exp5_rec} & \VAR{exp5_f1} & \VAR{exp5_em} \\
 6 & +SROIE-NER+CORD      & \VAR{exp6_n} & \VAR{exp6_prec} & \VAR{exp6_rec} & \VAR{exp6_f1} & \VAR{exp6_em} \\
 7 & +All                 & \VAR{exp7_n} & \VAR{exp7_prec} & \VAR{exp7_rec} & \VAR{exp7_f1} & \VAR{exp7_em} \\
+8 & +Invoices-DONUT   & \VAR{exp8_n} & \VAR{exp8_prec} & \VAR{exp8_rec} & \VAR{exp8_f1} & \VAR{exp8_em} \\
 \midrule
   & CORD zero-shot       & --    & \VAR{pre_prec}  & \VAR{pre_rec}  & \VAR{pre_f1}  & \VAR{pre_em} \\
 \bottomrule
@@ -266,6 +268,7 @@ CORD v2          & 900   & 30+ & ID & Receipts \\
 5 & +WildReceipt+CORD  & \VAR{exp5_company_f1} & \VAR{exp5_company_ned} & \VAR{exp5_date_f1} & \VAR{exp5_date_ned} & \VAR{exp5_address_f1} & \VAR{exp5_address_ned} & \VAR{exp5_total_f1} & \VAR{exp5_total_ned} \\
 6 & +SROIE-NER+CORD    & \VAR{exp6_company_f1} & \VAR{exp6_company_ned} & \VAR{exp6_date_f1} & \VAR{exp6_date_ned} & \VAR{exp6_address_f1} & \VAR{exp6_address_ned} & \VAR{exp6_total_f1} & \VAR{exp6_total_ned} \\
 7 & +All               & \VAR{exp7_company_f1} & \VAR{exp7_company_ned} & \VAR{exp7_date_f1} & \VAR{exp7_date_ned} & \VAR{exp7_address_f1} & \VAR{exp7_address_ned} & \VAR{exp7_total_f1} & \VAR{exp7_total_ned} \\
+8 & +Invoices-DONUT & \VAR{exp8_company_f1} & \VAR{exp8_company_ned} & \VAR{exp8_date_f1} & \VAR{exp8_date_ned} & \VAR{exp8_address_f1} & \VAR{exp8_address_ned} & \VAR{exp8_total_f1} & \VAR{exp8_total_ned} \\
 \bottomrule
 \end{tabular}
 \end{table*}
