@@ -188,9 +188,10 @@ def main():
             pretrained_preds.append(remap_cord_to_sroie(raw))
 
             # Fine-tuned (SROIE)
-            finetuned_preds.append(
-                run_inference(ft_model, ft_processor, img_path, "<s_sroie>")
-            )
+            raw_ft = run_inference(ft_model, ft_processor, img_path, "<s_sroie>")
+            if "sroie" in raw_ft and isinstance(raw_ft["sroie"], dict):
+                raw_ft = raw_ft["sroie"]
+            finetuned_preds.append(raw_ft)
 
     pretrained_metrics = compute_metrics(pretrained_preds, ground_truths)
     finetuned_metrics = compute_metrics(finetuned_preds, ground_truths)
