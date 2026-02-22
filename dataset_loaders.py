@@ -19,7 +19,12 @@ from typing import List, Tuple, Dict
 
 # Where auxiliary datasets are stored
 DATASETS_DIR = Path("/workspace/datasets")
-SROIE_DIR = Path(os.environ.get("SROIE_DATA_DIR", "/workspace/ICDAR-2019-SROIE/data"))
+
+# BUG C FIX: module-level constant was evaluated once at import time, so
+# os.environ["SROIE_DATA_DIR"] set later in run_all.py had no effect.
+# Use a function that re-reads the env var on every call instead.
+def _get_sroie_dir() -> Path:
+    return Path(os.environ.get("SROIE_DATA_DIR", "/workspace/ICDAR-2019-SROIE/data"))
 
 # Type alias
 Sample = Tuple[Path, Dict[str, str]]
@@ -80,45 +85,72 @@ def _download_with_progress(url: str, dest_path: Path) -> None:
 # SROIE
 # ---------------------------------------------------------------------------
 
+def _load_key_file(key_dir: Path, stem: str) -> Dict[str, str]:
+    """Load a SROIE key file for the given image stem.
+
+    BUG A FIX: The SROIE repo stores annotations as plain .txt files with
+    4 lines (company / date / address / total), NOT as .json files.  The old
+    code only tried .json, so key_file.exists() was always False and every
+    sample was silently skipped.  We now try .json first (for pre-converted
+    data) and fall back to the 4-line .txt format.
+    """
+    # Try .json first in case a user has pre-converted the files
+    key_file_json = key_dir / (stem + ".json")
+    if key_file_json.exists():
+        try:
+            gt = json.loads(key_file_json.read_text(encoding="utf-8"))
+            return {k: str(gt.get(k, "")) for k in EMPTY_GT}
+        except json.JSONDecodeError:
+            pass
+
+    # Fall back to the 4-line .txt format that the repo actually provides
+    key_file_txt = key_dir / (stem + ".txt")
+    if key_file_txt.exists():
+        lines = key_file_txt.read_text(encoding="utf-8").strip().splitlines()
+        if len(lines) >= 4:
+            return {
+                "company": lines[0].strip(),
+                "date":    lines[1].strip(),
+                "address": lines[2].strip(),
+                "total":   lines[3].strip(),
+            }
+
+    return {}
+
+
 def load_sroie_train() -> List[Sample]:
     """Load SROIE training split (526 samples) from the local workspace."""
     samples: List[Sample] = []
-    img_dir = SROIE_DIR / "img"
-    key_dir = SROIE_DIR / "key"
+    sroie_dir = _get_sroie_dir()
+    img_dir = sroie_dir / "img"
+    key_dir = sroie_dir / "key"
     if not img_dir.exists():
         raise FileNotFoundError(f"SROIE img dir not found: {img_dir}")
 
     image_exts = {".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".webp"}
     for img_path in sorted(p for p in img_dir.iterdir()
                            if p.is_file() and p.suffix.lower() in image_exts):
-        key_file = key_dir / (img_path.stem + ".json")
-        if key_file.exists():
-            try:
-                gt = json.loads(key_file.read_text(encoding="utf-8"))
-                samples.append((img_path, {k: str(gt.get(k, "")) for k in EMPTY_GT}))
-            except json.JSONDecodeError:
-                pass
+        gt = _load_key_file(key_dir, img_path.stem)
+        if gt:
+            samples.append((img_path, gt))
     return samples
 
 
 def load_sroie_test() -> List[Sample]:
     """Load SROIE test split (100 samples) from the local workspace."""
     samples: List[Sample] = []
-    img_dir = SROIE_DIR / "test_img"
-    key_dir = SROIE_DIR / "test_key"
+    sroie_dir = _get_sroie_dir()
+    img_dir = sroie_dir / "test_img"
+    key_dir = sroie_dir / "test_key"
     if not img_dir.exists():
         raise FileNotFoundError(f"SROIE test_img dir not found: {img_dir}")
 
     image_exts = {".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".webp"}
     for img_path in sorted(p for p in img_dir.iterdir()
                            if p.is_file() and p.suffix.lower() in image_exts):
-        key_file = key_dir / (img_path.stem + ".json")
-        if key_file.exists():
-            try:
-                gt = json.loads(key_file.read_text(encoding="utf-8"))
-                samples.append((img_path, {k: str(gt.get(k, "")) for k in EMPTY_GT}))
-            except json.JSONDecodeError:
-                pass
+        gt = _load_key_file(key_dir, img_path.stem)
+        if gt:
+            samples.append((img_path, gt))
     return samples
 
 
@@ -242,102 +274,61 @@ _NER_TAG_TO_FIELD = {
 
 
 def _download_sroie_ner() -> Path:
-    """Download SROIE-NER parquet via huggingface_hub (no deprecated script)."""
+    """Download SROIE-NER via datasets.load_dataset + save_to_disk.
+
+    BUG B FIX: The old code downloaded a raw parquet file which contains only
+    an 'image_path' string column, not embedded image bytes.  load_sroie_ner()
+    then looked for an 'image' column that doesn't exist in the parquet, so
+    every row was skipped and 0 samples were returned.
+
+    The fix uses datasets.load_dataset() which automatically resolves the
+    image_path references and provides PIL Image objects via the 'image'
+    feature.  save_to_disk / load_from_disk preserves those Image objects.
+    """
     dest = _ensure_dir(DATASETS_DIR / "sroie_ner")
     marker = dest / ".downloaded"
     if marker.exists():
         return dest
 
-    parquet_dest = dest / "train.parquet"
-
-    # --- Primary: try hf_hub_download with several known parquet paths -------
-    _known_paths = [
-        "data/train-00000-of-00001.parquet",
-        "train/train-00000-of-00001.parquet",
-    ]
     try:
-        from huggingface_hub import hf_hub_download  # type: ignore
-        import shutil
-
-        downloaded = False
-        for hf_path in _known_paths:
-            try:
-                local = hf_hub_download(
-                    repo_id=_SROIE_NER_REPO,
-                    filename=hf_path,
-                    repo_type="dataset",
-                )
-                shutil.copy2(local, str(parquet_dest))
-                downloaded = True
-                break
-            except Exception:
-                pass  # try next known path
-
-        if not downloaded:
-            # Discover actual parquet URLs via the HF Datasets-server API
-            api_url = (
-                "https://datasets-server.huggingface.co/parquet"
-                f"?dataset={_SROIE_NER_REPO}"
-            )
-            try:
-                with urllib.request.urlopen(api_url, timeout=30) as resp:
-                    info = json.loads(resp.read())
-                parquet_files = [
-                    pf["url"]
-                    for pf in info.get("parquet_files", [])
-                    if pf.get("split") == "train"
-                ]
-                if parquet_files:
-                    _download_with_progress(parquet_files[0], parquet_dest)
-                    downloaded = True
-            except Exception:
-                pass  # fall through to load_dataset fallback
-
-        if not downloaded:
-            raise RuntimeError("hf_hub_download: no known parquet path succeeded")
-
-    except Exception as exc_primary:
+        from datasets import load_dataset  # type: ignore
+        ds = load_dataset(_SROIE_NER_REPO, split="train")
+        ds.save_to_disk(str(dest / "hf_cache"))
+        marker.touch()
+    except Exception as exc:
         print(
-            f"[SROIE-NER] hf_hub_download failed ({exc_primary}); "
-            "falling back to datasets.load_dataset ...",
+            f"[SROIE-NER] Download failed: {exc}. "
+            "Experiments 3, 6, 7 will run without SROIE-NER data.",
             file=sys.stderr,
         )
-        # --- Fallback: datasets.load_dataset (no trust_remote_code) ----------
-        try:
-            from datasets import load_dataset  # type: ignore
-            ds = load_dataset(_SROIE_NER_REPO, split="train")
-            ds.to_parquet(str(parquet_dest))
-        except Exception as exc_fallback:
-            print(
-                f"[SROIE-NER] datasets.load_dataset failed ({exc_fallback}). "
-                "Experiments 3, 6, 7 will run without SROIE-NER data.",
-                file=sys.stderr,
-            )
-            return dest
-
-    marker.touch()
     return dest
 
 
 def load_sroie_ner() -> List[Sample]:
-    """Load SROIE-NER (darentang/sroie) and normalize to SROIE schema."""
+    """Load SROIE-NER (darentang/sroie) and normalize to SROIE schema.
+
+    BUG B FIX: Uses load_from_disk (written by _download_sroie_ner via
+    save_to_disk) so that the HF dataset's Image feature is resolved into
+    PIL Image objects.  The old parquet-based path only had an 'image_path'
+    string and no embedded bytes, causing every row to be skipped.
+    """
     dest = _download_sroie_ner()
-    parquet_path = dest / "train.parquet"
-    if not parquet_path.exists():
+    cache_dir = dest / "hf_cache"
+    if not cache_dir.exists():
         print("[SROIE-NER] Cache not found — skipping.", file=sys.stderr)
         return []
 
     try:
-        import pandas as pd  # type: ignore
-        df = pd.read_parquet(str(parquet_path))
+        from datasets import load_from_disk  # type: ignore
+        ds = load_from_disk(str(cache_dir))
     except Exception as exc:
-        print(f"[SROIE-NER] Failed to load parquet: {exc}", file=sys.stderr)
+        print(f"[SROIE-NER] Failed to load cache: {exc}", file=sys.stderr)
         return []
 
     samples: List[Sample] = []
     img_dest_dir = _ensure_dir(dest / "images")
 
-    for row_idx, row in df.iterrows():
+    for row_idx, row in enumerate(ds):
         gt: Dict[str, str] = {k: "" for k in EMPTY_GT}
         words = row.get("words", [])
         ner_tags = row.get("ner_tags", [])
@@ -347,32 +338,20 @@ def load_sroie_ner() -> List[Sample]:
                 text = str(word).strip()
                 gt[field] = (gt[field] + " " + text).strip() if gt[field] else text
 
-        # Images are stored as bytes in the parquet — save to disk
-        image_data = row.get("image")
-        if image_data is not None:
-            img_path = img_dest_dir / f"row_{row_idx:06d}.jpg"
+        # HF datasets resolves image_path into a PIL Image object via the
+        # Image feature; save it to disk so the path-based pipeline can use it.
+        image = row.get("image")
+        if image is not None:
+            img_path = img_dest_dir / f"sroie_ner_{row_idx:06d}.jpg"
             if not img_path.exists():
                 try:
-                    from PIL import Image  # type: ignore
-                    import io
-                    if isinstance(image_data, dict) and "bytes" in image_data:
-                        raw = image_data["bytes"]
-                    elif isinstance(image_data, (bytes, bytearray)):
-                        raw = image_data
-                    else:
-                        raw = None
-                    if raw:
-                        Image.open(io.BytesIO(raw)).convert("RGB").save(
-                            img_path, "JPEG"
-                        )
-                    else:
-                        continue
+                    image.convert("RGB").save(img_path, "JPEG")
                 except Exception:
                     continue
             samples.append((img_path, gt))
 
     # Prevent test-set leakage: exclude any images that match SROIE test stems
-    test_img_dir = SROIE_DIR / "test_img"
+    test_img_dir = _get_sroie_dir() / "test_img"
     if test_img_dir.exists():
         test_stems = {p.stem for p in test_img_dir.iterdir() if p.is_file()}
         samples = [(p, gt) for p, gt in samples if p.stem not in test_stems]

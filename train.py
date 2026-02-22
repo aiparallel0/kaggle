@@ -11,7 +11,11 @@ from transformers import (DonutProcessor, VisionEncoderDecoderModel,
 # training/evaluation outside the experiment framework.
 
 import os
-SROIE_DIR = Path(os.environ.get("SROIE_DATA_DIR", "/workspace/ICDAR-2019-SROIE/data"))
+# BUG C FIX: Use a function so the env var is re-read at call time, not cached
+# at import time (run_all.py sets SROIE_DATA_DIR after this module is imported).
+def _get_sroie_dir():
+    return Path(os.environ.get("SROIE_DATA_DIR", "/workspace/ICDAR-2019-SROIE/data"))
+
 FIELDS = ["company", "date", "address", "total"]
 MAX_LENGTH = 512
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".webp"}
@@ -31,13 +35,28 @@ class SROIEDataset(Dataset):
         self.samples = []
         for img_path in sorted(p for p in Path(img_dir).iterdir()
                                 if p.is_file() and p.suffix.lower() in IMAGE_EXTS):
-            key_file = Path(key_dir) / (img_path.stem + ".json")
-            if key_file.exists():
+            # BUG E FIX: Key files are .txt (4-line format), not .json.
+            # Try .json first for pre-converted data, then fall back to .txt.
+            gt = None
+            key_json = Path(key_dir) / (img_path.stem + ".json")
+            if key_json.exists():
                 try:
-                    gt = json.loads(key_file.read_text(encoding="utf-8"))
-                    self.samples.append((img_path, gt))
+                    gt = json.loads(key_json.read_text(encoding="utf-8"))
                 except json.JSONDecodeError:
                     pass
+            if gt is None:
+                key_txt = Path(key_dir) / (img_path.stem + ".txt")
+                if key_txt.exists():
+                    lines = key_txt.read_text(encoding="utf-8").strip().splitlines()
+                    if len(lines) >= 4:
+                        gt = {
+                            "company": lines[0].strip(),
+                            "date":    lines[1].strip(),
+                            "address": lines[2].strip(),
+                            "total":   lines[3].strip(),
+                        }
+            if gt is not None:
+                self.samples.append((img_path, gt))
         print(f"Loaded {len(self.samples)} samples")
 
     def __len__(self):
@@ -73,7 +92,8 @@ def main():
 
     model.gradient_checkpointing_enable()
 
-    train_ds = SROIEDataset(processor, SROIE_DIR / "img", SROIE_DIR / "key")
+    sroie_dir = _get_sroie_dir()
+    train_ds = SROIEDataset(processor, sroie_dir / "img", sroie_dir / "key")
     args = Seq2SeqTrainingArguments(
         output_dir="/workspace/donut-sroie-finetuned",
         # FIX (BUG 6): Aligned to 5 epochs across train.py and run_experiments.py for reproducibility.
