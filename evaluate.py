@@ -6,7 +6,13 @@ from PIL import Image
 from transformers import DonutProcessor, VisionEncoderDecoderModel
 from tqdm import tqdm
 
-SROIE_DIR = Path("/workspace/ICDAR-2019-SROIE/data")
+# WARNING: This is a legacy standalone script. For the full 7-experiment
+# pipeline, use: python run_all.py
+# This script is kept for backward compatibility and ad-hoc single-model
+# training/evaluation outside the experiment framework.
+
+import os
+SROIE_DIR = Path(os.environ.get("SROIE_DATA_DIR", "/workspace/ICDAR-2019-SROIE/data"))
 FIELDS = ["company", "date", "address", "total"]
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".webp"}
@@ -54,8 +60,15 @@ def remap_cord_to_sroie(cord_output):
             result["total"] = total_info.get("total_price", "")
         elif isinstance(total_info, list) and len(total_info) > 0:
             result["total"] = total_info[0].get("total_price", "")
-        # CORD does not have a standard date field; leave empty
-        result["date"] = ""
+        date_info = cord_output.get("date", {})
+        if isinstance(date_info, dict):
+            result["date"] = str(date_info.get("date_value", "")).strip()
+        elif isinstance(date_info, list) and len(date_info) > 0:
+            result["date"] = str(date_info[0].get("date_value", "")).strip()
+        elif isinstance(date_info, str):
+            result["date"] = date_info.strip()
+        else:
+            result["date"] = ""
     return result
 
 
@@ -143,7 +156,8 @@ def print_results(pretrained_m, finetuned_m):
         ("PICK (Yu et al. 2021)", 0.9612),
         ("BROS (Hong et al. 2022)", 0.9548),
         ("LayoutLMv2 (Xu et al. 2021)", 0.9495),
-        ("DONUT published (Kim 2022)", 0.8411),
+        # Zero-shot F1 from Table 1 of "OCR-free Document Understanding Transformer" (Kim et al., ECCV 2022)
+        ("DONUT zero-shot (Kim et al. 2022)", 0.8411),
         ("Our pretrained (CORD zero-shot)", pretrained_m["global_f1"]),
         ("Our fine-tuned (this work)", finetuned_m["global_f1"]),
     ]

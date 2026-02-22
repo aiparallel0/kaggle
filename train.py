@@ -5,7 +5,13 @@ from torch.utils.data import Dataset
 from transformers import (DonutProcessor, VisionEncoderDecoderModel,
                           Seq2SeqTrainer, Seq2SeqTrainingArguments)
 
-SROIE_DIR = Path("/workspace/ICDAR-2019-SROIE/data")
+# WARNING: This is a legacy standalone script. For the full 7-experiment
+# pipeline, use: python run_all.py
+# This script is kept for backward compatibility and ad-hoc single-model
+# training/evaluation outside the experiment framework.
+
+import os
+SROIE_DIR = Path(os.environ.get("SROIE_DATA_DIR", "/workspace/ICDAR-2019-SROIE/data"))
 FIELDS = ["company", "date", "address", "total"]
 MAX_LENGTH = 512
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".webp"}
@@ -77,7 +83,7 @@ def main():
         warmup_steps=100,
         weight_decay=0.01,
         save_strategy="epoch",
-        save_total_limit=2,
+        save_total_limit=1,  # Aligned with run_experiments.py for consistency
         predict_with_generate=True,
         fp16=True,
         logging_steps=20,

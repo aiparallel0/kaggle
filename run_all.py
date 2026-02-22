@@ -2,6 +2,7 @@
 run_all.py — Single entry point that runs the complete DONUT SROIE pipeline.
 
 Calling this one script does everything:
+  0. Installs SROIE data (auto-clones from GitHub and creates train/test split)
   1. Verifies / downloads all auxiliary datasets
   2. Trains DONUT (from the CORD checkpoint) for each of the 7 experiment configurations
   3. Evaluates every fine-tuned model on the SROIE test set
@@ -24,6 +25,12 @@ Usage
   # Override where SROIE data and workspace dirs live:
       python run_all.py --sroie-dir /data/SROIE --workspace /workspace
 
+  # Skip SROIE auto-install (data already present):
+      python run_all.py --skip-install
+
+  # Skip pretrained baseline evaluation:
+      python run_all.py --skip-pretrained
+
   # Change output paper filename:
       python run_all.py --output my_paper.tex
 
@@ -36,10 +43,15 @@ Exit codes
 
 import argparse
 import json
+import os
+import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
 
+
+TEST_SPLIT_SIZE = 100  # Number of images reserved for the test split
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -55,6 +67,87 @@ def _banner(text: str) -> None:
 def _step(n: int, total: int, desc: str) -> None:
     print(f"\n[{n}/{total}] {desc}")
     print("-" * 60)
+
+
+# ---------------------------------------------------------------------------
+# Stage 0 — SROIE auto-install
+# ---------------------------------------------------------------------------
+
+def stage_install(args) -> None:
+    """Clone SROIE from GitHub and create a train/test split if not present."""
+    _banner("STAGE 0 — SROIE data install")
+
+    sroie_data_dir = Path(args.sroie_dir)
+    sroie_img = sroie_data_dir / "img"
+    sroie_test_img = sroie_data_dir / "test_img"
+
+    if sroie_img.exists() and sroie_test_img.exists():
+        print(f"  SROIE data already present at {sroie_data_dir} — skipping install.")
+        return
+
+    # Clone from GitHub into the parent directory of sroie_data_dir
+    parent_dir = sroie_data_dir.parent
+    parent_dir.mkdir(parents=True, exist_ok=True)
+    repo_url = "https://github.com/zzzDavid/ICDAR-2019-SROIE.git"
+    clone_target = parent_dir / "ICDAR-2019-SROIE-repo"
+
+    if not clone_target.exists():
+        print(f"  Cloning {repo_url} ...")
+        try:
+            subprocess.run(
+                ["git", "clone", "--depth", "1", repo_url, str(clone_target)],
+                check=True,
+            )
+        except subprocess.CalledProcessError:
+            print(
+                f"ERROR: Failed to clone SROIE repository from {repo_url}.",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+
+    # The repo has data/img/, data/key/, data/box/ but no test split.
+    # Point sroie_data_dir at the cloned repo's data/ subdirectory if needed.
+    cloned_data = clone_target / "data"
+    if not sroie_data_dir.exists() and cloned_data.exists():
+        # Symlink or use the cloned data dir directly
+        sroie_data_dir.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(str(cloned_data), str(sroie_data_dir))
+
+    # Verify source directories exist
+    img_dir = sroie_data_dir / "img"
+    key_dir = sroie_data_dir / "key"
+    if not img_dir.exists():
+        print(
+            f"ERROR: Expected {img_dir} after clone — directory not found.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    # Create test split: last 100 images alphabetically → test_img / test_key
+    image_exts = {".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".webp"}
+    all_images = sorted(
+        p for p in img_dir.iterdir()
+        if p.is_file() and p.suffix.lower() in image_exts
+    )
+    test_images = all_images[-TEST_SPLIT_SIZE:]
+
+    test_img_dir = sroie_data_dir / "test_img"
+    test_key_dir = sroie_data_dir / "test_key"
+    test_img_dir.mkdir(exist_ok=True)
+    test_key_dir.mkdir(exist_ok=True)
+
+    moved = 0
+    for img_path in test_images:
+        shutil.move(str(img_path), str(test_img_dir / img_path.name))
+        key_src = key_dir / (img_path.stem + ".json")
+        if key_src.exists():
+            shutil.move(str(key_src), str(test_key_dir / key_src.name))
+        moved += 1
+
+    train_count = len(list(img_dir.iterdir()))
+    print(f"  Train images : {train_count}")
+    print(f"  Test images  : {moved}")
+    print(f"  SROIE data ready at {sroie_data_dir}")
 
 
 # ---------------------------------------------------------------------------
@@ -91,6 +184,52 @@ def stage_download(args) -> None:
             print(f"    → WARNING: failed to fetch '{ds_name}': {exc}. "
                   f"Any experiment that includes this dataset will produce 0 samples "
                   f"from it and fall back to SROIE-only training.")
+
+
+# ---------------------------------------------------------------------------
+# Stage 1.5 — Pretrained baseline evaluation
+# ---------------------------------------------------------------------------
+
+def stage_pretrained_baseline(args) -> None:
+    """Evaluate the pretrained CORD model as a zero-shot baseline on SROIE test."""
+    import torch
+    import dataset_loaders
+    import evaluate as eval_mod
+    from transformers import DonutProcessor, VisionEncoderDecoderModel
+
+    _banner("STAGE 1.5 — Pretrained baseline evaluation (zero-shot CORD)")
+
+    workspace = Path(args.workspace)
+    output_path = workspace / "evaluation_results.json"
+
+    test_samples = dataset_loaders.load_sroie_test()
+    print(f"  Evaluating on {len(test_samples)} test images ...")
+
+    ground_truths = [s[1] for s in test_samples]
+    image_paths = [s[0] for s in test_samples]
+
+    pretrained_model_id = "naver-clova-ix/donut-base-finetuned-cord-v2"
+    print(f"  Loading pretrained model: {pretrained_model_id}")
+    pre_processor = DonutProcessor.from_pretrained(pretrained_model_id)
+    pre_model = VisionEncoderDecoderModel.from_pretrained(pretrained_model_id).to(
+        eval_mod.DEVICE
+    )
+    pre_model.eval()
+
+    pretrained_preds = []
+    with torch.no_grad():
+        for img_path in image_paths:
+            raw = eval_mod.run_inference(pre_model, pre_processor, img_path, "<s_cord-v2>")
+            pretrained_preds.append(eval_mod.remap_cord_to_sroie(raw))
+
+    pretrained_metrics = eval_mod.compute_metrics(pretrained_preds, ground_truths)
+    print(f"  Pretrained Global F1 = {pretrained_metrics.get('global_f1', 'N/A')}")
+
+    workspace.mkdir(parents=True, exist_ok=True)
+    output = {"pretrained_metrics": pretrained_metrics}
+    with open(output_path, "w") as fh:
+        json.dump(output, fh, indent=2, default=str)
+    print(f"  Saved → {output_path}")
 
 
 # ---------------------------------------------------------------------------
@@ -136,6 +275,7 @@ def stage_experiments(args) -> int:
 
 def stage_paper(args) -> None:
     """Generate LaTeX tables and fill paper_filled.tex."""
+    import dataset_loaders
     import inject_results as ir  # local module
 
     _banner("STAGE 3 — LaTeX paper generation")
@@ -148,7 +288,16 @@ def stage_paper(args) -> None:
     with open(results_path) as fh:
         all_exp = json.load(fh)
 
-    ir.print_table1_dataset_stats()
+    # Compute actual dataset counts for Table 1
+    try:
+        actual_counts = {
+            "sroie_train": len(dataset_loaders.load_sroie_train()),
+            "sroie_test": len(dataset_loaders.load_sroie_test()),
+        }
+    except Exception:
+        actual_counts = None
+
+    ir.print_table1_dataset_stats(actual_counts)
     ir.print_table2_experiments(all_exp)
     ir.print_table3_perfield(all_exp)
     ir.print_table4_leaderboard(all_exp)
@@ -190,8 +339,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Skip download & training; only generate the paper from existing results",
     )
     p.add_argument(
+        "--skip-install", action="store_true",
+        help="Skip Stage 0 SROIE auto-install (data already present)",
+    )
+    p.add_argument(
         "--skip-download", action="store_true",
         help="Skip the dataset download/verification stage",
+    )
+    p.add_argument(
+        "--skip-pretrained", action="store_true",
+        help="Skip pretrained baseline evaluation step",
     )
     p.add_argument(
         "--sroie-dir", default="/workspace/ICDAR-2019-SROIE/data",
@@ -221,17 +378,21 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
 
-    # Propagate workspace override to sub-modules before importing them
-    import os
+    # Propagate workspace and SROIE dir overrides to sub-modules before importing them
     os.environ.setdefault("DONUT_WORKSPACE", args.workspace)
+    os.environ["SROIE_DATA_DIR"] = args.sroie_dir
 
     exit_code = 0
 
     if args.paper_only:
         stage_paper(args)
     else:
+        if not args.skip_install:
+            stage_install(args)
         if not args.skip_download:
             stage_download(args)
+        if not args.skip_pretrained:
+            stage_pretrained_baseline(args)
         exit_code = stage_experiments(args)
         stage_paper(args)
 
