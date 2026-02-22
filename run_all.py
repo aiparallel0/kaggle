@@ -106,6 +106,12 @@ def stage_experiments(args) -> int:
     results_dir = Path("results")
     results_dir.mkdir(exist_ok=True)
 
+    # FIX (BUG 3): honour --force by clearing cached result files first
+    if getattr(args, "force", False):
+        for result_file in results_dir.glob("experiment_*.json"):
+            result_file.unlink()
+            print(f"[force] Deleted cached result: {result_file}")
+
     exp_ids = [args.experiment] if args.experiment else list(re_mod.EXPERIMENTS.keys())
     total = len(exp_ids)
     had_empty = False
@@ -173,6 +179,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--experiment", type=int, metavar="N",
         help="Run only experiment N (1–7) instead of all 7",
+    )
+    p.add_argument(
+        "--force", action="store_true",
+        # FIX (BUG 3): Delete all cached results and re-run every experiment.
+        help="Delete all cached experiment results and re-run from scratch",
     )
     p.add_argument(
         "--paper-only", action="store_true",

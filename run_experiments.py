@@ -193,12 +193,23 @@ def evaluate_experiment(exp_id: int, model_dir: Path) -> Dict:
     ft_model.eval()
 
     finetuned_preds = []
+    empty_count = 0
     with torch.no_grad():
         for img_path in image_paths:
             pred = run_inference(ft_model, ft_processor, img_path, "<s_sroie>")
             if "sroie" in pred and isinstance(pred["sroie"], dict):
                 pred = pred["sroie"]
+            if not pred:
+                empty_count += 1
             finetuned_preds.append(pred)
+
+    # FIX (BUG 5): Report how many predictions were empty so users can detect
+    # systematic token2json failures that would silently contaminate metrics.
+    if empty_count > 0:
+        print(
+            f"[Exp {exp_id}] WARNING: {empty_count} of {len(image_paths)} predictions were empty"
+            " (token2json failure or empty model output)"
+        )
 
     metrics = compute_metrics(finetuned_preds, ground_truths)
     return metrics
@@ -222,11 +233,21 @@ def run_experiment(exp_id: int) -> Dict:
 
     result_file = RESULTS_DIR / f"experiment_{exp_id}.json"
 
-    # Check if already done
+    # Check if already done - FIX (BUG 3): validate cached result matches
+    # current experiment definition before reusing. Previously ANY cached file
+    # was returned without checking if datasets had changed, causing stale results.
     if result_file.exists():
-        print(f"[Exp {exp_id}] Results already exist at {result_file} — skipping.")
         with open(result_file) as fh:
-            return json.load(fh)
+            cached = json.load(fh)
+        if cached.get("datasets") != exp["datasets"]:
+            print(
+                f"[Exp {exp_id}] STALE result detected (datasets mismatch). "
+                "Deleting and re-running."
+            )
+            result_file.unlink()
+        else:
+            print(f"[Exp {exp_id}] Valid cached result found — skipping.")
+            return cached
 
     # Load data
     samples = dataset_loaders.get_combined_dataset(exp["datasets"])
@@ -304,7 +325,16 @@ def main() -> None:
     group.add_argument("--all", action="store_true", help="Run all 7 experiments sequentially")
     group.add_argument("--experiment", type=int, metavar="N",
                        help="Run a single experiment (1-7)")
+    # FIX (BUG 3): --force deletes all cached result files so every experiment
+    # is re-run from scratch regardless of cached state.
+    parser.add_argument("--force", action="store_true",
+                        help="Delete all cached results and re-run from scratch")
     args = parser.parse_args()
+
+    if args.force:
+        for result_file in RESULTS_DIR.glob("experiment_*.json"):
+            result_file.unlink()
+            print(f"[force] Deleted cached result: {result_file}")
 
     if args.all:
         for exp_id in EXPERIMENTS:

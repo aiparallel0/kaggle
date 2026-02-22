@@ -70,8 +70,9 @@ def main():
     train_ds = SROIEDataset(processor, SROIE_DIR / "img", SROIE_DIR / "key")
     args = Seq2SeqTrainingArguments(
         output_dir="/workspace/donut-sroie-finetuned",
-        num_train_epochs=10,          # 10 epochs from CORD checkpoint is enough
-        per_device_train_batch_size=4,
+        # FIX (BUG 6): Aligned to 5 epochs across train.py and run_experiments.py for reproducibility.
+        # Previously train.py used 10, run_experiments.py used 5, producing incomparable models.
+        num_train_epochs=5,        per_device_train_batch_size=4,
         learning_rate=5e-5,
         warmup_steps=100,
         weight_decay=0.01,

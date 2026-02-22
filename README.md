@@ -1,8 +1,136 @@
-# OCR Receipt Analysis System
+# Multi-Dataset Fine-Tuning of DONUT for Receipt Information Extraction
 
-## 🎯 Overview
+A systematic study of multi-dataset fine-tuning for receipt key information
+extraction (KIE) using the DONUT (Document Understanding Transformer) model.
 
-A production-ready OCR receipt processing system available in **two versions**:
+## Overview
+
+Starting from a CORD-pretrained DONUT checkpoint, this pipeline trains on
+the SROIE benchmark combined with three auxiliary datasets (WildReceipt,
+SROIE-NER, CORD) across 7 experiment configurations, evaluates each model
+on the SROIE test set, and generates a complete LaTeX paper with real results.
+
+## Repository Structure (7-file pipeline)
+
+```
+.
+├── dataset_loaders.py   # Download & normalize WildReceipt, SROIE-NER, CORD
+├── train.py             # Standalone SROIE-only fine-tuning script
+├── evaluate.py          # Inference + SROIE Task-3 metric computation
+├── run_experiments.py   # 7-experiment orchestrator (train + eval)
+├── run_all.py           # Single entry point: download → train → eval → paper
+├── inject_results.py    # Generate LaTeX tables; fill paper_filled.tex
+├── paper.tex            # LaTeX paper template with \VAR{} placeholders
+├── requirements.txt     # Python dependencies
+├── results/             # Per-experiment JSON results (created at runtime)
+└── legacy/              # Archived files from previous iterations
+```
+
+## Quick Start (vast.ai / Jupyter terminal)
+
+```bash
+# 1. Install dependencies
+pip install -r requirements.txt
+
+# 2. Place SROIE data at /workspace/ICDAR-2019-SROIE/data/
+#    Expected subdirs: img/, key/, test_img/, test_key/
+
+# 3. Run the full pipeline (all 7 experiments)
+python run_all.py
+
+# 4. Run a single experiment
+python run_all.py --experiment 2
+
+# 5. Force re-run (ignore cached results)
+python run_all.py --force
+
+# 6. Generate paper only (results must already exist)
+python run_all.py --paper-only
+```
+
+## Experiment Definitions
+
+| Exp | Training Data                  | Description                          |
+|-----|-------------------------------|--------------------------------------|
+| 1   | SROIE only                    | Baseline — 526 SROIE train images    |
+| 2   | SROIE + WildReceipt           | +~1 740 WildReceipt images           |
+| 3   | SROIE + SROIE-NER             | +NER token-level view of SROIE       |
+| 4   | SROIE + CORD                  | +~900 CORD receipt images            |
+| 5   | SROIE + WildReceipt + CORD    | Combined receipt datasets            |
+| 6   | SROIE + SROIE-NER + CORD      | NER view + CORD                      |
+| 7   | SROIE + All                   | All four datasets combined           |
+
+## Dataset Sources
+
+- **SROIE**: Must be downloaded manually and placed at
+  `/workspace/ICDAR-2019-SROIE/data/`
+- **WildReceipt**: Auto-downloaded from
+  `https://download.openmmlab.com/mmocr/data/wildreceipt.tar`
+- **SROIE-NER**: Auto-downloaded from HuggingFace
+  (`darentang/sroie` via `huggingface_hub.snapshot_download`)
+- **CORD**: Auto-downloaded from HuggingFace
+  (`naver-clova-ix/cord-v2`)
+
+## CLI Reference
+
+### `run_all.py`
+
+```
+python run_all.py [options]
+
+Options:
+  --experiment N      Run only experiment N (1–7)
+  --force             Delete cached results and re-run from scratch
+  --paper-only        Skip training; generate paper from existing results
+  --skip-download     Skip dataset download/verification stage
+  --sroie-dir PATH    Path to SROIE data (default: /workspace/ICDAR-2019-SROIE/data)
+  --workspace PATH    Workspace root for model checkpoints (default: /workspace)
+  --paper-template F  LaTeX template to fill (default: paper.tex)
+  --output F          Output filled LaTeX file (default: paper_filled.tex)
+```
+
+### `run_experiments.py`
+
+```
+python run_experiments.py --all [--force]
+python run_experiments.py --experiment N [--force]
+```
+
+### `inject_results.py`
+
+```
+python inject_results.py --all [--results PATH] [--paper paper.tex] [--output paper_filled.tex]
+```
+
+## Evaluation Metric
+
+SROIE Task 3 global F1 over all (image, field) pairs, where a pair is TP
+if the predicted string equals the ground truth string (case-insensitive,
+stripped). NED (Normalized Edit Distance) is also reported per field; lower
+is better (↓).
+
+## Results Format
+
+Each experiment saves `results/experiment_N.json`:
+
+```json
+{
+  "experiment_id": 1,
+  "name": "SROIE only (baseline)",
+  "datasets": ["sroie"],
+  "num_train_samples": 526,
+  "metrics": {
+    "global_f1": 0.9123,
+    "global_precision": 0.9200,
+    "global_recall": 0.9048,
+    "overall_exact_match": 0.8500,
+    "company_f1": 0.9500,
+    "company_ned": 0.0312,
+    ...
+  }
+}
+```
+
 
 ### 🚀 Single File Version (For Kaggle)
 **File**: `kaggle_receipt_ocr.py` (1,009 lines, 38KB)
