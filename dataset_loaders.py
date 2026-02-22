@@ -12,6 +12,7 @@ import json
 import os
 import sys
 import tarfile
+import time
 import urllib.request
 from pathlib import Path
 from typing import List, Tuple, Dict
@@ -29,6 +30,50 @@ EMPTY_GT = {"company": "", "date": "", "address": "", "total": ""}
 def _ensure_dir(path: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def _download_with_progress(url: str, dest_path: Path) -> None:
+    """Download *url* to *dest_path* with 60-s timeout, chunked streaming,
+    per-chunk progress, and up to 3 retries with exponential back-off."""
+    max_retries = 3
+    backoff = [5, 15, 45]
+    for attempt in range(max_retries):
+        try:
+            response = urllib.request.urlopen(url, timeout=60)
+            total = int(response.headers.get("Content-Length") or 0)
+            total_mb = total / 1024 / 1024
+            downloaded = 0
+            t0 = time.time()
+            with open(dest_path, "wb") as fh:
+                while True:
+                    chunk = response.read(8 * 1024 * 1024)  # 8 MB chunks
+                    if not chunk:
+                        break
+                    fh.write(chunk)
+                    downloaded += len(chunk)
+                    dl_mb = downloaded / 1024 / 1024
+                    if total:
+                        pct = downloaded / total * 100
+                        print(f"\r[{pct:5.1f}%] {dl_mb:.1f} / {total_mb:.1f} MB",
+                              end="", flush=True)
+                    else:
+                        print(f"\r[{dl_mb:.1f} MB downloaded]", end="", flush=True)
+            elapsed = time.time() - t0
+            print(f"\nDownload complete in {elapsed:.1f}s")
+            return
+        except Exception as exc:
+            if dest_path.exists():
+                dest_path.unlink()
+            if attempt < max_retries - 1:
+                wait = backoff[attempt]
+                print(
+                    f"\n[download] Attempt {attempt + 1} failed: {exc}. "
+                    f"Retrying in {wait}s ...",
+                    flush=True,
+                )
+                time.sleep(wait)
+            else:
+                raise
 
 
 # ---------------------------------------------------------------------------
@@ -111,7 +156,7 @@ def _download_wildreceipt() -> Path:
     tar_path = dest / "wildreceipt.tar"
     try:
         print(f"[WildReceipt] Downloading from {url} ...")
-        urllib.request.urlretrieve(url, str(tar_path))
+        _download_with_progress(url, tar_path)
         print("[WildReceipt] Extracting tar ...")
         with tarfile.open(str(tar_path)) as tf:
             tf.extractall(str(dest))
@@ -178,14 +223,8 @@ def load_wildreceipt() -> List[Sample]:
 
 # FIX (BUG 2): Old code used load_dataset("darentang/sroie") which fails with
 # "Dataset scripts are no longer supported" and silently returned [].
-# New code uses huggingface_hub.snapshot_download to fetch parquet files
-# without invoking the deprecated loading script, then reads with pandas.
+# New code uses huggingface_hub / datasets API with dynamic parquet discovery.
 _SROIE_NER_REPO = "darentang/sroie"
-_SROIE_NER_PARQUET = "data/train-00000-of-00001.parquet"
-_SROIE_NER_PARQUET_URL = (
-    "https://huggingface.co/datasets/darentang/sroie/resolve/main/"
-    "data/train-00000-of-00001.parquet"
-)
 
 # NER tag index → (SROIE field, is_begin) mapping.
 # Tag scheme: 0=O, 1=B-COMPANY, 2=I-COMPANY, 3=B-DATE, 4=I-DATE,
@@ -210,33 +249,68 @@ def _download_sroie_ner() -> Path:
         return dest
 
     parquet_dest = dest / "train.parquet"
+
+    # --- Primary: try hf_hub_download with several known parquet paths -------
+    _known_paths = [
+        "data/train-00000-of-00001.parquet",
+        "train/train-00000-of-00001.parquet",
+    ]
     try:
-        # Primary: snapshot_download bypasses the deprecated loading script
-        from huggingface_hub import snapshot_download  # type: ignore
-        local_dir = snapshot_download(
-            repo_id=_SROIE_NER_REPO, repo_type="dataset"
-        )
-        src = Path(local_dir) / _SROIE_NER_PARQUET
-        if src.exists():
-            import shutil
-            shutil.copy2(str(src), str(parquet_dest))
-        else:
-            raise FileNotFoundError(
-                f"Expected parquet not found in snapshot: {src}"
+        from huggingface_hub import hf_hub_download  # type: ignore
+        import shutil
+
+        downloaded = False
+        for hf_path in _known_paths:
+            try:
+                local = hf_hub_download(
+                    repo_id=_SROIE_NER_REPO,
+                    filename=hf_path,
+                    repo_type="dataset",
+                )
+                shutil.copy2(local, str(parquet_dest))
+                downloaded = True
+                break
+            except Exception:
+                pass  # try next known path
+
+        if not downloaded:
+            # Discover actual parquet URLs via the HF Datasets-server API
+            api_url = (
+                "https://datasets-server.huggingface.co/parquet"
+                f"?dataset={_SROIE_NER_REPO}"
             )
+            try:
+                with urllib.request.urlopen(api_url, timeout=30) as resp:
+                    info = json.loads(resp.read())
+                parquet_files = [
+                    pf["url"]
+                    for pf in info.get("parquet_files", [])
+                    if pf.get("split") == "train"
+                ]
+                if parquet_files:
+                    _download_with_progress(parquet_files[0], parquet_dest)
+                    downloaded = True
+            except Exception:
+                pass  # fall through to load_dataset fallback
+
+        if not downloaded:
+            raise RuntimeError("hf_hub_download: no known parquet path succeeded")
+
     except Exception as exc_primary:
         print(
-            f"[SROIE-NER] snapshot_download failed ({exc_primary}); "
-            "falling back to direct wget ...",
+            f"[SROIE-NER] hf_hub_download failed ({exc_primary}); "
+            "falling back to datasets.load_dataset ...",
             file=sys.stderr,
         )
+        # --- Fallback: datasets.load_dataset (no trust_remote_code) ----------
         try:
-            urllib.request.urlretrieve(_SROIE_NER_PARQUET_URL, str(parquet_dest))
+            from datasets import load_dataset  # type: ignore
+            ds = load_dataset(_SROIE_NER_REPO, split="train")
+            ds.to_parquet(str(parquet_dest))
         except Exception as exc_fallback:
-            # FIX (BUG 2): Loud failure instead of silent empty return.
             print(
-                f"[SROIE-NER] FATAL: Download failed from {_SROIE_NER_PARQUET_URL}: "
-                f"{exc_fallback}. This experiment will have MISSING DATA.",
+                f"[SROIE-NER] datasets.load_dataset failed ({exc_fallback}). "
+                "Experiments 3, 6, 7 will run without SROIE-NER data.",
                 file=sys.stderr,
             )
             return dest
@@ -319,7 +393,7 @@ def _download_cord() -> Path:
 
     try:
         from datasets import load_dataset  # type: ignore
-        ds = load_dataset("naver-clova-ix/cord-v2", trust_remote_code=True)
+        ds = load_dataset("naver-clova-ix/cord-v2")
         ds.save_to_disk(str(dest / "hf_cache"))
         marker.touch()
     except Exception as exc:
