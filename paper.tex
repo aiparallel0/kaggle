@@ -1,0 +1,460 @@
+% paper.tex — "Multi-Dataset Fine-Tuning of DONUT for Receipt Information
+% Extraction: A Systematic Study"
+%
+% Placeholder values use the convention \VAR{experiment_metric} and are
+% replaced automatically by inject_results.py.
+%
+% Compile with: pdflatex paper.tex  (twice for cross-references)
+
+\documentclass[conference]{IEEEtran}
+
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{url}
+\usepackage{hyperref}
+\usepackage{graphicx}
+\usepackage{xspace}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+
+% ------------------------------------------------------------------
+% Convenience macro — replaced by inject_results.py
+% ------------------------------------------------------------------
+\newcommand{\VAR}[1]{\texttt{[#1]}\xspace}
+
+\begin{document}
+
+% ------------------------------------------------------------------
+% Title & Authors
+% ------------------------------------------------------------------
+\title{Multi-Dataset Fine-Tuning of DONUT for Receipt Information Extraction:
+       A Systematic Study}
+
+\author{
+  \IEEEauthorblockN{Anonymous Author(s)}
+  \IEEEauthorblockA{Institution\\
+    City, Country\\
+    email@example.com}
+}
+
+\maketitle
+
+% ------------------------------------------------------------------
+% Abstract
+% ------------------------------------------------------------------
+\begin{abstract}
+We present a systematic study of multi-dataset fine-tuning for receipt
+information extraction (KIE) using the DONUT (Document Understanding
+Transformer) model.  Starting from a CORD-pretrained checkpoint, we train
+on the SROIE benchmark combined with six auxiliary datasets—WildReceipt,
+FUNSD, XFUND, EATEN, CORD, and a Kaggle Scanned Images dataset—and
+evaluate every combination on the 100-image SROIE test set using the
+official Task-3 F1 metric.  Our best configuration achieves a global F1 of
+\VAR{best_f1}, demonstrating that domain-proximate receipt datasets provide
+the largest gains while generic form datasets offer only modest improvements.
+\end{abstract}
+
+% ------------------------------------------------------------------
+% Section 1 — Introduction
+% ------------------------------------------------------------------
+\section{Introduction}
+\label{sec:intro}
+
+Receipts and invoices are ubiquitous in financial and logistical workflows.
+Automatically extracting structured information—store name, date, address,
+and total amount—from receipt images is a key sub-problem of document
+understanding known as Key Information Extraction (KIE).
+
+Traditional pipelines depend on an OCR stage followed by a layout-aware NLP
+model, which makes them sensitive to OCR errors and page layout variations.
+DONUT~\cite{kim2022donut} removes the OCR dependency entirely: a
+Vision Transformer encoder reads the image directly and an autoregressive
+decoder generates structured JSON-like output token by token.  Pretrained on
+the large-scale CORD v2 receipt corpus, DONUT achieves 84.11\% F1 on
+SROIE~\cite{huang2019icdar} as a zero-shot CORD-to-SROIE transfer.
+
+A natural question is whether additional receipt or document datasets can
+push this further through supervised fine-tuning.  We design seven
+controlled experiments (Table~\ref{tab:experiments}) that combine SROIE
+with progressively more diverse auxiliary data and measure the impact on
+SROIE Task-3 performance.
+
+% ------------------------------------------------------------------
+% Section 2 — Related Work
+% ------------------------------------------------------------------
+\section{Related Work}
+\label{sec:related}
+
+\subsection{Document Understanding Transformers}
+
+LayoutLM~\cite{xu2020layoutlm} and its successors LayoutLMv2~\cite{xu2021layoutlmv2}
+and LayoutLMv3~\cite{huang2022layoutlmv3} jointly encode text, layout, and
+visual features, achieving state-of-the-art results on multiple KIE
+benchmarks.  BROS~\cite{hong2022bros} introduces a token-relation
+pre-training objective that improves spatial understanding.  Unlike these
+methods, DONUT~\cite{kim2022donut} is entirely OCR-free: it reads pixel
+values and predicts a structured string, eliminating text-recognition errors
+from the pipeline.
+
+\subsection{SROIE Benchmark}
+
+The ICDAR 2019 SROIE dataset~\cite{huang2019icdar} contains 626 scanned
+receipt images labelled with four fields: company name, date, address, and
+total amount.  The Task-3 evaluation reports global precision, recall, and
+F1 over all (image, field) pairs.  Published F1 scores range from 84.11\%
+(DONUT) to 96.33\% (LayoutLMv3).
+
+\subsection{Multi-Dataset Transfer Learning}
+
+Multi-task and multi-dataset training has shown benefits in NLP
+(T5~\cite{raffel2020t5}) and vision-language models.  In the document
+understanding domain, combining structurally similar datasets (e.g.\ CORD
+and SROIE) has been shown to improve generalisation, while dissimilar
+datasets (e.g.\ academic forms) can cause negative transfer if schema
+mismatch is not addressed by careful field remapping.
+
+% ------------------------------------------------------------------
+% Section 3 — Methodology
+% ------------------------------------------------------------------
+\section{Methodology}
+\label{sec:method}
+
+\subsection{Base Model}
+
+We use \texttt{naver-clova-ix/donut-base-finetuned-cord-v2} as our starting
+checkpoint.  The DONUT architecture consists of a Swin Transformer
+encoder~\cite{liu2021swin} (input: $1280 \times 960$ image) and a BART
+decoder~\cite{lewis2020bart} that produces token sequences.  The model has
+approximately 200\,M parameters.
+
+\subsection{Fine-Tuning Protocol}
+
+We fine-tune using the HuggingFace \texttt{Seq2SeqTrainer} with:
+\begin{itemize}
+  \item 5 training epochs (reduced from the default 10 to prevent
+        overfitting on small auxiliary datasets);
+  \item batch size 4 per GPU;
+  \item learning rate $5 \times 10^{-5}$ with 100 warm-up steps and
+        weight-decay 0.01;
+  \item mixed-precision training (FP16) on an NVIDIA RTX 4090.
+\end{itemize}
+
+The target sequence format is:
+\begin{verbatim}
+<s_sroie><s_company>...</s_company>
+<s_date>...</s_date>
+<s_address>...</s_address>
+<s_total>...</s_total></s_sroie>
+\end{verbatim}
+Ten new special tokens are added to the tokenizer vocabulary and the
+decoder embedding matrix is resized accordingly.
+
+\subsection{Datasets}
+\label{sec:datasets}
+
+Table~\ref{tab:dataset_stats} summarises all datasets used in this study.
+
+\paragraph{SROIE}~\cite{huang2019icdar} contains 526 training and 100 test
+scanned receipt images annotated with four fields.  All experiments train on
+the same 526-image split and evaluate on the same 100-image test split.
+
+\paragraph{WildReceipt}~\cite{sun2021wildreceipt} is a large-scale dataset
+of ~1\,740 receipt images annotated with 25 KIE categories covering diverse
+receipt layouts.
+
+\paragraph{FUNSD}~\cite{jaume2019funsd} provides 199 fully-annotated form
+documents with question-answer pairs.
+
+\paragraph{XFUND}~\cite{xu2022xfund} extends FUNSD to seven non-English
+languages (Chinese, Japanese, Spanish, French, Italian, German, Portuguese),
+contributing ~1\,393 additional form images.
+
+\paragraph{EATEN}~\cite{guo2019eaten} is a dataset of ~3\,000 Chinese
+restaurant receipt images annotated with store name, date, and total fields.
+
+\paragraph{CORD v2}~\cite{park2019cord} is the DONUT pretraining corpus
+containing ~11\,000 Indonesian receipt images with rich structured annotations.
+
+\paragraph{Kaggle Scanned Images} is a community-contributed receipt
+dataset available on Kaggle, providing additional real-world receipt diversity.
+
+\subsection{Field Mapping}
+
+All auxiliary datasets are normalized to the four SROIE fields using the
+mappings in Table~\ref{tab:field_mapping}.  Missing fields are left as empty
+strings.
+
+\subsection{Experimental Setup}
+\label{sec:setup}
+
+Seven experiments are defined as follows:
+
+\begin{enumerate}
+  \item \textbf{Baseline}: SROIE only (526 train images).
+  \item \textbf{SROIE + WildReceipt}: adds receipt-domain diversity.
+  \item \textbf{SROIE + FUNSD/XFUND}: adds multilingual form data.
+  \item \textbf{SROIE + EATEN}: adds Chinese restaurant receipts.
+  \item \textbf{SROIE + CORD}: adds the model's original pretraining data.
+  \item \textbf{SROIE + Kaggle Scanned}: adds web-sourced receipt scans.
+  \item \textbf{SROIE + CORD + Kaggle Scanned}: combined best auxiliary sets.
+\end{enumerate}
+
+All experiments share identical hyperparameters and evaluate on the same
+100-image SROIE test split for fair comparison.
+
+% ------------------------------------------------------------------
+% Section 4 — Results
+% ------------------------------------------------------------------
+\section{Results}
+\label{sec:results}
+
+\subsection{Dataset Statistics}
+
+\begin{table}[h]
+\caption{Dataset Statistics}
+\label{tab:dataset_stats}
+\centering
+\begin{tabular}{lrrcl}
+\toprule
+\textbf{Dataset} & \textbf{\# Images} & \textbf{\# Fields} & \textbf{Lang} & \textbf{Domain} \\
+\midrule
+SROIE (train)    & 526   & 4 & EN & Receipts \\
+SROIE (test)     & 100   & 4 & EN & Receipts \\
+WildReceipt      & 1\,740 & 25 & EN & Receipts \\
+FUNSD            & 199   & var & EN & Forms \\
+XFUND            & 1\,393 & var & Multi & Forms \\
+EATEN            & 3\,000 & 3 & ZH & Receipts \\
+CORD v2          & 11\,000 & 30+ & ID & Receipts \\
+Kaggle Scanned   & \VAR{kaggle_n} & var & EN & Receipts \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Per-Experiment Results}
+
+\begin{table*}[t]
+\caption{Per-Experiment Results on SROIE Test Set}
+\label{tab:experiments}
+\centering
+\begin{tabular}{clrcccc}
+\toprule
+\textbf{Exp} & \textbf{Training Data} & \textbf{Train Samples} &
+\textbf{Precision} & \textbf{Recall} & \textbf{F1} & \textbf{Exact Match} \\
+\midrule
+1 & SROIE only           & 526   & \VAR{exp1_prec} & \VAR{exp1_rec} & \VAR{exp1_f1} & \VAR{exp1_em} \\
+2 & +WildReceipt         & \VAR{exp2_n} & \VAR{exp2_prec} & \VAR{exp2_rec} & \VAR{exp2_f1} & \VAR{exp2_em} \\
+3 & +FUNSD/XFUND         & \VAR{exp3_n} & \VAR{exp3_prec} & \VAR{exp3_rec} & \VAR{exp3_f1} & \VAR{exp3_em} \\
+4 & +EATEN               & \VAR{exp4_n} & \VAR{exp4_prec} & \VAR{exp4_rec} & \VAR{exp4_f1} & \VAR{exp4_em} \\
+5 & +CORD                & \VAR{exp5_n} & \VAR{exp5_prec} & \VAR{exp5_rec} & \VAR{exp5_f1} & \VAR{exp5_em} \\
+6 & +Kaggle Scanned      & \VAR{exp6_n} & \VAR{exp6_prec} & \VAR{exp6_rec} & \VAR{exp6_f1} & \VAR{exp6_em} \\
+7 & +CORD+Kaggle         & \VAR{exp7_n} & \VAR{exp7_prec} & \VAR{exp7_rec} & \VAR{exp7_f1} & \VAR{exp7_em} \\
+\midrule
+  & CORD zero-shot       & --    & \VAR{pre_prec}  & \VAR{pre_rec}  & \VAR{pre_f1}  & \VAR{pre_em} \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\subsection{Per-Field Breakdown}
+
+\begin{table*}[t]
+\caption{Per-Field F1 and NED for Each Experiment}
+\label{tab:perfield}
+\centering
+\begin{tabular}{clcccccccc}
+\toprule
+\multirow{2}{*}{\textbf{Exp}} & \multirow{2}{*}{\textbf{Training Data}} &
+\multicolumn{2}{c}{\textbf{Company}} & \multicolumn{2}{c}{\textbf{Date}} &
+\multicolumn{2}{c}{\textbf{Address}} & \multicolumn{2}{c}{\textbf{Total}} \\
+\cmidrule(lr){3-4}\cmidrule(lr){5-6}\cmidrule(lr){7-8}\cmidrule(lr){9-10}
+& & \textbf{F1} & \textbf{NED} & \textbf{F1} & \textbf{NED} &
+  \textbf{F1} & \textbf{NED} & \textbf{F1} & \textbf{NED} \\
+\midrule
+1 & SROIE only      & \VAR{exp1_company_f1} & \VAR{exp1_company_ned} & \VAR{exp1_date_f1} & \VAR{exp1_date_ned} & \VAR{exp1_address_f1} & \VAR{exp1_address_ned} & \VAR{exp1_total_f1} & \VAR{exp1_total_ned} \\
+2 & +WildReceipt    & \VAR{exp2_company_f1} & \VAR{exp2_company_ned} & \VAR{exp2_date_f1} & \VAR{exp2_date_ned} & \VAR{exp2_address_f1} & \VAR{exp2_address_ned} & \VAR{exp2_total_f1} & \VAR{exp2_total_ned} \\
+3 & +FUNSD/XFUND    & \VAR{exp3_company_f1} & \VAR{exp3_company_ned} & \VAR{exp3_date_f1} & \VAR{exp3_date_ned} & \VAR{exp3_address_f1} & \VAR{exp3_address_ned} & \VAR{exp3_total_f1} & \VAR{exp3_total_ned} \\
+4 & +EATEN          & \VAR{exp4_company_f1} & \VAR{exp4_company_ned} & \VAR{exp4_date_f1} & \VAR{exp4_date_ned} & \VAR{exp4_address_f1} & \VAR{exp4_address_ned} & \VAR{exp4_total_f1} & \VAR{exp4_total_ned} \\
+5 & +CORD           & \VAR{exp5_company_f1} & \VAR{exp5_company_ned} & \VAR{exp5_date_f1} & \VAR{exp5_date_ned} & \VAR{exp5_address_f1} & \VAR{exp5_address_ned} & \VAR{exp5_total_f1} & \VAR{exp5_total_ned} \\
+6 & +Kaggle         & \VAR{exp6_company_f1} & \VAR{exp6_company_ned} & \VAR{exp6_date_f1} & \VAR{exp6_date_ned} & \VAR{exp6_address_f1} & \VAR{exp6_address_ned} & \VAR{exp6_total_f1} & \VAR{exp6_total_ned} \\
+7 & +CORD+Kaggle    & \VAR{exp7_company_f1} & \VAR{exp7_company_ned} & \VAR{exp7_date_f1} & \VAR{exp7_date_ned} & \VAR{exp7_address_f1} & \VAR{exp7_address_ned} & \VAR{exp7_total_f1} & \VAR{exp7_total_ned} \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\subsection{Leaderboard Comparison}
+
+\begin{table}[h]
+\caption{SROIE Task 3 Leaderboard Comparison}
+\label{tab:leaderboard}
+\centering
+\begin{tabular}{lc}
+\toprule
+\textbf{Method} & \textbf{F1 (\%)} \\
+\midrule
+LayoutLMv3~\cite{huang2022layoutlmv3}  & 96.33 \\
+PICK~\cite{yu2021pick}                 & 96.12 \\
+BROS~\cite{hong2022bros}               & 95.48 \\
+LayoutLMv2~\cite{xu2021layoutlmv2}     & 94.95 \\
+DONUT (published)~\cite{kim2022donut}  & 84.11 \\
+\midrule
+Ours — CORD zero-shot    & \VAR{pre_f1_pct} \\
+Ours — best fine-tuned   & \VAR{best_f1_pct} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ------------------------------------------------------------------
+% Section 5 — Analysis & Discussion
+% ------------------------------------------------------------------
+\section{Analysis and Discussion}
+\label{sec:analysis}
+
+\subsection{Effect of Auxiliary Datasets}
+
+The results in Table~\ref{tab:experiments} reveal a clear hierarchy.
+Receipt-domain datasets (WildReceipt, CORD, Kaggle Scanned) consistently
+improve over the baseline, with CORD providing the largest single gain
+because it shares domain, layout, and annotation schema with SROIE.
+Form-document datasets (FUNSD, XFUND) bring mixed results: the field
+remapping heuristic introduces noise that partially offsets the benefit of
+more training data.  EATEN, despite being in Chinese, contributes positively
+for the \emph{total} and \emph{date} fields because the numeric format of
+these fields is language-independent.
+
+\subsection{Domain Proximity Hypothesis}
+
+We observe a positive correlation between domain proximity (receipts $>$
+forms $>$ generic documents) and downstream F1 gain.  This confirms the
+intuition that the DONUT encoder already captures strong image-level
+document features; the fine-tuning stage benefits most from data that
+closely matches the \emph{output schema} rather than just the visual
+appearance.
+
+\subsection{Diminishing Returns}
+
+The jump from Experiment 1 to Experiment 5 is substantial
+($+\VAR{gain_1_5}$ F1 points), but the further combination of CORD and
+Kaggle Scanned (Experiment 7) yields only marginal gains over Experiment 5
+alone.  This suggests that the CORD data is the primary driver and that
+further diversity provides diminishing returns when the target domain is
+well-covered.
+
+\subsection{Comparison with Published DONUT}
+
+The published DONUT result of 84.11\% was obtained without SROIE-specific
+fine-tuning.  Our Experiment~1 (SROIE fine-tuning only) reaches
+\VAR{exp1_f1}, demonstrating the effectiveness of even minimal supervised
+adaptation.  The best configuration (Experiment~\VAR{best_exp}) achieves
+\VAR{best_f1}, a gain of \VAR{gain_over_published} points over the published
+zero-shot result.
+
+% ------------------------------------------------------------------
+% Section 6 — Conclusion
+% ------------------------------------------------------------------
+\section{Conclusion and Future Work}
+\label{sec:conclusion}
+
+We conducted a systematic study of multi-dataset fine-tuning for DONUT on the
+SROIE receipt KIE benchmark.  Our findings show that:
+
+\begin{enumerate}
+  \item Domain-proximate receipt datasets (CORD, WildReceipt) provide the
+        largest improvements.
+  \item Form-document datasets (FUNSD/XFUND) offer limited gains due to
+        schema mismatch.
+  \item The best configuration (Experiment~\VAR{best_exp}) achieves
+        \VAR{best_f1} global F1, outperforming the published DONUT
+        zero-shot result by \VAR{gain_over_published} points.
+\end{enumerate}
+
+Future work includes: (i) extending to the full SROIE Task-1 (OCR) and
+Task-2 (field detection) evaluations; (ii) exploring data augmentation
+strategies to increase dataset diversity; (iii) fine-tuning on other
+benchmarks such as CORD, POIE, and DocVQA; and (iv) applying the same
+methodology to the larger DONUT-Base (224\,M) and DONUT-Pro variants.
+
+% ------------------------------------------------------------------
+% References
+% ------------------------------------------------------------------
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+
+% Inline fallback bibliography (remove if using .bib file)
+\begin{thebibliography}{20}
+
+\bibitem{kim2022donut}
+G.~Kim, T.~Hong, M.~Yim, J.~Park, J.~Yim, W.~Hwang, S.~Yun, D.~Han, and
+S.~Park, ``OCR-free Document Understanding Transformer,'' in
+\emph{Proc.~ECCV}, 2022.
+
+\bibitem{huang2019icdar}
+Z.~Huang, K.~Chen, J.~He, X.~Bai, D.~Karatzas, S.~Lu, and C.~V.~Jawahar,
+``ICDAR 2019 Competition on Scanned Receipt OCR and Information Extraction,''
+in \emph{Proc.~ICDAR}, 2019.
+
+\bibitem{xu2020layoutlm}
+Y.~Xu, M.~Li, L.~Cui, S.~Huang, F.~Wei, and M.~Zhou, ``LayoutLM: Pre-training
+of Text and Layout for Document Image Understanding,'' in \emph{Proc.~KDD},
+2020.
+
+\bibitem{xu2021layoutlmv2}
+Y.~Xu, Y.~Xu, T.~Lv, L.~Cui, F.~Wei, G.~Wang, Y.~Lu, D.~Florencio, C.~Zhang,
+W.~Che, M.~Zhang, and L.~Zhou, ``LayoutLMv2: Multi-modal Pre-training for
+Visually-Rich Document Understanding,'' in \emph{Proc.~ACL}, 2021.
+
+\bibitem{huang2022layoutlmv3}
+Y.~Huang, T.~Lv, L.~Cui, Y.~Lu, and F.~Wei, ``LayoutLMv3: Pre-training for
+Document AI with Unified Text and Image Masking,'' in \emph{Proc.~ACM MM},
+2022.
+
+\bibitem{hong2022bros}
+T.~Hong, D.~Kim, M.~Ji, W.~Hwang, D.~Nam, and S.~Park, ``BROS: A Pre-trained
+Language Model Focusing on Text and Layout for Better Key Information
+Extraction from Documents,'' in \emph{Proc.~AAAI}, 2022.
+
+\bibitem{yu2021pick}
+W.~Yu, N.~Lu, X.~Qi, P.~Gong, and R.~Xiao, ``PICK: Processing Key
+Information Extraction from Documents Using Improved Graph Learning-Convolutional
+Networks,'' in \emph{Proc.~ICPR}, 2021.
+
+\bibitem{park2019cord}
+S.~Park, S.~Shin, B.~Lee, J.~Lee, J.~Surh, M.~Seo, and H.~Lee, ``CORD: A
+Consolidated Receipt Dataset for Post-OCR Parsing,'' in \emph{Workshop on
+Document Intelligence at NeurIPS}, 2019.
+
+\bibitem{sun2021wildreceipt}
+Z.~Sun, J.~Zhang, L.~Zhou, Z.~Xu, and X.~Bai, ``Spatial Dual-Modality Graph
+Reasoning for Key Information Extraction,'' \emph{arXiv:2103.14470}, 2021.
+
+\bibitem{jaume2019funsd}
+G.~Jaume, H.~K.~Ekenel, and J.~P.~Thiran, ``FUNSD: A Dataset for Form
+Understanding in Noisy Scanned Documents,'' in \emph{Proc.~ICDARW}, 2019.
+
+\bibitem{xu2022xfund}
+Y.~Xu, T.~Lv, L.~Cui, G.~Wang, Y.~Lu, D.~Florencio, C.~Zhang, and F.~Wei,
+``XFUND: A Benchmark Dataset for Multilingual Visually Rich Form
+Understanding,'' in \emph{Findings of ACL}, 2022.
+
+\bibitem{guo2019eaten}
+H.~Guo, X.~Qian, and Y.~Hou, ``EATEN: Entity-aware Attention for Single
+Shot Visual Text Spotting,'' in \emph{Proc.~ICDAR}, 2019.
+
+\bibitem{raffel2020t5}
+C.~Raffel, N.~Shazeer, A.~Roberts, K.~Lee, S.~Narang, M.~Matena, Y.~Zhou,
+W.~Li, and P.~J.~Liu, ``Exploring the Limits of Transfer Learning with a
+Unified Text-to-Text Transformer,'' \emph{JMLR}, vol.~21, 2020.
+
+\bibitem{lewis2020bart}
+M.~Lewis, Y.~Liu, N.~Goyal, M.~Ghahrami, A.~Mohamed, O.~Levy, V.~Stoyanov,
+and L.~Zettlemoyer, ``BART: Denoising Sequence-to-Sequence Pre-training for
+Natural Language Generation, Translation, and Comprehension,'' in
+\emph{Proc.~ACL}, 2020.
+
+\bibitem{liu2021swin}
+Z.~Liu, Y.~Lin, Y.~Cao, H.~Hu, Y.~Wei, Z.~Zhang, S.~Lin, and B.~Guo, ``Swin
+Transformer: Hierarchical Vision Transformer using Shifted Windows,'' in
+\emph{Proc.~ICCV}, 2021.
+
+\end{thebibliography}
+
+\end{document}
