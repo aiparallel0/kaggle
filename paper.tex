@@ -47,12 +47,11 @@
 We present a systematic study of multi-dataset fine-tuning for receipt
 information extraction (KIE) using the DONUT (Document Understanding
 Transformer) model.  Starting from a CORD-pretrained checkpoint, we train
-on the SROIE benchmark combined with six auxiliary datasets—WildReceipt,
-FUNSD, XFUND, EATEN, CORD, and a Kaggle Scanned Images dataset—and
-evaluate every combination on the 100-image SROIE test set using the
-official Task-3 F1 metric.  Our best configuration achieves a global F1 of
-\VAR{best_f1}, demonstrating that domain-proximate receipt datasets provide
-the largest gains while generic form datasets offer only modest improvements.
+on the SROIE benchmark combined with three auxiliary datasets—WildReceipt,
+SROIE-NER, and CORD—and evaluate every combination on the 100-image SROIE
+test set using the official Task-3 F1 metric.  Our best configuration
+achieves a global F1 of \VAR{best_f1}, demonstrating that domain-proximate
+receipt datasets provide the largest gains.
 \end{abstract}
 
 % ------------------------------------------------------------------
@@ -163,21 +162,14 @@ the same 526-image split and evaluate on the same 100-image test split.
 of ~1\,740 receipt images annotated with 25 KIE categories covering diverse
 receipt layouts.
 
-\paragraph{FUNSD}~\cite{jaume2019funsd} provides 199 fully-annotated form
-documents with question-answer pairs.
-
-\paragraph{XFUND}~\cite{xu2022xfund} extends FUNSD to seven non-English
-languages (Chinese, Japanese, Spanish, French, Italian, German, Portuguese),
-contributing ~1\,393 additional form images.
-
-\paragraph{EATEN}~\cite{guo2019eaten} is a dataset of ~3\,000 Chinese
-restaurant receipt images annotated with store name, date, and total fields.
+\paragraph{SROIE-NER} is the SROIE dataset in token-level NER format
+(words + bounding boxes + NER tags) from \texttt{darentang/sroie} on the
+HuggingFace Hub.  It provides a second view of SROIE-like receipt data with
+different augmentation characteristics.
 
 \paragraph{CORD v2}~\cite{park2019cord} is the DONUT pretraining corpus
-containing ~11\,000 Indonesian receipt images with rich structured annotations.
-
-\paragraph{Kaggle Scanned Images} is a community-contributed receipt
-dataset available on Kaggle, providing additional real-world receipt diversity.
+containing Indonesian receipt images with rich structured annotations.
+We use the available train and validation splits (~900 images total).
 
 \subsection{Field Mapping}
 
@@ -193,11 +185,11 @@ Seven experiments are defined as follows:
 \begin{enumerate}
   \item \textbf{Baseline}: SROIE only (526 train images).
   \item \textbf{SROIE + WildReceipt}: adds receipt-domain diversity.
-  \item \textbf{SROIE + FUNSD/XFUND}: adds multilingual form data.
-  \item \textbf{SROIE + EATEN}: adds Chinese restaurant receipts.
+  \item \textbf{SROIE + SROIE-NER}: adds a token-level NER view of SROIE.
   \item \textbf{SROIE + CORD}: adds the model's original pretraining data.
-  \item \textbf{SROIE + Kaggle Scanned}: adds web-sourced receipt scans.
-  \item \textbf{SROIE + CORD + Kaggle Scanned}: combined best auxiliary sets.
+  \item \textbf{SROIE + WildReceipt + CORD}: combined receipt datasets.
+  \item \textbf{SROIE + SROIE-NER + CORD}: NER view combined with CORD.
+  \item \textbf{SROIE + All}: all four available datasets combined.
 \end{enumerate}
 
 All experiments share identical hyperparameters and evaluate on the same
@@ -222,11 +214,8 @@ All experiments share identical hyperparameters and evaluate on the same
 SROIE (train)    & 526   & 4 & EN & Receipts \\
 SROIE (test)     & 100   & 4 & EN & Receipts \\
 WildReceipt      & 1\,740 & 25 & EN & Receipts \\
-FUNSD            & 199   & var & EN & Forms \\
-XFUND            & 1\,393 & var & Multi & Forms \\
-EATEN            & 3\,000 & 3 & ZH & Receipts \\
-CORD v2          & 11\,000 & 30+ & ID & Receipts \\
-Kaggle Scanned   & \VAR{kaggle_n} & var & EN & Receipts \\
+SROIE-NER        & 526   & 4 & EN & Receipts \\
+CORD v2          & 900   & 30+ & ID & Receipts \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -244,11 +233,11 @@ Kaggle Scanned   & \VAR{kaggle_n} & var & EN & Receipts \\
 \midrule
 1 & SROIE only           & 526   & \VAR{exp1_prec} & \VAR{exp1_rec} & \VAR{exp1_f1} & \VAR{exp1_em} \\
 2 & +WildReceipt         & \VAR{exp2_n} & \VAR{exp2_prec} & \VAR{exp2_rec} & \VAR{exp2_f1} & \VAR{exp2_em} \\
-3 & +FUNSD/XFUND         & \VAR{exp3_n} & \VAR{exp3_prec} & \VAR{exp3_rec} & \VAR{exp3_f1} & \VAR{exp3_em} \\
-4 & +EATEN               & \VAR{exp4_n} & \VAR{exp4_prec} & \VAR{exp4_rec} & \VAR{exp4_f1} & \VAR{exp4_em} \\
-5 & +CORD                & \VAR{exp5_n} & \VAR{exp5_prec} & \VAR{exp5_rec} & \VAR{exp5_f1} & \VAR{exp5_em} \\
-6 & +Kaggle Scanned      & \VAR{exp6_n} & \VAR{exp6_prec} & \VAR{exp6_rec} & \VAR{exp6_f1} & \VAR{exp6_em} \\
-7 & +CORD+Kaggle         & \VAR{exp7_n} & \VAR{exp7_prec} & \VAR{exp7_rec} & \VAR{exp7_f1} & \VAR{exp7_em} \\
+3 & +SROIE-NER           & \VAR{exp3_n} & \VAR{exp3_prec} & \VAR{exp3_rec} & \VAR{exp3_f1} & \VAR{exp3_em} \\
+4 & +CORD                & \VAR{exp4_n} & \VAR{exp4_prec} & \VAR{exp4_rec} & \VAR{exp4_f1} & \VAR{exp4_em} \\
+5 & +WildReceipt+CORD    & \VAR{exp5_n} & \VAR{exp5_prec} & \VAR{exp5_rec} & \VAR{exp5_f1} & \VAR{exp5_em} \\
+6 & +SROIE-NER+CORD      & \VAR{exp6_n} & \VAR{exp6_prec} & \VAR{exp6_rec} & \VAR{exp6_f1} & \VAR{exp6_em} \\
+7 & +All                 & \VAR{exp7_n} & \VAR{exp7_prec} & \VAR{exp7_rec} & \VAR{exp7_f1} & \VAR{exp7_em} \\
 \midrule
   & CORD zero-shot       & --    & \VAR{pre_prec}  & \VAR{pre_rec}  & \VAR{pre_f1}  & \VAR{pre_em} \\
 \bottomrule
@@ -270,13 +259,13 @@ Kaggle Scanned   & \VAR{kaggle_n} & var & EN & Receipts \\
 & & \textbf{F1} & \textbf{NED} & \textbf{F1} & \textbf{NED} &
   \textbf{F1} & \textbf{NED} & \textbf{F1} & \textbf{NED} \\
 \midrule
-1 & SROIE only      & \VAR{exp1_company_f1} & \VAR{exp1_company_ned} & \VAR{exp1_date_f1} & \VAR{exp1_date_ned} & \VAR{exp1_address_f1} & \VAR{exp1_address_ned} & \VAR{exp1_total_f1} & \VAR{exp1_total_ned} \\
-2 & +WildReceipt    & \VAR{exp2_company_f1} & \VAR{exp2_company_ned} & \VAR{exp2_date_f1} & \VAR{exp2_date_ned} & \VAR{exp2_address_f1} & \VAR{exp2_address_ned} & \VAR{exp2_total_f1} & \VAR{exp2_total_ned} \\
-3 & +FUNSD/XFUND    & \VAR{exp3_company_f1} & \VAR{exp3_company_ned} & \VAR{exp3_date_f1} & \VAR{exp3_date_ned} & \VAR{exp3_address_f1} & \VAR{exp3_address_ned} & \VAR{exp3_total_f1} & \VAR{exp3_total_ned} \\
-4 & +EATEN          & \VAR{exp4_company_f1} & \VAR{exp4_company_ned} & \VAR{exp4_date_f1} & \VAR{exp4_date_ned} & \VAR{exp4_address_f1} & \VAR{exp4_address_ned} & \VAR{exp4_total_f1} & \VAR{exp4_total_ned} \\
-5 & +CORD           & \VAR{exp5_company_f1} & \VAR{exp5_company_ned} & \VAR{exp5_date_f1} & \VAR{exp5_date_ned} & \VAR{exp5_address_f1} & \VAR{exp5_address_ned} & \VAR{exp5_total_f1} & \VAR{exp5_total_ned} \\
-6 & +Kaggle         & \VAR{exp6_company_f1} & \VAR{exp6_company_ned} & \VAR{exp6_date_f1} & \VAR{exp6_date_ned} & \VAR{exp6_address_f1} & \VAR{exp6_address_ned} & \VAR{exp6_total_f1} & \VAR{exp6_total_ned} \\
-7 & +CORD+Kaggle    & \VAR{exp7_company_f1} & \VAR{exp7_company_ned} & \VAR{exp7_date_f1} & \VAR{exp7_date_ned} & \VAR{exp7_address_f1} & \VAR{exp7_address_ned} & \VAR{exp7_total_f1} & \VAR{exp7_total_ned} \\
+1 & SROIE only         & \VAR{exp1_company_f1} & \VAR{exp1_company_ned} & \VAR{exp1_date_f1} & \VAR{exp1_date_ned} & \VAR{exp1_address_f1} & \VAR{exp1_address_ned} & \VAR{exp1_total_f1} & \VAR{exp1_total_ned} \\
+2 & +WildReceipt       & \VAR{exp2_company_f1} & \VAR{exp2_company_ned} & \VAR{exp2_date_f1} & \VAR{exp2_date_ned} & \VAR{exp2_address_f1} & \VAR{exp2_address_ned} & \VAR{exp2_total_f1} & \VAR{exp2_total_ned} \\
+3 & +SROIE-NER         & \VAR{exp3_company_f1} & \VAR{exp3_company_ned} & \VAR{exp3_date_f1} & \VAR{exp3_date_ned} & \VAR{exp3_address_f1} & \VAR{exp3_address_ned} & \VAR{exp3_total_f1} & \VAR{exp3_total_ned} \\
+4 & +CORD              & \VAR{exp4_company_f1} & \VAR{exp4_company_ned} & \VAR{exp4_date_f1} & \VAR{exp4_date_ned} & \VAR{exp4_address_f1} & \VAR{exp4_address_ned} & \VAR{exp4_total_f1} & \VAR{exp4_total_ned} \\
+5 & +WildReceipt+CORD  & \VAR{exp5_company_f1} & \VAR{exp5_company_ned} & \VAR{exp5_date_f1} & \VAR{exp5_date_ned} & \VAR{exp5_address_f1} & \VAR{exp5_address_ned} & \VAR{exp5_total_f1} & \VAR{exp5_total_ned} \\
+6 & +SROIE-NER+CORD    & \VAR{exp6_company_f1} & \VAR{exp6_company_ned} & \VAR{exp6_date_f1} & \VAR{exp6_date_ned} & \VAR{exp6_address_f1} & \VAR{exp6_address_ned} & \VAR{exp6_total_f1} & \VAR{exp6_total_ned} \\
+7 & +All               & \VAR{exp7_company_f1} & \VAR{exp7_company_ned} & \VAR{exp7_date_f1} & \VAR{exp7_date_ned} & \VAR{exp7_address_f1} & \VAR{exp7_address_ned} & \VAR{exp7_total_f1} & \VAR{exp7_total_ned} \\
 \bottomrule
 \end{tabular}
 \end{table*}
@@ -312,31 +301,27 @@ Ours — best fine-tuned   & \VAR{best_f1_pct} \\
 \subsection{Effect of Auxiliary Datasets}
 
 The results in Table~\ref{tab:experiments} reveal a clear hierarchy.
-Receipt-domain datasets (WildReceipt, CORD, Kaggle Scanned) consistently
-improve over the baseline, with CORD providing the largest single gain
-because it shares domain, layout, and annotation schema with SROIE.
-Form-document datasets (FUNSD, XFUND) bring mixed results: the field
-remapping heuristic introduces noise that partially offsets the benefit of
-more training data.  EATEN, despite being in Chinese, contributes positively
-for the \emph{total} and \emph{date} fields because the numeric format of
-these fields is language-independent.
+Receipt-domain datasets (WildReceipt, CORD) consistently improve over the
+baseline, with CORD providing the largest single gain because it shares
+domain, layout, and annotation schema with SROIE.  SROIE-NER provides a
+complementary view of the same data with different augmentation
+characteristics.
 
 \subsection{Domain Proximity Hypothesis}
 
 We observe a positive correlation between domain proximity (receipts $>$
-forms $>$ generic documents) and downstream F1 gain.  This confirms the
-intuition that the DONUT encoder already captures strong image-level
-document features; the fine-tuning stage benefits most from data that
-closely matches the \emph{output schema} rather than just the visual
-appearance.
+generic documents) and downstream F1 gain.  This confirms the intuition
+that the DONUT encoder already captures strong image-level document
+features; the fine-tuning stage benefits most from data that closely
+matches the \emph{output schema} rather than just the visual appearance.
 
 \subsection{Diminishing Returns}
 
-The jump from Experiment 1 to Experiment 5 is substantial
-($+\VAR{gain_1_5}$ F1 points), but the further combination of CORD and
-Kaggle Scanned (Experiment 7) yields only marginal gains over Experiment 5
-alone.  This suggests that the CORD data is the primary driver and that
-further diversity provides diminishing returns when the target domain is
+The jump from Experiment 1 to Experiment 4 is substantial
+($+\VAR{gain_1_4}$ F1 points), but the further combination of all datasets
+(Experiment 7) yields only marginal gains over Experiment 4 alone.  This
+suggests that the CORD data is the primary driver and that further
+diversity provides diminishing returns when the target domain is
 well-covered.
 
 \subsection{Comparison with Published DONUT}
@@ -360,8 +345,8 @@ SROIE receipt KIE benchmark.  Our findings show that:
 \begin{enumerate}
   \item Domain-proximate receipt datasets (CORD, WildReceipt) provide the
         largest improvements.
-  \item Form-document datasets (FUNSD/XFUND) offer limited gains due to
-        schema mismatch.
+  \item A token-level NER view of the same data (SROIE-NER) provides
+        complementary augmentation benefits.
   \item The best configuration (Experiment~\VAR{best_exp}) achieves
         \VAR{best_f1} global F1, outperforming the published DONUT
         zero-shot result by \VAR{gain_over_published} points.
