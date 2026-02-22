@@ -1,4 +1,4 @@
-import json, torch, os
+import json, torch
 from pathlib import Path
 from PIL import Image
 from torch.utils.data import Dataset
@@ -23,7 +23,7 @@ class SROIEDataset(Dataset):
         self.max_length = max_length
         self.samples = []
         for img_path in sorted(Path(img_dir).glob("*.jpg")):
-            key_file = Path(key_dir) / (img_path.stem + ".txt")
+            key_file = Path(key_dir) / (img_path.stem + ".json")
             if key_file.exists():
                 try:
                     gt = json.loads(key_file.read_text(encoding="utf-8"))
@@ -42,7 +42,7 @@ class SROIEDataset(Dataset):
         target = "<s_sroie>"
         for f in FIELDS:
             v = gt.get(f, "")
-            target += f"<s_{f}>{v}</{f}>"
+            target += f"<s_{f}>{v}</s_{f}>"
         target += "</s_sroie>"
 
         pixel_values = self.processor(image, return_tensors="pt").pixel_values.squeeze()
@@ -55,7 +55,6 @@ class SROIEDataset(Dataset):
 
 
 def main():
-    # Start from CORD checkpoint (faster convergence than donut-base)
     processor = DonutProcessor.from_pretrained("naver-clova-ix/donut-base-finetuned-cord-v2")
     model = VisionEncoderDecoderModel.from_pretrained("naver-clova-ix/donut-base-finetuned-cord-v2")
 
@@ -66,13 +65,7 @@ def main():
 
     model.gradient_checkpointing_enable()
 
-    # Split: use first 500 images for train, rest for validation
-    all_imgs = sorted((SROIE_DIR / "img").glob("*.jpg"))
-    split_idx = 500
-
     train_ds = SROIEDataset(processor, SROIE_DIR / "img", SROIE_DIR / "key")
-    # Use all data for training (small dataset), evaluate separately
-    
     args = Seq2SeqTrainingArguments(
         output_dir="/workspace/donut-sroie-finetuned",
         num_train_epochs=10,          # 10 epochs from CORD checkpoint is enough

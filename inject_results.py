@@ -1,6 +1,7 @@
 import json
 
-results = json.load(open("/workspace/evaluation_results.json"))
+with open("/workspace/evaluation_results.json") as f:
+    results = json.load(f)
 pm = results["pretrained_metrics"]
 fm = results["finetuned_metrics"]
 

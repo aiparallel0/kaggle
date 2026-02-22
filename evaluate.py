@@ -1,4 +1,4 @@
-import json, torch, re
+import json, torch
 import editdistance
 import numpy as np
 from pathlib import Path
@@ -146,12 +146,12 @@ def print_results(pretrained_m, finetuned_m):
 
 def main():
     # Load test images + ground truth
-    img_dir = SROIE_DIR / "img"
-    key_dir = SROIE_DIR / "key"
+    img_dir = SROIE_DIR / "test_img"
+    key_dir = SROIE_DIR / "test_key"
 
     test_samples = []
     for img_path in sorted(img_dir.glob("*.jpg")):
-        key_file = key_dir / (img_path.stem + ".txt")
+        key_file = key_dir / (img_path.stem + ".json")
         if key_file.exists():
             try:
                 gt = json.loads(key_file.read_text(encoding="utf-8"))
@@ -159,8 +159,6 @@ def main():
             except json.JSONDecodeError:
                 pass
 
-    # Use last 100 images as test set (first 500+ used for training)
-    test_samples = test_samples[-100:]
     print(f"Evaluating on {len(test_samples)} test images")
 
     ground_truths = [s[1] for s in test_samples]
