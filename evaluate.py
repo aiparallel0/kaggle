@@ -12,7 +12,11 @@ from tqdm import tqdm
 # training/evaluation outside the experiment framework.
 
 import os
-SROIE_DIR = Path(os.environ.get("SROIE_DATA_DIR", "/workspace/ICDAR-2019-SROIE/data"))
+# BUG C FIX: Use a function so the env var is re-read at call time, not cached
+# at import time (run_all.py sets SROIE_DATA_DIR after this module is imported).
+def _get_sroie_dir():
+    return Path(os.environ.get("SROIE_DATA_DIR", "/workspace/ICDAR-2019-SROIE/data"))
+
 FIELDS = ["company", "date", "address", "total"]
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".webp"}
@@ -169,19 +173,35 @@ def print_results(pretrained_m, finetuned_m):
 
 def main():
     # Load test images + ground truth
-    img_dir = SROIE_DIR / "test_img"
-    key_dir = SROIE_DIR / "test_key"
+    sroie_dir = _get_sroie_dir()
+    img_dir = sroie_dir / "test_img"
+    key_dir = sroie_dir / "test_key"
 
     test_samples = []
     for img_path in sorted(p for p in img_dir.iterdir()
                             if p.is_file() and p.suffix.lower() in IMAGE_EXTS):
-        key_file = key_dir / (img_path.stem + ".json")
-        if key_file.exists():
+        # BUG E FIX: Key files are .txt (4-line format), not .json.
+        # Try .json first for pre-converted data, then fall back to .txt.
+        gt = None
+        key_json = key_dir / (img_path.stem + ".json")
+        if key_json.exists():
             try:
-                gt = json.loads(key_file.read_text(encoding="utf-8"))
-                test_samples.append((img_path, gt))
+                gt = json.loads(key_json.read_text(encoding="utf-8"))
             except json.JSONDecodeError:
                 pass
+        if gt is None:
+            key_txt = key_dir / (img_path.stem + ".txt")
+            if key_txt.exists():
+                lines = key_txt.read_text(encoding="utf-8").strip().splitlines()
+                if len(lines) >= 4:
+                    gt = {
+                        "company": lines[0].strip(),
+                        "date":    lines[1].strip(),
+                        "address": lines[2].strip(),
+                        "total":   lines[3].strip(),
+                    }
+        if gt is not None:
+            test_samples.append((img_path, gt))
 
     print(f"Evaluating on {len(test_samples)} test images")
 

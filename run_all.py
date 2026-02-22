@@ -139,9 +139,13 @@ def stage_install(args) -> None:
     moved = 0
     for img_path in test_images:
         shutil.move(str(img_path), str(test_img_dir / img_path.name))
-        key_src = key_dir / (img_path.stem + ".json")
-        if key_src.exists():
-            shutil.move(str(key_src), str(test_key_dir / key_src.name))
+        # BUG D FIX: Key files are .txt (4-line format), not .json.
+        # Try .txt first (the actual format), then .json for pre-converted data.
+        for ext in [".txt", ".json"]:
+            key_src = key_dir / (img_path.stem + ext)
+            if key_src.exists():
+                shutil.move(str(key_src), str(test_key_dir / key_src.name))
+                break
         moved += 1
 
     train_count = len(list(img_dir.iterdir()))
