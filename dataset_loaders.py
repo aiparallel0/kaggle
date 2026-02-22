@@ -274,83 +274,188 @@ _NER_TAG_TO_FIELD = {
 
 
 def _download_sroie_ner() -> Path:
-    """Download SROIE-NER via datasets.load_dataset + save_to_disk.
+    """Download SROIE-NER parquet from HuggingFace datasets-server API.
 
-    BUG B FIX: The old code downloaded a raw parquet file which contains only
-    an 'image_path' string column, not embedded image bytes.  load_sroie_ner()
-    then looked for an 'image' column that doesn't exist in the parquet, so
-    every row was skipped and 0 samples were returned.
+    BUG B FIX: The old code used load_dataset("darentang/sroie") which fails
+    with "Dataset scripts are no longer supported" on datasets>=4.0.  Even the
+    auto-converted parquet from refs/convert/parquet only contains an
+    'image_path' string column (not embedded image bytes).
 
-    The fix uses datasets.load_dataset() which automatically resolves the
-    image_path references and provides PIL Image objects via the 'image'
-    feature.  save_to_disk / load_from_disk preserves those Image objects.
+    The fix downloads the NER parquet (words + ner_tags + image_path) from the
+    datasets-server API and relies on load_sroie_ner() to resolve image_path
+    stems against the local SROIE image directory — no embedded images needed.
     """
     dest = _ensure_dir(DATASETS_DIR / "sroie_ner")
     marker = dest / ".downloaded"
+    parquet_dest = dest / "train.parquet"
+
+    # Validate existing cache: if the parquet exists but is missing ner_tags
+    # (stale download), delete it so we re-download the correct file.
+    if marker.exists() and parquet_dest.exists():
+        try:
+            import pyarrow.parquet as pq  # type: ignore
+            schema_names = pq.read_schema(str(parquet_dest)).names
+            if "ner_tags" in schema_names:
+                return dest  # Cache is valid
+            print(
+                "[SROIE-NER] Stale cache detected (parquet missing 'ner_tags'). Re-downloading.",
+                file=sys.stderr,
+            )
+        except Exception:
+            pass
+        marker.unlink(missing_ok=True)
+        parquet_dest.unlink(missing_ok=True)
+
     if marker.exists():
         return dest
 
+    # PRIMARY: Download from HuggingFace datasets-server API.
+    api_url = "https://datasets-server.huggingface.co/parquet?dataset=darentang/sroie"
+    downloaded = False
     try:
-        from datasets import load_dataset  # type: ignore
-        ds = load_dataset(_SROIE_NER_REPO, split="train")
-        ds.save_to_disk(str(dest / "hf_cache"))
-        marker.touch()
+        with urllib.request.urlopen(api_url, timeout=30) as resp:
+            info = json.loads(resp.read())
+        parquet_urls = [
+            pf["url"]
+            for pf in info.get("parquet_files", [])
+            if pf.get("split") == "train"
+        ]
+        if parquet_urls:
+            print("[SROIE-NER] Downloading parquet from datasets-server ...")
+            _download_with_progress(parquet_urls[0], parquet_dest)
+            downloaded = True
     except Exception as exc:
+        print(f"[SROIE-NER] datasets-server download failed: {exc}", file=sys.stderr)
+
+    # FALLBACK: hf_hub_download from refs/convert/parquet branch.
+    if not downloaded:
+        try:
+            from huggingface_hub import hf_hub_download  # type: ignore
+            import shutil
+            local = hf_hub_download(
+                repo_id="darentang/sroie",
+                filename="sroie/train/0000.parquet",
+                repo_type="dataset",
+                revision="refs/convert/parquet",
+            )
+            shutil.copy2(local, str(parquet_dest))
+            downloaded = True
+        except Exception as exc:
+            print(f"[SROIE-NER] hf_hub_download fallback failed: {exc}", file=sys.stderr)
+
+    if not downloaded:
         print(
-            f"[SROIE-NER] Download failed: {exc}. "
+            "[SROIE-NER] FATAL: All download methods failed. "
             "Experiments 3, 6, 7 will run without SROIE-NER data.",
             file=sys.stderr,
         )
+        return dest
+
+    # Validate: ensure the parquet has usable NER data before caching.
+    try:
+        import pandas as pd
+        df = pd.read_parquet(str(parquet_dest))
+        if "ner_tags" not in df.columns:
+            print(
+                f"[SROIE-NER] WARNING: Downloaded parquet columns={list(df.columns)} "
+                "— missing 'ner_tags'. Not caching.",
+                file=sys.stderr,
+            )
+            return dest
+        print(f"[SROIE-NER] Validated: {len(df)} rows with NER tags.")
+    except Exception as exc:
+        print(f"[SROIE-NER] Validation failed: {exc}", file=sys.stderr)
+        return dest
+
+    marker.touch()
+    print("[SROIE-NER] Download and validation complete.")
     return dest
 
 
 def load_sroie_ner() -> List[Sample]:
     """Load SROIE-NER (darentang/sroie) and normalize to SROIE schema.
 
-    BUG B FIX: Uses load_from_disk (written by _download_sroie_ner via
-    save_to_disk) so that the HF dataset's Image feature is resolved into
-    PIL Image objects.  The old parquet-based path only had an 'image_path'
-    string and no embedded bytes, causing every row to be skipped.
+    BUG B FIX: Reads the NER parquet directly (words + ner_tags + image_path)
+    and resolves each image_path stem against the local SROIE image directory.
+    The darentang/sroie dataset is the SROIE dataset re-published with NER
+    tags, so its images are already present at _get_sroie_dir()/img/.
+
+    This avoids the need for embedded image bytes in the parquet and works with
+    datasets>=4.0 (which no longer supports legacy dataset scripts).
     """
     dest = _download_sroie_ner()
-    cache_dir = dest / "hf_cache"
-    if not cache_dir.exists():
-        print("[SROIE-NER] Cache not found — skipping.", file=sys.stderr)
+    parquet_path = dest / "train.parquet"
+    if not parquet_path.exists():
+        print("[SROIE-NER] Parquet not found — skipping.", file=sys.stderr)
         return []
 
     try:
-        from datasets import load_from_disk  # type: ignore
-        ds = load_from_disk(str(cache_dir))
+        import pandas as pd
+        df = pd.read_parquet(str(parquet_path))
     except Exception as exc:
-        print(f"[SROIE-NER] Failed to load cache: {exc}", file=sys.stderr)
+        print(f"[SROIE-NER] Failed to read parquet: {exc}", file=sys.stderr)
         return []
 
+    sroie_img_dir = _get_sroie_dir() / "img"
     samples: List[Sample] = []
-    img_dest_dir = _ensure_dir(dest / "images")
+    embedded_img_counter = 0
 
-    for row_idx, row in enumerate(ds):
+    for _, row in df.iterrows():
         gt: Dict[str, str] = {k: "" for k in EMPTY_GT}
-        words = row.get("words", [])
-        ner_tags = row.get("ner_tags", [])
+        raw_words = row.get("words")
+        raw_tags = row.get("ner_tags")
+        words = raw_words if isinstance(raw_words, (list, tuple)) else []
+        ner_tags = raw_tags if isinstance(raw_tags, (list, tuple)) else []
         for word, tag in zip(words, ner_tags):
             field = _NER_TAG_TO_FIELD.get(int(tag))
             if field:
                 text = str(word).strip()
                 gt[field] = (gt[field] + " " + text).strip() if gt[field] else text
 
-        # HF datasets resolves image_path into a PIL Image object via the
-        # Image feature; save it to disk so the path-based pipeline can use it.
-        image = row.get("image")
-        if image is not None:
-            img_path = img_dest_dir / f"sroie_ner_{row_idx:06d}.jpg"
-            if not img_path.exists():
-                try:
-                    image.convert("RGB").save(img_path, "JPEG")
-                except Exception:
-                    continue
-            samples.append((img_path, gt))
+        # Resolve the image from the local SROIE directory using the stem of
+        # image_path (e.g. "img/X00016469612.jpg" → stem "X00016469612").
+        image_path_val = row.get("image_path") or row.get("image") or ""
+        if isinstance(image_path_val, dict):
+            # Future-proof: handle embedded-bytes dict if HF ever embeds images.
+            image_bytes = image_path_val.get("bytes")
+            if image_bytes:
+                img_dest_dir = _ensure_dir(dest / "images")
+                img_path = img_dest_dir / f"sroie_ner_{embedded_img_counter:06d}.jpg"
+                if not img_path.exists():
+                    try:
+                        import io
+                        from PIL import Image  # type: ignore
+                        Image.open(io.BytesIO(image_bytes)).convert("RGB").save(img_path, "JPEG")
+                    except Exception:
+                        continue
+                embedded_img_counter += 1
+                samples.append((img_path, gt))
+            continue
 
-    # Prevent test-set leakage: exclude any images that match SROIE test stems
+        stem = Path(str(image_path_val)).stem if image_path_val else ""
+        if not stem:
+            continue
+        local_img = sroie_img_dir / (stem + ".jpg")
+        if not local_img.exists():
+            for ext in (".jpeg", ".png", ".tiff", ".tif"):
+                candidate = sroie_img_dir / (stem + ext)
+                if candidate.exists():
+                    local_img = candidate
+                    break
+            else:
+                continue
+        samples.append((local_img, gt))
+
+    if not samples:
+        print(
+            "[SROIE-NER] WARNING: 0 samples loaded. "
+            "The parquet image_path stems may not match local SROIE images. "
+            "Deleting cache marker so next run will re-download.",
+            file=sys.stderr,
+        )
+        (dest / ".downloaded").unlink(missing_ok=True)
+
+    # Prevent test-set leakage: exclude images that match SROIE test stems.
     test_img_dir = _get_sroie_dir() / "test_img"
     if test_img_dir.exists():
         test_stems = {p.stem for p in test_img_dir.iterdir() if p.is_file()}
