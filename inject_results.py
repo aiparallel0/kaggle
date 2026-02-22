@@ -33,11 +33,11 @@ DONUT_PUBLISHED_F1 = 0.8411
 EXP_NAMES = {
     "1": "SROIE only",
     "2": "+WildReceipt",
-    "3": "+FUNSD/XFUND",
-    "4": "+EATEN",
-    "5": "+CORD",
-    "6": "+Kaggle Scanned",
-    "7": "+CORD+Kaggle",
+    "3": "+SROIE-NER",
+    "4": "+CORD",
+    "5": "+WildReceipt+CORD",
+    "6": "+SROIE-NER+CORD",
+    "7": "+All",
 }
 
 
@@ -88,14 +88,11 @@ def print_table1_dataset_stats() -> None:
     """Print Table 1: Dataset Statistics LaTeX rows."""
     print("% === TABLE 1: Dataset Statistics ===")
     rows = [
-        ("SROIE (train)",    526,    4,   "EN",    "Receipts"),
-        ("SROIE (test)",     100,    4,   "EN",    "Receipts"),
-        ("WildReceipt",    1740,   25,   "EN",    "Receipts"),
-        ("FUNSD",           199,  "var", "EN",    "Forms"),
-        ("XFUND",          1393,  "var", "Multi", "Forms"),
-        ("EATEN",          3000,    3,   "ZH",    "Receipts"),
-        ("CORD v2",       11000,  "30+", "ID",    "Receipts"),
-        ("Kaggle Scanned", "?",  "var", "EN",    "Receipts"),
+        ("SROIE (train)",  526,    4,    "EN",    "Receipts"),
+        ("SROIE (test)",   100,    4,    "EN",    "Receipts"),
+        ("WildReceipt",   1740,   25,   "EN",    "Receipts"),
+        ("SROIE-NER",      526,    4,   "EN",    "Receipts"),
+        ("CORD v2",        900,  "30+", "ID",    "Receipts"),
     ]
     for name, n, nf, lang, domain in rows:
         n_str = f"{n:,}" if isinstance(n, int) else str(n)
@@ -217,15 +214,12 @@ def build_var_map(all_exp: dict) -> dict:
     # Gains
     try:
         exp1_f1 = all_exp.get("1", {}).get("metrics", {}).get("global_f1", 0.0)
-        exp5_f1 = all_exp.get("5", {}).get("metrics", {}).get("global_f1", 0.0)
-        var_map["gain_1_5"] = f"{(exp5_f1 - exp1_f1):+.4f}"
+        exp4_f1 = all_exp.get("4", {}).get("metrics", {}).get("global_f1", 0.0)
+        var_map["gain_1_4"] = f"{(exp4_f1 - exp1_f1):+.4f}"
         var_map["gain_over_published"] = f"{(best_f1 - DONUT_PUBLISHED_F1):+.4f}"
     except Exception:
-        var_map["gain_1_5"] = "N/A"
+        var_map["gain_1_4"] = "N/A"
         var_map["gain_over_published"] = "N/A"
-
-    # Kaggle dataset size (unknown until download)
-    var_map["kaggle_n"] = "?"
 
     return var_map
 

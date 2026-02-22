@@ -29,7 +29,7 @@ from transformers import (
 )
 
 import dataset_loaders
-from evaluate import compute_metrics, run_inference, remap_cord_to_sroie
+from evaluate import compute_metrics, run_inference
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -69,29 +69,29 @@ EXPERIMENTS: Dict[int, Dict] = {
         "description": "Add ~1 740 WildReceipt receipt images with KIE remapping.",
     },
     3: {
-        "name": "SROIE + FUNSD/XFUND",
-        "datasets": ["sroie", "funsd", "xfund"],
-        "description": "Add 199 FUNSD + ~1 393 XFUND form images.",
+        "name": "SROIE + SROIE-NER",
+        "datasets": ["sroie", "sroie_ner"],
+        "description": "Add SROIE in token-level NER format (different augmentation view).",
     },
     4: {
-        "name": "SROIE + EATEN",
-        "datasets": ["sroie", "eaten"],
-        "description": "Add ~3 000 EATEN Chinese restaurant receipt images.",
-    },
-    5: {
         "name": "SROIE + CORD",
         "datasets": ["sroie", "cord"],
-        "description": "Add ~11 000 CORD receipt images (model's original pretraining data).",
+        "description": "Add ~900 CORD receipt images (model's original pretraining data).",
+    },
+    5: {
+        "name": "SROIE + WildReceipt + CORD",
+        "datasets": ["sroie", "wildreceipt", "cord"],
+        "description": "Combine SROIE, WildReceipt, and CORD.",
     },
     6: {
-        "name": "SROIE + Kaggle Scanned",
-        "datasets": ["sroie", "kaggle_scanned"],
-        "description": "Add Kaggle Scanned Images dataset.",
+        "name": "SROIE + SROIE-NER + CORD",
+        "datasets": ["sroie", "sroie_ner", "cord"],
+        "description": "Combine SROIE, SROIE-NER, and CORD.",
     },
     7: {
-        "name": "SROIE + CORD + Kaggle Scanned",
-        "datasets": ["sroie", "cord", "kaggle_scanned"],
-        "description": "Combine SROIE, CORD, and Kaggle Scanned Images.",
+        "name": "SROIE + All",
+        "datasets": ["sroie", "wildreceipt", "sroie_ner", "cord"],
+        "description": "Combine all four available datasets.",
     },
 }
 

@@ -81,7 +81,7 @@ def stage_download(args) -> None:
     print(f"  SROIE test  : {len(test_samples)} samples")
 
     # Trigger downloads for all auxiliary datasets so they are cached before training
-    aux_datasets = ["wildreceipt", "funsd", "xfund", "eaten", "cord", "kaggle_scanned"]
+    aux_datasets = ["wildreceipt", "sroie_ner", "cord"]
     for ds_name in aux_datasets:
         print(f"  Fetching '{ds_name}' ...")
         try:
