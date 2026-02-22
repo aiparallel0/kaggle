@@ -1,4 +1,4 @@
-import json, torch, re
+import json, torch
 import editdistance
 import numpy as np
 from pathlib import Path
@@ -9,6 +9,7 @@ from tqdm import tqdm
 SROIE_DIR = Path("/workspace/ICDAR-2019-SROIE/data")
 FIELDS = ["company", "date", "address", "total"]
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".webp"}
 
 
 def run_inference(model, processor, image_path, task_prompt, max_length=512):
@@ -146,12 +147,13 @@ def print_results(pretrained_m, finetuned_m):
 
 def main():
     # Load test images + ground truth
-    img_dir = SROIE_DIR / "img"
-    key_dir = SROIE_DIR / "key"
+    img_dir = SROIE_DIR / "test_img"
+    key_dir = SROIE_DIR / "test_key"
 
     test_samples = []
-    for img_path in sorted(img_dir.glob("*.jpg")):
-        key_file = key_dir / (img_path.stem + ".txt")
+    for img_path in sorted(p for p in img_dir.iterdir()
+                            if p.is_file() and p.suffix.lower() in IMAGE_EXTS):
+        key_file = key_dir / (img_path.stem + ".json")
         if key_file.exists():
             try:
                 gt = json.loads(key_file.read_text(encoding="utf-8"))
@@ -159,8 +161,6 @@ def main():
             except json.JSONDecodeError:
                 pass
 
-    # Use last 100 images as test set (first 500+ used for training)
-    test_samples = test_samples[-100:]
     print(f"Evaluating on {len(test_samples)} test images")
 
     ground_truths = [s[1] for s in test_samples]
