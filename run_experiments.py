@@ -196,6 +196,8 @@ def evaluate_experiment(exp_id: int, model_dir: Path) -> Dict:
     with torch.no_grad():
         for img_path in image_paths:
             pred = run_inference(ft_model, ft_processor, img_path, "<s_sroie>")
+            if "sroie" in pred and isinstance(pred["sroie"], dict):
+                pred = pred["sroie"]
             finetuned_preds.append(pred)
 
     metrics = compute_metrics(finetuned_preds, ground_truths)
