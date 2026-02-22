@@ -8,6 +8,7 @@ from transformers import (DonutProcessor, VisionEncoderDecoderModel,
 SROIE_DIR = Path("/workspace/ICDAR-2019-SROIE/data")
 FIELDS = ["company", "date", "address", "total"]
 MAX_LENGTH = 512
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".webp"}
 
 NEW_TOKENS = [
     "<s_sroie>", "</s_sroie>",
@@ -22,7 +23,8 @@ class SROIEDataset(Dataset):
         self.processor = processor
         self.max_length = max_length
         self.samples = []
-        for img_path in sorted(Path(img_dir).glob("*.jpg")):
+        for img_path in sorted(p for p in Path(img_dir).iterdir()
+                                if p.is_file() and p.suffix.lower() in IMAGE_EXTS):
             key_file = Path(key_dir) / (img_path.stem + ".json")
             if key_file.exists():
                 try:

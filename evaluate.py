@@ -9,6 +9,7 @@ from tqdm import tqdm
 SROIE_DIR = Path("/workspace/ICDAR-2019-SROIE/data")
 FIELDS = ["company", "date", "address", "total"]
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".webp"}
 
 
 def run_inference(model, processor, image_path, task_prompt, max_length=512):
@@ -150,7 +151,8 @@ def main():
     key_dir = SROIE_DIR / "test_key"
 
     test_samples = []
-    for img_path in sorted(img_dir.glob("*.jpg")):
+    for img_path in sorted(p for p in img_dir.iterdir()
+                            if p.is_file() and p.suffix.lower() in IMAGE_EXTS):
         key_file = key_dir / (img_path.stem + ".json")
         if key_file.exists():
             try:
