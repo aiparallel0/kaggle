@@ -326,7 +326,7 @@ def stage_download(args) -> None:
         import run_experiments as re_mod
         affected_exp_ids = [
             exp_id for exp_id, exp in re_mod.EXPERIMENTS.items()
-            if any(ds in exp["datasets"] for ds in failed_datasets)
+            if any(ds in exp.datasets for ds in failed_datasets)
         ]
         print(
             f"\n  WARNING: {len(failed_datasets)} auxiliary dataset(s) failed to load: "
@@ -422,10 +422,10 @@ def stage_experiments(args) -> int:
     failed_experiments = []
 
     for i, exp_id in enumerate(exp_ids, 1):
-        _step(i, total, f"Experiment {exp_id}: {re_mod.EXPERIMENTS[exp_id]['name']}")
+        _step(i, total, f"Experiment {exp_id}: {re_mod.EXPERIMENTS[exp_id].name}")
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         print(f"  ▶ Experiment {exp_id} started at {ts}")
-        print(f"    Datasets: {re_mod.EXPERIMENTS[exp_id]['datasets']}")
+        print(f"    Datasets: {re_mod.EXPERIMENTS[exp_id].datasets}")
         t0 = time.monotonic()
         try:
             result = re_mod.run_experiment(exp_id)
