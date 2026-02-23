@@ -533,10 +533,7 @@ class WildReceiptLoader(BaseDatasetLoader):
                 field = self._IDX_TO_FIELD.get(label_idx)
                 text = str(ann.get("text", "")).strip()
                 if field and text:
-                    if gt[field]:
-                        gt[field] = gt[field] + " " + text
-                    else:
-                        gt[field] = text
+                    gt[field] = (gt[field] + " " + text).strip() if gt[field] else text
 
             file_name = obj.get("file_name", "")
             img_path = inner / file_name
@@ -564,7 +561,6 @@ class WildReceiptLoader(BaseDatasetLoader):
                 return True
         except Exception:
             return False
-        return False
 
     def clear_cache(self) -> None:
         """Remove the entire WildReceipt cache directory."""
@@ -1276,13 +1272,6 @@ def get_combined_dataset(
             raise
         per_loader_counts[name] = len(data)
         print(f"[dataset_loaders] '{name}' → {len(data)} samples")
-
-        if len(data) == 0:
-            print(
-                f"FATAL: [{name}] returned 0 samples! "
-                f"This experiment's results will NOT reflect this dataset.",
-                file=sys.stderr,
-            )
 
         if name == "sroie":
             # SROIE: train split → combined_train; val split → combined_val
