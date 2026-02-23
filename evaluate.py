@@ -176,7 +176,9 @@ def _retie_decoder_head(model) -> None:
                 )
 
     assert model.decoder.lm_head.weight is not None, (
-        "decoder.lm_head.weight is None after loading — model is broken"
+        "decoder.lm_head.weight is None after _retie_decoder_head() — "
+        "weight tying failed. Check that the checkpoint was saved with "
+        "model.tie_weights() or that embed_tokens exists."
     )
 
 
