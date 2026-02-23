@@ -137,7 +137,7 @@ def main():
         warmup_steps=100,
         weight_decay=0.01,
         save_strategy="epoch",
-        evaluation_strategy="epoch",
+        eval_strategy="epoch",
         save_total_limit=3,
         load_best_model_at_end=True,
         metric_for_best_model="eval_loss",

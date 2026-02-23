@@ -19,6 +19,20 @@ import urllib.request
 from pathlib import Path
 from typing import List, Tuple, Dict
 
+# ── Transformers compat shim ──────────────────────────────────────────
+# In transformers ≥4.47 PreTrainedTokenizerBase moved to
+# transformers.tokenization_utils_base.  The `datasets` library still
+# tries to access it at the old location during load_dataset() which
+# causes an AttributeError.  Restore the alias so CORD and
+# Invoices-DONUT downloads succeed.
+try:
+    import transformers
+    if not hasattr(transformers, "PreTrainedTokenizerBase"):
+        from transformers.tokenization_utils_base import PreTrainedTokenizerBase
+        transformers.PreTrainedTokenizerBase = PreTrainedTokenizerBase
+except Exception:
+    pass
+
 # Where auxiliary datasets are stored — respects DONUT_WORKSPACE env var.
 def _get_datasets_dir() -> Path:
     return Path(os.environ.get("DONUT_WORKSPACE", "/workspace")) / "datasets"

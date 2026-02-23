@@ -249,7 +249,7 @@ def train_experiment(
         warmup_steps=100,
         weight_decay=0.01,
         save_strategy="epoch",
-        evaluation_strategy="epoch" if do_eval else "no",
+        eval_strategy="epoch" if do_eval else "no",
         save_total_limit=3,
         load_best_model_at_end=do_eval,
         metric_for_best_model="eval_loss" if do_eval else None,
