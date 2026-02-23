@@ -44,9 +44,11 @@ Exit codes
 import argparse
 import json
 import os
+import random
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -67,18 +69,81 @@ def _step(n: int, total: int, desc: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# HuggingFace authentication
+# ---------------------------------------------------------------------------
+
+def _setup_hf_auth() -> None:
+    """Load HuggingFace token from hf_token.txt or environment for faster downloads.
+
+    Authenticated HF downloads are 5-10x faster and avoid rate limiting (429 errors).
+    """
+    # Priority: HF_TOKEN env var > hf_token.txt file
+    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    if not token:
+        token_file = Path("hf_token.txt")
+        if token_file.exists():
+            token = token_file.read_text().strip()
+            if token and not token.startswith("#"):
+                print(f"  [HF Auth] Loaded token from {token_file}")
+            else:
+                token = None
+    if token:
+        os.environ["HF_TOKEN"] = token
+        os.environ["HUGGING_FACE_HUB_TOKEN"] = token  # legacy env var
+        try:
+            from huggingface_hub import login
+            login(token=token, add_to_git_credential=False)
+            print("  [HF Auth] Authenticated — faster downloads enabled")
+        except Exception as e:
+            print(f"  [HF Auth] Login failed: {e} — continuing unauthenticated")
+    else:
+        print(
+            "  [HF Auth] No token found. Downloads may be slow/rate-limited.\n"
+            "            To fix: create hf_token.txt with your HF token,\n"
+            "            or set HF_TOKEN environment variable."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Background model pre-download
+# ---------------------------------------------------------------------------
+
+def _predownload_model_background() -> threading.Thread:
+    """Start downloading the base model in a background thread.
+
+    This runs concurrently with dataset downloads so the model is
+    already cached when training starts.
+    """
+    def _download():
+        try:
+            from transformers import DonutProcessor, VisionEncoderDecoderModel
+            model_id = "naver-clova-ix/donut-base-finetuned-cord-v2"
+            print("  [Background] Pre-downloading base model ...")
+            DonutProcessor.from_pretrained(model_id)
+            VisionEncoderDecoderModel.from_pretrained(model_id)
+            print("  [Background] Base model cached ✓")
+        except Exception as e:
+            print(f"  [Background] Model pre-download failed: {e}")
+
+    t = threading.Thread(target=_download, daemon=True, name="model-predownload")
+    t.start()
+    return t
+
+
+# ---------------------------------------------------------------------------
 # Stage 0 — SROIE auto-install
 # ---------------------------------------------------------------------------
 
 def stage_install(args) -> None:
-    """Clone SROIE from GitHub and set up train/test directories if not present."""
+    """Clone SROIE from GitHub and set up train/val/test directories using 80/10/10 split."""
     _banner("STAGE 0 — SROIE data install")
 
     sroie_data_dir = Path(args.sroie_dir)
     sroie_img = sroie_data_dir / "img"
     sroie_test_img = sroie_data_dir / "test_img"
+    sroie_val_img = sroie_data_dir / "val_img"
 
-    if sroie_img.exists() and sroie_test_img.exists():
+    if sroie_img.exists() and sroie_test_img.exists() and sroie_val_img.exists():
         print(f"  SROIE data already present at {sroie_data_dir} — skipping install.")
         return
 
@@ -102,8 +167,9 @@ def stage_install(args) -> None:
             )
             sys.exit(2)
 
-    # The repo has data/img/, data/key/, data/box/ but no test split.
-    # Point sroie_data_dir at the cloned repo's data/ subdirectory if needed.
+    # The repo has data/img/, data/key/, data/box/ with ALL 626 images.
+    # The official SROIE test set (347 images) has NO public ground truth labels,
+    # so we use an 80/10/10 split instead: 500 train / 63 val / 63 test.
     cloned_data = clone_target / "data"
     if not sroie_data_dir.exists() and cloned_data.exists():
         sroie_data_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -127,87 +193,54 @@ def stage_install(args) -> None:
 
     image_exts = {".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".webp"}
 
-    # Try to use the official SROIE test split.
-    # Check if the repo includes a separate test folder or split-list files.
+    # Collect all images with matching key files
+    all_images = sorted(
+        p for p in img_dir.iterdir()
+        if p.is_file() and p.suffix.lower() in image_exts
+    )
+    # Keep only images that have a corresponding key file
+    valid_images = [
+        p for p in all_images
+        if (key_dir / (p.stem + ".txt")).exists() or (key_dir / (p.stem + ".json")).exists()
+    ]
+
+    # 80/10/10 split with seed 42
+    # Official test split has no public ground truth — use our own split instead.
+    rng = random.Random(42)
+    shuffled = list(valid_images)
+    rng.shuffle(shuffled)
+    n = len(shuffled)
+    n_train = int(n * 0.8)
+    n_val = (n - n_train) // 2
+    train_imgs = shuffled[:n_train]
+    val_imgs = shuffled[n_train:n_train + n_val]
+    test_imgs = shuffled[n_train + n_val:]
+
+    val_img_dir = sroie_data_dir / "val_img"
+    val_key_dir = sroie_data_dir / "val_key"
     test_img_dir = sroie_data_dir / "test_img"
     test_key_dir = sroie_data_dir / "test_key"
 
-    # Look for official test folder variants in the cloned repo
-    official_test_found = False
-    for test_candidate in (
-        clone_target / "data" / "test",
-        clone_target / "test",
-        clone_target / "data" / "test_img",
-    ):
-        if test_candidate.exists() and any(
-            p.is_file() and p.suffix.lower() in image_exts
-            for p in test_candidate.iterdir()
-        ):
-            # Official test images found — copy to test_img/
-            test_img_dir.mkdir(exist_ok=True)
-            test_key_dir.mkdir(exist_ok=True)
-            for img_path in test_candidate.iterdir():
-                if img_path.is_file() and img_path.suffix.lower() in image_exts:
-                    shutil.copy2(str(img_path), str(test_img_dir / img_path.name))
-            # Look for matching key files in a parallel key folder
-            key_candidate = test_candidate.parent / (test_candidate.name.replace("img", "key"))
-            if not key_candidate.exists():
-                key_candidate = test_candidate.parent / "test_key"
-            if key_candidate.exists():
-                for kf in key_candidate.iterdir():
-                    if kf.is_file():
-                        shutil.copy2(str(kf), str(test_key_dir / kf.name))
-            official_test_found = True
-            img_count = sum(1 for p in test_img_dir.iterdir()
-                            if p.is_file() and p.suffix.lower() in image_exts)
-            print(f"  Official SROIE test split found: {img_count} images at {test_img_dir}")
-            break
+    val_img_dir.mkdir(exist_ok=True)
+    val_key_dir.mkdir(exist_ok=True)
+    test_img_dir.mkdir(exist_ok=True)
+    test_key_dir.mkdir(exist_ok=True)
 
-    # Check for task3 split list files
-    if not official_test_found:
-        for split_file in (
-            clone_target / "task3_test.txt",
-            clone_target / "data" / "task3_test.txt",
-            sroie_data_dir / "task3_test.txt",
-        ):
-            if split_file.exists():
-                test_stems = set(split_file.read_text(encoding="utf-8").splitlines())
-                test_stems = {s.strip() for s in test_stems if s.strip()}
-                test_img_dir.mkdir(exist_ok=True)
-                test_key_dir.mkdir(exist_ok=True)
-                for img_path in img_dir.iterdir():
-                    if img_path.is_file() and img_path.suffix.lower() in image_exts:
-                        if img_path.stem in test_stems:
-                            shutil.move(str(img_path), str(test_img_dir / img_path.name))
-                            for ext in [".txt", ".json"]:
-                                key_src = key_dir / (img_path.stem + ext)
-                                if key_src.exists():
-                                    shutil.move(str(key_src), str(test_key_dir / key_src.name))
-                                    break
-                official_test_found = True
-                img_count = sum(1 for p in test_img_dir.iterdir()
-                                if p.is_file() and p.suffix.lower() in image_exts)
-                print(f"  Official SROIE test split (task3_test.txt): {img_count} images")
-                break
+    def _copy_split(img_list, dst_img_dir, dst_key_dir):
+        for img_path in img_list:
+            shutil.copy2(str(img_path), str(dst_img_dir / img_path.name))
+            for ext in [".txt", ".json"]:
+                key_src = key_dir / (img_path.stem + ext)
+                if key_src.exists():
+                    shutil.copy2(str(key_src), str(dst_key_dir / key_src.name))
+                    break
 
-    if not official_test_found:
-        # Fallback: use ALL available images as training; no test split.
-        print(
-            "  WARNING: The official SROIE test split (347 images) could not be determined "
-            "from the cloned repository. ALL available images will be used as training data. "
-            "Evaluation on the SROIE test set will be skipped (0 test samples).",
-            file=sys.stderr,
-        )
-        # Create empty test directories to prevent FileNotFoundError downstream
-        test_img_dir.mkdir(exist_ok=True)
-        test_key_dir.mkdir(exist_ok=True)
+    _copy_split(val_imgs, val_img_dir, val_key_dir)
+    _copy_split(test_imgs, test_img_dir, test_key_dir)
 
-    train_count = sum(1 for p in img_dir.iterdir()
-                      if p.is_file() and p.suffix.lower() in image_exts)
-    test_count = sum(1 for p in test_img_dir.iterdir()
-                     if p.is_file() and p.suffix.lower() in image_exts)
-    print(f"  Train images : {train_count}")
-    print(f"  Test images  : {test_count}")
+    print(f"  Train images : {len(train_imgs)}")
+    print(f"  Val images   : {len(val_imgs)}")
+    print(f"  Test images  : {len(test_imgs)}")
     print(f"  SROIE data ready at {sroie_data_dir}")
 
 
@@ -216,10 +249,14 @@ def stage_install(args) -> None:
 # ---------------------------------------------------------------------------
 
 def stage_download(args) -> None:
-    """Verify SROIE exists and pre-fetch all auxiliary datasets."""
+    """Verify SROIE exists and pre-fetch all auxiliary datasets IN PARALLEL."""
     import dataset_loaders  # local module
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    _banner("STAGE 1 — Dataset verification & download")
+    _banner("STAGE 1 — Dataset verification & parallel download")
+
+    # Start model download in background (runs during dataset downloads)
+    model_thread = _predownload_model_background()
 
     # SROIE must already be present (img/ directory at minimum)
     sroie_img = Path(args.sroie_dir) / "img"
@@ -231,7 +268,9 @@ def stage_download(args) -> None:
 
     train_samples = dataset_loaders.load_sroie_train()
     test_samples = dataset_loaders.load_sroie_test()
+    val_samples = dataset_loaders.load_sroie_val()
     print(f"  SROIE train : {len(train_samples)} samples")
+    print(f"  SROIE val   : {len(val_samples)} samples")
     print(f"  SROIE test  : {len(test_samples)} samples")
     if not sroie_test_img.exists() or len(test_samples) == 0:
         print(
@@ -239,19 +278,31 @@ def stage_download(args) -> None:
             file=sys.stderr,
         )
 
-    # Trigger downloads for all auxiliary datasets so they are cached before training
-    aux_datasets = ["wildreceipt", "coru", "cord", "invoices_donut"]
+    # Download all auxiliary datasets in parallel (I/O-bound, threads are fine)
+    aux_datasets = ["wildreceipt", "cord", "invoices_donut"]
     failed_datasets = []
-    for ds_name in aux_datasets:
-        print(f"  Fetching '{ds_name}' ...")
+
+    def _fetch_one(ds_name: str) -> tuple:
+        """Download a single dataset. Returns (name, count, error)."""
         try:
-            train_data, val_data = dataset_loaders.get_combined_dataset([ds_name])
-            print(f"    → {len(train_data)} train / {len(val_data)} val samples available")
+            t0 = time.monotonic()
+            data = dataset_loaders.get_combined_dataset([ds_name])
+            train_count = len(data[0]) if isinstance(data, tuple) else len(data)
+            elapsed = time.monotonic() - t0
+            return (ds_name, train_count, None, elapsed)
         except Exception as exc:
-            print(f"    → WARNING: failed to fetch '{ds_name}': {exc}. "
-                  f"Any experiment that includes this dataset will produce 0 samples "
-                  f"from it and fall back to SROIE-only training.")
-            failed_datasets.append(ds_name)
+            return (ds_name, 0, str(exc), 0.0)
+
+    print(f"  Downloading {len(aux_datasets)} datasets in parallel ...")
+    with ThreadPoolExecutor(max_workers=len(aux_datasets)) as pool:
+        futures = {pool.submit(_fetch_one, ds): ds for ds in aux_datasets}
+        for future in as_completed(futures):
+            ds_name, count, error, elapsed = future.result()
+            if error:
+                print(f"    → WARNING: '{ds_name}' failed: {error}")
+                failed_datasets.append(ds_name)
+            else:
+                print(f"    → '{ds_name}' ready: {count} train samples ({elapsed:.1f}s)")
 
     if failed_datasets:
         # Report which experiment IDs are affected by the failed downloads
@@ -269,6 +320,9 @@ def stage_download(args) -> None:
             f"  Affected experiment IDs: {affected_exp_ids}",
             file=sys.stderr,
         )
+
+    # Wait for background model download to finish
+    model_thread.join(timeout=600)  # 10 min max
 
 
 # ---------------------------------------------------------------------------
@@ -384,6 +438,7 @@ def stage_paper(args) -> None:
     try:
         actual_counts = {
             "sroie_train": len(dataset_loaders.load_sroie_train()),
+            "sroie_val": len(dataset_loaders.load_sroie_val()),
             "sroie_test": len(dataset_loaders.load_sroie_test()),
         }
     except Exception:
@@ -469,6 +524,9 @@ def main() -> None:
     t_start = time.monotonic()
     parser = build_parser()
     args = parser.parse_args()
+
+    # Set up HuggingFace authentication for faster downloads
+    _setup_hf_auth()
 
     # Propagate workspace and SROIE dir overrides to sub-modules before importing them
     os.environ["DONUT_WORKSPACE"] = args.workspace

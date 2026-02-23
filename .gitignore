@@ -53,3 +53,6 @@ tmp/
 # Output files (keep for testing)
 # *.png
 # *.csv
+
+# HuggingFace token (keep local, never commit)
+hf_token.txt

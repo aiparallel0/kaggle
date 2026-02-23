@@ -12,3 +12,4 @@ pandas
 pyarrow
 datasets>=2.14.0
 protobuf
+psutil
