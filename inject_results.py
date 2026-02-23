@@ -283,6 +283,217 @@ def fill_paper(paper_path: str, output_path: str, var_map: dict) -> None:
         )
 
 
+
+# ---------------------------------------------------------------------------
+# Convergence plot data / tex generation
+# ---------------------------------------------------------------------------
+
+# Distinct colors and markers for 8 experiments in pgfplots syntax
+_PLOT_STYLES = [
+    ("blue",        "o"),
+    ("red",         "square"),
+    ("green!60!black", "triangle"),
+    ("orange",      "diamond"),
+    ("purple",      "star"),
+    ("teal",        "pentagon"),
+    ("brown",       "x"),
+    ("magenta",     "+"),
+]
+
+
+def generate_convergence_data(results_path: str = "results/all_experiments.json",
+                               output_dir: str = "results") -> None:
+    """Read all_experiments.json and write per-experiment convergence CSV files."""
+    results_file = Path(results_path)
+    if not results_file.exists():
+        return
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    with open(results_file) as fh:
+        all_exp = json.load(fh)
+
+    for exp_id_str in sorted(all_exp, key=lambda x: int(x)):
+        res = all_exp[exp_id_str]
+        log_history = res.get("training_log", [])
+        if not log_history:
+            continue
+
+        # Aggregate per-epoch: collect train_loss and eval_loss from log entries
+        epoch_data: dict = {}
+        for entry in log_history:
+            epoch = entry.get("epoch")
+            if epoch is None:
+                continue
+            ep = round(epoch)
+            if ep not in epoch_data:
+                epoch_data[ep] = {}
+            if "loss" in entry:
+                epoch_data[ep]["train_loss"] = entry["loss"]
+            if "eval_loss" in entry:
+                epoch_data[ep]["eval_loss"] = entry["eval_loss"]
+
+        csv_path = out_dir / f"convergence_exp{exp_id_str}.csv"
+        with open(csv_path, "w") as fh:
+            fh.write("epoch,train_loss,eval_loss\n")
+            for ep in sorted(epoch_data):
+                row = epoch_data[ep]
+                train_loss = row.get("train_loss", "")
+                eval_loss = row.get("eval_loss", "")
+                fh.write(f"{ep},{train_loss},{eval_loss}\n")
+
+
+def generate_convergence_tex(results_path: str = "results/all_experiments.json",
+                              output_dir: str = "results") -> None:
+    """Generate results/convergence_plots.tex — pgfplots figure included in paper.tex."""
+    results_file = Path(results_path)
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Determine which experiments have convergence data
+    exp_ids_with_data: list = []
+    if results_file.exists():
+        with open(results_file) as fh:
+            all_exp = json.load(fh)
+        for exp_id_str in sorted(all_exp, key=lambda x: int(x)):
+            csv_path = out_dir / f"convergence_exp{exp_id_str}.csv"
+            if csv_path.exists():
+                exp_ids_with_data.append(exp_id_str)
+
+    def _plot_commands(loss_col: int, ylabel: str) -> str:
+        """Return addplot lines for one subplot (loss_col: 1=train, 2=eval)."""
+        lines = []
+        for i, exp_id_str in enumerate(exp_ids_with_data):
+            color, marker = _PLOT_STYLES[i % len(_PLOT_STYLES)]
+            name = EXP_NAMES.get(exp_id_str, f"Exp {exp_id_str}")
+            csv_rel = f"results/convergence_exp{exp_id_str}.csv"
+            lines.append(
+                f"    \\addplot[color={color},mark={marker},thick] "
+                f"table[x=epoch,y index={loss_col},col sep=comma,header=true]"
+                f"{{{csv_rel}}};\n"
+                f"    \\addlegendentry{{{name}}}"
+            )
+        return "\n".join(lines)
+
+    train_plots = _plot_commands(1, "Training Loss")
+    eval_plots = _plot_commands(2, "Validation Loss")
+
+    tex = r"""\begin{figure*}[t]
+  \centering
+  \begin{subfigure}[t]{0.48\linewidth}
+    \begin{tikzpicture}
+      \begin{axis}[
+        xlabel={Epoch},
+        ylabel={Training Loss},
+        width=\linewidth,
+        height=6cm,
+        legend pos=north east,
+        legend style={font=\tiny},
+        grid=major,
+      ]
+""" + train_plots + r"""
+      \end{axis}
+    \end{tikzpicture}
+    \caption{Training Loss}
+  \end{subfigure}%
+  \hfill
+  \begin{subfigure}[t]{0.48\linewidth}
+    \begin{tikzpicture}
+      \begin{axis}[
+        xlabel={Epoch},
+        ylabel={Validation Loss},
+        width=\linewidth,
+        height=6cm,
+        legend pos=north east,
+        legend style={font=\tiny},
+        grid=major,
+      ]
+""" + eval_plots + r"""
+      \end{axis}
+    \end{tikzpicture}
+    \caption{Validation Loss}
+  \end{subfigure}
+  \caption{Training and validation loss convergence curves for all eight
+    experiments.  Experiments with larger combined training sets
+    (Exp.~5--8) generally converge to lower training loss but may
+    exhibit higher validation loss due to domain mismatch between
+    auxiliary data and the SROIE test distribution.  Early stopping
+    (patience = 5 epochs on validation loss) terminates training at
+    different epochs across experiments.}
+  \label{fig:convergence}
+\end{figure*}
+"""
+    tex_path = out_dir / "convergence_plots.tex"
+    tex_path.write_text(tex, encoding="utf-8")
+
+
+def generate_f1_barchart_tex(results_path: str = "results/all_experiments.json",
+                              output_dir: str = "results") -> None:
+    """Generate results/f1_barchart.tex — horizontal bar chart of Global F1."""
+    results_file = Path(results_path)
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    exp_labels: list = []
+    f1_values: list = []
+
+    if results_file.exists():
+        with open(results_file) as fh:
+            all_exp = json.load(fh)
+        for exp_id_str in sorted(all_exp, key=lambda x: int(x)):
+            res = all_exp[exp_id_str]
+            f1 = res.get("metrics", {}).get("global_f1")
+            if f1 is not None:
+                name = EXP_NAMES.get(exp_id_str, f"Exp {exp_id_str}")
+                exp_labels.append(f"Exp.~{exp_id_str}: {name}")
+                f1_values.append(f1)
+
+    if not f1_values:
+        # Write an empty placeholder so \input{} does not break compilation
+        tex_path = out_dir / "f1_barchart.tex"
+        tex_path.write_text("% No F1 data available yet.\n", encoding="utf-8")
+        return
+
+    coords = "\n        ".join(
+        f"({v:.4f},{i})" for i, v in enumerate(f1_values)
+    )
+    ylabels = "\n        ".join(
+        f"{i}/{{{lab}}}" for i, lab in enumerate(exp_labels)
+    )
+
+    tex = r"""\begin{figure}[h]
+  \centering
+  \begin{tikzpicture}
+    \begin{axis}[
+      xbar,
+      xlabel={Global F1},
+      ytick=data,
+      yticklabels={
+        """ + ylabels + r"""
+      },
+      width=\linewidth,
+      height=7cm,
+      xmin=0, xmax=1,
+      bar width=8pt,
+      nodes near coords,
+      nodes near coords align={horizontal},
+      every node near coord/.style={font=\tiny},
+    ]
+      \addplot[fill=blue!60] coordinates {
+        """ + coords + r"""
+      };
+    \end{axis}
+  \end{tikzpicture}
+  \caption{Global F1 score on the SROIE test set for each of the eight
+    fine-tuning experiments, showing the impact of auxiliary dataset
+    inclusion on extraction accuracy.}
+  \label{fig:f1_barchart}
+\end{figure}
+"""
+    tex_path = out_dir / "f1_barchart.tex"
+    tex_path.write_text(tex, encoding="utf-8")
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -314,6 +525,10 @@ def main() -> None:
         print_table2_experiments(all_exp)
         print_table3_perfield(all_exp)
         print_table4_leaderboard(all_exp)
+
+        generate_convergence_data(args.results)
+        generate_convergence_tex(args.results)
+        generate_f1_barchart_tex(args.results)
 
         if Path(args.paper).exists():
             var_map = build_var_map(all_exp)

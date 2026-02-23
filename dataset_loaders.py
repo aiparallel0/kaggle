@@ -421,7 +421,14 @@ def _download_invoices_donut() -> Path:
     dest = _ensure_dir(_get_datasets_dir() / "invoices_donut")
     marker = dest / ".downloaded"
     if marker.exists():
-        return dest
+        if not (dest / "hf_cache").exists():
+            print(
+                "[Invoices-DONUT] Cache marker present but hf_cache/ missing — re-downloading.",
+                file=sys.stderr,
+            )
+            marker.unlink(missing_ok=True)
+        else:
+            return dest
 
     try:
         from datasets import load_dataset  # type: ignore

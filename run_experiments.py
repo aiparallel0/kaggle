@@ -214,8 +214,12 @@ def train_experiment(
     samples: List[Tuple[Path, Dict]],
     output_dir: Path,
     val_samples: List[Tuple[Path, Dict]] = None,
-) -> None:
-    """Fine-tune DONUT on *samples* and save the model to *output_dir*."""
+) -> List[Dict]:
+    """Fine-tune DONUT on *samples* and save the model to *output_dir*.
+
+    Returns the trainer log history (list of per-step dicts) for convergence
+    plot generation.
+    """
     set_seed()
     print(f"\n[Exp {exp_id}] Training on {len(samples)} samples → {output_dir}")
     if val_samples:
@@ -282,9 +286,11 @@ def train_experiment(
         callbacks=callbacks or None,
     )
     trainer.train()
+    log_history = trainer.state.log_history
     model.save_pretrained(str(output_dir))
     processor.save_pretrained(str(output_dir))
     print(f"[Exp {exp_id}] Model saved → {output_dir}")
+    return log_history
 
 
 # ---------------------------------------------------------------------------
@@ -392,7 +398,7 @@ def run_experiment(exp_id: int) -> Dict:
     # Train
     model_dir = WORKSPACE / "models" / f"experiment_{exp_id}"
     model_dir.mkdir(parents=True, exist_ok=True)
-    train_experiment(exp_id, train_samples, model_dir, val_samples=val_samples)
+    log_history = train_experiment(exp_id, train_samples, model_dir, val_samples=val_samples)
 
     # Evaluate
     metrics = evaluate_experiment(exp_id, model_dir)
@@ -405,6 +411,7 @@ def run_experiment(exp_id: int) -> Dict:
         "config": TRAIN_CONFIG,
         "num_train_samples": len(train_samples),
         "metrics": metrics,
+        "training_log": log_history,
     }
     result_file.write_text(json.dumps(result, indent=2))
     print(f"[Exp {exp_id}] Results saved → {result_file}")
