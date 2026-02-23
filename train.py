@@ -1,4 +1,4 @@
-import json, torch
+import json, random, torch
 from pathlib import Path
 from PIL import Image
 from torch.utils.data import Dataset
@@ -60,6 +60,16 @@ class SROIEDataset(Dataset):
                 self.samples.append((img_path, gt))
         print(f"Loaded {len(self.samples)} samples")
 
+    @classmethod
+    def from_samples(cls, processor, samples, max_length=MAX_LENGTH):
+        """Create a SROIEDataset from a pre-built list of (path, gt) tuples."""
+        obj = cls.__new__(cls)
+        Dataset.__init__(obj)
+        obj.processor = processor
+        obj.max_length = max_length
+        obj.samples = list(samples)
+        return obj
+
     def __len__(self):
         return len(self.samples)
 
@@ -97,26 +107,19 @@ def main():
     model.gradient_checkpointing_enable()
 
     sroie_dir = _get_sroie_dir()
-    all_samples = SROIEDataset(processor, sroie_dir / "img", sroie_dir / "key").samples
+    full_ds = SROIEDataset(processor, sroie_dir / "img", sroie_dir / "key")
+    all_samples = full_ds.samples
 
     # Use last 15% of samples as validation for early stopping
-    import random as _random
-    _random.seed(42)
     shuffled = list(all_samples)
-    _random.shuffle(shuffled)
+    random.seed(42)
+    random.shuffle(shuffled)
     n_val = max(1, int(len(shuffled) * 0.15))
     train_samples = shuffled[n_val:]
     val_samples = shuffled[:n_val]
 
-    train_ds = SROIEDataset.__new__(SROIEDataset)
-    train_ds.processor = processor
-    train_ds.max_length = MAX_LENGTH
-    train_ds.samples = train_samples
-
-    val_ds = SROIEDataset.__new__(SROIEDataset)
-    val_ds.processor = processor
-    val_ds.max_length = MAX_LENGTH
-    val_ds.samples = val_samples
+    train_ds = SROIEDataset.from_samples(processor, train_samples)
+    val_ds = SROIEDataset.from_samples(processor, val_samples)
 
     workspace = os.environ.get("DONUT_WORKSPACE", "/workspace")
     output_dir = os.path.join(workspace, "donut-sroie-finetuned")

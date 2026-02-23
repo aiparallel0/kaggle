@@ -194,7 +194,7 @@ def stage_install(args) -> None:
         # Fallback: use ALL available images as training; no test split.
         print(
             "  WARNING: The official SROIE test split (347 images) could not be determined "
-            "from the cloned repository.  ALL available images will be used as training data. "
+            "from the cloned repository. ALL available images will be used as training data. "
             "Evaluation on the SROIE test set will be skipped (0 test samples).",
             file=sys.stderr,
         )

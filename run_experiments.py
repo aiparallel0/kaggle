@@ -223,7 +223,7 @@ def train_experiment(
         args=training_args,
         train_dataset=train_ds,
         eval_dataset=val_ds,
-        callbacks=callbacks if callbacks else None,
+        callbacks=callbacks or None,
     )
     trainer.train()
     model.save_pretrained(str(output_dir))

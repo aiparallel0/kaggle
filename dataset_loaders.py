@@ -332,7 +332,7 @@ def _coru_remap(item: dict) -> Dict[str, str]:
         if val and str(val).strip():
             gt["total"] = str(val).strip()
             break
-    # address — not directly in CORU, leave empty
+    # address - not directly in CORU, leave empty
     gt["address"] = ""
     return gt
 
@@ -618,7 +618,10 @@ def split_dataset(
     -------
     (train, val, test) lists
     """
-    assert abs(train_ratio + val_ratio + test_ratio - 1.0) < 1e-6
+    assert abs(train_ratio + val_ratio + test_ratio - 1.0) < 1e-6, (
+        f"train_ratio + val_ratio + test_ratio must sum to 1.0, got "
+        f"{train_ratio + val_ratio + test_ratio}"
+    )
     rng = random.Random(seed)
     shuffled = list(samples)
     rng.shuffle(shuffled)
