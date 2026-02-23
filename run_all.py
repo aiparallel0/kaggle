@@ -489,6 +489,10 @@ def stage_paper(args) -> None:
     ir.print_table3_perfield(all_exp)
     ir.print_table4_leaderboard(all_exp)
 
+    ir.generate_convergence_data(str(results_path))
+    ir.generate_convergence_tex(str(results_path))
+    ir.generate_f1_barchart_tex(str(results_path))
+
     paper_template = Path(args.paper_template)
     output_paper = Path(args.output)
 
@@ -586,7 +590,7 @@ def main() -> None:
         gpu_mem = torch.cuda.get_device_properties(0).total_memory / (1024**3)
         print(f"  GPU memory   : {gpu_mem:.1f} GB")
     for pkg in ["torch", "transformers", "datasets", "accelerate", "huggingface_hub",
-                "sentencepiece", "editdistance", "protobuf", "pandas", "numpy", "Pillow"]:
+                "sentencepiece", "editdistance", "pandas", "numpy", "Pillow"]:
         try:
             mod = importlib.import_module(pkg.replace("-", "_").lower() if pkg != "Pillow" else "PIL")
             ver = getattr(mod, "__version__", "?")

@@ -17,6 +17,9 @@
 \usepackage{xspace}
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
+\usepackage{pgfplots}
+\usepackage{subcaption}
+\pgfplotsset{compat=1.18}
 
 % ------------------------------------------------------------------
 % Convenience macro — replaced by inject_results.py
@@ -280,6 +283,20 @@ Invoices-DONUT   & 800   & 7+ & EN & Invoices \\
 \bottomrule
 \end{tabular}
 \end{table*}
+
+\subsection{Training Convergence}
+
+Figure~\ref{fig:convergence} shows the training and validation loss
+curves for all eight experiments.  Experiments with larger combined
+training sets (Exp.~5--8) generally converge to lower training loss
+but may exhibit higher validation loss due to domain mismatch between
+auxiliary data and the SROIE test distribution.  Early stopping
+(patience = 5 epochs on validation loss) terminates training at
+different epochs across experiments.
+
+\input{results/convergence_plots.tex}
+
+\input{results/f1_barchart.tex}
 
 \subsection{Leaderboard Comparison}
 
