@@ -19,6 +19,13 @@
 \usepackage[T1]{fontenc}
 \usepackage{pgfplots}
 \usepackage{subcaption}
+\usepackage{siunitx}     % Decimal-aligned numeric columns
+\usepackage{xcolor}      % Color support for highlighting
+\sisetup{
+  round-mode = places,
+  round-precision = 4,
+  table-format = 1.4,
+}
 \pgfplotsset{compat=1.18}
 
 % ------------------------------------------------------------------
@@ -235,7 +242,7 @@ Invoices-DONUT   & 800   & 7+ & EN & Invoices \\
 \subsection{Per-Experiment Results}
 
 \begin{table*}[t]
-\caption{Per-Experiment Results on SROIE Test Set (N=63 test images)}
+\caption{Per-Experiment Results on SROIE Test Set ($N{=}63$ test images, 80/10/10 split of 626 annotated receipts)}
 \label{tab:experiments}
 \centering
 \begin{tabular}{clrcccc}
@@ -260,7 +267,7 @@ Invoices-DONUT   & 800   & 7+ & EN & Invoices \\
 \subsection{Per-Field Breakdown}
 
 \begin{table*}[t]
-\caption{Per-Field F1 and NED for Each Experiment (N=63 test images)}
+\caption{Per-Field F1 and NED for Each Experiment ($N{=}63$ test images, 80/10/10 split of 626 annotated receipts)}
 \label{tab:perfield}
 \centering
 \begin{tabular}{clcccccccc}
@@ -312,11 +319,15 @@ LayoutLMv3~\cite{huang2022layoutlmv3}  & 96.33 \\
 PICK~\cite{yu2021pick}                 & 96.12 \\
 BROS~\cite{hong2022bros}               & 95.48 \\
 LayoutLMv2~\cite{xu2021layoutlmv2}     & 94.95 \\
+H\&H Lab — ICDAR'19 1st~\cite{huang2019icdar}  & 95.67 \\
+CLOVA OCR — ICDAR'19 2nd~\cite{huang2019icdar}  & 93.73 \\
+ICDAR'19 3rd place~\cite{huang2019icdar}         & 91.98 \\
 DONUT (published)~\cite{kim2022donut}  & 84.11 \\
 \midrule
-Ours — CORD zero-shot    & \VAR{pre_f1_pct} \\
+Ours — CORD zero-shot$^\dagger$    & \VAR{pre_f1_pct} \\
 Ours — best fine-tuned   & \VAR{best_f1_pct} \\
 \bottomrule
+\multicolumn{2}{l}{\footnotesize $^\dagger$~Zero-shot transfer, no SROIE fine-tuning.}
 \end{tabular}
 \end{table}
 

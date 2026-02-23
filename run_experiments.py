@@ -1,3 +1,25 @@
+# MIT License
+#
+# Copyright (c) 2024
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
 """
 run_experiments.py — Experiment orchestrator for 8 DONUT fine-tuning experiments.
 
@@ -9,27 +31,37 @@ Run all experiments:
 Run a single experiment (e.g., experiment 2):
     python run_experiments.py --experiment 2
 
+Force re-run (ignore cached results):
+    python run_experiments.py --all --force
+
 Each experiment trains DONUT from the CORD checkpoint and evaluates on the
 SROIE test set (347 images in test_img / test_key).  Results are saved to
 results/experiment_N.json and a summary to results/all_experiments.json.
+
+Architecture
+------------
+ExperimentConfig is THE single source of truth for all training hyperparameters.
+No hardcoded epoch values, learning rates, or batch sizes exist outside of it.
+DonutTrainer (from train.py) receives an ExperimentConfig and reads all
+hyperparameters from it via duck-typed attribute access.
+DonutEvaluator (from evaluate.py) handles model loading with weight re-tying
+and evaluation with self-test and parse-failure thresholds.
 """
 
 import argparse
 import json
+import math
 import os
 import random
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Tuple, Dict
+from typing import Any, Dict, List, Tuple
 
 import numpy as np
 import torch
 from PIL import Image
 from torch.utils.data import Dataset
-from transformers import (
-    DonutProcessor, VisionEncoderDecoderModel,
-    Seq2SeqTrainer, Seq2SeqTrainingArguments,
-    EarlyStoppingCallback,
-)
+from transformers import DonutProcessor, VisionEncoderDecoderModel
 
 import dataset_loaders
 from evaluate import compute_metrics, run_inference
@@ -51,15 +83,6 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 # does not change between module imports, which is the expected runtime assumption.
 SEED = 42
 
-# Hyperparameter config — stored in each result JSON for cache validation
-TRAIN_CONFIG = {
-    "max_epochs": 30,
-    "learning_rate": 5e-5,
-    "per_device_train_batch_size": 4,
-    "early_stopping_patience": 5,
-    "base_model": BASE_MODEL,
-}
-
 NEW_TOKENS = [
     "<s_sroie>", "</s_sroie>",
     "<s_company>", "</s_company>",
@@ -79,52 +102,127 @@ def set_seed(seed: int = SEED) -> None:
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
 
+
+# ---------------------------------------------------------------------------
+# ExperimentConfig — THE single source of truth for all hyperparameters
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ExperimentConfig:
+    """Single source of truth for all training hyperparameters.
+
+    Every training parameter (epochs, lr, batch_size, etc.) lives here.
+    DonutTrainer reads them via duck-typed attribute access using the
+    property aliases below (max_epochs, learning_rate, etc.).
+    """
+
+    name: str
+    datasets: List[str]
+    epochs: int = 30
+    lr: float = 5e-5
+    batch_size: int = 4
+    seed: int = 42
+    early_stopping_patience: int = 5
+    base_model: str = "naver-clova-ix/donut-base-finetuned-cord-v2"
+    warmup_steps: int = 100
+    weight_decay: float = 0.01
+    max_length: int = 512
+    description: str = ""
+    experiment_id: int = 0
+
+    # -- Duck-typed aliases for DonutTrainer compatibility ----------------
+    # DonutTrainer reads config.max_epochs, config.learning_rate, etc.
+    # These properties ensure a single source of truth (no duplication).
+
+    @property
+    def max_epochs(self) -> int:
+        return self.epochs
+
+    @property
+    def learning_rate(self) -> float:
+        return self.lr
+
+    @property
+    def per_device_train_batch_size(self) -> int:
+        return self.batch_size
+
+    @property
+    def output_dir(self) -> str:
+        """Default output directory; overridden at call site when needed."""
+        return str(WORKSPACE / "models" / f"experiment_{self.experiment_id}")
+
+
 # ---------------------------------------------------------------------------
 # Experiment definitions
 # ---------------------------------------------------------------------------
 
-EXPERIMENTS: Dict[int, Dict] = {
-    1: {
-        "name": "SROIE only (baseline)",
-        "datasets": ["sroie"],
-        "description": "Fine-tune on SROIE training set only.",
-    },
-    2: {
-        "name": "SROIE + WildReceipt",
-        "datasets": ["sroie", "wildreceipt"],
-        "description": "Add ~1 740 WildReceipt receipt images with KIE remapping.",
-    },
-    3: {
-        "name": "SROIE + Invoices-DONUT",
-        "datasets": ["sroie", "invoices_donut"],
-        "description": "Add Invoices-DONUT invoice images.",
-    },
-    4: {
-        "name": "SROIE + CORD",
-        "datasets": ["sroie", "cord"],
-        "description": "Add ~900 CORD receipt images (model's original pretraining data).",
-    },
-    5: {
-        "name": "SROIE + WildReceipt + CORD",
-        "datasets": ["sroie", "wildreceipt", "cord"],
-        "description": "Combine SROIE, WildReceipt, and CORD.",
-    },
-    6: {
-        "name": "SROIE + WildReceipt + Invoices",
-        "datasets": ["sroie", "wildreceipt", "invoices_donut"],
-        "description": "Combine SROIE, WildReceipt, and Invoices-DONUT.",
-    },
-    7: {
-        "name": "SROIE + CORD + Invoices",
-        "datasets": ["sroie", "cord", "invoices_donut"],
-        "description": "Combine SROIE, CORD, and Invoices-DONUT.",
-    },
-    8: {
-        "name": "SROIE + All",
-        "datasets": ["sroie", "wildreceipt", "cord", "invoices_donut"],
-        "description": "Combine all four available datasets.",
-    },
+EXPERIMENTS: Dict[int, ExperimentConfig] = {
+    1: ExperimentConfig(
+        name="SROIE only (baseline)",
+        datasets=["sroie"],
+        description="Fine-tune on SROIE training set only.",
+        experiment_id=1,
+    ),
+    2: ExperimentConfig(
+        name="SROIE + WildReceipt",
+        datasets=["sroie", "wildreceipt"],
+        description="Add ~1 740 WildReceipt receipt images with KIE remapping.",
+        experiment_id=2,
+    ),
+    3: ExperimentConfig(
+        name="SROIE + Invoices-DONUT",
+        datasets=["sroie", "invoices_donut"],
+        description="Add Invoices-DONUT invoice images.",
+        experiment_id=3,
+    ),
+    4: ExperimentConfig(
+        name="SROIE + CORD",
+        datasets=["sroie", "cord"],
+        description="Add ~900 CORD receipt images (model's original pretraining data).",
+        experiment_id=4,
+    ),
+    5: ExperimentConfig(
+        name="SROIE + WildReceipt + CORD",
+        datasets=["sroie", "wildreceipt", "cord"],
+        description="Combine SROIE, WildReceipt, and CORD.",
+        experiment_id=5,
+    ),
+    6: ExperimentConfig(
+        name="SROIE + WildReceipt + Invoices",
+        datasets=["sroie", "wildreceipt", "invoices_donut"],
+        description="Combine SROIE, WildReceipt, and Invoices-DONUT.",
+        experiment_id=6,
+    ),
+    7: ExperimentConfig(
+        name="SROIE + CORD + Invoices",
+        datasets=["sroie", "cord", "invoices_donut"],
+        description="Combine SROIE, CORD, and Invoices-DONUT.",
+        experiment_id=7,
+    ),
+    8: ExperimentConfig(
+        name="SROIE + All",
+        datasets=["sroie", "wildreceipt", "cord", "invoices_donut"],
+        description="Combine all four available datasets.",
+        experiment_id=8,
+    ),
 }
+
+# ---------------------------------------------------------------------------
+# TRAIN_CONFIG — backward compatibility for result JSON cache validation
+# ---------------------------------------------------------------------------
+# Derived from ExperimentConfig defaults so there is exactly ONE place
+# where default hyperparameters are defined.
+
+_default_config = ExperimentConfig(name="", datasets=[])
+
+TRAIN_CONFIG: Dict[str, Any] = {
+    "max_epochs": _default_config.epochs,
+    "learning_rate": _default_config.lr,
+    "per_device_train_batch_size": _default_config.batch_size,
+    "early_stopping_patience": _default_config.early_stopping_patience,
+    "base_model": _default_config.base_model,
+}
+
 
 # ---------------------------------------------------------------------------
 # PyTorch Dataset that works from a list of (image_path, gt_dict) tuples
@@ -137,8 +235,13 @@ class MultiDataset(Dataset):
     to eliminate disk I/O during training.
     """
 
-    def __init__(self, samples: List[Tuple[Path, Dict]], processor, max_length: int = MAX_LENGTH,
-                 cache_in_ram: bool = True):
+    def __init__(
+        self,
+        samples: List[Tuple[Path, Dict]],
+        processor: DonutProcessor,
+        max_length: int = MAX_LENGTH,
+        cache_in_ram: bool = True,
+    ):
         self.samples = samples
         self.processor = processor
         self.max_length = max_length
@@ -206,7 +309,7 @@ class MultiDataset(Dataset):
 
 
 # ---------------------------------------------------------------------------
-# Training
+# Training — delegates to DonutTrainer from train.py
 # ---------------------------------------------------------------------------
 
 def train_experiment(
@@ -217,129 +320,119 @@ def train_experiment(
 ) -> List[Dict]:
     """Fine-tune DONUT on *samples* and save the model to *output_dir*.
 
+    All hyperparameters come from ``EXPERIMENTS[exp_id]`` (an ExperimentConfig).
+    Training is delegated to ``DonutTrainer`` from ``train.py``, which reads
+    hyperparameters from the config via duck-typed attributes.
+
     Returns the trainer log history (list of per-step dicts) for convergence
     plot generation.
     """
-    set_seed()
+    from train import DonutTrainer
+
+    config = EXPERIMENTS[exp_id]
+
+    set_seed(config.seed)
     print(f"\n[Exp {exp_id}] Training on {len(samples)} samples → {output_dir}")
+    print(f"[Exp {exp_id}] Hyperparams: epochs={config.epochs}, "
+          f"lr={config.lr}, batch_size={config.batch_size}, "
+          f"warmup={config.warmup_steps}, wd={config.weight_decay}")
     if val_samples:
         print(f"[Exp {exp_id}] Validation set: {len(val_samples)} samples")
 
-    processor = DonutProcessor.from_pretrained(BASE_MODEL)
-    model = VisionEncoderDecoderModel.from_pretrained(BASE_MODEL)
+    # Load base model and processor
+    processor = DonutProcessor.from_pretrained(config.base_model)
+    model = VisionEncoderDecoderModel.from_pretrained(config.base_model)
 
+    # Add SROIE special tokens
     processor.tokenizer.add_special_tokens({"additional_special_tokens": NEW_TOKENS})
     model.decoder.resize_token_embeddings(len(processor.tokenizer))
     model.config.pad_token_id = processor.tokenizer.pad_token_id
-    model.config.decoder_start_token_id = processor.tokenizer.convert_tokens_to_ids(["<s_sroie>"])[0]
+    model.config.decoder_start_token_id = processor.tokenizer.convert_tokens_to_ids(
+        ["<s_sroie>"]
+    )[0]
     model.gradient_checkpointing_enable()
 
-    train_ds = MultiDataset(samples, processor)
-    val_ds = MultiDataset(val_samples, processor) if val_samples else None
+    # Build PyTorch datasets
+    train_ds = MultiDataset(samples, processor, max_length=config.max_length)
+    val_ds = MultiDataset(val_samples, processor, max_length=config.max_length) if val_samples else None
 
-    do_eval = val_ds is not None and len(val_ds) > 0
-
-    # Calculate optimal num_workers based on available CPU cores
-    import multiprocessing
-    num_cpus = multiprocessing.cpu_count()
-    # Use up to 8 workers or half of available cores, whichever is smaller
-    optimal_workers = min(8, max(4, num_cpus // 2))
-
-    training_args = Seq2SeqTrainingArguments(
-        output_dir=str(output_dir),
-        num_train_epochs=TRAIN_CONFIG["max_epochs"],
-        per_device_train_batch_size=TRAIN_CONFIG["per_device_train_batch_size"],
-        learning_rate=TRAIN_CONFIG["learning_rate"],
-        warmup_steps=100,
-        weight_decay=0.01,
-        save_strategy="epoch",
-        eval_strategy="epoch" if do_eval else "no",
-        save_total_limit=3,
-        load_best_model_at_end=do_eval,
-        metric_for_best_model="eval_loss" if do_eval else None,
-        greater_is_better=False if do_eval else None,
-        predict_with_generate=True,
-        fp16=torch.cuda.is_available(),
-        logging_steps=20,
-        # PERFORMANCE: Optimized DataLoader settings
-        dataloader_num_workers=optimal_workers,
-        dataloader_pin_memory=True,
-        dataloader_prefetch_factor=4 if optimal_workers > 0 else None,
-        dataloader_persistent_workers=True if optimal_workers > 0 else False,
-        remove_unused_columns=False,
-        seed=SEED,
+    # Verify single source of truth: ExperimentConfig properties map correctly
+    assert config.epochs == config.max_epochs, (
+        f"Single source of truth violation: epochs={config.epochs} "
+        f"!= max_epochs={config.max_epochs}"
+    )
+    assert config.lr == config.learning_rate, (
+        f"Single source of truth violation: lr={config.lr} "
+        f"!= learning_rate={config.learning_rate}"
+    )
+    assert config.batch_size == config.per_device_train_batch_size, (
+        f"Single source of truth violation: batch_size={config.batch_size} "
+        f"!= per_device_train_batch_size={config.per_device_train_batch_size}"
     )
 
-    callbacks = []
-    if do_eval:
-        callbacks.append(
-            EarlyStoppingCallback(
-                early_stopping_patience=TRAIN_CONFIG["early_stopping_patience"]
-            )
-        )
-
-    trainer = Seq2SeqTrainer(
+    # Create DonutTrainer — it reads all hyperparams from config
+    trainer = DonutTrainer(
+        config=config,
+        processor=processor,
         model=model,
-        args=training_args,
         train_dataset=train_ds,
-        eval_dataset=val_ds,
-        callbacks=callbacks or None,
+        val_dataset=val_ds,
     )
-    trainer.train()
-    log_history = trainer.state.log_history
-    model.save_pretrained(str(output_dir))
-    processor.save_pretrained(str(output_dir))
-    print(f"[Exp {exp_id}] Model saved → {output_dir}")
-    return log_history
+
+    # Train
+    result = trainer.train()
+
+    # Save model with tied weights
+    trainer.save(output_dir)
+
+    print(f"[Exp {exp_id}] Training complete "
+          f"(duration={result.duration_seconds:.1f}s, "
+          f"train={result.train_samples}, val={result.val_samples})")
+
+    return result.log_history
 
 
 # ---------------------------------------------------------------------------
-# Evaluation
+# Evaluation — delegates to DonutEvaluator from evaluate.py
 # ---------------------------------------------------------------------------
 
 def evaluate_experiment(exp_id: int, model_dir: Path) -> Dict:
-    """Evaluate a fine-tuned model (at *model_dir*) on the SROIE test set."""
+    """Evaluate a fine-tuned model (at *model_dir*) on the SROIE test set.
+
+    Uses DonutEvaluator from evaluate.py which handles:
+      - Weight re-tying via load_model_with_tied_weights (fixes lm_head bug)
+      - Self-test before full evaluation
+      - Parse failure threshold checking
+    """
+    from evaluate import DonutEvaluator, load_model_with_tied_weights
+
+    config = EXPERIMENTS[exp_id]
     test_samples = dataset_loaders.load_sroie_test()
     print(f"[Exp {exp_id}] Evaluating on {len(test_samples)} SROIE test images")
 
-    ground_truths = [s[1] for s in test_samples]
-    image_paths = [s[0] for s in test_samples]
+    # Load processor from the fine-tuned model directory
+    processor = DonutProcessor.from_pretrained(str(model_dir))
 
-    # Load fine-tuned model
-    ft_processor = DonutProcessor.from_pretrained(str(model_dir))
-    ft_model = VisionEncoderDecoderModel.from_pretrained(str(model_dir)).to(DEVICE)
-    ft_model.eval()
+    # Create evaluator — handles model loading with weight re-tying
+    evaluator = DonutEvaluator(
+        model_path=model_dir,
+        processor=processor,
+        test_dataset=test_samples,
+        task_prompt="<s_sroie>",
+        max_length=config.max_length,
+        device=DEVICE,
+    )
 
-    # Pre-load all test images in parallel (I/O bound, fits in RAM easily)
-    from concurrent.futures import ThreadPoolExecutor
+    # Run evaluation (includes self-test + parse failure threshold)
+    eval_result = evaluator.evaluate()
+    metrics = eval_result.to_dict()
 
-    def _load_image(path):
-        return Image.open(path).convert("RGB")
-
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        images = list(pool.map(_load_image, image_paths))
-
-    finetuned_preds = []
-    empty_count = 0
-    with torch.no_grad():
-        for img, img_path in zip(images, image_paths):
-            pred = run_inference(ft_model, ft_processor, img_path, "<s_sroie>",
-                                 preloaded_image=img)
-            if "sroie" in pred and isinstance(pred["sroie"], dict):
-                pred = pred["sroie"]
-            if not pred:
-                empty_count += 1
-            finetuned_preds.append(pred)
-
-    # Report how many predictions were empty so users can detect
-    # systematic token2json failures that would silently contaminate metrics.
-    if empty_count > 0:
+    if eval_result.parse_failures > 0:
         print(
-            f"[Exp {exp_id}] WARNING: {empty_count} of {len(image_paths)} predictions were empty"
-            " (token2json failure or empty model output)"
+            f"[Exp {exp_id}] WARNING: {eval_result.parse_failures} of "
+            f"{eval_result.num_samples} predictions had parse failures"
         )
 
-    metrics = compute_metrics(finetuned_preds, ground_truths)
     return metrics
 
 
@@ -348,26 +441,32 @@ def evaluate_experiment(exp_id: int, model_dir: Path) -> Dict:
 # ---------------------------------------------------------------------------
 
 def run_experiment(exp_id: int) -> Dict:
-    """Run a single experiment: train, evaluate, save results."""
+    """Run a single experiment: train, evaluate, save results.
+
+    Checks cache validity (datasets AND hyperparams must match) before
+    reusing a previous result.  Loads data via dataset_loaders, delegates
+    training to train_experiment and evaluation to evaluate_experiment,
+    then saves the result JSON.
+    """
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     if exp_id not in EXPERIMENTS:
         raise ValueError(f"Unknown experiment ID {exp_id}. Valid: {list(EXPERIMENTS)}")
 
-    exp = EXPERIMENTS[exp_id]
+    config = EXPERIMENTS[exp_id]
     print(f"\n{'='*72}")
-    print(f"Experiment {exp_id}: {exp['name']}")
-    print(f"Description: {exp['description']}")
-    print(f"Datasets: {exp['datasets']}")
+    print(f"Experiment {exp_id}: {config.name}")
+    print(f"Description: {config.description}")
+    print(f"Datasets: {config.datasets}")
     print(f"{'='*72}")
 
     result_file = RESULTS_DIR / f"experiment_{exp_id}.json"
 
-    # Check if already done - validate cached result matches current experiment
+    # Check if already done — validate cached result matches current experiment
     # definition (datasets AND hyperparameters) before reusing.
     if result_file.exists():
         with open(result_file) as fh:
             cached = json.load(fh)
-        if cached.get("datasets") != exp["datasets"] or cached.get("config") != TRAIN_CONFIG:
+        if cached.get("datasets") != config.datasets or cached.get("config") != TRAIN_CONFIG:
             # NOTE: JSON round-trip preserves numeric equality for floats like 5e-5,
             # so this comparison is safe (5e-5 == 5e-05 after json.load).
             print(
@@ -380,13 +479,13 @@ def run_experiment(exp_id: int) -> Dict:
             return cached
 
     # Load data
-    train_samples, val_samples = dataset_loaders.get_combined_dataset(exp["datasets"])
+    train_samples, val_samples = dataset_loaders.get_combined_dataset(config.datasets)
     if len(train_samples) == 0:
         print(f"[Exp {exp_id}] WARNING: No samples loaded — saving empty result.")
         result = {
             "experiment_id": exp_id,
-            "name": exp["name"],
-            "datasets": exp["datasets"],
+            "name": config.name,
+            "datasets": config.datasets,
             "config": TRAIN_CONFIG,
             "num_train_samples": 0,
             "metrics": {},
@@ -406,8 +505,8 @@ def run_experiment(exp_id: int) -> Dict:
     # Save result
     result = {
         "experiment_id": exp_id,
-        "name": exp["name"],
-        "datasets": exp["datasets"],
+        "name": config.name,
+        "datasets": config.datasets,
         "config": TRAIN_CONFIG,
         "num_train_samples": len(train_samples),
         "metrics": metrics,
@@ -445,7 +544,6 @@ def save_summary() -> None:
         name = res.get("name", "")[:34]
         n = res.get("num_train_samples", 0)
         f1 = res.get("metrics", {}).get("global_f1", float("nan"))
-        import math
         f1_str = f"{f1:>10.4f}" if not math.isnan(f1) else "       N/A"
         print(f"{exp_id_str:<5} {name:<35} {n:>14} {f1_str}")
     print(f"{'='*72}\n")
@@ -462,8 +560,6 @@ def main() -> None:
     group.add_argument("--experiment", type=int, metavar="N",
                        choices=range(1, len(EXPERIMENTS) + 1),
                        help="Run a single experiment (1-8)")
-    # FIX (BUG 3): --force deletes all cached result files so every experiment
-    # is re-run from scratch regardless of cached state.
     parser.add_argument("--force", action="store_true",
                         help="Delete all cached results and re-run from scratch")
     args = parser.parse_args()

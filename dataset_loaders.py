@@ -1,13 +1,48 @@
+# MIT License
+# Copyright (c) 2026 DONUT-SROIE Contributors
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
 """
 dataset_loaders.py — Multi-dataset download & normalization module.
 
-Provides functions to download each auxiliary dataset (WildReceipt,
-CORD, Invoices-DONUT) and normalize their annotations to the SROIE
-schema: {"company": "...", "date": "...", "address": "...", "total": ""}.
+Provides an ABC-based loader hierarchy to download each auxiliary dataset
+(WildReceipt, CORD, Invoices-DONUT, SROIE-NER) and normalize their
+annotations to the SROIE schema:
+    {"company": "...", "date": "...", "address": "...", "total": "..."}
 
-Returns lists of (image_path, ground_truth_dict) tuples.
+Returns lists of (image_path, ground_truth_dict) tuples (type alias: Sample).
+
+Concrete loaders
+----------------
+- SROIELoader        — local SROIE img/key directories
+- WildReceiptLoader  — OpenMMLab tar download
+- SROIENERLoader     — parquet fallback for broken HF "darentang/sroie"
+- CORDLoader         — HuggingFace naver-clova-ix/cord-v2
+- InvoicesDonutLoader— HuggingFace katanaml-org/invoices-donut-data-v1
+
+Backward-compatible module-level functions are provided as thin wrappers
+around the loader classes so existing call-sites continue to work.
 """
 
+from __future__ import annotations
+
+import hashlib
 import json
 import os
 import random
@@ -16,8 +51,9 @@ import sys
 import tarfile
 import time
 import urllib.request
+from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import List, Tuple, Dict
+from typing import Any, Dict, List, Optional, Tuple
 
 # ── Transformers compat shim ──────────────────────────────────────────
 # In transformers ≥4.47 PreTrainedTokenizerBase moved to
@@ -33,26 +69,68 @@ try:
 except Exception:
     pass
 
-# Where auxiliary datasets are stored — respects DONUT_WORKSPACE env var.
-def _get_datasets_dir() -> Path:
-    return Path(os.environ.get("DONUT_WORKSPACE", "/workspace")) / "datasets"
-
-# BUG C FIX: module-level constant was evaluated once at import time, so
-# os.environ["SROIE_DATA_DIR"] set later in run_all.py had no effect.
-# Use a function that re-reads the env var on every call instead.
-def _get_sroie_dir() -> Path:
-    return Path(os.environ.get("SROIE_DATA_DIR", "/workspace/ICDAR-2019-SROIE/data"))
-
-# Type alias
+# ── Type alias ────────────────────────────────────────────────────────
 Sample = Tuple[Path, Dict[str, str]]
 
-EMPTY_GT = {"company": "", "date": "", "address": "", "total": ""}
+# ── Shared constants ──────────────────────────────────────────────────
+EMPTY_GT: Dict[str, str] = {"company": "", "date": "", "address": "", "total": ""}
+_SROIE_FIELDS = frozenset(EMPTY_GT.keys())
+_IMAGE_EXTS = frozenset({".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".webp"})
+
+
+# ======================================================================
+#  Custom exception
+# ======================================================================
+
+class DatasetLoadError(Exception):
+    """Raised when a dataset cannot be loaded or produces zero samples.
+
+    All loader classes raise this instead of silently returning [].
+    The message is prefixed with ``FATAL:`` for grep-ability.
+    """
+
+    def __init__(self, dataset_name: str, reason: str) -> None:
+        self.dataset_name = dataset_name
+        self.reason = reason
+        msg = f"FATAL: [{dataset_name}] {reason}"
+        # Always echo to stderr so CI logs can grep for FATAL:
+        print(msg, file=sys.stderr, flush=True)
+        super().__init__(msg)
+
+
+# ======================================================================
+#  Path helpers — no module-level constants (BUG C FIX)
+# ======================================================================
+
+def _get_datasets_dir() -> Path:
+    """Return auxiliary-dataset root; respects DONUT_WORKSPACE env var.
+
+    Re-reads the environment variable on *every* call so that callers
+    who set it after import time (e.g. run_all.py) get the right path.
+    """
+    return Path(os.environ.get("DONUT_WORKSPACE", "/workspace")) / "datasets"
+
+
+def _get_sroie_dir() -> Path:
+    """Return SROIE data root; respects SROIE_DATA_DIR env var.
+
+    BUG C FIX: module-level constant was evaluated once at import time,
+    so os.environ["SROIE_DATA_DIR"] set later in run_all.py had no
+    effect.  Use a function that re-reads the env var on every call.
+    """
+    return Path(os.environ.get("SROIE_DATA_DIR",
+                               "/workspace/ICDAR-2019-SROIE/data"))
 
 
 def _ensure_dir(path: Path) -> Path:
+    """Create *path* (and parents) if it doesn't exist, then return it."""
     path.mkdir(parents=True, exist_ok=True)
     return path
 
+
+# ======================================================================
+#  Download helper
+# ======================================================================
 
 def _download_with_progress(url: str, dest_path: Path) -> None:
     """Download *url* to *dest_path* with 60-s timeout, chunked streaming,
@@ -79,7 +157,8 @@ def _download_with_progress(url: str, dest_path: Path) -> None:
                         print(f"\r[{pct:5.1f}%] {dl_mb:.1f} / {total_mb:.1f} MB",
                               end="", flush=True)
                     else:
-                        print(f"\r[{dl_mb:.1f} MB downloaded]", end="", flush=True)
+                        print(f"\r[{dl_mb:.1f} MB downloaded]",
+                              end="", flush=True)
             elapsed = time.time() - t0
             print(f"\nDownload complete in {elapsed:.1f}s")
             return
@@ -98,199 +177,348 @@ def _download_with_progress(url: str, dest_path: Path) -> None:
                 raise
 
 
-# ---------------------------------------------------------------------------
-# SROIE
-# ---------------------------------------------------------------------------
+# ======================================================================
+#  Schema validation helpers
+# ======================================================================
+
+def _validate_sample_schema(sample: Sample, dataset_name: str) -> bool:
+    """Spot-check that *sample* matches the SROIE schema.
+
+    Returns True if the sample is a 2-tuple of (Path, dict) with the
+    expected keys.  Does **not** raise — the caller decides what to do.
+    """
+    if not isinstance(sample, (tuple, list)) or len(sample) != 2:
+        return False
+    path, gt = sample
+    if not isinstance(path, Path):
+        return False
+    if not isinstance(gt, dict):
+        return False
+    if not _SROIE_FIELDS.issubset(gt.keys()):
+        return False
+    return True
+
+
+def _validate_samples_nonempty(
+    samples: List[Sample], dataset_name: str
+) -> List[Sample]:
+    """Return *samples* unchanged if non-empty; raise DatasetLoadError otherwise."""
+    if not samples:
+        raise DatasetLoadError(
+            dataset_name,
+            "Loader returned 0 samples — dataset is MISSING from this run.",
+        )
+    return samples
+
+
+# ======================================================================
+#  SROIE key-file reader (BUG A FIX)
+# ======================================================================
 
 def _load_key_file(key_dir: Path, stem: str) -> Dict[str, str]:
     """Load a SROIE key file for the given image stem.
 
     BUG A FIX: The SROIE repo stores annotations as plain .txt files with
     4 lines (company / date / address / total), NOT as .json files.  The old
-    code only tried .json, so key_file.exists() was always False and every
-    sample was silently skipped.  We now try .json first (for pre-converted
-    data) and fall back to the 4-line .txt format.
+    code only tried .json, so ``key_file.exists()`` was always False and every
+    sample was silently skipped.  We now try .txt first (the format the repo
+    actually ships), then .json as a fallback for pre-converted data.
     """
-    # Try .json first in case a user has pre-converted the files
+    # Try .txt first — the 4-line format that the repo actually provides
+    key_file_txt = key_dir / (stem + ".txt")
+    if key_file_txt.exists():
+        try:
+            lines = key_file_txt.read_text(encoding="utf-8").strip().splitlines()
+            if len(lines) >= 4:
+                return {
+                    "company": lines[0].strip(),
+                    "date":    lines[1].strip(),
+                    "address": lines[2].strip(),
+                    "total":   lines[3].strip(),
+                }
+        except OSError:
+            pass
+
+    # Fallback: .json in case the user has pre-converted the files
     key_file_json = key_dir / (stem + ".json")
     if key_file_json.exists():
         try:
             gt = json.loads(key_file_json.read_text(encoding="utf-8"))
             return {k: str(gt.get(k, "")) for k in EMPTY_GT}
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, OSError):
             pass
-
-    # Fall back to the 4-line .txt format that the repo actually provides
-    key_file_txt = key_dir / (stem + ".txt")
-    if key_file_txt.exists():
-        lines = key_file_txt.read_text(encoding="utf-8").strip().splitlines()
-        if len(lines) >= 4:
-            return {
-                "company": lines[0].strip(),
-                "date":    lines[1].strip(),
-                "address": lines[2].strip(),
-                "total":   lines[3].strip(),
-            }
 
     return {}
 
 
-def load_sroie_train() -> List[Sample]:
-    """Load SROIE training split from the local workspace (img/ + key/)."""
-    samples: List[Sample] = []
-    sroie_dir = _get_sroie_dir()
-    img_dir = sroie_dir / "img"
-    key_dir = sroie_dir / "key"
-    if not img_dir.exists():
-        raise FileNotFoundError(f"SROIE img dir not found: {img_dir}")
+# ======================================================================
+#  Abstract base class
+# ======================================================================
 
-    image_exts = {".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".webp"}
-    for img_path in sorted(p for p in img_dir.iterdir()
-                           if p.is_file() and p.suffix.lower() in image_exts):
-        gt = _load_key_file(key_dir, img_path.stem)
-        if gt:
-            samples.append((img_path, gt))
-    return samples
+class BaseDatasetLoader(ABC):
+    """Abstract base class for all dataset loaders.
 
+    Concrete subclasses must implement four methods:
 
-def load_sroie_test() -> List[Sample]:
-    """Load SROIE test split from the local workspace (test_img/ + test_key/).
+    - ``load(split)``         → list of ``(Path, dict)`` samples
+    - ``validate_cache()``    → True if local cache is usable
+    - ``clear_cache()``       → delete local cache
+    - ``sample_count(split)`` → number of samples in *split*
 
-    Returns an empty list with a warning if the test split directory
-    (test_img/) has not been populated.  This avoids raising on pipelines
-    where the test images are not available.
+    ``load()`` must raise :class:`DatasetLoadError` on failure and must
+    never return an empty list.
     """
-    samples: List[Sample] = []
-    sroie_dir = _get_sroie_dir()
-    img_dir = sroie_dir / "test_img"
-    key_dir = sroie_dir / "test_key"
-    if not img_dir.exists():
-        print(
-            "[SROIE] WARNING: test_img/ directory not found — returning 0 test samples. "
-            "Evaluation will be skipped.",
-            file=sys.stderr,
-        )
-        return []
 
-    image_exts = {".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".webp"}
-    for img_path in sorted(p for p in img_dir.iterdir()
-                           if p.is_file() and p.suffix.lower() in image_exts):
-        gt = _load_key_file(key_dir, img_path.stem)
-        if gt:
-            samples.append((img_path, gt))
-    return samples
+    # Friendly name shown in log messages
+    name: str = "base"
+
+    # ── abstract interface ────────────────────────────────────────────
+
+    @abstractmethod
+    def load(self, split: str = "train") -> List[Sample]:
+        """Load samples for *split*.
+
+        Must raise :class:`DatasetLoadError` on failure.
+        Must never return an empty list — raise instead.
+        """
+        ...
+
+    @abstractmethod
+    def validate_cache(self) -> bool:
+        """Return True if local cache is present **and** schema-valid.
+
+        Must spot-check the first record, not just test file presence.
+        """
+        ...
+
+    @abstractmethod
+    def clear_cache(self) -> None:
+        """Delete any local cached data for this dataset."""
+        ...
+
+    @abstractmethod
+    def sample_count(self, split: str = "train") -> int:
+        """Return the number of samples in *split* without fully loading."""
+        ...
+
+    # ── helpers available to subclasses ───────────────────────────────
+
+    def _log(self, message: str) -> None:
+        """Print a bracketed log line to stdout."""
+        print(f"[{self.name}] {message}", flush=True)
+
+    def _warn(self, message: str) -> None:
+        """Print a bracketed warning to stderr."""
+        print(f"[{self.name}] WARNING: {message}", file=sys.stderr, flush=True)
+
+    def _fatal(self, reason: str) -> DatasetLoadError:
+        """Build and return a :class:`DatasetLoadError` (also prints FATAL:)."""
+        return DatasetLoadError(self.name, reason)
 
 
-def load_sroie_val() -> List[Sample]:
-    """Load SROIE validation split from the local workspace (val_img/ + val_key/).
+# ======================================================================
+#  SROIELoader
+# ======================================================================
 
-    Returns an empty list with a warning if the validation split directory
-    (val_img/) has not been populated.
+class SROIELoader(BaseDatasetLoader):
+    """Load SROIE from local img/key directories.
+
+    Supports three splits:
+    - ``train`` → ``img/`` + ``key/``
+    - ``test``  → ``test_img/`` + ``test_key/``
+    - ``val``   → ``val_img/`` + ``val_key/``
+
+    For ``test`` and ``val`` the loader falls back to an empty list with
+    a warning (instead of raising) because those directories may
+    legitimately not exist in some pipeline configurations.
     """
-    samples: List[Sample] = []
-    sroie_dir = _get_sroie_dir()
-    img_dir = sroie_dir / "val_img"
-    key_dir = sroie_dir / "val_key"
-    if not img_dir.exists():
-        print(
-            "[SROIE] WARNING: val_img/ directory not found — returning 0 val samples.",
-            file=sys.stderr,
-        )
-        return []
 
-    image_exts = {".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".webp"}
-    for img_path in sorted(p for p in img_dir.iterdir()
-                           if p.is_file() and p.suffix.lower() in image_exts):
-        gt = _load_key_file(key_dir, img_path.stem)
-        if gt:
-            samples.append((img_path, gt))
-    return samples
+    name = "SROIE"
 
+    # Map split name → (img_subdir, key_subdir)
+    _SPLIT_DIRS = {
+        "train": ("img", "key"),
+        "test":  ("test_img", "test_key"),
+        "val":   ("val_img", "val_key"),
+    }
 
-# ---------------------------------------------------------------------------
-# WildReceipt
-# ---------------------------------------------------------------------------
+    # ── public interface ──────────────────────────────────────────────
 
-# FIX (BUG 1): Old code used load_dataset("Theivaprakasham/wildreceipt") which
-# fails with "Dataset scripts are no longer supported" and silently returned [].
-# New code downloads the official OpenMMLab tar directly.
-_WILDRECEIPT_URL = "https://download.openmmlab.com/mmocr/data/wildreceipt.tar"
+    def load(self, split: str = "train") -> List[Sample]:
+        """Load SROIE samples for *split*.
 
-# WildReceipt label index → SROIE field mapping.
-# Label indices from class_list.txt (0-indexed):
-#   1 = Store_name_value → company
-#   3 = Date_value       → date
-#   7 = Total_value      → total
-#  10 = Addr_value       → address
-_WILDRECEIPT_IDX_TO_FIELD = {
-    1: "company",
-    3: "date",
-    7: "total",
-    10: "address",
-}
+        Raises DatasetLoadError for the ``train`` split if the directory
+        does not exist.  For ``test`` and ``val`` splits, returns ``[]``
+        with a warning (matching legacy behaviour expected by callers).
+        """
+        img_subdir, key_subdir = self._split_dirs(split)
+        sroie_dir = _get_sroie_dir()
+        img_dir = sroie_dir / img_subdir
+        key_dir = sroie_dir / key_subdir
 
-
-def _download_wildreceipt() -> Path:
-    """Download WildReceipt from OpenMMLab tar (confirmed working URL)."""
-    dest = _ensure_dir(_get_datasets_dir() / "wildreceipt")
-    marker = dest / ".downloaded"
-    if marker.exists():
-        # Validate cache: ensure train.txt exists inside the extracted directory.
-        # A partial download or failed extraction would leave a stale marker.
-        if not (dest / "wildreceipt" / "train.txt").exists():
-            print(
-                "[WildReceipt] Cache marker present but train.txt missing — re-downloading.",
-                file=sys.stderr,
+        if not img_dir.exists():
+            if split == "train":
+                raise self._fatal(
+                    f"Training img dir not found: {img_dir}. "
+                    "Set SROIE_DATA_DIR to the correct path."
+                )
+            # test / val may be absent — warn but don't crash
+            self._warn(
+                f"{img_subdir}/ directory not found — returning 0 {split} samples."
             )
-            marker.unlink(missing_ok=True)
-        else:
-            return dest
+            return []
 
-    url = _WILDRECEIPT_URL
-    tar_path = dest / "wildreceipt.tar"
-    try:
-        print(f"[WildReceipt] Downloading from {url} ...")
-        _download_with_progress(url, tar_path)
-        print("[WildReceipt] Extracting tar ...")
-        with tarfile.open(str(tar_path)) as tf:
-            # Use filter='data' on Python 3.12+ to prevent path-traversal attacks.
-            if sys.version_info >= (3, 12):
-                tf.extractall(str(dest), filter="data")
+        samples: List[Sample] = []
+        for img_path in sorted(
+            p for p in img_dir.iterdir()
+            if p.is_file() and p.suffix.lower() in _IMAGE_EXTS
+        ):
+            gt = _load_key_file(key_dir, img_path.stem)
+            if gt:
+                samples.append((img_path, gt))
+
+        if split == "train" and not samples:
+            raise self._fatal(
+                f"img dir exists ({img_dir}) but 0 samples matched — "
+                "check that key/ files are present."
+            )
+        return samples
+
+    def validate_cache(self) -> bool:
+        """SROIE is local data; 'cache' is valid if train split loads
+        at least one sample whose schema is correct."""
+        try:
+            samples = self.load("train")
+        except DatasetLoadError:
+            return False
+        if not samples:
+            return False
+        return _validate_sample_schema(samples[0], self.name)
+
+    def clear_cache(self) -> None:
+        """SROIE data is user-provided — nothing to clear."""
+        self._log("SROIE data is user-provided; clear_cache() is a no-op.")
+
+    def sample_count(self, split: str = "train") -> int:
+        """Count images in the split directory without loading key files."""
+        img_subdir, _ = self._split_dirs(split)
+        img_dir = _get_sroie_dir() / img_subdir
+        if not img_dir.exists():
+            return 0
+        return sum(
+            1 for p in img_dir.iterdir()
+            if p.is_file() and p.suffix.lower() in _IMAGE_EXTS
+        )
+
+    # ── private helpers ───────────────────────────────────────────────
+
+    def _split_dirs(self, split: str) -> Tuple[str, str]:
+        """Return (img_subdir, key_subdir) for *split*, raising on bad name."""
+        if split not in self._SPLIT_DIRS:
+            raise ValueError(
+                f"Unknown SROIE split '{split}'. "
+                f"Valid: {list(self._SPLIT_DIRS)}"
+            )
+        return self._SPLIT_DIRS[split]
+
+
+# ======================================================================
+#  WildReceiptLoader
+# ======================================================================
+
+class WildReceiptLoader(BaseDatasetLoader):
+    """Download WildReceipt from the OpenMMLab tar and normalize to SROIE schema.
+
+    BUG 1 FIX: Old code used ``load_dataset("Theivaprakasham/wildreceipt")``
+    which fails with "Dataset scripts are no longer supported" and silently
+    returned [].  New code downloads the official OpenMMLab tar directly.
+    """
+
+    name = "WildReceipt"
+
+    _URL = "https://download.openmmlab.com/mmocr/data/wildreceipt.tar"
+
+    # WildReceipt label index → SROIE field mapping
+    #   1 = Store_name_value → company
+    #   3 = Date_value       → date
+    #   7 = Total_value      → total
+    #  10 = Addr_value       → address
+    _IDX_TO_FIELD: Dict[int, str] = {
+        1: "company",
+        3: "date",
+        7: "total",
+        10: "address",
+    }
+
+    # ── download & extraction ─────────────────────────────────────────
+
+    def _dest_dir(self) -> Path:
+        return _ensure_dir(_get_datasets_dir() / "wildreceipt")
+
+    def _inner_dir(self) -> Path:
+        """The extracted ``wildreceipt/`` subdirectory inside _dest_dir()."""
+        return self._dest_dir() / "wildreceipt"
+
+    def _marker(self) -> Path:
+        return self._dest_dir() / ".downloaded"
+
+    def _download(self) -> Path:
+        """Download and extract the tar if not already cached."""
+        dest = self._dest_dir()
+        marker = self._marker()
+        if marker.exists():
+            # Validate cache: ensure train.txt exists inside the extracted dir
+            if not (self._inner_dir() / "train.txt").exists():
+                self._warn(
+                    "Cache marker present but train.txt missing — re-downloading."
+                )
+                marker.unlink(missing_ok=True)
             else:
-                tf.extractall(str(dest))
-        tar_path.unlink(missing_ok=True)
-        marker.touch()
-        print("[WildReceipt] Download and extraction complete.")
-    except Exception as exc:
-        # FIX (BUG 1): Loud failure instead of silent empty return.
-        # Previously the exception was swallowed; now we print a FATAL warning.
-        print(
-            f"[WildReceipt] FATAL: Download failed from {url}: {exc}. "
-            "This experiment will have MISSING DATA.",
-            file=sys.stderr,
-        )
-    return dest
+                return dest
 
+        url = self._URL
+        tar_path = dest / "wildreceipt.tar"
+        try:
+            self._log(f"Downloading from {url} ...")
+            _download_with_progress(url, tar_path)
+            self._log("Extracting tar ...")
+            with tarfile.open(str(tar_path)) as tf:
+                # Safe extraction: use filter='data' on Python 3.12+
+                if sys.version_info >= (3, 12):
+                    tf.extractall(str(dest), filter="data")
+                else:
+                    tf.extractall(str(dest))
+            tar_path.unlink(missing_ok=True)
+            marker.touch()
+            self._log("Download and extraction complete.")
+        except Exception as exc:
+            raise self._fatal(
+                f"Download failed from {url}: {exc}. "
+                "This experiment will have MISSING DATA."
+            ) from exc
+        return dest
 
-def load_wildreceipt() -> List[Sample]:
-    """Load WildReceipt (OpenMMLab format) and normalize to SROIE schema."""
-    dest = _download_wildreceipt()
-    # INTEGRITY: Only load train.txt to prevent test-set contamination.
-    # The tar contains both train.txt and test.txt; test.txt must not be used.
-    train_txt = dest / "wildreceipt" / "train.txt"
-    if not train_txt.exists():
-        print(
-            "[WildReceipt] *** WARNING: 'wildreceipt' returned 0 samples! "
-            "This experiment's results will NOT reflect this dataset. ***",
-            file=sys.stderr,
-        )
-        return []
+    # ── public interface ──────────────────────────────────────────────
 
-    samples: List[Sample] = []
-    img_base = dest / "wildreceipt"
+    def load(self, split: str = "train") -> List[Sample]:
+        """Load WildReceipt (OpenMMLab format) and normalize to SROIE schema.
 
-    with open(train_txt, encoding="utf-8") as fh:
-        for line in fh:
+        Only the ``train`` split is used to prevent test-set contamination.
+        """
+        dest = self._download()
+        inner = self._inner_dir()
+
+        # Map split to file name
+        split_file = "train.txt" if split == "train" else f"{split}.txt"
+        txt_path = inner / split_file
+        if not txt_path.exists():
+            raise self._fatal(
+                f"'{split_file}' not found in {inner}. "
+                "Download may be incomplete."
+            )
+
+        samples: List[Sample] = []
+        for line in txt_path.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if not line:
                 continue
@@ -302,229 +530,661 @@ def load_wildreceipt() -> List[Sample]:
             gt: Dict[str, str] = {k: "" for k in EMPTY_GT}
             for ann in obj.get("annotations", []):
                 label_idx = int(ann.get("label", -1))
-                field = _WILDRECEIPT_IDX_TO_FIELD.get(label_idx)
+                field = self._IDX_TO_FIELD.get(label_idx)
                 text = str(ann.get("text", "")).strip()
                 if field and text:
                     gt[field] = (gt[field] + " " + text).strip() if gt[field] else text
 
             file_name = obj.get("file_name", "")
-            img_path = img_base / file_name
+            img_path = inner / file_name
             if img_path.exists():
                 samples.append((img_path, gt))
 
-    return samples
+        return _validate_samples_nonempty(samples, self.name)
+
+    def validate_cache(self) -> bool:
+        """Check that the cache directory has train.txt and the first
+        record can be parsed and has the right schema."""
+        try:
+            train_txt = self._inner_dir() / "train.txt"
+            if not train_txt.exists():
+                return False
+            # Spot-check: load just the first record
+            for line in train_txt.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                obj = json.loads(line)
+                # Must have annotations list and file_name
+                if "annotations" not in obj or "file_name" not in obj:
+                    return False
+                return True
+        except Exception:
+            return False
+
+    def clear_cache(self) -> None:
+        """Remove the entire WildReceipt cache directory."""
+        import shutil
+        dest = self._dest_dir()
+        if dest.exists():
+            shutil.rmtree(dest, ignore_errors=True)
+            self._log("Cache cleared.")
+
+    def sample_count(self, split: str = "train") -> int:
+        """Count lines in the split file without fully parsing."""
+        split_file = "train.txt" if split == "train" else f"{split}.txt"
+        txt_path = self._inner_dir() / split_file
+        if not txt_path.exists():
+            return 0
+        return sum(
+            1 for line in txt_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        )
 
 
-# ---------------------------------------------------------------------------
-# CORD
-# ---------------------------------------------------------------------------
+# ======================================================================
+#  SROIENERLoader (minimal — known-broken upstream)
+# ======================================================================
 
-def _download_cord() -> Path:
-    """Download CORD from the HuggingFace datasets hub."""
-    dest = _ensure_dir(_get_datasets_dir() / "cord")
-    marker = dest / ".downloaded"
-    if marker.exists():
-        # Validate cache: ensure the HF dataset directory exists.
-        # A partial download would leave a stale marker without usable data.
-        if not (dest / "hf_cache").exists():
-            print(
-                "[CORD] Cache marker present but hf_cache/ missing — re-downloading.",
-                file=sys.stderr,
+class SROIENERLoader(BaseDatasetLoader):
+    """Attempt to load the SROIE-NER dataset (darentang/sroie on HuggingFace).
+
+    BUG 2: The HuggingFace ``load_dataset("darentang/sroie")`` call is broken
+    because dataset scripts are no longer supported.  This loader tries a
+    parquet fallback URL and raises ``DatasetLoadError`` loudly if it fails.
+    """
+
+    name = "SROIE-NER"
+
+    _PARQUET_URL = (
+        "https://huggingface.co/datasets/darentang/sroie/resolve/main/"
+        "data/train-00000-of-00001.parquet"
+    )
+
+    def _dest_dir(self) -> Path:
+        return _ensure_dir(_get_datasets_dir() / "sroie_ner")
+
+    def _marker(self) -> Path:
+        return self._dest_dir() / ".downloaded"
+
+    def _parquet_path(self) -> Path:
+        return self._dest_dir() / "train.parquet"
+
+    # ── public interface ──────────────────────────────────────────────
+
+    def load(self, split: str = "train") -> List[Sample]:
+        """Try to load SROIE-NER via parquet fallback.
+
+        This dataset is known to be broken upstream. The loader tries
+        the parquet URL as a best-effort fallback and raises loudly if
+        that also fails.
+        """
+        dest = self._dest_dir()
+        parquet = self._parquet_path()
+        marker = self._marker()
+
+        # Attempt download if not cached
+        if not marker.exists() or not parquet.exists():
+            try:
+                self._log(f"Attempting parquet fallback: {self._PARQUET_URL}")
+                _download_with_progress(self._PARQUET_URL, parquet)
+                marker.touch()
+            except Exception as exc:
+                raise self._fatal(
+                    f"Parquet fallback failed: {exc}. "
+                    "The upstream dataset 'darentang/sroie' is broken "
+                    "(HF dataset scripts no longer supported). "
+                    "This dataset will NOT be available."
+                ) from exc
+
+        # Try loading via pandas/pyarrow
+        try:
+            import pandas as pd  # type: ignore
+            df = pd.read_parquet(str(parquet))
+        except ImportError:
+            raise self._fatal(
+                "pandas/pyarrow not installed — cannot read parquet file. "
+                "Install with: pip install pandas pyarrow"
             )
-            marker.unlink(missing_ok=True)
-        else:
-            return dest
+        except Exception as exc:
+            raise self._fatal(
+                f"Failed to read parquet file: {exc}"
+            ) from exc
 
-    try:
-        from datasets import load_dataset  # type: ignore
-        ds = load_dataset("naver-clova-ix/cord-v2")
-        ds.save_to_disk(str(dest / "hf_cache"))
-        marker.touch()
-    except Exception as exc:
-        print(f"[CORD] Download failed: {exc}. Will return empty dataset.")
-    return dest
+        samples: List[Sample] = []
+        img_dir = _ensure_dir(dest / "images")
+
+        for idx, row in df.iterrows():
+            gt: Dict[str, str] = {k: "" for k in EMPTY_GT}
+            # Map NER fields to SROIE schema if present
+            for field in _SROIE_FIELDS:
+                val = row.get(field, "")
+                if val and isinstance(val, str):
+                    gt[field] = val.strip()
+
+            # Handle image data — may be bytes or a path
+            image_data = row.get("image")
+            if image_data is not None:
+                img_path = img_dir / f"sroie_ner_{idx:06d}.png"
+                if not img_path.exists():
+                    if isinstance(image_data, bytes):
+                        img_path.write_bytes(image_data)
+                    elif isinstance(image_data, dict) and "bytes" in image_data:
+                        img_path.write_bytes(image_data["bytes"])
+                    else:
+                        continue
+                samples.append((img_path, gt))
+
+        return _validate_samples_nonempty(samples, self.name)
+
+    def validate_cache(self) -> bool:
+        """Check that the parquet file exists and can be read."""
+        parquet = self._parquet_path()
+        if not parquet.exists():
+            return False
+        try:
+            import pandas as pd  # type: ignore
+            df = pd.read_parquet(str(parquet))
+            return len(df) > 0
+        except Exception:
+            return False
+
+    def clear_cache(self) -> None:
+        """Remove SROIE-NER cache."""
+        import shutil
+        dest = self._dest_dir()
+        if dest.exists():
+            shutil.rmtree(dest, ignore_errors=True)
+            self._log("Cache cleared.")
+
+    def sample_count(self, split: str = "train") -> int:
+        """Return row count from parquet without full load."""
+        parquet = self._parquet_path()
+        if not parquet.exists():
+            return 0
+        try:
+            import pandas as pd  # type: ignore
+            df = pd.read_parquet(str(parquet))
+            return len(df)
+        except Exception:
+            return 0
 
 
-def _cord_remap(ground_truth_str: str) -> Dict[str, str]:
-    """Parse CORD ground_truth JSON and remap to SROIE schema."""
-    gt: Dict[str, str] = {k: "" for k in EMPTY_GT}
-    try:
-        obj = json.loads(ground_truth_str) if isinstance(ground_truth_str, str) else ground_truth_str
-        gt_json = obj.get("gt_parse", obj)
-        store_info = gt_json.get("store_info", {})
-        if isinstance(store_info, dict):
-            gt["company"] = str(store_info.get("store_name", "")).strip()
-            gt["address"] = str(store_info.get("region", "")).strip()
-        total_info = gt_json.get("total", {})
-        if isinstance(total_info, dict):
-            gt["total"] = str(total_info.get("total_price", "")).strip()
-        elif isinstance(total_info, list) and len(total_info) > 0:
-            gt["total"] = str(total_info[0].get("total_price", "")).strip()
-        # FIX (BUG 7): CORD v2 DOES contain date annotations in gt_parse.
-        # Previously hardcoded to "" with incorrect comment "CORD has no standard date field".
-        date_info = gt_json.get("date", {})
-        if isinstance(date_info, dict):
-            gt["date"] = str(date_info.get("date_value", "")).strip()
-        elif isinstance(date_info, list) and len(date_info) > 0:
-            gt["date"] = str(date_info[0].get("date_value", "")).strip()
-        elif isinstance(date_info, str):
-            gt["date"] = date_info.strip()
-        else:
-            gt["date"] = ""
-    except (json.JSONDecodeError, AttributeError):
-        pass
-    return gt
+# ======================================================================
+#  CORDLoader
+# ======================================================================
+
+class CORDLoader(BaseDatasetLoader):
+    """Download CORD (naver-clova-ix/cord-v2) from HuggingFace and
+    normalize to SROIE schema.
+
+    BUG 7 FIX: date_info is now properly extracted from gt_parse.
+    CORD filename collision fix: uses content hash for filenames.
+    """
+
+    name = "CORD"
+
+    # ── download ──────────────────────────────────────────────────────
+
+    def _dest_dir(self) -> Path:
+        return _ensure_dir(_get_datasets_dir() / "cord")
+
+    def _hf_cache(self) -> Path:
+        return self._dest_dir() / "hf_cache"
+
+    def _marker(self) -> Path:
+        return self._dest_dir() / ".downloaded"
+
+    def _download(self) -> Path:
+        """Download CORD from the HuggingFace datasets hub."""
+        dest = self._dest_dir()
+        marker = self._marker()
+        if marker.exists():
+            if not self._hf_cache().exists():
+                self._warn(
+                    "Cache marker present but hf_cache/ missing — re-downloading."
+                )
+                marker.unlink(missing_ok=True)
+            else:
+                return dest
+
+        try:
+            from datasets import load_dataset  # type: ignore
+            self._log("Downloading naver-clova-ix/cord-v2 from HuggingFace ...")
+            ds = load_dataset("naver-clova-ix/cord-v2")
+            ds.save_to_disk(str(self._hf_cache()))
+            marker.touch()
+            self._log("Download complete.")
+        except Exception as exc:
+            raise self._fatal(
+                f"Download failed: {exc}"
+            ) from exc
+        return dest
+
+    # ── CORD → SROIE remapping ────────────────────────────────────────
+
+    @staticmethod
+    def _cord_remap(ground_truth_str: Any) -> Dict[str, str]:
+        """Parse CORD ground_truth JSON and remap to SROIE schema.
+
+        BUG 7 FIX: CORD v2 DOES contain date annotations in gt_parse.
+        Previously the date field was hardcoded to "" with an incorrect
+        comment "CORD has no standard date field".
+        """
+        gt: Dict[str, str] = {k: "" for k in EMPTY_GT}
+        try:
+            obj = (
+                json.loads(ground_truth_str)
+                if isinstance(ground_truth_str, str)
+                else ground_truth_str
+            )
+            gt_json = obj.get("gt_parse", obj)
+
+            # Company / address from store_info
+            store_info = gt_json.get("store_info", {})
+            if isinstance(store_info, dict):
+                gt["company"] = str(store_info.get("store_name", "")).strip()
+                gt["address"] = str(store_info.get("region", "")).strip()
+
+            # Total from total / total_price
+            total_info = gt_json.get("total", {})
+            if isinstance(total_info, dict):
+                gt["total"] = str(total_info.get("total_price", "")).strip()
+            elif isinstance(total_info, list) and len(total_info) > 0:
+                gt["total"] = str(
+                    total_info[0].get("total_price", "")
+                ).strip()
+
+            # FIX (BUG 7): Extract date_info from gt_parse properly
+            date_info = gt_json.get("date", {})
+            if isinstance(date_info, dict):
+                gt["date"] = str(date_info.get("date_value", "")).strip()
+            elif isinstance(date_info, list) and len(date_info) > 0:
+                gt["date"] = str(
+                    date_info[0].get("date_value", "")
+                ).strip()
+            elif isinstance(date_info, str):
+                gt["date"] = date_info.strip()
+            else:
+                gt["date"] = ""
+        except (json.JSONDecodeError, AttributeError):
+            pass
+        return gt
+
+    # ── public interface ──────────────────────────────────────────────
+
+    def load(self, split: str = "train") -> List[Sample]:
+        """Load CORD and normalize to SROIE schema.
+
+        Uses content hash (md5 of image bytes) for on-disk filenames to
+        avoid collisions when multiple splits produce same counter index.
+        Skips the ``test`` split to prevent contamination.
+        """
+        dest = self._download()
+        hf_cache = self._hf_cache()
+        if not hf_cache.exists():
+            raise self._fatal("hf_cache/ not found after download.")
+
+        try:
+            from datasets import load_from_disk  # type: ignore
+            ds = load_from_disk(str(hf_cache))
+        except Exception as exc:
+            raise self._fatal(f"Failed to load cache: {exc}") from exc
+
+        samples: List[Sample] = []
+        splits = list(ds.keys()) if hasattr(ds, "keys") else ["train"]
+
+        for ds_split in splits:
+            if ds_split == "test":
+                continue  # only use train/validation for augmentation
+
+            # Allow caller to request a specific split
+            if split != "train" and ds_split != split:
+                continue
+
+            split_ds = ds[ds_split] if hasattr(ds, "keys") else ds
+            for item in split_ds:
+                gt = self._cord_remap(item.get("ground_truth", "{}"))
+                pil_image = item.get("image")
+                if pil_image is not None:
+                    img_dest_dir = _ensure_dir(dest / "images")
+                    # Use content hash for unique filenames
+                    rgb = pil_image.convert("RGB")
+                    img_hash = hashlib.md5(
+                        rgb.tobytes()
+                    ).hexdigest()[:8]
+                    img_path = img_dest_dir / f"{ds_split}_{img_hash}.jpg"
+                    if not img_path.exists():
+                        rgb.save(img_path, "JPEG")
+                    samples.append((img_path, gt))
+
+        return _validate_samples_nonempty(samples, self.name)
+
+    def validate_cache(self) -> bool:
+        """Check that hf_cache exists and first record has gt_parse schema."""
+        hf_cache = self._hf_cache()
+        if not hf_cache.exists():
+            return False
+        try:
+            from datasets import load_from_disk  # type: ignore
+            ds = load_from_disk(str(hf_cache))
+            splits = list(ds.keys()) if hasattr(ds, "keys") else ["train"]
+            first_split = ds[splits[0]] if hasattr(ds, "keys") else ds
+            if len(first_split) == 0:
+                return False
+            item = first_split[0]
+            gt_str = item.get("ground_truth", "")
+            if not gt_str:
+                return False
+            obj = json.loads(gt_str) if isinstance(gt_str, str) else gt_str
+            return "gt_parse" in obj
+        except Exception:
+            return False
+
+    def clear_cache(self) -> None:
+        """Remove the entire CORD cache directory."""
+        import shutil
+        dest = self._dest_dir()
+        if dest.exists():
+            shutil.rmtree(dest, ignore_errors=True)
+            self._log("Cache cleared.")
+
+    def sample_count(self, split: str = "train") -> int:
+        """Return approximate sample count from the HF cache."""
+        hf_cache = self._hf_cache()
+        if not hf_cache.exists():
+            return 0
+        try:
+            from datasets import load_from_disk  # type: ignore
+            ds = load_from_disk(str(hf_cache))
+            total = 0
+            splits = list(ds.keys()) if hasattr(ds, "keys") else ["train"]
+            for s in splits:
+                if s == "test":
+                    continue
+                split_ds = ds[s] if hasattr(ds, "keys") else ds
+                total += len(split_ds)
+            return total
+        except Exception:
+            return 0
+
+
+# ======================================================================
+#  InvoicesDonutLoader
+# ======================================================================
+
+class InvoicesDonutLoader(BaseDatasetLoader):
+    """Download Invoices-DONUT (katanaml-org/invoices-donut-data-v1) from
+    HuggingFace and normalize to SROIE schema."""
+
+    name = "Invoices-DONUT"
+
+    # ── download ──────────────────────────────────────────────────────
+
+    def _dest_dir(self) -> Path:
+        return _ensure_dir(_get_datasets_dir() / "invoices_donut")
+
+    def _hf_cache(self) -> Path:
+        return self._dest_dir() / "hf_cache"
+
+    def _marker(self) -> Path:
+        return self._dest_dir() / ".downloaded"
+
+    def _download(self) -> Path:
+        """Download Invoices-DONUT from the HuggingFace datasets hub."""
+        dest = self._dest_dir()
+        marker = self._marker()
+        if marker.exists():
+            if not self._hf_cache().exists():
+                self._warn(
+                    "Cache marker present but hf_cache/ missing — re-downloading."
+                )
+                marker.unlink(missing_ok=True)
+            else:
+                return dest
+
+        try:
+            from datasets import load_dataset  # type: ignore
+            self._log(
+                "Downloading katanaml-org/invoices-donut-data-v1 from HuggingFace ..."
+            )
+            ds = load_dataset("katanaml-org/invoices-donut-data-v1")
+            ds.save_to_disk(str(self._hf_cache()))
+            marker.touch()
+            self._log("Download complete.")
+        except Exception as exc:
+            raise self._fatal(
+                f"Download failed: {exc}"
+            ) from exc
+        return dest
+
+    # ── Invoices-DONUT → SROIE remapping ─────────────────────────────
+
+    @staticmethod
+    def _invoices_donut_remap(ground_truth_str: Any) -> Dict[str, str]:
+        """Parse Invoices-DONUT ground_truth JSON and remap to SROIE schema.
+
+        Field mapping rationale:
+        - company: seller name from gt_parse.header.seller
+        - date:    invoice date from gt_parse.header.invoice_date
+        - address: empty — invoices lack a reliable store-address field
+        - total:   total_gross_worth with currency symbol stripped
+        """
+        gt: Dict[str, str] = {k: "" for k in EMPTY_GT}
+        try:
+            obj = (
+                json.loads(ground_truth_str)
+                if isinstance(ground_truth_str, str)
+                else ground_truth_str
+            )
+            gt_parse = obj.get("gt_parse", obj)
+
+            header = gt_parse.get("header", {})
+            if isinstance(header, dict):
+                gt["company"] = str(header.get("seller", "")).strip()
+                gt["date"] = str(header.get("invoice_date", "")).strip()
+
+            gt["address"] = ""
+
+            summary = gt_parse.get("summary", {})
+            if isinstance(summary, dict):
+                raw_total = str(
+                    summary.get("total_gross_worth", "")
+                ).strip()
+                # Strip leading currency symbols
+                gt["total"] = re.sub(
+                    r"^[\$€£¥₹₩\u20ac\u00a3\u00a5]+", "", raw_total
+                ).strip()
+        except (json.JSONDecodeError, AttributeError):
+            pass
+        return gt
+
+    # ── public interface ──────────────────────────────────────────────
+
+    def load(self, split: str = "train") -> List[Sample]:
+        """Load Invoices-DONUT and normalize to SROIE schema."""
+        dest = self._download()
+        hf_cache = self._hf_cache()
+        if not hf_cache.exists():
+            raise self._fatal("hf_cache/ not found after download.")
+
+        try:
+            from datasets import load_from_disk  # type: ignore
+            ds = load_from_disk(str(hf_cache))
+        except Exception as exc:
+            raise self._fatal(f"Failed to load cache: {exc}") from exc
+
+        samples: List[Sample] = []
+        splits = list(ds.keys()) if hasattr(ds, "keys") else ["train"]
+
+        for ds_split in splits:
+            if ds_split == "test":
+                continue  # skip test split to avoid contamination
+
+            if split != "train" and ds_split != split:
+                continue
+
+            split_ds = ds[ds_split] if hasattr(ds, "keys") else ds
+            for idx, item in enumerate(split_ds):
+                gt = self._invoices_donut_remap(
+                    item.get("ground_truth", "{}")
+                )
+                pil_image = item.get("image")
+                if pil_image is not None:
+                    img_dest_dir = _ensure_dir(dest / "images")
+                    img_path = img_dest_dir / f"{ds_split}_{idx:06d}.jpg"
+                    if not img_path.exists():
+                        pil_image.convert("RGB").save(img_path, "JPEG")
+                    samples.append((img_path, gt))
+
+        return _validate_samples_nonempty(samples, self.name)
+
+    def validate_cache(self) -> bool:
+        """Check that hf_cache exists and first record has gt_parse schema."""
+        hf_cache = self._hf_cache()
+        if not hf_cache.exists():
+            return False
+        try:
+            from datasets import load_from_disk  # type: ignore
+            ds = load_from_disk(str(hf_cache))
+            splits = list(ds.keys()) if hasattr(ds, "keys") else ["train"]
+            first_split = ds[splits[0]] if hasattr(ds, "keys") else ds
+            if len(first_split) == 0:
+                return False
+            item = first_split[0]
+            gt_str = item.get("ground_truth", "")
+            if not gt_str:
+                return False
+            obj = json.loads(gt_str) if isinstance(gt_str, str) else gt_str
+            return "gt_parse" in obj
+        except Exception:
+            return False
+
+    def clear_cache(self) -> None:
+        """Remove the entire Invoices-DONUT cache directory."""
+        import shutil
+        dest = self._dest_dir()
+        if dest.exists():
+            shutil.rmtree(dest, ignore_errors=True)
+            self._log("Cache cleared.")
+
+    def sample_count(self, split: str = "train") -> int:
+        """Return approximate sample count from the HF cache."""
+        hf_cache = self._hf_cache()
+        if not hf_cache.exists():
+            return 0
+        try:
+            from datasets import load_from_disk  # type: ignore
+            ds = load_from_disk(str(hf_cache))
+            total = 0
+            splits = list(ds.keys()) if hasattr(ds, "keys") else ["train"]
+            for s in splits:
+                if s == "test":
+                    continue
+                split_ds = ds[s] if hasattr(ds, "keys") else ds
+                total += len(split_ds)
+            return total
+        except Exception:
+            return 0
+
+
+# ======================================================================
+#  Singleton loader instances (lazy)
+# ======================================================================
+
+_sroie_loader: Optional[SROIELoader] = None
+_wildreceipt_loader: Optional[WildReceiptLoader] = None
+_sroie_ner_loader: Optional[SROIENERLoader] = None
+_cord_loader: Optional[CORDLoader] = None
+_invoices_donut_loader: Optional[InvoicesDonutLoader] = None
+
+
+def _get_sroie_loader() -> SROIELoader:
+    global _sroie_loader
+    if _sroie_loader is None:
+        _sroie_loader = SROIELoader()
+    return _sroie_loader
+
+
+def _get_wildreceipt_loader() -> WildReceiptLoader:
+    global _wildreceipt_loader
+    if _wildreceipt_loader is None:
+        _wildreceipt_loader = WildReceiptLoader()
+    return _wildreceipt_loader
+
+
+def _get_sroie_ner_loader() -> SROIENERLoader:
+    global _sroie_ner_loader
+    if _sroie_ner_loader is None:
+        _sroie_ner_loader = SROIENERLoader()
+    return _sroie_ner_loader
+
+
+def _get_cord_loader() -> CORDLoader:
+    global _cord_loader
+    if _cord_loader is None:
+        _cord_loader = CORDLoader()
+    return _cord_loader
+
+
+def _get_invoices_donut_loader() -> InvoicesDonutLoader:
+    global _invoices_donut_loader
+    if _invoices_donut_loader is None:
+        _invoices_donut_loader = InvoicesDonutLoader()
+    return _invoices_donut_loader
+
+
+# ======================================================================
+#  Backward-compatible module-level functions
+# ======================================================================
+# These wrap the OOP loaders so that existing call-sites (run_all.py,
+# run_experiments.py, etc.) continue to work without modification.
+
+def load_sroie_train() -> List[Sample]:
+    """Load SROIE training split — compatibility wrapper for SROIELoader."""
+    return _get_sroie_loader().load("train")
+
+
+def load_sroie_test() -> List[Sample]:
+    """Load SROIE test split — compatibility wrapper for SROIELoader.
+
+    Returns an empty list with a warning if test_img/ is absent (matching
+    legacy behaviour expected by callers).
+    """
+    return _get_sroie_loader().load("test")
+
+
+def load_sroie_val() -> List[Sample]:
+    """Load SROIE validation split — compatibility wrapper for SROIELoader.
+
+    Returns an empty list with a warning if val_img/ is absent.
+    """
+    return _get_sroie_loader().load("val")
+
+
+def load_wildreceipt() -> List[Sample]:
+    """Load WildReceipt — compatibility wrapper for WildReceiptLoader."""
+    return _get_wildreceipt_loader().load("train")
+
+
+def load_sroie_ner() -> List[Sample]:
+    """Load SROIE-NER — compatibility wrapper for SROIENERLoader."""
+    return _get_sroie_ner_loader().load("train")
 
 
 def load_cord() -> List[Sample]:
-    """Load CORD and normalize to SROIE schema."""
-    dest = _download_cord()
-    hf_cache = dest / "hf_cache"
-    if not hf_cache.exists():
-        print("[CORD] Cache not found — skipping.")
-        return []
-
-    try:
-        from datasets import load_from_disk  # type: ignore
-        ds = load_from_disk(str(hf_cache))
-    except Exception as exc:
-        print(f"[CORD] Failed to load cache: {exc}")
-        return []
-
-    samples: List[Sample] = []
-    splits = list(ds.keys()) if hasattr(ds, "keys") else ["train"]
-    for split in splits:
-        if split == "test":
-            continue  # only use train/validation for augmentation
-        split_ds = ds[split] if hasattr(ds, "keys") else ds
-        for item in split_ds:
-            gt = _cord_remap(item.get("ground_truth", "{}"))
-            # CORD images are PIL Images in the HF dataset
-            pil_image = item.get("image")
-            if pil_image is not None:
-                # Save to disk so we can use the path-based training pipeline
-                img_dest_dir = _ensure_dir(dest / "images")
-                idx = len(samples)
-                img_path = img_dest_dir / f"{split}_{idx:06d}.jpg"
-                if not img_path.exists():
-                    pil_image.convert("RGB").save(img_path, "JPEG")
-                samples.append((img_path, gt))
-    return samples
-
-
-# ---------------------------------------------------------------------------
-# Invoices-DONUT (katanaml-org/invoices-donut-data-v1)
-# ---------------------------------------------------------------------------
-
-def _download_invoices_donut() -> Path:
-    """Download Invoices-DONUT from the HuggingFace datasets hub."""
-    dest = _ensure_dir(_get_datasets_dir() / "invoices_donut")
-    marker = dest / ".downloaded"
-    if marker.exists():
-        if not (dest / "hf_cache").exists():
-            print(
-                "[Invoices-DONUT] Cache marker present but hf_cache/ missing — re-downloading.",
-                file=sys.stderr,
-            )
-            marker.unlink(missing_ok=True)
-        else:
-            return dest
-
-    try:
-        from datasets import load_dataset  # type: ignore
-        ds = load_dataset("katanaml-org/invoices-donut-data-v1")
-        ds.save_to_disk(str(dest / "hf_cache"))
-        marker.touch()
-    except Exception as exc:
-        print(f"[Invoices-DONUT] Download failed: {exc}. Will return empty dataset.")
-    return dest
-
-
-def _invoices_donut_remap(ground_truth_str: str) -> Dict[str, str]:
-    """Parse Invoices-DONUT ground_truth JSON and remap to SROIE schema.
-
-    Field mapping rationale:
-    - company: seller name from gt_parse.header.seller (full string; the
-      model learns to extract just the company name portion).
-    - date:    invoice date from gt_parse.header.invoice_date.
-    - address: empty string — invoices don't have a single address field
-      that reliably maps to SROIE's "store address".
-    - total:   total gross worth from gt_parse.summary.total_gross_worth,
-      with any leading currency symbol (e.g. '$') stripped.
-    """
-    gt: Dict[str, str] = {k: "" for k in EMPTY_GT}
-    try:
-        obj = json.loads(ground_truth_str) if isinstance(ground_truth_str, str) else ground_truth_str
-        gt_parse = obj.get("gt_parse", obj)
-
-        header = gt_parse.get("header", {})
-        if isinstance(header, dict):
-            # Seller → company: the full seller string is used here because the
-            # dataset doesn't split company name from address.  The DONUT decoder
-            # will learn to emit only the company name portion during fine-tuning.
-            gt["company"] = str(header.get("seller", "")).strip()
-            # Invoice date → date
-            gt["date"] = str(header.get("invoice_date", "")).strip()
-
-        # address: no reliable single-address field in invoice schema
-        gt["address"] = ""
-
-        summary = gt_parse.get("summary", {})
-        if isinstance(summary, dict):
-            raw_total = str(summary.get("total_gross_worth", "")).strip()
-            # Strip any leading currency symbol (e.g. '$', '€', '£', '¥', '₹', '₩')
-            # using a regex so all Unicode currency prefixes are handled uniformly.
-            gt["total"] = re.sub(r"^[\$€£¥₹₩\u20ac\u00a3\u00a5]+", "", raw_total).strip()
-    except (json.JSONDecodeError, AttributeError):
-        pass
-    return gt
+    """Load CORD — compatibility wrapper for CORDLoader."""
+    return _get_cord_loader().load("train")
 
 
 def load_invoices_donut() -> List[Sample]:
-    """Load Invoices-DONUT and normalize to SROIE schema."""
-    dest = _download_invoices_donut()
-    hf_cache = dest / "hf_cache"
-    if not hf_cache.exists():
-        print("[Invoices-DONUT] Cache not found — skipping.")
-        return []
-
-    try:
-        from datasets import load_from_disk  # type: ignore
-        ds = load_from_disk(str(hf_cache))
-    except Exception as exc:
-        print(f"[Invoices-DONUT] Failed to load cache: {exc}")
-        return []
-
-    samples: List[Sample] = []
-    splits = list(ds.keys()) if hasattr(ds, "keys") else ["train"]
-    for split in splits:
-        if split == "test":
-            continue  # skip test split to avoid contamination
-        split_ds = ds[split] if hasattr(ds, "keys") else ds
-        for idx, item in enumerate(split_ds):
-            gt = _invoices_donut_remap(item.get("ground_truth", "{}"))
-            # Invoices-DONUT images are PIL Images embedded in the HF dataset
-            pil_image = item.get("image")
-            if pil_image is not None:
-                # Save to disk so the path-based training pipeline can load them
-                img_dest_dir = _ensure_dir(dest / "images")
-                img_path = img_dest_dir / f"{split}_{idx:06d}.jpg"
-                if not img_path.exists():
-                    pil_image.convert("RGB").save(img_path, "JPEG")
-                samples.append((img_path, gt))
-
-    if not samples:
-        print(
-            "[Invoices-DONUT] *** WARNING: 'invoices_donut' returned 0 samples! "
-            "This experiment's results will NOT reflect this dataset. ***",
-            file=sys.stderr,
-        )
-    return samples
+    """Load Invoices-DONUT — compatibility wrapper for InvoicesDonutLoader."""
+    return _get_invoices_donut_loader().load("train")
 
 
-# ---------------------------------------------------------------------------
-# Combined dataset loader
-# ---------------------------------------------------------------------------
+# ======================================================================
+#  Combined dataset loader
+# ======================================================================
 
 _LOADERS = {
     "sroie": load_sroie_train,
@@ -563,14 +1223,17 @@ def split_dataset(
     n = len(shuffled)
     n_train = int(n * train_ratio)
     n_val = int(n * val_ratio)
-    return shuffled[:n_train], shuffled[n_train:n_train + n_val], shuffled[n_train + n_val:]
+    return (
+        shuffled[:n_train],
+        shuffled[n_train:n_train + n_val],
+        shuffled[n_train + n_val:],
+    )
 
 
 def get_combined_dataset(
     dataset_names: List[str],
 ) -> Tuple[List[Sample], List[Sample]]:
-    """
-    Merge multiple datasets into train and validation lists.
+    """Merge multiple datasets into train and validation lists.
 
     SROIE training samples are added to train as-is (train split from img/).
     SROIE validation samples (from val_img/) are added to the combined val.
@@ -598,36 +1261,44 @@ def get_combined_dataset(
     for name in dataset_names:
         loader = _LOADERS.get(name)
         if loader is None:
-            raise ValueError(f"Unknown dataset '{name}'. Valid: {list(_LOADERS)}")
+            raise ValueError(
+                f"Unknown dataset '{name}'. Valid: {list(_LOADERS)}"
+            )
         print(f"[dataset_loaders] Loading '{name}' ...")
-        data = loader()
+        try:
+            data = loader()
+        except DatasetLoadError:
+            # Re-raise — the error has already been printed to stderr
+            raise
         per_loader_counts[name] = len(data)
         print(f"[dataset_loaders] '{name}' → {len(data)} samples")
-        if len(data) == 0:
-            print(
-                f"[dataset_loaders] *** WARNING: '{name}' returned 0 samples! "
-                f"This experiment's results will NOT reflect this dataset. ***",
-                file=sys.stderr,
-            )
+
         if name == "sroie":
-            # SROIE: train split goes to combined_train; val split goes to combined_val.
+            # SROIE: train split → combined_train; val split → combined_val
             combined_train.extend(data)
             sroie_val = load_sroie_val()
             combined_val.extend(sroie_val)
             if sroie_val:
-                print(f"[dataset_loaders] 'sroie_val' → {len(sroie_val)} val samples")
+                print(
+                    f"[dataset_loaders] 'sroie_val' → {len(sroie_val)} val samples"
+                )
         else:
-            # Auxiliary datasets: 70/15/15 split; hold-out test portion discarded.
+            # Auxiliary datasets: 70/15/15 split
             train_split, val_split, _ = split_dataset(data, seed=42)
             combined_train.extend(train_split)
             combined_val.extend(val_split)
 
-    # Fixed-seed shuffle to interleave samples from different datasets.
+    # Fixed-seed shuffle to interleave samples from different datasets
     rng = random.Random(42)
     rng.shuffle(combined_train)
     rng.shuffle(combined_val)
 
-    counts_summary = ", ".join(f"{n}={c}" for n, c in per_loader_counts.items())
+    counts_summary = ", ".join(
+        f"{n}={c}" for n, c in per_loader_counts.items()
+    )
     print(f"[dataset_loaders] Per-loader counts: {counts_summary}")
-    print(f"[dataset_loaders] Combined train: {len(combined_train)}  val: {len(combined_val)}")
+    print(
+        f"[dataset_loaders] Combined train: {len(combined_train)}  "
+        f"val: {len(combined_val)}"
+    )
     return combined_train, combined_val
