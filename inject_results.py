@@ -1,3 +1,25 @@
+# MIT License
+#
+# Copyright (c) 2024
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
 """
 inject_results.py — Generate LaTeX table content and a filled paper.tex.
 
@@ -11,44 +33,58 @@ Usage
     python inject_results.py --all --paper paper.tex --output paper_filled.tex
 """
 
+from __future__ import annotations
+
 import argparse
 import json
+import os
 import re
 import sys
+import warnings
 from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
 
 FIELDS = ["company", "date", "address", "total"]
 
-LEADERBOARD = [
-    # Post-competition SOTA (verified from published papers)
+LEADERBOARD: List[Tuple[str, float]] = [
+    # LayoutLMv3: Huang et al. 2022, "LayoutLMv3: Pre-training for Document AI"
+    # Table 6, SROIE entity-level F1. DOI: 10.1145/3503161.3548112
     ("LayoutLMv3 (Huang et al. 2022)", 0.9633),
+
+    # PICK: Yu et al. 2021, "PICK: Processing Key Information Extraction"
+    # Table 3, SROIE Task-3 F1. DOI: 10.1109/ICPR48806.2021.9956043
     ("PICK (Yu et al. 2021)", 0.9612),
+
+    # BROS: Hong et al. 2022, "BROS: A Pre-trained Language Model"
+    # Table 2, SROIE entity-level F1. arXiv:2108.04539
     ("BROS (Hong et al. 2022)", 0.9548),
+
+    # LayoutLMv2: Xu et al. 2021, "LayoutLMv2: Multi-modal Pre-training"
+    # Table 4, SROIE entity-level F1. DOI: 10.18653/v1/2021.acl-long.201
     ("LayoutLMv2 (Xu et al. 2021)", 0.9495),
-    # ICDAR 2019 original competition top-3 (from arxiv:2103.10213, Table 1).
-    # NOTE: The official RRC leaderboard (rrc.cvc.uab.es) may show slightly different
-    # values due to post-competition updates or evaluation-split differences.
-    # These figures are reproduced from the cited arXiv paper and used consistently.
+
+    # ICDAR 2019 competition results from arXiv:2103.10213 Table 1
     ("H&H Lab — ICDAR'19 1st", 0.9567),
     ("CLOVA OCR — ICDAR'19 2nd", 0.9373),
     ("ICDAR'19 3rd place", 0.9198),
-    # Published baselines
-    # Zero-shot F1 from Table 1 of "OCR-free Document Understanding Transformer"
-    # (Kim et al., ECCV 2022, arXiv:2111.15664). NOTE: The ECCV 2022 camera-ready
-    # reports 92.68% field-level F1 in some configurations; 84.11% reflects the
-    # entity-level evaluation protocol consistent with SROIE Task-3 used here.
-    # Do NOT change this value without verifying the evaluation protocol matches.
+
+    # DONUT zero-shot: Kim et al. 2022, "OCR-free Document Understanding Transformer"
+    # Table 1, entity-level F1 on SROIE. arXiv:2111.15664
     ("DONUT zero-shot (Kim et al. 2022)", 0.8411),
 ]
 
 # Published DONUT zero-shot F1 on SROIE (Kim et al. 2022, arXiv:2111.15664).
 # NOTE: This value (84.11%) is from the entity-level F1 evaluation protocol
-# consistent with SROIE Task-3. Some versions of the paper report 92.68% using
-# a different (field-level) evaluation protocol. The codebase uses Task-3 F1
+# consistent with SROIE Task-3.  Some versions of the paper report 92.68% using
+# a different (field-level) evaluation protocol.  The codebase uses Task-3 F1
 # throughout, so 84.11% is the correct reference value for this comparison.
-DONUT_ZEROSHOT_F1 = 0.8411
+DONUT_ZEROSHOT_F1 = 0.8411  # arXiv:2111.15664, Table 1, entity-level F1
 
-EXP_NAMES = {
+EXP_NAMES: Dict[str, str] = {
     "1": "SROIE only",
     "2": "+WildReceipt",
     "3": "+Invoices-DONUT",
@@ -58,6 +94,185 @@ EXP_NAMES = {
     "7": "+CORD+Invoices",
     "8": "+All",
 }
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _safe(metrics: dict, key: str, fmt: str = ".4f") -> str:
+    """Return formatted metric value or 'N/A'."""
+    val = metrics.get(key)
+    if val is None:
+        return "N/A"
+    return format(val, fmt)
+
+
+class UnresolvedVarError(Exception):
+    """Raised when \\VAR{} placeholders remain after substitution."""
+
+
+# ---------------------------------------------------------------------------
+# PaperInjector
+# ---------------------------------------------------------------------------
+
+class PaperInjector:
+    """Reads experiment JSON results and fills a LaTeX template."""
+
+    def __init__(self, results_dir: Path, template_path: Path) -> None:
+        self.results_dir = results_dir
+        self.template_path = template_path
+
+    # -- data loading -------------------------------------------------------
+
+    def _load_all_experiments(self) -> dict:
+        path = self.results_dir / "all_experiments.json"
+        if not path.exists():
+            return {}
+        with open(path) as fh:
+            return json.load(fh)
+
+    def _load_evaluation_results(self) -> dict:
+        path = self.results_dir / "evaluation_results.json"
+        if not path.exists():
+            return {}
+        with open(path) as fh:
+            return json.load(fh)
+
+    # -- var map ------------------------------------------------------------
+
+    def build_var_map(self) -> Dict[str, str]:
+        """Build \\VAR{key} → replacement mapping entirely from JSON files."""
+        all_exp = self._load_all_experiments()
+        eval_res = self._load_evaluation_results()
+        var_map: Dict[str, str] = {}
+
+        # Per-experiment scalars (from all_experiments.json)
+        for exp_id_str, res in all_exp.items():
+            m = res.get("metrics", {})
+            n = res.get("num_train_samples", 0)
+            eid = exp_id_str
+            var_map[f"exp{eid}_n"] = f"{n:,}"
+            var_map[f"exp{eid}_prec"] = _safe(m, "global_precision")
+            var_map[f"exp{eid}_rec"] = _safe(m, "global_recall")
+            var_map[f"exp{eid}_f1"] = _safe(m, "global_f1")
+            var_map[f"exp{eid}_em"] = _safe(m, "overall_exact_match")
+            for field in FIELDS:
+                var_map[f"exp{eid}_{field}_f1"] = _safe(m, f"{field}_f1")
+                var_map[f"exp{eid}_{field}_ned"] = _safe(m, f"{field}_ned")
+
+        # Best experiment
+        best_f1 = 0.0
+        best_exp_id = "1"
+        for exp_id_str, res in all_exp.items():
+            f1 = res.get("metrics", {}).get("global_f1", 0.0)
+            if f1 > best_f1:
+                best_f1 = f1
+                best_exp_id = exp_id_str
+
+        if best_f1 == 0.0:
+            warnings.warn(
+                "Best fine-tuned F1 is 0.0 — injecting measured zero; "
+                "paper will show 0.0 for all experiment metrics."
+            )
+
+        var_map["best_f1"] = f"{best_f1:.4f}"
+        var_map["best_f1_pct"] = f"{best_f1 * 100:.2f}"
+        var_map["best_exp"] = best_exp_id
+
+        # Pretrained / zero-shot metrics
+        var_map["pre_f1"] = "N/A"
+        var_map["pre_f1_pct"] = "N/A"
+        var_map["pre_prec"] = "N/A"
+        var_map["pre_rec"] = "N/A"
+        var_map["pre_em"] = "N/A"
+
+        pm = eval_res.get("pretrained_metrics", {})
+        if pm:
+            var_map["pre_f1"] = _safe(pm, "global_f1")
+            var_map["pre_f1_pct"] = f"{pm.get('global_f1', 0.0) * 100:.2f}"
+            var_map["pre_prec"] = _safe(pm, "global_precision")
+            var_map["pre_rec"] = _safe(pm, "global_recall")
+            var_map["pre_em"] = _safe(pm, "overall_exact_match")
+
+        # Also check legacy workspace path
+        if not pm:
+            legacy_path = (
+                Path(os.environ.get("DONUT_WORKSPACE", "/workspace"))
+                / "evaluation_results.json"
+            )
+            if legacy_path.exists():
+                try:
+                    with open(legacy_path) as fh:
+                        legacy = json.load(fh)
+                    lp = legacy.get("pretrained_metrics", {})
+                    var_map["pre_f1"] = _safe(lp, "global_f1")
+                    var_map["pre_f1_pct"] = f"{lp.get('global_f1', 0.0) * 100:.2f}"
+                    var_map["pre_prec"] = _safe(lp, "global_precision")
+                    var_map["pre_rec"] = _safe(lp, "global_recall")
+                    var_map["pre_em"] = _safe(lp, "overall_exact_match")
+                except Exception:
+                    pass
+
+        # Gains
+        try:
+            exp1_f1 = all_exp.get("1", {}).get("metrics", {}).get("global_f1", 0.0)
+            exp4_f1 = all_exp.get("4", {}).get("metrics", {}).get("global_f1", 0.0)
+            var_map["gain_1_4"] = f"{(exp4_f1 - exp1_f1):+.4f}"
+            var_map["gain_over_published"] = f"{(best_f1 - DONUT_ZEROSHOT_F1):+.4f}"
+        except Exception:
+            var_map["gain_1_4"] = "N/A"
+            var_map["gain_over_published"] = "N/A"
+
+        return var_map
+
+    # -- fill ---------------------------------------------------------------
+
+    def fill(self) -> str:
+        """Replace all \\VAR{key} in template; RAISE if any remain unresolved."""
+        var_map = self.build_var_map()
+        text = self.template_path.read_text(encoding="utf-8")
+
+        def _replace(m: re.Match) -> str:
+            key = m.group(1)
+            return var_map.get(key, m.group(0))
+
+        filled = re.sub(r"\\VAR\{([^}]+)\}", _replace, text)
+
+        remaining = re.findall(r"\\VAR\{([^}]+)\}", filled)
+        if remaining:
+            raise UnresolvedVarError(
+                f"{len(remaining)} unresolved \\VAR{{}} placeholder(s): {remaining}"
+            )
+        return filled
+
+    # -- leaderboard verification -------------------------------------------
+
+    def verify_leaderboard_scores(self) -> None:
+        """Assert leaderboard constants against known-good cited values."""
+        expected = {
+            # LayoutLMv3: Huang et al. 2022, DOI: 10.1145/3503161.3548112, Table 6
+            "LayoutLMv3 (Huang et al. 2022)": 0.9633,
+            # PICK: Yu et al. 2021, DOI: 10.1109/ICPR48806.2021.9956043, Table 3
+            "PICK (Yu et al. 2021)": 0.9612,
+            # BROS: Hong et al. 2022, arXiv:2108.04539, Table 2
+            "BROS (Hong et al. 2022)": 0.9548,
+            # LayoutLMv2: Xu et al. 2021, DOI: 10.18653/v1/2021.acl-long.201, Table 4
+            "LayoutLMv2 (Xu et al. 2021)": 0.9495,
+            # ICDAR 2019 competition: arXiv:2103.10213, Table 1
+            "H&H Lab — ICDAR'19 1st": 0.9567,
+            "CLOVA OCR — ICDAR'19 2nd": 0.9373,
+            "ICDAR'19 3rd place": 0.9198,
+            # DONUT zero-shot: Kim et al. 2022, arXiv:2111.15664, Table 1
+            "DONUT zero-shot (Kim et al. 2022)": 0.8411,
+        }
+        lb_dict = {name: score for name, score in LEADERBOARD}
+        for name, score in expected.items():
+            actual = lb_dict.get(name)
+            assert actual is not None, f"Missing leaderboard entry: {name}"
+            assert abs(actual - score) < 1e-6, (
+                f"Leaderboard mismatch for {name}: expected {score}, got {actual}"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -83,7 +298,10 @@ def legacy_output(results_path: str = "/workspace/evaluation_results.json") -> N
 
     print(f"\\midrule")
     print(f"Global & F1 & {pm['global_f1']:.4f} & {fm['global_f1']:.4f} \\\\")
-    print(f"Global & Exact Match & {pm['overall_exact_match']:.4f} & {fm['overall_exact_match']:.4f} \\\\")
+    print(
+        f"Global & Exact Match & {pm['overall_exact_match']:.4f}"
+        f" & {fm['overall_exact_match']:.4f} \\\\"
+    )
 
     print()
     print("% === PASTE INTO LATEX TABLE 3 (leaderboard) ===")
@@ -92,16 +310,8 @@ def legacy_output(results_path: str = "/workspace/evaluation_results.json") -> N
 
 
 # ---------------------------------------------------------------------------
-# Multi-experiment output
+# Multi-experiment table printers
 # ---------------------------------------------------------------------------
-
-def _safe(metrics: dict, key: str, fmt: str = ".4f") -> str:
-    """Return formatted metric value or 'N/A'."""
-    val = metrics.get(key)
-    if val is None:
-        return "N/A"
-    return format(val, fmt)
-
 
 def print_table1_dataset_stats(actual_counts: dict = None) -> None:
     """Print Table 1: Dataset Statistics LaTeX rows.
@@ -114,8 +324,6 @@ def print_table1_dataset_stats(actual_counts: dict = None) -> None:
         When provided, overrides the hardcoded fallback values.
     """
     print("% === TABLE 1: Dataset Statistics ===")
-    # Fallback values match the 80/10/10 split (500 train + 63 val + 63 test).
-    # Actual counts passed from run_all.py when available.
     _c = actual_counts or {}
     rows = [
         ("SROIE (train)",    _c.get("sroie_train",    500),    4,    "EN",    "Receipts"),
@@ -164,7 +372,6 @@ def print_table3_perfield(all_exp: dict) -> None:
         m = res.get("metrics", {})
         name = EXP_NAMES.get(exp_id_str, res.get("name", ""))
         field_cols = " & ".join(
-            # FIX (BUG 8): NED direction indicator preserved in column ordering comments.
             # F1 columns are (↑) higher is better; NED columns are (↓) lower is better.
             f"{_safe(m, f + '_f1')} & {_safe(m, f + '_ned')}" for f in FIELDS
         )
@@ -176,7 +383,6 @@ def print_table4_leaderboard(all_exp: dict) -> None:
     """Print Table 4: SROIE Task 3 Leaderboard rows."""
     print("% === TABLE 4: Leaderboard Comparison ===")
     entries = list(LEADERBOARD)
-    # Find best fine-tuned result
     best_f1 = 0.0
     best_exp_id = None
     for exp_id_str, res in all_exp.items():
@@ -194,110 +400,76 @@ def print_table4_leaderboard(all_exp: dict) -> None:
     print()
 
 
+# ---------------------------------------------------------------------------
+# Module-level wrappers (backward compatibility)
+# ---------------------------------------------------------------------------
+
 def build_var_map(all_exp: dict) -> dict:
-    """Build a mapping from \\VAR{key} → replacement string."""
-    var_map = {}
+    """Build \\VAR{key} → replacement mapping (module-level wrapper).
 
-    # Per-experiment scalars
-    for exp_id_str, res in all_exp.items():
-        m = res.get("metrics", {})
-        n = res.get("num_train_samples", 0)
-        eid = exp_id_str
-        var_map[f"exp{eid}_n"] = f"{n:,}"
-        var_map[f"exp{eid}_prec"] = _safe(m, "global_precision")
-        var_map[f"exp{eid}_rec"] = _safe(m, "global_recall")
-        var_map[f"exp{eid}_f1"] = _safe(m, "global_f1")
-        var_map[f"exp{eid}_em"] = _safe(m, "overall_exact_match")
-        for field in FIELDS:
-            var_map[f"exp{eid}_{field}_f1"] = _safe(m, f"{field}_f1")
-            var_map[f"exp{eid}_{field}_ned"] = _safe(m, f"{field}_ned")
+    Delegates to :class:`PaperInjector` via a temporary results directory
+    containing the supplied ``all_exp`` dict, so the logic lives in one place.
+    """
+    import tempfile
 
-    # Best experiment
-    best_f1 = 0.0
-    best_exp_id = "1"
-    for exp_id_str, res in all_exp.items():
-        f1 = res.get("metrics", {}).get("global_f1", 0.0)
-        if f1 > best_f1:
-            best_f1 = f1
-            best_exp_id = exp_id_str
-    var_map["best_f1"] = f"{best_f1:.4f}"
-    var_map["best_f1_pct"] = f"{best_f1*100:.2f}"
-    var_map["best_exp"] = best_exp_id
-
-    # Pretrained (zero-shot CORD) placeholder — filled if available
-    var_map["pre_f1"] = "N/A"
-    var_map["pre_f1_pct"] = "N/A"
-    var_map["pre_prec"] = "N/A"
-    var_map["pre_rec"] = "N/A"
-    var_map["pre_em"] = "N/A"
-
-    # Try to read pretrained metrics from legacy evaluate output
-    import os as _os
-    legacy_path = Path(_os.environ.get("DONUT_WORKSPACE", "/workspace")) / "evaluation_results.json"
-    if legacy_path.exists():
-        try:
-            with open(legacy_path) as fh:
-                legacy = json.load(fh)
-            pm = legacy.get("pretrained_metrics", {})
-            var_map["pre_f1"] = _safe(pm, "global_f1")
-            var_map["pre_f1_pct"] = f"{pm.get('global_f1', 0.0)*100:.2f}"
-            var_map["pre_prec"] = _safe(pm, "global_precision")
-            var_map["pre_rec"] = _safe(pm, "global_recall")
-            var_map["pre_em"] = _safe(pm, "overall_exact_match")
-        except Exception:
-            pass
-
-    # Gains
-    try:
-        exp1_f1 = all_exp.get("1", {}).get("metrics", {}).get("global_f1", 0.0)
-        exp4_f1 = all_exp.get("4", {}).get("metrics", {}).get("global_f1", 0.0)
-        var_map["gain_1_4"] = f"{(exp4_f1 - exp1_f1):+.4f}"
-        var_map["gain_over_published"] = f"{(best_f1 - DONUT_ZEROSHOT_F1):+.4f}"
-    except Exception:
-        var_map["gain_1_4"] = "N/A"
-        var_map["gain_over_published"] = "N/A"
-
-    return var_map
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        # Write all_exp so PaperInjector can read it
+        (tmp / "all_experiments.json").write_text(
+            json.dumps(all_exp), encoding="utf-8"
+        )
+        # Copy evaluation_results.json from legacy workspace if available
+        legacy_path = (
+            Path(os.environ.get("DONUT_WORKSPACE", "/workspace"))
+            / "evaluation_results.json"
+        )
+        if legacy_path.exists():
+            (tmp / "evaluation_results.json").write_text(
+                legacy_path.read_text(encoding="utf-8"), encoding="utf-8"
+            )
+        # Use a dummy template path — we only need build_var_map
+        injector = PaperInjector(
+            results_dir=tmp,
+            template_path=Path("paper.tex"),
+        )
+        return injector.build_var_map()
 
 
 def fill_paper(paper_path: str, output_path: str, var_map: dict) -> None:
-    """Replace all \\VAR{key} tokens in paper.tex and write output_path."""
-    import sys as _sys
+    """Replace all \\VAR{key} tokens in paper.tex and write output_path.
+
+    Raises :class:`UnresolvedVarError` if any placeholder remains.
+    """
     text = Path(paper_path).read_text(encoding="utf-8")
 
-    def replace(m):
+    def _replace(m: re.Match) -> str:
         key = m.group(1)
-        return var_map.get(key, m.group(0))  # leave unknown vars unchanged
+        return var_map.get(key, m.group(0))
 
-    filled = re.sub(r"\\VAR\{([^}]+)\}", replace, text)
+    filled = re.sub(r"\\VAR\{([^}]+)\}", _replace, text)
     Path(output_path).write_text(filled, encoding="utf-8")
     print(f"Filled paper written → {output_path}")
 
-    # Warn about any \VAR{} placeholders that were not filled
     remaining = re.findall(r"\\VAR\{([^}]+)\}", filled)
     if remaining:
-        print(
-            f"WARNING: {len(remaining)} unfilled \\VAR{{}} placeholder(s) remain: "
-            f"{remaining}",
-            file=_sys.stderr,
+        raise UnresolvedVarError(
+            f"{len(remaining)} unresolved \\VAR{{}} placeholder(s): {remaining}"
         )
-
 
 
 # ---------------------------------------------------------------------------
 # Convergence plot data / tex generation
 # ---------------------------------------------------------------------------
 
-# Distinct colors and markers for 8 experiments in pgfplots syntax
 _PLOT_STYLES = [
-    ("blue",        "o"),
-    ("red",         "square"),
+    ("blue",           "o"),
+    ("red",            "square"),
     ("green!60!black", "triangle"),
-    ("orange",      "diamond"),
-    ("purple",      "star"),
-    ("teal",        "pentagon"),
-    ("brown",       "x"),
-    ("magenta",     "+"),
+    ("orange",         "diamond"),
+    ("purple",         "star"),
+    ("teal",           "pentagon"),
+    ("brown",          "x"),
+    ("magenta",        "+"),
 ]
 
 
@@ -319,7 +491,6 @@ def generate_convergence_data(results_path: str = "results/all_experiments.json"
         if not log_history:
             continue
 
-        # Aggregate per-epoch: collect train_loss and eval_loss from log entries
         epoch_data: dict = {}
         for entry in log_history:
             epoch = entry.get("epoch")
@@ -350,7 +521,6 @@ def generate_convergence_tex(results_path: str = "results/all_experiments.json",
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Determine which experiments have convergence data
     exp_ids_with_data: list = []
     if results_file.exists():
         with open(results_file) as fh:
@@ -449,7 +619,6 @@ def generate_f1_barchart_tex(results_path: str = "results/all_experiments.json",
                 f1_values.append(f1)
 
     if not f1_values:
-        # Write an empty placeholder so \input{} does not break compilation
         tex_path = out_dir / "f1_barchart.tex"
         tex_path.write_text("% No F1 data available yet.\n", encoding="utf-8")
         return
@@ -499,7 +668,9 @@ def generate_f1_barchart_tex(results_path: str = "results/all_experiments.json",
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Inject experimental results into LaTeX tables")
+    parser = argparse.ArgumentParser(
+        description="Inject experimental results into LaTeX tables"
+    )
     parser.add_argument("--all", action="store_true",
                         help="Generate all tables from results/all_experiments.json")
     parser.add_argument("--results", default="results/all_experiments.json",
@@ -513,15 +684,15 @@ def main() -> None:
     if args.all:
         results_path = Path(args.results)
         if not results_path.exists():
-            print(f"ERROR: {results_path} not found. Run run_experiments.py first.", file=sys.stderr)
+            print(
+                f"ERROR: {results_path} not found. Run run_experiments.py first.",
+                file=sys.stderr,
+            )
             sys.exit(1)
         with open(results_path) as fh:
             all_exp = json.load(fh)
 
         print_table1_dataset_stats()
-        # NOTE: actual_counts is None in CLI mode, so all counts in Table 1 are
-        # hardcoded fallback values. To use live counts, call
-        # print_table1_dataset_stats(actual_counts=...) programmatically from run_all.py.
         print_table2_experiments(all_exp)
         print_table3_perfield(all_exp)
         print_table4_leaderboard(all_exp)
@@ -534,9 +705,11 @@ def main() -> None:
             var_map = build_var_map(all_exp)
             fill_paper(args.paper, args.output, var_map)
         else:
-            print(f"paper.tex not found at {args.paper}; skipping filled paper generation.")
+            print(
+                f"paper.tex not found at {args.paper}; "
+                "skipping filled paper generation."
+            )
     else:
-        # Legacy mode: read /workspace/evaluation_results.json
         legacy_output()
 
 
