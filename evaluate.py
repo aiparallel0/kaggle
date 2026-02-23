@@ -6,7 +6,7 @@ from PIL import Image
 from transformers import DonutProcessor, VisionEncoderDecoderModel
 from tqdm import tqdm
 
-# WARNING: This is a legacy standalone script. For the full 7-experiment
+# WARNING: This is a legacy standalone script. For the full 8-experiment
 # pipeline, use: python run_all.py
 # This script is kept for backward compatibility and ad-hoc single-model
 # training/evaluation outside the experiment framework.
