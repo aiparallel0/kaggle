@@ -50,6 +50,7 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -294,6 +295,12 @@ def stage_download(args) -> None:
             return (ds_name, 0, str(exc), 0.0)
 
     print(f"  Downloading {len(aux_datasets)} datasets in parallel ...")
+    counts = {
+        "sroie": len(train_samples),
+        "wildreceipt": 0,
+        "cord": 0,
+        "invoices_donut": 0,
+    }
     with ThreadPoolExecutor(max_workers=len(aux_datasets)) as pool:
         futures = {pool.submit(_fetch_one, ds): ds for ds in aux_datasets}
         for future in as_completed(futures):
@@ -302,7 +309,17 @@ def stage_download(args) -> None:
                 print(f"    → WARNING: '{ds_name}' failed: {error}")
                 failed_datasets.append(ds_name)
             else:
+                counts[ds_name] = count
                 print(f"    → '{ds_name}' ready: {count} train samples ({elapsed:.1f}s)")
+
+    print(f"\n  ┌{'─'*50}┐")
+    print(f"  │ {'Dataset':<25} {'Samples':>10} {'Status':>12} │")
+    print(f"  ├{'─'*50}┤")
+    for ds_name in ["sroie", "wildreceipt", "cord", "invoices_donut"]:
+        count = counts.get(ds_name, 0)
+        status = "✓ OK" if count > 0 else "✗ EMPTY"
+        print(f"  │ {ds_name:<25} {count:>10} {status:>12} │")
+    print(f"  └{'─'*50}┘")
 
     if failed_datasets:
         # Report which experiment IDs are affected by the failed downloads
@@ -400,16 +417,39 @@ def stage_experiments(args) -> int:
     exp_ids = [args.experiment] if args.experiment else list(re_mod.EXPERIMENTS.keys())
     total = len(exp_ids)
     had_empty = False
+    completed = 0
+    succeeded = 0
+    failed_experiments = []
 
     for i, exp_id in enumerate(exp_ids, 1):
         _step(i, total, f"Experiment {exp_id}: {re_mod.EXPERIMENTS[exp_id]['name']}")
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        print(f"  ▶ Experiment {exp_id} started at {ts}")
+        print(f"    Datasets: {re_mod.EXPERIMENTS[exp_id]['datasets']}")
         t0 = time.monotonic()
-        result = re_mod.run_experiment(exp_id)
+        try:
+            result = re_mod.run_experiment(exp_id)
+        except Exception as exc:
+            import traceback
+            elapsed = time.monotonic() - t0
+            ts_end = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+            print(f"\n  ✗ FATAL: Experiment {exp_id} crashed: {type(exc).__name__}: {exc}")
+            print(f"    Traceback follows:")
+            traceback.print_exc()
+            failed_experiments.append(exp_id)
+            had_empty = True
+            continue
         elapsed = time.monotonic() - t0
+        ts_end = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         f1 = result.get("metrics", {}).get("global_f1", "N/A")
-        print(f"  Finished in {elapsed/60:.1f} min  |  Global F1 = {f1}")
+        print(f"  ◀ Experiment {exp_id} finished at {ts_end} ({elapsed:.1f}s)")
+        print(f"    done in {elapsed/60:.1f}min | F1={f1} | Samples={result.get('num_train_samples', '?')}")
+        completed += 1
         if result.get("num_train_samples", 0) == 0:
             had_empty = True
+            failed_experiments.append(exp_id)
+        else:
+            succeeded += 1
 
     re_mod.save_summary()
     return 1 if had_empty else 0
@@ -532,6 +572,38 @@ def main() -> None:
     os.environ["DONUT_WORKSPACE"] = args.workspace
     os.environ["SROIE_DATA_DIR"] = args.sroie_dir
 
+    # ── Diagnostic: environment snapshot ──────────────────────────────────
+    import platform
+    import importlib
+    import torch
+    _banner("ENVIRONMENT DIAGNOSTICS")
+    print(f"  Python       : {platform.python_version()} ({sys.executable})")
+    print(f"  Platform     : {platform.platform()}")
+    print(f"  CUDA avail   : {torch.cuda.is_available()}")
+    if torch.cuda.is_available():
+        print(f"  CUDA device  : {torch.cuda.get_device_name(0)}")
+        print(f"  CUDA version : {torch.version.cuda}")
+        gpu_mem = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+        print(f"  GPU memory   : {gpu_mem:.1f} GB")
+    for pkg in ["torch", "transformers", "datasets", "accelerate", "huggingface_hub",
+                "sentencepiece", "editdistance", "protobuf", "pandas", "numpy", "Pillow"]:
+        try:
+            mod = importlib.import_module(pkg.replace("-", "_").lower() if pkg != "Pillow" else "PIL")
+            ver = getattr(mod, "__version__", "?")
+            print(f"  {pkg:20s}: {ver}")
+        except ImportError:
+            print(f"  {pkg:20s}: NOT INSTALLED")
+    print(f"  Workspace    : {args.workspace}")
+    print(f"  SROIE dir    : {args.sroie_dir}")
+    print(f"  CWD          : {Path.cwd()}")
+    try:
+        import psutil
+        mem = psutil.virtual_memory()
+        print(f"  RAM          : {mem.total / (1024**3):.1f} GB total, {mem.available / (1024**3):.1f} GB available")
+    except ImportError:
+        pass
+    print(f"  CPU cores    : {os.cpu_count()}")
+
     exit_code = 0
 
     if args.paper_only:
@@ -539,25 +611,48 @@ def main() -> None:
     else:
         if not args.skip_install:
             t0 = time.monotonic()
+            ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+            print(f"\n  ▶ Stage 0 started at {ts}")
             stage_install(args)
-            print(f"  [Stage 0 elapsed: {time.monotonic()-t0:.1f}s]")
+            elapsed = time.monotonic() - t0
+            ts_end = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+            print(f"  ◀ Stage 0 finished at {ts_end} ({elapsed:.1f}s)")
         if not args.skip_download:
             t0 = time.monotonic()
+            ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+            print(f"\n  ▶ Stage 1 started at {ts}")
             stage_download(args)
-            print(f"  [Stage 1 elapsed: {time.monotonic()-t0:.1f}s]")
+            elapsed = time.monotonic() - t0
+            ts_end = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+            print(f"  ◀ Stage 1 finished at {ts_end} ({elapsed:.1f}s)")
         if not args.skip_pretrained:
             t0 = time.monotonic()
+            ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+            print(f"\n  ▶ Stage 1.5 started at {ts}")
             stage_pretrained_baseline(args)
-            print(f"  [Stage 1.5 elapsed: {time.monotonic()-t0:.1f}s]")
+            elapsed = time.monotonic() - t0
+            ts_end = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+            print(f"  ◀ Stage 1.5 finished at {ts_end} ({elapsed:.1f}s)")
         t0 = time.monotonic()
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        print(f"\n  ▶ Stage 2 started at {ts}")
         exit_code = stage_experiments(args)
-        print(f"  [Stage 2 elapsed: {time.monotonic()-t0:.1f}s]")
+        elapsed = time.monotonic() - t0
+        ts_end = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        print(f"  ◀ Stage 2 finished at {ts_end} ({elapsed:.1f}s)")
         t0 = time.monotonic()
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        print(f"\n  ▶ Stage 3 started at {ts}")
         stage_paper(args)
-        print(f"  [Stage 3 elapsed: {time.monotonic()-t0:.1f}s]")
+        elapsed = time.monotonic() - t0
+        ts_end = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        print(f"  ◀ Stage 3 finished at {ts_end} ({elapsed:.1f}s)")
 
-    elapsed = time.monotonic() - t_start
-    _banner(f"DONE — total wall time {elapsed/60:.1f} min  |  exit code {exit_code}")
+    total_elapsed = time.monotonic() - t_start
+    _banner("PIPELINE SUMMARY")
+    print(f"  Total wall time : {total_elapsed/60:.1f} min")
+    print(f"  Exit code       : {exit_code}")
+    _banner(f"DONE — total wall time {total_elapsed/60:.1f} min  |  exit code {exit_code}")
     sys.exit(exit_code)
 
 
