@@ -22,8 +22,13 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".webp"}
 
 
-def run_inference(model, processor, image_path, task_prompt, max_length=512):
-    image = Image.open(image_path).convert("RGB")
+def run_inference(model, processor, image_path, task_prompt, max_length=512,
+                  preloaded_image=None):
+    """Run inference on a single image. Accepts an optional pre-loaded PIL Image."""
+    if preloaded_image is not None:
+        image = preloaded_image
+    else:
+        image = Image.open(image_path).convert("RGB")
     pixel_values = processor(image, return_tensors="pt").pixel_values.to(DEVICE)
     decoder_input_ids = processor.tokenizer(
         task_prompt, add_special_tokens=False, return_tensors="pt"

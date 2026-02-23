@@ -123,6 +123,12 @@ def main():
 
     workspace = os.environ.get("DONUT_WORKSPACE", "/workspace")
     output_dir = os.path.join(workspace, "donut-sroie-finetuned")
+
+    # Calculate optimal num_workers based on available CPU cores
+    import multiprocessing
+    num_cpus = multiprocessing.cpu_count()
+    optimal_workers = min(8, max(4, num_cpus // 2))
+
     args = Seq2SeqTrainingArguments(
         output_dir=output_dir,
         num_train_epochs=30,
@@ -139,7 +145,11 @@ def main():
         predict_with_generate=True,
         fp16=torch.cuda.is_available(),
         logging_steps=20,
-        dataloader_num_workers=4,
+        # PERFORMANCE: Optimized DataLoader settings
+        dataloader_num_workers=optimal_workers,
+        dataloader_pin_memory=True,
+        dataloader_prefetch_factor=4 if optimal_workers > 0 else None,
+        dataloader_persistent_workers=True if optimal_workers > 0 else False,
         remove_unused_columns=False,
         seed=42,
     )

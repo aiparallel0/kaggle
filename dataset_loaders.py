@@ -2,8 +2,8 @@
 dataset_loaders.py — Multi-dataset download & normalization module.
 
 Provides functions to download each auxiliary dataset (WildReceipt,
-CORU, CORD, Invoices-DONUT) and normalize their annotations to the
-SROIE schema: {"company": "...", "date": "...", "address": "...", "total": ""}.
+CORD, Invoices-DONUT) and normalize their annotations to the SROIE
+schema: {"company": "...", "date": "...", "address": "...", "total": ""}.
 
 Returns lists of (image_path, ground_truth_dict) tuples.
 """
@@ -122,7 +122,7 @@ def _load_key_file(key_dir: Path, stem: str) -> Dict[str, str]:
 
 
 def load_sroie_train() -> List[Sample]:
-    """Load SROIE training split (626 samples) from the local workspace."""
+    """Load SROIE training split from the local workspace (img/ + key/)."""
     samples: List[Sample] = []
     sroie_dir = _get_sroie_dir()
     img_dir = sroie_dir / "img"
@@ -140,11 +140,11 @@ def load_sroie_train() -> List[Sample]:
 
 
 def load_sroie_test() -> List[Sample]:
-    """Load SROIE test split (347 samples) from the local workspace.
+    """Load SROIE test split from the local workspace (test_img/ + test_key/).
 
-    Returns an empty list with a warning if the official test split
-    directory (test_img/) has not been populated.  This avoids raising
-    on pipelines where the official test images are not available.
+    Returns an empty list with a warning if the test split directory
+    (test_img/) has not been populated.  This avoids raising on pipelines
+    where the test images are not available.
     """
     samples: List[Sample] = []
     sroie_dir = _get_sroie_dir()
@@ -153,8 +153,33 @@ def load_sroie_test() -> List[Sample]:
     if not img_dir.exists():
         print(
             "[SROIE] WARNING: test_img/ directory not found — returning 0 test samples. "
-            "The official SROIE test split (347 images) was not found. "
             "Evaluation will be skipped.",
+            file=sys.stderr,
+        )
+        return []
+
+    image_exts = {".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".webp"}
+    for img_path in sorted(p for p in img_dir.iterdir()
+                           if p.is_file() and p.suffix.lower() in image_exts):
+        gt = _load_key_file(key_dir, img_path.stem)
+        if gt:
+            samples.append((img_path, gt))
+    return samples
+
+
+def load_sroie_val() -> List[Sample]:
+    """Load SROIE validation split from the local workspace (val_img/ + val_key/).
+
+    Returns an empty list with a warning if the validation split directory
+    (val_img/) has not been populated.
+    """
+    samples: List[Sample] = []
+    sroie_dir = _get_sroie_dir()
+    img_dir = sroie_dir / "val_img"
+    key_dir = sroie_dir / "val_key"
+    if not img_dir.exists():
+        print(
+            "[SROIE] WARNING: val_img/ directory not found — returning 0 val samples.",
             file=sys.stderr,
         )
         return []
@@ -273,116 +298,6 @@ def load_wildreceipt() -> List[Sample]:
             if img_path.exists():
                 samples.append((img_path, gt))
 
-    return samples
-
-
-# ---------------------------------------------------------------------------
-# CORU (abdoelsayed/CORU — multilingual receipt dataset)
-# ---------------------------------------------------------------------------
-
-def _download_coru() -> Path:
-    """Download CORU Information_Extraction subset from HuggingFace."""
-    dest = _ensure_dir(_get_datasets_dir() / "coru")
-    marker = dest / ".downloaded"
-    if marker.exists():
-        if not (dest / "hf_cache").exists():
-            marker.unlink(missing_ok=True)
-        else:
-            return dest
-    try:
-        from datasets import load_dataset  # type: ignore
-        try:
-            ds = load_dataset("abdoelsayed/CORU", "Information_Extraction")
-        except Exception as exc_config:
-            print(
-                f"[CORU] load_dataset with 'Information_Extraction' config failed: {exc_config}. "
-                "Trying without config name ...",
-                file=sys.stderr,
-            )
-            ds = load_dataset("abdoelsayed/CORU")
-            # Log available columns for debugging
-            sample_split = list(ds.keys())[0] if hasattr(ds, "keys") else "train"
-            cols = ds[sample_split].column_names if hasattr(ds, "keys") else ds.column_names
-            print(f"[CORU] Available columns (no-config fallback): {cols}", file=sys.stderr)
-        ds.save_to_disk(str(dest / "hf_cache"))
-        marker.touch()
-    except Exception as exc:
-        print(f"[CORU] Download failed: {exc}. Will return empty dataset.", file=sys.stderr)
-    return dest
-
-
-def _coru_remap(item: dict) -> Dict[str, str]:
-    """Remap CORU Information_Extraction fields to SROIE schema."""
-    gt: Dict[str, str] = {k: "" for k in EMPTY_GT}
-    # merchant_name / merchant / store_name → company
-    for key in ("merchant_name", "merchant", "store_name"):
-        val = item.get(key)
-        if val and str(val).strip():
-            gt["company"] = str(val).strip()
-            break
-    # transaction_date / date → date
-    for key in ("transaction_date", "date"):
-        val = item.get(key)
-        if val and str(val).strip():
-            gt["date"] = str(val).strip()
-            break
-    # total_amount / total / total_price → total
-    for key in ("total_amount", "total", "total_price"):
-        val = item.get(key)
-        if val and str(val).strip():
-            gt["total"] = str(val).strip()
-            break
-    # address - not directly in CORU, leave empty
-    gt["address"] = ""
-    return gt
-
-
-def load_coru() -> List[Sample]:
-    """Load CORU Information_Extraction subset and normalize to SROIE schema."""
-    dest = _download_coru()
-    hf_cache = dest / "hf_cache"
-    if not hf_cache.exists():
-        print("[CORU] Cache not found — skipping.", file=sys.stderr)
-        return []
-    try:
-        from datasets import load_from_disk  # type: ignore
-        ds = load_from_disk(str(hf_cache))
-    except Exception as exc:
-        print(f"[CORU] Failed to load cache: {exc}", file=sys.stderr)
-        return []
-
-    # Log available columns for diagnostic purposes
-    sample_split = list(ds.keys())[0] if hasattr(ds, "keys") else "train"
-    cols = ds[sample_split].column_names if hasattr(ds, "keys") else ds.column_names
-    print(f"[CORU] Available columns: {cols}")
-
-    samples: List[Sample] = []
-    splits = list(ds.keys()) if hasattr(ds, "keys") else ["train"]
-    for split in splits:
-        if split == "test":
-            continue  # avoid test contamination
-        split_ds = ds[split] if hasattr(ds, "keys") else ds
-        for idx, item in enumerate(split_ds):
-            gt = _coru_remap(item)
-            # Skip samples where ALL fields are empty
-            if not any(gt[f] for f in EMPTY_GT):
-                continue
-            pil_image = item.get("image")
-            if pil_image is not None:
-                img_dest_dir = _ensure_dir(dest / "images")
-                img_path = img_dest_dir / f"{split}_{idx:06d}.jpg"
-                if not img_path.exists():
-                    try:
-                        pil_image.convert("RGB").save(img_path, "JPEG")
-                    except Exception:
-                        continue
-                samples.append((img_path, gt))
-
-    if not samples:
-        print(
-            "[CORU] *** WARNING: 'coru' returned 0 samples! ***",
-            file=sys.stderr,
-        )
     return samples
 
 
@@ -593,7 +508,6 @@ def load_invoices_donut() -> List[Sample]:
 _LOADERS = {
     "sroie": load_sroie_train,
     "wildreceipt": load_wildreceipt,
-    "coru": load_coru,
     "cord": load_cord,
     "invoices_donut": load_invoices_donut,
 }
@@ -637,12 +551,11 @@ def get_combined_dataset(
     """
     Merge multiple datasets into train and validation lists.
 
-    SROIE training samples are added to train as-is (using the official
-    626/347 train/test split — no further splitting applied).
-    All auxiliary datasets (WildReceipt, CORU, CORD, Invoices-DONUT) are
-    split 70/15/15; the 70% goes into combined train, the 15% validation
-    portion goes into combined val, and the held-out 15% test portion is
-    discarded.
+    SROIE training samples are added to train as-is (train split from img/).
+    SROIE validation samples (from val_img/) are added to the combined val.
+    All auxiliary datasets (WildReceipt, CORD, Invoices-DONUT) are split
+    70/15/15; the 70% goes into combined train, the 15% validation portion
+    goes into combined val, and the held-out 15% test portion is discarded.
 
     After merging, both combined_train and combined_val are shuffled with
     a fixed seed so that samples from different datasets are interleaved.
@@ -651,7 +564,7 @@ def get_combined_dataset(
     ----------
     dataset_names : list of str
         Names of datasets to include.  Valid names: sroie, wildreceipt,
-        coru, cord, invoices_donut.
+        cord, invoices_donut.
 
     Returns
     -------
@@ -676,8 +589,12 @@ def get_combined_dataset(
                 file=sys.stderr,
             )
         if name == "sroie":
-            # SROIE uses the official train/test split — no further splitting.
+            # SROIE: train split goes to combined_train; val split goes to combined_val.
             combined_train.extend(data)
+            sroie_val = load_sroie_val()
+            combined_val.extend(sroie_val)
+            if sroie_val:
+                print(f"[dataset_loaders] 'sroie_val' → {len(sroie_val)} val samples")
         else:
             # Auxiliary datasets: 70/15/15 split; hold-out test portion discarded.
             train_split, val_split, _ = split_dataset(data, seed=42)

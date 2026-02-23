@@ -87,7 +87,7 @@ EXPERIMENTS: Dict[int, Dict] = {
     1: {
         "name": "SROIE only (baseline)",
         "datasets": ["sroie"],
-        "description": "Fine-tune on SROIE training set only (626 images).",
+        "description": "Fine-tune on SROIE training set only.",
     },
     2: {
         "name": "SROIE + WildReceipt",
@@ -95,9 +95,9 @@ EXPERIMENTS: Dict[int, Dict] = {
         "description": "Add ~1 740 WildReceipt receipt images with KIE remapping.",
     },
     3: {
-        "name": "SROIE + CORU",
-        "datasets": ["sroie", "coru"],
-        "description": "Add CORU multilingual receipt images (2024, ~20k images).",
+        "name": "SROIE + Invoices-DONUT",
+        "datasets": ["sroie", "invoices_donut"],
+        "description": "Add Invoices-DONUT invoice images.",
     },
     4: {
         "name": "SROIE + CORD",
@@ -110,18 +110,18 @@ EXPERIMENTS: Dict[int, Dict] = {
         "description": "Combine SROIE, WildReceipt, and CORD.",
     },
     6: {
-        "name": "SROIE + CORU + CORD",
-        "datasets": ["sroie", "coru", "cord"],
-        "description": "Combine SROIE, CORU, and CORD.",
+        "name": "SROIE + WildReceipt + Invoices",
+        "datasets": ["sroie", "wildreceipt", "invoices_donut"],
+        "description": "Combine SROIE, WildReceipt, and Invoices-DONUT.",
     },
     7: {
-        "name": "SROIE + WildReceipt + CORU",
-        "datasets": ["sroie", "wildreceipt", "coru"],
-        "description": "Combine SROIE, WildReceipt, and CORU.",
+        "name": "SROIE + CORD + Invoices",
+        "datasets": ["sroie", "cord", "invoices_donut"],
+        "description": "Combine SROIE, CORD, and Invoices-DONUT.",
     },
     8: {
         "name": "SROIE + All",
-        "datasets": ["sroie", "wildreceipt", "coru", "cord"],
+        "datasets": ["sroie", "wildreceipt", "cord", "invoices_donut"],
         "description": "Combine all four available datasets.",
     },
 }
@@ -131,19 +131,64 @@ EXPERIMENTS: Dict[int, Dict] = {
 # ---------------------------------------------------------------------------
 
 class MultiDataset(Dataset):
-    """Wraps a list of (Path, dict) samples into a PyTorch Dataset."""
+    """Wraps a list of (Path, dict) samples into a PyTorch Dataset.
 
-    def __init__(self, samples: List[Tuple[Path, Dict]], processor, max_length: int = MAX_LENGTH):
+    When sufficient RAM is available, pre-loads all images into memory
+    to eliminate disk I/O during training.
+    """
+
+    def __init__(self, samples: List[Tuple[Path, Dict]], processor, max_length: int = MAX_LENGTH,
+                 cache_in_ram: bool = True):
         self.samples = samples
         self.processor = processor
         self.max_length = max_length
+        self._image_cache: Dict[int, Image.Image] = {}
+
+        if cache_in_ram and len(samples) > 0:
+            # Estimate memory: ~3MB per receipt image × num_samples
+            estimated_mb = len(samples) * 3
+            try:
+                import psutil
+                available_mb = psutil.virtual_memory().available // (1024 * 1024)
+            except ImportError:
+                available_mb = 0  # skip caching if psutil unavailable
+
+            # Only cache if we'd use less than 50% of available RAM
+            if available_mb > 0 and estimated_mb < available_mb * 0.5:
+                print(f"  [RAM Cache] Pre-loading {len(samples)} images into RAM "
+                      f"(~{estimated_mb}MB / {available_mb}MB available) ...")
+                import concurrent.futures
+
+                def _load_one(idx_path):
+                    idx, path = idx_path
+                    try:
+                        return idx, Image.open(path).convert("RGB")
+                    except Exception:
+                        return idx, None
+
+                with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+                    for idx, img in pool.map(_load_one, enumerate(
+                            (s[0] for s in samples))):
+                        if img is not None:
+                            self._image_cache[idx] = img
+
+                print(f"  [RAM Cache] {len(self._image_cache)}/{len(samples)} images cached")
+            else:
+                if available_mb > 0:
+                    print(f"  [RAM Cache] Skipped (need ~{estimated_mb}MB, "
+                          f"available {available_mb}MB)")
 
     def __len__(self) -> int:
         return len(self.samples)
 
     def __getitem__(self, idx: int) -> Dict:
         img_path, gt = self.samples[idx]
-        image = Image.open(img_path).convert("RGB")
+
+        # Use cached image if available, otherwise load from disk
+        if idx in self._image_cache:
+            image = self._image_cache[idx]
+        else:
+            image = Image.open(img_path).convert("RGB")
 
         target = "<s_sroie>"
         for f in FIELDS:
@@ -189,6 +234,13 @@ def train_experiment(
     val_ds = MultiDataset(val_samples, processor) if val_samples else None
 
     do_eval = val_ds is not None and len(val_ds) > 0
+
+    # Calculate optimal num_workers based on available CPU cores
+    import multiprocessing
+    num_cpus = multiprocessing.cpu_count()
+    # Use up to 8 workers or half of available cores, whichever is smaller
+    optimal_workers = min(8, max(4, num_cpus // 2))
+
     training_args = Seq2SeqTrainingArguments(
         output_dir=str(output_dir),
         num_train_epochs=TRAIN_CONFIG["max_epochs"],
@@ -205,7 +257,11 @@ def train_experiment(
         predict_with_generate=True,
         fp16=torch.cuda.is_available(),
         logging_steps=20,
-        dataloader_num_workers=4,
+        # PERFORMANCE: Optimized DataLoader settings
+        dataloader_num_workers=optimal_workers,
+        dataloader_pin_memory=True,
+        dataloader_prefetch_factor=4 if optimal_workers > 0 else None,
+        dataloader_persistent_workers=True if optimal_workers > 0 else False,
         remove_unused_columns=False,
         seed=SEED,
     )
@@ -248,18 +304,28 @@ def evaluate_experiment(exp_id: int, model_dir: Path) -> Dict:
     ft_model = VisionEncoderDecoderModel.from_pretrained(str(model_dir)).to(DEVICE)
     ft_model.eval()
 
+    # Pre-load all test images in parallel (I/O bound, fits in RAM easily)
+    from concurrent.futures import ThreadPoolExecutor
+
+    def _load_image(path):
+        return Image.open(path).convert("RGB")
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        images = list(pool.map(_load_image, image_paths))
+
     finetuned_preds = []
     empty_count = 0
     with torch.no_grad():
-        for img_path in image_paths:
-            pred = run_inference(ft_model, ft_processor, img_path, "<s_sroie>")
+        for img, img_path in zip(images, image_paths):
+            pred = run_inference(ft_model, ft_processor, img_path, "<s_sroie>",
+                                 preloaded_image=img)
             if "sroie" in pred and isinstance(pred["sroie"], dict):
                 pred = pred["sroie"]
             if not pred:
                 empty_count += 1
             finetuned_preds.append(pred)
 
-    # FIX (BUG 5): Report how many predictions were empty so users can detect
+    # Report how many predictions were empty so users can detect
     # systematic token2json failures that would silently contaminate metrics.
     if empty_count > 0:
         print(

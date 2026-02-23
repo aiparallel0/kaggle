@@ -51,11 +51,11 @@ DONUT_ZEROSHOT_F1 = 0.8411
 EXP_NAMES = {
     "1": "SROIE only",
     "2": "+WildReceipt",
-    "3": "+CORU",
+    "3": "+Invoices-DONUT",
     "4": "+CORD",
     "5": "+WildReceipt+CORD",
-    "6": "+CORU+CORD",
-    "7": "+WildReceipt+CORU",
+    "6": "+WildReceipt+Invoices",
+    "7": "+CORD+Invoices",
     "8": "+All",
 }
 
@@ -110,18 +110,18 @@ def print_table1_dataset_stats(actual_counts: dict = None) -> None:
     ----------
     actual_counts : dict, optional
         Mapping of dataset name to actual sample count, e.g.
-        ``{"sroie_train": 626, "sroie_test": 347, ...}``.
+        ``{"sroie_train": 500, "sroie_val": 63, "sroie_test": 63, ...}``.
         When provided, overrides the hardcoded fallback values.
     """
     print("% === TABLE 1: Dataset Statistics ===")
-    # Fallback values match the official SROIE split (626 train + 347 test).
+    # Fallback values match the 80/10/10 split (500 train + 63 val + 63 test).
     # Actual counts passed from run_all.py when available.
     _c = actual_counts or {}
     rows = [
-        ("SROIE (train)",    _c.get("sroie_train",    626),    4,    "EN",    "Receipts"),
-        ("SROIE (test)",     _c.get("sroie_test",     347),    4,    "EN",    "Receipts"),
+        ("SROIE (train)",    _c.get("sroie_train",    500),    4,    "EN",    "Receipts"),
+        ("SROIE (val)",      _c.get("sroie_val",       63),    4,    "EN",    "Receipts"),
+        ("SROIE (test)",     _c.get("sroie_test",      63),    4,    "EN",    "Receipts"),
         ("WildReceipt",      _c.get("wildreceipt",   1740),   25,   "EN",    "Receipts"),
-        ("CORU",             _c.get("coru",         20000),    4,   "Multi", "Receipts"),
         ("CORD v2",          _c.get("cord",            900),  "30+", "ID",    "Receipts"),
         ("Invoices-DONUT",   _c.get("invoices_donut",  800),  "7+",  "EN",    "Invoices"),
     ]

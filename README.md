@@ -7,14 +7,14 @@ extraction (KIE) using the DONUT (Document Understanding Transformer) model.
 
 Starting from a CORD-pretrained DONUT checkpoint, this pipeline trains on
 the SROIE benchmark combined with three auxiliary datasets (WildReceipt,
-CORU, CORD) across 8 experiment configurations, evaluates each model
+CORD, Invoices-DONUT) across 8 experiment configurations, evaluates each model
 on the SROIE test set, and generates a complete LaTeX paper with real results.
 
 ## Repository Structure (7-file pipeline)
 
 ```
 .
-├── dataset_loaders.py   # Download & normalize WildReceipt, CORU, CORD
+├── dataset_loaders.py   # Download & normalize WildReceipt, CORD, Invoices-DONUT
 ├── train.py             # Standalone SROIE-only fine-tuning script
 ├── evaluate.py          # Inference + SROIE Task-3 metric computation
 ├── run_experiments.py   # 8-experiment orchestrator (train + eval)
@@ -22,6 +22,7 @@ on the SROIE test set, and generates a complete LaTeX paper with real results.
 ├── inject_results.py    # Generate LaTeX tables; fill paper_filled.tex
 ├── paper.tex            # LaTeX paper template with \VAR{} placeholders
 ├── requirements.txt     # Python dependencies
+├── hf_token.txt         # HuggingFace token placeholder (gitignored)
 ├── results/             # Per-experiment JSON results (created at runtime)
 └── legacy/              # Archived files from previous iterations
 ```
@@ -48,31 +49,38 @@ python run_all.py --skip-install
 python run_all.py --skip-pretrained
 ```
 
+## Performance Tips
+
+- **HF_TOKEN**: Create `hf_token.txt` with your HuggingFace token for 5-10x faster downloads.
+  Get one at https://huggingface.co/settings/tokens
+- **Parallel downloads**: All auxiliary datasets are downloaded in parallel automatically.
+- **RAM cache**: Images are pre-loaded into RAM when sufficient memory is available.
+- **DataLoader**: Optimized with pin_memory, prefetch_factor=4, and persistent workers.
+
 ## Experiment Definitions
 
-| Exp | Training Data                    | Description                              |
-|-----|----------------------------------|------------------------------------------|
-| 1   | SROIE only                      | Baseline — 626 SROIE train images        |
-| 2   | SROIE + WildReceipt             | +~1 740 WildReceipt images               |
-| 3   | SROIE + CORU                    | +CORU multilingual receipts (~20k)       |
-| 4   | SROIE + CORD                    | +~900 CORD receipt images                |
-| 5   | SROIE + WildReceipt + CORD      | Combined receipt datasets                |
-| 6   | SROIE + CORU + CORD             | CORU + CORD                              |
-| 7   | SROIE + WildReceipt + CORU      | WildReceipt + CORU                       |
-| 8   | SROIE + All                     | All four datasets combined               |
+| Exp | Training Data                       | Description                              |
+|-----|-------------------------------------|------------------------------------------|
+| 1   | SROIE only                         | Baseline — 500 SROIE train images        |
+| 2   | SROIE + WildReceipt                | +~1 740 WildReceipt images               |
+| 3   | SROIE + Invoices-DONUT             | +~800 invoice images                     |
+| 4   | SROIE + CORD                       | +~900 CORD receipt images                |
+| 5   | SROIE + WildReceipt + CORD         | Combined receipt datasets                |
+| 6   | SROIE + WildReceipt + Invoices     | WildReceipt + Invoices-DONUT             |
+| 7   | SROIE + CORD + Invoices            | CORD + Invoices-DONUT                    |
+| 8   | SROIE + All                        | All four datasets combined               |
 
 ## Dataset Sources
 
 - **SROIE**: **Auto-downloaded** from `https://github.com/zzzDavid/ICDAR-2019-SROIE.git`
-  (shallow-cloned into the parent of `--sroie-dir`; uses the official 626/347 train/test split).
+  (shallow-cloned; uses 80/10/10 split: 500 train / 63 val / 63 test).
+  The official 347-image test split has no public ground truth labels.
   Use `--skip-install` if data is already present.
 - **WildReceipt**: Auto-downloaded from
   `https://download.openmmlab.com/mmocr/data/wildreceipt.tar`
-- **CORU**: Auto-downloaded from HuggingFace
-  (`abdoelsayed/CORU`, `Information_Extraction` subset)
 - **CORD**: Auto-downloaded from HuggingFace
   (`naver-clova-ix/cord-v2`)
-- **Invoices-DONUT**: Available but not in active experiments — Auto-downloaded from HuggingFace
+- **Invoices-DONUT**: Auto-downloaded from HuggingFace
   (`katanaml-org/invoices-donut-data-v1`)
 
 ## CLI Reference
@@ -124,7 +132,7 @@ Each experiment saves `results/experiment_N.json`:
   "experiment_id": 1,
   "name": "SROIE only (baseline)",
   "datasets": ["sroie"],
-  "num_train_samples": 626,
+  "num_train_samples": 500,
   "metrics": {
     "global_f1": 0.9123,
     "global_precision": 0.9200,
