@@ -2,7 +2,7 @@
 dataset_loaders.py — Multi-dataset download & normalization module.
 
 Provides functions to download each auxiliary dataset (WildReceipt,
-SROIE-NER, CORD, Invoices-DONUT) and normalize their annotations to the
+CORU, CORD, Invoices-DONUT) and normalize their annotations to the
 SROIE schema: {"company": "...", "date": "...", "address": "...", "total": ""}.
 
 Returns lists of (image_path, ground_truth_dict) tuples.
@@ -10,6 +10,7 @@ Returns lists of (image_path, ground_truth_dict) tuples.
 
 import json
 import os
+import random
 import re
 import sys
 import tarfile
@@ -121,7 +122,7 @@ def _load_key_file(key_dir: Path, stem: str) -> Dict[str, str]:
 
 
 def load_sroie_train() -> List[Sample]:
-    """Load SROIE training split (526 samples) from the local workspace."""
+    """Load SROIE training split (626 samples) from the local workspace."""
     samples: List[Sample] = []
     sroie_dir = _get_sroie_dir()
     img_dir = sroie_dir / "img"
@@ -139,13 +140,24 @@ def load_sroie_train() -> List[Sample]:
 
 
 def load_sroie_test() -> List[Sample]:
-    """Load SROIE test split (100 samples) from the local workspace."""
+    """Load SROIE test split (347 samples) from the local workspace.
+
+    Returns an empty list with a warning if the official test split
+    directory (test_img/) has not been populated.  This avoids raising
+    on pipelines where the official test images are not available.
+    """
     samples: List[Sample] = []
     sroie_dir = _get_sroie_dir()
     img_dir = sroie_dir / "test_img"
     key_dir = sroie_dir / "test_key"
     if not img_dir.exists():
-        raise FileNotFoundError(f"SROIE test_img dir not found: {img_dir}")
+        print(
+            "[SROIE] WARNING: test_img/ directory not found — returning 0 test samples. "
+            "The official SROIE test split (347 images) was not found. "
+            "Evaluation will be skipped.",
+            file=sys.stderr,
+        )
+        return []
 
     image_exts = {".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".webp"}
     for img_path in sorted(p for p in img_dir.iterdir()
@@ -265,225 +277,112 @@ def load_wildreceipt() -> List[Sample]:
 
 
 # ---------------------------------------------------------------------------
-# SROIE-NER (darentang/sroie — token-level NER format)
+# CORU (abdoelsayed/CORU — multilingual receipt dataset)
 # ---------------------------------------------------------------------------
 
-# FIX (BUG 2): Old code used load_dataset("darentang/sroie") which fails with
-# "Dataset scripts are no longer supported" and silently returned [].
-# New code uses huggingface_hub / datasets API with dynamic parquet discovery.
-_SROIE_NER_REPO = "darentang/sroie"
-
-# NER tag index → (SROIE field, is_begin) mapping.
-# Tag scheme: 0=O, 1=B-COMPANY, 2=I-COMPANY, 3=B-DATE, 4=I-DATE,
-#             5=B-ADDRESS, 6=I-ADDRESS, 7=B-TOTAL, 8=I-TOTAL
-_NER_TAG_TO_FIELD = {
-    1: "company",
-    2: "company",
-    3: "date",
-    4: "date",
-    5: "address",
-    6: "address",
-    7: "total",
-    8: "total",
-}
-
-
-def _download_sroie_ner() -> Path:
-    """Download SROIE-NER parquet from HuggingFace datasets-server API.
-
-    BUG B FIX: The old code used load_dataset("darentang/sroie") which fails
-    with "Dataset scripts are no longer supported" on datasets>=4.0.  Even the
-    auto-converted parquet from refs/convert/parquet only contains an
-    'image_path' string column (not embedded image bytes).
-
-    The fix downloads the NER parquet (words + ner_tags + image_path) from the
-    datasets-server API and relies on load_sroie_ner() to resolve image_path
-    stems against the local SROIE image directory — no embedded images needed.
-    """
-    dest = _ensure_dir(_get_datasets_dir() / "sroie_ner")
+def _download_coru() -> Path:
+    """Download CORU Information_Extraction subset from HuggingFace."""
+    dest = _ensure_dir(_get_datasets_dir() / "coru")
     marker = dest / ".downloaded"
-    parquet_dest = dest / "train.parquet"
-
-    # Validate existing cache: if the parquet exists but is missing ner_tags
-    # (stale download), delete it so we re-download the correct file.
-    if marker.exists() and parquet_dest.exists():
-        try:
-            import pyarrow.parquet as pq  # type: ignore
-            schema_names = pq.read_schema(str(parquet_dest)).names
-            if "ner_tags" in schema_names:
-                return dest  # Cache is valid
-            print(
-                "[SROIE-NER] Stale cache detected (parquet missing 'ner_tags'). Re-downloading.",
-                file=sys.stderr,
-            )
-        except Exception:
-            pass
-        marker.unlink(missing_ok=True)
-        parquet_dest.unlink(missing_ok=True)
-
     if marker.exists():
-        return dest
-
-    # PRIMARY: Download from HuggingFace datasets-server API.
-    api_url = "https://datasets-server.huggingface.co/parquet?dataset=darentang/sroie"
-    downloaded = False
+        if not (dest / "hf_cache").exists():
+            marker.unlink(missing_ok=True)
+        else:
+            return dest
     try:
-        with urllib.request.urlopen(api_url, timeout=30) as resp:
-            info = json.loads(resp.read())
-        parquet_urls = [
-            pf["url"]
-            for pf in info.get("parquet_files", [])
-            if pf.get("split") == "train"
-        ]
-        if parquet_urls:
-            print("[SROIE-NER] Downloading parquet from datasets-server ...")
-            _download_with_progress(parquet_urls[0], parquet_dest)
-            downloaded = True
-    except Exception as exc:
-        print(f"[SROIE-NER] datasets-server download failed: {exc}", file=sys.stderr)
-
-    # FALLBACK: hf_hub_download from refs/convert/parquet branch.
-    if not downloaded:
+        from datasets import load_dataset  # type: ignore
         try:
-            from huggingface_hub import hf_hub_download  # type: ignore
-            import shutil
-            local = hf_hub_download(
-                repo_id="darentang/sroie",
-                filename="sroie/train/0000.parquet",
-                repo_type="dataset",
-                revision="refs/convert/parquet",
-            )
-            shutil.copy2(local, str(parquet_dest))
-            downloaded = True
-        except Exception as exc:
-            print(f"[SROIE-NER] hf_hub_download fallback failed: {exc}", file=sys.stderr)
-
-    if not downloaded:
-        print(
-            "[SROIE-NER] FATAL: All download methods failed. "
-            "Experiments 3, 6, 7 will run without SROIE-NER data.",
-            file=sys.stderr,
-        )
-        return dest
-
-    # Validate: ensure the parquet has usable NER data before caching.
-    try:
-        import pandas as pd
-        df = pd.read_parquet(str(parquet_dest))
-        if "ner_tags" not in df.columns:
+            ds = load_dataset("abdoelsayed/CORU", "Information_Extraction")
+        except Exception as exc_config:
             print(
-                f"[SROIE-NER] WARNING: Downloaded parquet columns={list(df.columns)} "
-                "— missing 'ner_tags'. Not caching.",
+                f"[CORU] load_dataset with 'Information_Extraction' config failed: {exc_config}. "
+                "Trying without config name ...",
                 file=sys.stderr,
             )
-            return dest
-        print(f"[SROIE-NER] Validated: {len(df)} rows with NER tags.")
+            ds = load_dataset("abdoelsayed/CORU")
+            # Log available columns for debugging
+            sample_split = list(ds.keys())[0] if hasattr(ds, "keys") else "train"
+            cols = ds[sample_split].column_names if hasattr(ds, "keys") else ds.column_names
+            print(f"[CORU] Available columns (no-config fallback): {cols}", file=sys.stderr)
+        ds.save_to_disk(str(dest / "hf_cache"))
+        marker.touch()
     except Exception as exc:
-        print(f"[SROIE-NER] Validation failed: {exc}", file=sys.stderr)
-        return dest
-
-    marker.touch()
-    print("[SROIE-NER] Download and validation complete.")
+        print(f"[CORU] Download failed: {exc}. Will return empty dataset.", file=sys.stderr)
     return dest
 
 
-def load_sroie_ner() -> List[Sample]:
-    """Load SROIE-NER (darentang/sroie) and normalize to SROIE schema.
+def _coru_remap(item: dict) -> Dict[str, str]:
+    """Remap CORU Information_Extraction fields to SROIE schema."""
+    gt: Dict[str, str] = {k: "" for k in EMPTY_GT}
+    # merchant_name / merchant / store_name → company
+    for key in ("merchant_name", "merchant", "store_name"):
+        val = item.get(key)
+        if val and str(val).strip():
+            gt["company"] = str(val).strip()
+            break
+    # transaction_date / date → date
+    for key in ("transaction_date", "date"):
+        val = item.get(key)
+        if val and str(val).strip():
+            gt["date"] = str(val).strip()
+            break
+    # total_amount / total / total_price → total
+    for key in ("total_amount", "total", "total_price"):
+        val = item.get(key)
+        if val and str(val).strip():
+            gt["total"] = str(val).strip()
+            break
+    # address - not directly in CORU, leave empty
+    gt["address"] = ""
+    return gt
 
-    BUG B FIX: Reads the NER parquet directly (words + ner_tags + image_path)
-    and resolves each image_path stem against the local SROIE image directory.
-    The darentang/sroie dataset is the SROIE dataset re-published with NER
-    tags, so its images are already present at _get_sroie_dir()/img/.
 
-    This avoids the need for embedded image bytes in the parquet and works with
-    datasets>=4.0 (which no longer supports legacy dataset scripts).
-    """
-    dest = _download_sroie_ner()
-    parquet_path = dest / "train.parquet"
-    if not parquet_path.exists():
-        print("[SROIE-NER] Parquet not found — skipping.", file=sys.stderr)
+def load_coru() -> List[Sample]:
+    """Load CORU Information_Extraction subset and normalize to SROIE schema."""
+    dest = _download_coru()
+    hf_cache = dest / "hf_cache"
+    if not hf_cache.exists():
+        print("[CORU] Cache not found — skipping.", file=sys.stderr)
         return []
-
     try:
-        import pandas as pd
-        df = pd.read_parquet(str(parquet_path))
+        from datasets import load_from_disk  # type: ignore
+        ds = load_from_disk(str(hf_cache))
     except Exception as exc:
-        print(f"[SROIE-NER] Failed to read parquet: {exc}", file=sys.stderr)
+        print(f"[CORU] Failed to load cache: {exc}", file=sys.stderr)
         return []
 
-    sroie_img_dir = _get_sroie_dir() / "img"
+    # Log available columns for diagnostic purposes
+    sample_split = list(ds.keys())[0] if hasattr(ds, "keys") else "train"
+    cols = ds[sample_split].column_names if hasattr(ds, "keys") else ds.column_names
+    print(f"[CORU] Available columns: {cols}")
+
     samples: List[Sample] = []
-    embedded_img_counter = 0
-
-    for _, row in df.iterrows():
-        gt: Dict[str, str] = {k: "" for k in EMPTY_GT}
-        raw_words = row.get("words")
-        raw_tags = row.get("ner_tags")
-        words = raw_words if isinstance(raw_words, (list, tuple)) else []
-        ner_tags = raw_tags if isinstance(raw_tags, (list, tuple)) else []
-        for word, tag in zip(words, ner_tags):
-            field = _NER_TAG_TO_FIELD.get(int(tag))
-            if field:
-                text = str(word).strip()
-                gt[field] = (gt[field] + " " + text).strip() if gt[field] else text
-
-        # Resolve the image from the local SROIE directory using the stem of
-        # image_path (e.g. "img/X00016469612.jpg" → stem "X00016469612").
-        image_path_val = row.get("image_path") or row.get("image") or ""
-        if isinstance(image_path_val, dict):
-            # Future-proof: handle embedded-bytes dict if HF ever embeds images.
-            image_bytes = image_path_val.get("bytes")
-            if image_bytes:
+    splits = list(ds.keys()) if hasattr(ds, "keys") else ["train"]
+    for split in splits:
+        if split == "test":
+            continue  # avoid test contamination
+        split_ds = ds[split] if hasattr(ds, "keys") else ds
+        for idx, item in enumerate(split_ds):
+            gt = _coru_remap(item)
+            # Skip samples where ALL fields are empty
+            if not any(gt[f] for f in EMPTY_GT):
+                continue
+            pil_image = item.get("image")
+            if pil_image is not None:
                 img_dest_dir = _ensure_dir(dest / "images")
-                img_path = img_dest_dir / f"sroie_ner_{embedded_img_counter:06d}.jpg"
+                img_path = img_dest_dir / f"{split}_{idx:06d}.jpg"
                 if not img_path.exists():
                     try:
-                        import io
-                        from PIL import Image  # type: ignore
-                        Image.open(io.BytesIO(image_bytes)).convert("RGB").save(img_path, "JPEG")
+                        pil_image.convert("RGB").save(img_path, "JPEG")
                     except Exception:
                         continue
-                embedded_img_counter += 1
                 samples.append((img_path, gt))
-            continue
-
-        stem = Path(str(image_path_val)).stem if image_path_val else ""
-        if not stem:
-            continue
-        local_img = sroie_img_dir / (stem + ".jpg")
-        if not local_img.exists():
-            for ext in (".jpeg", ".png", ".tiff", ".tif"):
-                candidate = sroie_img_dir / (stem + ext)
-                if candidate.exists():
-                    local_img = candidate
-                    break
-            else:
-                continue
-        samples.append((local_img, gt))
 
     if not samples:
         print(
-            "[SROIE-NER] WARNING: 0 samples loaded. "
-            "The parquet image_path stems may not match local SROIE images. "
-            "Deleting cache marker so next run will re-download.",
+            "[CORU] *** WARNING: 'coru' returned 0 samples! ***",
             file=sys.stderr,
         )
-        (dest / ".downloaded").unlink(missing_ok=True)
-
-    # Prevent test-set leakage: exclude images that match SROIE test stems.
-    test_img_dir = _get_sroie_dir() / "test_img"
-    if test_img_dir.exists():
-        test_stems = {p.stem for p in test_img_dir.iterdir() if p.is_file()}
-        samples = [(p, gt) for p, gt in samples if p.stem not in test_stems]
-    else:
-        print(
-            "[SROIE-NER] WARNING: test_img/ directory not found — cannot filter test-set images. "
-            "Call stage_install() first to create the test split. Returning empty list to "
-            "prevent train/test leakage.",
-            file=sys.stderr,
-        )
-        return []
-
     return samples
 
 
@@ -694,29 +593,74 @@ def load_invoices_donut() -> List[Sample]:
 _LOADERS = {
     "sroie": load_sroie_train,
     "wildreceipt": load_wildreceipt,
-    "sroie_ner": load_sroie_ner,
+    "coru": load_coru,
     "cord": load_cord,
     "invoices_donut": load_invoices_donut,
 }
 
 
-def get_combined_dataset(dataset_names: List[str]) -> List[Sample]:
+def split_dataset(
+    samples: List[Sample],
+    train_ratio: float = 0.70,
+    val_ratio: float = 0.15,
+    test_ratio: float = 0.15,
+    seed: int = 42,
+) -> Tuple[List[Sample], List[Sample], List[Sample]]:
+    """Split a dataset into train/val/test with a fixed seed.
+
+    Parameters
+    ----------
+    samples : list of (Path, dict) tuples
+    train_ratio, val_ratio, test_ratio : floats summing to 1.0
+    seed : int — random seed for reproducibility
+
+    Returns
+    -------
+    (train, val, test) lists
     """
-    Merge multiple datasets into a single list of (image_path, gt_dict) tuples.
+    assert abs(train_ratio + val_ratio + test_ratio - 1.0) < 1e-6, (
+        f"train_ratio + val_ratio + test_ratio must sum to 1.0, got "
+        f"{train_ratio + val_ratio + test_ratio}"
+    )
+    rng = random.Random(seed)
+    shuffled = list(samples)
+    rng.shuffle(shuffled)
+    n = len(shuffled)
+    n_train = int(n * train_ratio)
+    n_val = int(n * val_ratio)
+    return shuffled[:n_train], shuffled[n_train:n_train + n_val], shuffled[n_train + n_val:]
+
+
+def get_combined_dataset(
+    dataset_names: List[str],
+) -> Tuple[List[Sample], List[Sample]]:
+    """
+    Merge multiple datasets into train and validation lists.
+
+    SROIE training samples are added to train as-is (using the official
+    626/347 train/test split — no further splitting applied).
+    All auxiliary datasets (WildReceipt, CORU, CORD, Invoices-DONUT) are
+    split 70/15/15; the 70% goes into combined train, the 15% validation
+    portion goes into combined val, and the held-out 15% test portion is
+    discarded.
+
+    After merging, both combined_train and combined_val are shuffled with
+    a fixed seed so that samples from different datasets are interleaved.
 
     Parameters
     ----------
     dataset_names : list of str
         Names of datasets to include.  Valid names: sroie, wildreceipt,
-        sroie_ner, cord.
+        coru, cord, invoices_donut.
 
     Returns
     -------
-    List[Sample]
-        Combined list of (Path, dict) tuples.
+    (train_samples, val_samples) : Tuple[List[Sample], List[Sample]]
     """
-    combined: List[Sample] = []
+    combined_train: List[Sample] = []
+    combined_val: List[Sample] = []
     per_loader_counts: Dict[str, int] = {}
+
     for name in dataset_names:
         loader = _LOADERS.get(name)
         if loader is None:
@@ -725,17 +669,27 @@ def get_combined_dataset(dataset_names: List[str]) -> List[Sample]:
         data = loader()
         per_loader_counts[name] = len(data)
         print(f"[dataset_loaders] '{name}' → {len(data)} samples")
-        # FIX (BUG 9): Loud warning when a requested dataset returns 0 samples,
-        # so experiments silently degrading to fewer datasets are immediately visible.
         if len(data) == 0:
             print(
                 f"[dataset_loaders] *** WARNING: '{name}' returned 0 samples! "
                 f"This experiment's results will NOT reflect this dataset. ***",
                 file=sys.stderr,
             )
-        combined.extend(data)
-    # Print per-loader summary so users can see exactly which loaders contributed samples
+        if name == "sroie":
+            # SROIE uses the official train/test split — no further splitting.
+            combined_train.extend(data)
+        else:
+            # Auxiliary datasets: 70/15/15 split; hold-out test portion discarded.
+            train_split, val_split, _ = split_dataset(data, seed=42)
+            combined_train.extend(train_split)
+            combined_val.extend(val_split)
+
+    # Fixed-seed shuffle to interleave samples from different datasets.
+    rng = random.Random(42)
+    rng.shuffle(combined_train)
+    rng.shuffle(combined_val)
+
     counts_summary = ", ".join(f"{n}={c}" for n, c in per_loader_counts.items())
     print(f"[dataset_loaders] Per-loader counts: {counts_summary}")
-    print(f"[dataset_loaders] Total combined samples: {len(combined)}")
-    return combined
+    print(f"[dataset_loaders] Combined train: {len(combined_train)}  val: {len(combined_val)}")
+    return combined_train, combined_val

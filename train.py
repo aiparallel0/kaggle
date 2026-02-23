@@ -1,11 +1,12 @@
-import json, torch
+import json, random, torch
 from pathlib import Path
 from PIL import Image
 from torch.utils.data import Dataset
 from transformers import (DonutProcessor, VisionEncoderDecoderModel,
-                          Seq2SeqTrainer, Seq2SeqTrainingArguments)
+                          Seq2SeqTrainer, Seq2SeqTrainingArguments,
+                          EarlyStoppingCallback)
 
-# WARNING: This is a legacy standalone script. For the full 7-experiment
+# WARNING: This is a legacy standalone script. For the full 8-experiment
 # pipeline, use: python run_all.py
 # This script is kept for backward compatibility and ad-hoc single-model
 # training/evaluation outside the experiment framework.
@@ -59,6 +60,16 @@ class SROIEDataset(Dataset):
                 self.samples.append((img_path, gt))
         print(f"Loaded {len(self.samples)} samples")
 
+    @classmethod
+    def from_samples(cls, processor, samples, max_length=MAX_LENGTH):
+        """Create a SROIEDataset from a pre-built list of (path, gt) tuples."""
+        obj = cls.__new__(cls)
+        Dataset.__init__(obj)
+        obj.processor = processor
+        obj.max_length = max_length
+        obj.samples = list(samples)
+        return obj
+
     def __len__(self):
         return len(self.samples)
 
@@ -96,19 +107,35 @@ def main():
     model.gradient_checkpointing_enable()
 
     sroie_dir = _get_sroie_dir()
-    train_ds = SROIEDataset(processor, sroie_dir / "img", sroie_dir / "key")
+    full_ds = SROIEDataset(processor, sroie_dir / "img", sroie_dir / "key")
+    all_samples = full_ds.samples
+
+    # Use last 15% of samples as validation for early stopping
+    shuffled = list(all_samples)
+    random.seed(42)
+    random.shuffle(shuffled)
+    n_val = max(1, int(len(shuffled) * 0.15))
+    train_samples = shuffled[n_val:]
+    val_samples = shuffled[:n_val]
+
+    train_ds = SROIEDataset.from_samples(processor, train_samples)
+    val_ds = SROIEDataset.from_samples(processor, val_samples)
+
     workspace = os.environ.get("DONUT_WORKSPACE", "/workspace")
     output_dir = os.path.join(workspace, "donut-sroie-finetuned")
     args = Seq2SeqTrainingArguments(
         output_dir=output_dir,
-        # FIX (BUG 6): Aligned to 5 epochs across train.py and run_experiments.py for reproducibility.
-        # Previously train.py used 10, run_experiments.py used 5, producing incomparable models.
-        num_train_epochs=5,        per_device_train_batch_size=4,
+        num_train_epochs=30,
+        per_device_train_batch_size=4,
         learning_rate=5e-5,
         warmup_steps=100,
         weight_decay=0.01,
         save_strategy="epoch",
-        save_total_limit=1,  # Aligned with run_experiments.py for consistency
+        evaluation_strategy="epoch",
+        save_total_limit=3,
+        load_best_model_at_end=True,
+        metric_for_best_model="eval_loss",
+        greater_is_better=False,
         predict_with_generate=True,
         fp16=torch.cuda.is_available(),
         logging_steps=20,
@@ -121,6 +148,8 @@ def main():
         model=model,
         args=args,
         train_dataset=train_ds,
+        eval_dataset=val_ds,
+        callbacks=[EarlyStoppingCallback(early_stopping_patience=5)],
     )
 
     trainer.train()

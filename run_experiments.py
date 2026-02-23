@@ -10,7 +10,7 @@ Run a single experiment (e.g., experiment 2):
     python run_experiments.py --experiment 2
 
 Each experiment trains DONUT from the CORD checkpoint and evaluates on the
-SROIE test set (100 images in test_img / test_key).  Results are saved to
+SROIE test set (347 images in test_img / test_key).  Results are saved to
 results/experiment_N.json and a summary to results/all_experiments.json.
 """
 
@@ -28,6 +28,7 @@ from torch.utils.data import Dataset
 from transformers import (
     DonutProcessor, VisionEncoderDecoderModel,
     Seq2SeqTrainer, Seq2SeqTrainingArguments,
+    EarlyStoppingCallback,
 )
 
 import dataset_loaders
@@ -52,9 +53,10 @@ SEED = 42
 
 # Hyperparameter config — stored in each result JSON for cache validation
 TRAIN_CONFIG = {
-    "num_train_epochs": 5,
+    "max_epochs": 30,
     "learning_rate": 5e-5,
     "per_device_train_batch_size": 4,
+    "early_stopping_patience": 5,
     "base_model": BASE_MODEL,
 }
 
@@ -85,7 +87,7 @@ EXPERIMENTS: Dict[int, Dict] = {
     1: {
         "name": "SROIE only (baseline)",
         "datasets": ["sroie"],
-        "description": "Fine-tune on SROIE training set only (526 images).",
+        "description": "Fine-tune on SROIE training set only (626 images).",
     },
     2: {
         "name": "SROIE + WildReceipt",
@@ -93,9 +95,9 @@ EXPERIMENTS: Dict[int, Dict] = {
         "description": "Add ~1 740 WildReceipt receipt images with KIE remapping.",
     },
     3: {
-        "name": "SROIE + SROIE-NER",
-        "datasets": ["sroie", "sroie_ner"],
-        "description": "Add SROIE in token-level NER format (different augmentation view).",
+        "name": "SROIE + CORU",
+        "datasets": ["sroie", "coru"],
+        "description": "Add CORU multilingual receipt images (2024, ~20k images).",
     },
     4: {
         "name": "SROIE + CORD",
@@ -108,19 +110,19 @@ EXPERIMENTS: Dict[int, Dict] = {
         "description": "Combine SROIE, WildReceipt, and CORD.",
     },
     6: {
-        "name": "SROIE + SROIE-NER + CORD",
-        "datasets": ["sroie", "sroie_ner", "cord"],
-        "description": "Combine SROIE, SROIE-NER, and CORD.",
+        "name": "SROIE + CORU + CORD",
+        "datasets": ["sroie", "coru", "cord"],
+        "description": "Combine SROIE, CORU, and CORD.",
     },
     7: {
-        "name": "SROIE + All",
-        "datasets": ["sroie", "wildreceipt", "sroie_ner", "cord"],
-        "description": "Combine all four available datasets.",
+        "name": "SROIE + WildReceipt + CORU",
+        "datasets": ["sroie", "wildreceipt", "coru"],
+        "description": "Combine SROIE, WildReceipt, and CORU.",
     },
     8: {
-        "name": "SROIE + Invoices-DONUT",
-        "datasets": ["sroie", "invoices_donut"],
-        "description": "Add ~800 structured invoice images (cross-domain transfer from invoices to receipts).",
+        "name": "SROIE + All",
+        "datasets": ["sroie", "wildreceipt", "coru", "cord"],
+        "description": "Combine all four available datasets.",
     },
 }
 
@@ -162,10 +164,17 @@ class MultiDataset(Dataset):
 # Training
 # ---------------------------------------------------------------------------
 
-def train_experiment(exp_id: int, samples: List[Tuple[Path, Dict]], output_dir: Path) -> None:
+def train_experiment(
+    exp_id: int,
+    samples: List[Tuple[Path, Dict]],
+    output_dir: Path,
+    val_samples: List[Tuple[Path, Dict]] = None,
+) -> None:
     """Fine-tune DONUT on *samples* and save the model to *output_dir*."""
     set_seed()
     print(f"\n[Exp {exp_id}] Training on {len(samples)} samples → {output_dir}")
+    if val_samples:
+        print(f"[Exp {exp_id}] Validation set: {len(val_samples)} samples")
 
     processor = DonutProcessor.from_pretrained(BASE_MODEL)
     model = VisionEncoderDecoderModel.from_pretrained(BASE_MODEL)
@@ -177,16 +186,22 @@ def train_experiment(exp_id: int, samples: List[Tuple[Path, Dict]], output_dir: 
     model.gradient_checkpointing_enable()
 
     train_ds = MultiDataset(samples, processor)
+    val_ds = MultiDataset(val_samples, processor) if val_samples else None
 
+    do_eval = val_ds is not None and len(val_ds) > 0
     training_args = Seq2SeqTrainingArguments(
         output_dir=str(output_dir),
-        num_train_epochs=TRAIN_CONFIG["num_train_epochs"],
+        num_train_epochs=TRAIN_CONFIG["max_epochs"],
         per_device_train_batch_size=TRAIN_CONFIG["per_device_train_batch_size"],
         learning_rate=TRAIN_CONFIG["learning_rate"],
         warmup_steps=100,
         weight_decay=0.01,
         save_strategy="epoch",
-        save_total_limit=1,
+        evaluation_strategy="epoch" if do_eval else "no",
+        save_total_limit=3,
+        load_best_model_at_end=do_eval,
+        metric_for_best_model="eval_loss" if do_eval else None,
+        greater_is_better=False if do_eval else None,
         predict_with_generate=True,
         fp16=torch.cuda.is_available(),
         logging_steps=20,
@@ -195,10 +210,20 @@ def train_experiment(exp_id: int, samples: List[Tuple[Path, Dict]], output_dir: 
         seed=SEED,
     )
 
+    callbacks = []
+    if do_eval:
+        callbacks.append(
+            EarlyStoppingCallback(
+                early_stopping_patience=TRAIN_CONFIG["early_stopping_patience"]
+            )
+        )
+
     trainer = Seq2SeqTrainer(
         model=model,
         args=training_args,
         train_dataset=train_ds,
+        eval_dataset=val_ds,
+        callbacks=callbacks or None,
     )
     trainer.train()
     model.save_pretrained(str(output_dir))
@@ -283,8 +308,8 @@ def run_experiment(exp_id: int) -> Dict:
             return cached
 
     # Load data
-    samples = dataset_loaders.get_combined_dataset(exp["datasets"])
-    if len(samples) == 0:
+    train_samples, val_samples = dataset_loaders.get_combined_dataset(exp["datasets"])
+    if len(train_samples) == 0:
         print(f"[Exp {exp_id}] WARNING: No samples loaded — saving empty result.")
         result = {
             "experiment_id": exp_id,
@@ -301,7 +326,7 @@ def run_experiment(exp_id: int) -> Dict:
     # Train
     model_dir = WORKSPACE / "models" / f"experiment_{exp_id}"
     model_dir.mkdir(parents=True, exist_ok=True)
-    train_experiment(exp_id, samples, model_dir)
+    train_experiment(exp_id, train_samples, model_dir, val_samples=val_samples)
 
     # Evaluate
     metrics = evaluate_experiment(exp_id, model_dir)
@@ -312,7 +337,7 @@ def run_experiment(exp_id: int) -> Dict:
         "name": exp["name"],
         "datasets": exp["datasets"],
         "config": TRAIN_CONFIG,
-        "num_train_samples": len(samples),
+        "num_train_samples": len(train_samples),
         "metrics": metrics,
     }
     result_file.write_text(json.dumps(result, indent=2))

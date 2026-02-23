@@ -7,17 +7,17 @@ extraction (KIE) using the DONUT (Document Understanding Transformer) model.
 
 Starting from a CORD-pretrained DONUT checkpoint, this pipeline trains on
 the SROIE benchmark combined with three auxiliary datasets (WildReceipt,
-SROIE-NER, CORD) across 8 experiment configurations, evaluates each model
+CORU, CORD) across 8 experiment configurations, evaluates each model
 on the SROIE test set, and generates a complete LaTeX paper with real results.
 
 ## Repository Structure (7-file pipeline)
 
 ```
 .
-├── dataset_loaders.py   # Download & normalize WildReceipt, SROIE-NER, CORD
+├── dataset_loaders.py   # Download & normalize WildReceipt, CORU, CORD
 ├── train.py             # Standalone SROIE-only fine-tuning script
 ├── evaluate.py          # Inference + SROIE Task-3 metric computation
-├── run_experiments.py   # 7-experiment orchestrator (train + eval)
+├── run_experiments.py   # 8-experiment orchestrator (train + eval)
 ├── run_all.py           # Single entry point: download → train → eval → paper
 ├── inject_results.py    # Generate LaTeX tables; fill paper_filled.tex
 ├── paper.tex            # LaTeX paper template with \VAR{} placeholders
@@ -50,29 +50,29 @@ python run_all.py --skip-pretrained
 
 ## Experiment Definitions
 
-| Exp | Training Data                  | Description                          |
-|-----|-------------------------------|--------------------------------------|
-| 1   | SROIE only                    | Baseline — 526 SROIE train images    |
-| 2   | SROIE + WildReceipt           | +~1 740 WildReceipt images           |
-| 3   | SROIE + SROIE-NER             | +NER token-level view of SROIE       |
-| 4   | SROIE + CORD                  | +~900 CORD receipt images            |
-| 5   | SROIE + WildReceipt + CORD    | Combined receipt datasets            |
-| 6   | SROIE + SROIE-NER + CORD      | NER view + CORD                      |
-| 7   | SROIE + All                   | All four datasets combined           |
-| 8   | SROIE + Invoices-DONUT        | +~800 invoice images (cross-domain) |
+| Exp | Training Data                    | Description                              |
+|-----|----------------------------------|------------------------------------------|
+| 1   | SROIE only                      | Baseline — 626 SROIE train images        |
+| 2   | SROIE + WildReceipt             | +~1 740 WildReceipt images               |
+| 3   | SROIE + CORU                    | +CORU multilingual receipts (~20k)       |
+| 4   | SROIE + CORD                    | +~900 CORD receipt images                |
+| 5   | SROIE + WildReceipt + CORD      | Combined receipt datasets                |
+| 6   | SROIE + CORU + CORD             | CORU + CORD                              |
+| 7   | SROIE + WildReceipt + CORU      | WildReceipt + CORU                       |
+| 8   | SROIE + All                     | All four datasets combined               |
 
 ## Dataset Sources
 
 - **SROIE**: **Auto-downloaded** from `https://github.com/zzzDavid/ICDAR-2019-SROIE.git`
-  (shallow-cloned into the parent of `--sroie-dir`; last 100 images split into test set).
+  (shallow-cloned into the parent of `--sroie-dir`; uses the official 626/347 train/test split).
   Use `--skip-install` if data is already present.
 - **WildReceipt**: Auto-downloaded from
   `https://download.openmmlab.com/mmocr/data/wildreceipt.tar`
-- **SROIE-NER**: Auto-downloaded from HuggingFace
-  (`darentang/sroie` via `huggingface_hub.snapshot_download`)
+- **CORU**: Auto-downloaded from HuggingFace
+  (`abdoelsayed/CORU`, `Information_Extraction` subset)
 - **CORD**: Auto-downloaded from HuggingFace
   (`naver-clova-ix/cord-v2`)
-- **Invoices-DONUT**: Auto-downloaded from HuggingFace
+- **Invoices-DONUT**: Available but not in active experiments — Auto-downloaded from HuggingFace
   (`katanaml-org/invoices-donut-data-v1`)
 
 ## CLI Reference
@@ -83,7 +83,7 @@ python run_all.py --skip-pretrained
 python run_all.py [options]
 
 Options:
-  --experiment N      Run only experiment N (1–7)
+  --experiment N      Run only experiment N (1–8)
   --force             Delete cached results and re-run from scratch
   --paper-only        Skip training; generate paper from existing results
   --skip-install      Skip Stage 0 SROIE auto-install (data already present)
@@ -124,7 +124,7 @@ Each experiment saves `results/experiment_N.json`:
   "experiment_id": 1,
   "name": "SROIE only (baseline)",
   "datasets": ["sroie"],
-  "num_train_samples": 526,
+  "num_train_samples": 626,
   "metrics": {
     "global_f1": 0.9123,
     "global_precision": 0.9200,

@@ -2,7 +2,7 @@
 run_all.py — Single entry point that runs the complete DONUT SROIE pipeline.
 
 Calling this one script does everything:
-  0. Installs SROIE data (auto-clones from GitHub and creates train/test split)
+  0. Installs SROIE data (auto-clones from GitHub; uses official 626/347 train/test split)
   1. Verifies / downloads all auxiliary datasets
   2. Trains DONUT (from the CORD checkpoint) for each of the 8 experiment configurations
   3. Evaluates every fine-tuned model on the SROIE test set
@@ -50,9 +50,6 @@ import sys
 import time
 from pathlib import Path
 
-
-TEST_SPLIT_SIZE = 100  # Number of images reserved for the test split
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -74,7 +71,7 @@ def _step(n: int, total: int, desc: str) -> None:
 # ---------------------------------------------------------------------------
 
 def stage_install(args) -> None:
-    """Clone SROIE from GitHub and create a train/test split if not present."""
+    """Clone SROIE from GitHub and set up train/test directories if not present."""
     _banner("STAGE 0 — SROIE data install")
 
     sroie_data_dir = Path(args.sroie_dir)
@@ -109,7 +106,6 @@ def stage_install(args) -> None:
     # Point sroie_data_dir at the cloned repo's data/ subdirectory if needed.
     cloned_data = clone_target / "data"
     if not sroie_data_dir.exists() and cloned_data.exists():
-        # Symlink or use the cloned data dir directly
         sroie_data_dir.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(str(cloned_data), str(sroie_data_dir))
 
@@ -129,34 +125,89 @@ def stage_install(args) -> None:
         )
         sys.exit(2)
 
-    # Create test split: last 100 images alphabetically → test_img / test_key
     image_exts = {".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".webp"}
-    all_images = sorted(
-        p for p in img_dir.iterdir()
-        if p.is_file() and p.suffix.lower() in image_exts
-    )
-    test_images = all_images[-TEST_SPLIT_SIZE:]
 
+    # Try to use the official SROIE test split.
+    # Check if the repo includes a separate test folder or split-list files.
     test_img_dir = sroie_data_dir / "test_img"
     test_key_dir = sroie_data_dir / "test_key"
-    test_img_dir.mkdir(exist_ok=True)
-    test_key_dir.mkdir(exist_ok=True)
 
-    moved = 0
-    for img_path in test_images:
-        shutil.move(str(img_path), str(test_img_dir / img_path.name))
-        # BUG D FIX: Key files are .txt (4-line format), not .json.
-        # Try .txt first (the actual format), then .json for pre-converted data.
-        for ext in [".txt", ".json"]:
-            key_src = key_dir / (img_path.stem + ext)
-            if key_src.exists():
-                shutil.move(str(key_src), str(test_key_dir / key_src.name))
+    # Look for official test folder variants in the cloned repo
+    official_test_found = False
+    for test_candidate in (
+        clone_target / "data" / "test",
+        clone_target / "test",
+        clone_target / "data" / "test_img",
+    ):
+        if test_candidate.exists() and any(
+            p.is_file() and p.suffix.lower() in image_exts
+            for p in test_candidate.iterdir()
+        ):
+            # Official test images found — copy to test_img/
+            test_img_dir.mkdir(exist_ok=True)
+            test_key_dir.mkdir(exist_ok=True)
+            for img_path in test_candidate.iterdir():
+                if img_path.is_file() and img_path.suffix.lower() in image_exts:
+                    shutil.copy2(str(img_path), str(test_img_dir / img_path.name))
+            # Look for matching key files in a parallel key folder
+            key_candidate = test_candidate.parent / (test_candidate.name.replace("img", "key"))
+            if not key_candidate.exists():
+                key_candidate = test_candidate.parent / "test_key"
+            if key_candidate.exists():
+                for kf in key_candidate.iterdir():
+                    if kf.is_file():
+                        shutil.copy2(str(kf), str(test_key_dir / kf.name))
+            official_test_found = True
+            img_count = sum(1 for p in test_img_dir.iterdir()
+                            if p.is_file() and p.suffix.lower() in image_exts)
+            print(f"  Official SROIE test split found: {img_count} images at {test_img_dir}")
+            break
+
+    # Check for task3 split list files
+    if not official_test_found:
+        for split_file in (
+            clone_target / "task3_test.txt",
+            clone_target / "data" / "task3_test.txt",
+            sroie_data_dir / "task3_test.txt",
+        ):
+            if split_file.exists():
+                test_stems = set(split_file.read_text(encoding="utf-8").splitlines())
+                test_stems = {s.strip() for s in test_stems if s.strip()}
+                test_img_dir.mkdir(exist_ok=True)
+                test_key_dir.mkdir(exist_ok=True)
+                for img_path in img_dir.iterdir():
+                    if img_path.is_file() and img_path.suffix.lower() in image_exts:
+                        if img_path.stem in test_stems:
+                            shutil.move(str(img_path), str(test_img_dir / img_path.name))
+                            for ext in [".txt", ".json"]:
+                                key_src = key_dir / (img_path.stem + ext)
+                                if key_src.exists():
+                                    shutil.move(str(key_src), str(test_key_dir / key_src.name))
+                                    break
+                official_test_found = True
+                img_count = sum(1 for p in test_img_dir.iterdir()
+                                if p.is_file() and p.suffix.lower() in image_exts)
+                print(f"  Official SROIE test split (task3_test.txt): {img_count} images")
                 break
-        moved += 1
 
-    train_count = sum(1 for p in img_dir.iterdir() if p.is_file() and p.suffix.lower() in image_exts)
+    if not official_test_found:
+        # Fallback: use ALL available images as training; no test split.
+        print(
+            "  WARNING: The official SROIE test split (347 images) could not be determined "
+            "from the cloned repository. ALL available images will be used as training data. "
+            "Evaluation on the SROIE test set will be skipped (0 test samples).",
+            file=sys.stderr,
+        )
+        # Create empty test directories to prevent FileNotFoundError downstream
+        test_img_dir.mkdir(exist_ok=True)
+        test_key_dir.mkdir(exist_ok=True)
+
+    train_count = sum(1 for p in img_dir.iterdir()
+                      if p.is_file() and p.suffix.lower() in image_exts)
+    test_count = sum(1 for p in test_img_dir.iterdir()
+                     if p.is_file() and p.suffix.lower() in image_exts)
     print(f"  Train images : {train_count}")
-    print(f"  Test images  : {moved}")
+    print(f"  Test images  : {test_count}")
     print(f"  SROIE data ready at {sroie_data_dir}")
 
 
@@ -170,32 +221,32 @@ def stage_download(args) -> None:
 
     _banner("STAGE 1 — Dataset verification & download")
 
-    # SROIE must already be present (including test split)
+    # SROIE must already be present (img/ directory at minimum)
     sroie_img = Path(args.sroie_dir) / "img"
     sroie_test_img = Path(args.sroie_dir) / "test_img"
-    sroie_test_key = Path(args.sroie_dir) / "test_key"
-    if not sroie_img.exists() or not sroie_test_img.exists():
+    if not sroie_img.exists():
         print(f"ERROR: SROIE data not found at {args.sroie_dir}.", file=sys.stderr)
-        print("       Expected subdirs: img/, key/, test_img/, test_key/", file=sys.stderr)
-        sys.exit(2)
-    if not sroie_test_key.exists():
-        print(f"ERROR: SROIE test_key/ not found at {args.sroie_dir}.", file=sys.stderr)
-        print("       Run without --skip-install to create the test split.", file=sys.stderr)
+        print("       Expected subdirs: img/, key/", file=sys.stderr)
         sys.exit(2)
 
     train_samples = dataset_loaders.load_sroie_train()
     test_samples = dataset_loaders.load_sroie_test()
     print(f"  SROIE train : {len(train_samples)} samples")
     print(f"  SROIE test  : {len(test_samples)} samples")
+    if not sroie_test_img.exists() or len(test_samples) == 0:
+        print(
+            "  WARNING: SROIE test split not found or empty — evaluation will be skipped.",
+            file=sys.stderr,
+        )
 
     # Trigger downloads for all auxiliary datasets so they are cached before training
-    aux_datasets = ["wildreceipt", "sroie_ner", "cord", "invoices_donut"]
+    aux_datasets = ["wildreceipt", "coru", "cord", "invoices_donut"]
     failed_datasets = []
     for ds_name in aux_datasets:
         print(f"  Fetching '{ds_name}' ...")
         try:
-            data = dataset_loaders.get_combined_dataset([ds_name])
-            print(f"    → {len(data)} samples available")
+            train_data, val_data = dataset_loaders.get_combined_dataset([ds_name])
+            print(f"    → {len(train_data)} train / {len(val_data)} val samples available")
         except Exception as exc:
             print(f"    → WARNING: failed to fetch '{ds_name}': {exc}. "
                   f"Any experiment that includes this dataset will produce 0 samples "
@@ -236,19 +287,14 @@ def stage_pretrained_baseline(args) -> None:
     workspace = Path(args.workspace)
     output_path = workspace / "evaluation_results.json"
 
-    # Guard: test split must exist before evaluating
-    sroie_test_img = Path(args.sroie_dir) / "test_img"
-    sroie_test_key = Path(args.sroie_dir) / "test_key"
-    if not sroie_test_img.exists() or not sroie_test_key.exists():
+    test_samples = dataset_loaders.load_sroie_test()
+    if len(test_samples) == 0:
         print(
-            f"ERROR: SROIE test split not found at {args.sroie_dir} "
-            "(expected test_img/ and test_key/).",
+            "  WARNING: SROIE test split is empty — skipping pretrained baseline evaluation.",
             file=sys.stderr,
         )
-        print("       Run without --skip-install to create the test split.", file=sys.stderr)
-        sys.exit(2)
+        return
 
-    test_samples = dataset_loaders.load_sroie_test()
     print(f"  Evaluating on {len(test_samples)} test images ...")
 
     ground_truths = [s[1] for s in test_samples]
