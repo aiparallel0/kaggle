@@ -1,5 +1,5 @@
 """
-run_experiments.py — Experiment orchestrator for 7 DONUT fine-tuning experiments.
+run_experiments.py — Experiment orchestrator for 8 DONUT fine-tuning experiments.
 
 Usage
 -----
@@ -40,11 +40,14 @@ from evaluate import compute_metrics, run_inference
 RESULTS_DIR = Path("results")
 
 BASE_MODEL = "naver-clova-ix/donut-base-finetuned-cord-v2"
-WORKSPACE = Path("/workspace")
+WORKSPACE = Path(os.environ.get("DONUT_WORKSPACE", "/workspace"))
 FIELDS = ["company", "date", "address", "total"]
 MAX_LENGTH = 512
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".webp"}
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+# NOTE: DEVICE is evaluated at import time. Both run_experiments.py and evaluate.py
+# define this constant independently; they will agree as long as GPU availability
+# does not change between module imports, which is the expected runtime assumption.
 SEED = 42
 
 # Hyperparameter config — stored in each result JSON for cache validation
@@ -268,6 +271,8 @@ def run_experiment(exp_id: int) -> Dict:
         with open(result_file) as fh:
             cached = json.load(fh)
         if cached.get("datasets") != exp["datasets"] or cached.get("config") != TRAIN_CONFIG:
+            # NOTE: JSON round-trip preserves numeric equality for floats like 5e-5,
+            # so this comparison is safe (5e-5 == 5e-05 after json.load).
             print(
                 f"[Exp {exp_id}] STALE result detected (datasets or config mismatch). "
                 "Deleting and re-running."
@@ -342,7 +347,9 @@ def save_summary() -> None:
         name = res.get("name", "")[:34]
         n = res.get("num_train_samples", 0)
         f1 = res.get("metrics", {}).get("global_f1", float("nan"))
-        print(f"{exp_id_str:<5} {name:<35} {n:>14} {f1:>10.4f}")
+        import math
+        f1_str = f"{f1:>10.4f}" if not math.isnan(f1) else "       N/A"
+        print(f"{exp_id_str:<5} {name:<35} {n:>14} {f1_str}")
     print(f"{'='*72}\n")
 
 
@@ -355,6 +362,7 @@ def main() -> None:
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--all", action="store_true", help="Run all 8 experiments sequentially")
     group.add_argument("--experiment", type=int, metavar="N",
+                       choices=range(1, len(EXPERIMENTS) + 1),
                        help="Run a single experiment (1-8)")
     # FIX (BUG 3): --force deletes all cached result files so every experiment
     # is re-run from scratch regardless of cached state.

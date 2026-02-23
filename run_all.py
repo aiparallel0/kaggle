@@ -4,7 +4,7 @@ run_all.py — Single entry point that runs the complete DONUT SROIE pipeline.
 Calling this one script does everything:
   0. Installs SROIE data (auto-clones from GitHub and creates train/test split)
   1. Verifies / downloads all auxiliary datasets
-  2. Trains DONUT (from the CORD checkpoint) for each of the 7 experiment configurations
+  2. Trains DONUT (from the CORD checkpoint) for each of the 8 experiment configurations
   3. Evaluates every fine-tuned model on the SROIE test set
   4. Saves per-experiment JSON metrics to results/
   5. Writes a summary JSON   results/all_experiments.json
@@ -13,7 +13,7 @@ Calling this one script does everything:
 
 Usage
 -----
-  # Full pipeline (all 7 experiments):
+  # Full pipeline (all 8 experiments):
       python run_all.py
 
   # Single experiment only (skip the others, still generate paper at end):
@@ -122,6 +122,12 @@ def stage_install(args) -> None:
             file=sys.stderr,
         )
         sys.exit(2)
+    if not key_dir.exists():
+        print(
+            f"ERROR: Expected {key_dir} after clone — directory not found.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
     # Create test split: last 100 images alphabetically → test_img / test_key
     image_exts = {".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".webp"}
@@ -148,7 +154,7 @@ def stage_install(args) -> None:
                 break
         moved += 1
 
-    train_count = len(list(img_dir.iterdir()))
+    train_count = sum(1 for p in img_dir.iterdir() if p.is_file() and p.suffix.lower() in image_exts)
     print(f"  Train images : {train_count}")
     print(f"  Test images  : {moved}")
     print(f"  SROIE data ready at {sroie_data_dir}")
@@ -164,12 +170,17 @@ def stage_download(args) -> None:
 
     _banner("STAGE 1 — Dataset verification & download")
 
-    # SROIE must already be present
+    # SROIE must already be present (including test split)
     sroie_img = Path(args.sroie_dir) / "img"
     sroie_test_img = Path(args.sroie_dir) / "test_img"
+    sroie_test_key = Path(args.sroie_dir) / "test_key"
     if not sroie_img.exists() or not sroie_test_img.exists():
         print(f"ERROR: SROIE data not found at {args.sroie_dir}.", file=sys.stderr)
         print("       Expected subdirs: img/, key/, test_img/, test_key/", file=sys.stderr)
+        sys.exit(2)
+    if not sroie_test_key.exists():
+        print(f"ERROR: SROIE test_key/ not found at {args.sroie_dir}.", file=sys.stderr)
+        print("       Run without --skip-install to create the test split.", file=sys.stderr)
         sys.exit(2)
 
     train_samples = dataset_loaders.load_sroie_train()
@@ -179,6 +190,7 @@ def stage_download(args) -> None:
 
     # Trigger downloads for all auxiliary datasets so they are cached before training
     aux_datasets = ["wildreceipt", "sroie_ner", "cord", "invoices_donut"]
+    failed_datasets = []
     for ds_name in aux_datasets:
         print(f"  Fetching '{ds_name}' ...")
         try:
@@ -188,6 +200,24 @@ def stage_download(args) -> None:
             print(f"    → WARNING: failed to fetch '{ds_name}': {exc}. "
                   f"Any experiment that includes this dataset will produce 0 samples "
                   f"from it and fall back to SROIE-only training.")
+            failed_datasets.append(ds_name)
+
+    if failed_datasets:
+        # Report which experiment IDs are affected by the failed downloads
+        import run_experiments as re_mod
+        affected_exp_ids = [
+            exp_id for exp_id, exp in re_mod.EXPERIMENTS.items()
+            if any(ds in exp["datasets"] for ds in failed_datasets)
+        ]
+        print(
+            f"\n  WARNING: {len(failed_datasets)} auxiliary dataset(s) failed to load: "
+            f"{failed_datasets}",
+            file=sys.stderr,
+        )
+        print(
+            f"  Affected experiment IDs: {affected_exp_ids}",
+            file=sys.stderr,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -205,6 +235,18 @@ def stage_pretrained_baseline(args) -> None:
 
     workspace = Path(args.workspace)
     output_path = workspace / "evaluation_results.json"
+
+    # Guard: test split must exist before evaluating
+    sroie_test_img = Path(args.sroie_dir) / "test_img"
+    sroie_test_key = Path(args.sroie_dir) / "test_key"
+    if not sroie_test_img.exists() or not sroie_test_key.exists():
+        print(
+            f"ERROR: SROIE test split not found at {args.sroie_dir} "
+            "(expected test_img/ and test_key/).",
+            file=sys.stderr,
+        )
+        print("       Run without --skip-install to create the test split.", file=sys.stderr)
+        sys.exit(2)
 
     test_samples = dataset_loaders.load_sroie_test()
     print(f"  Evaluating on {len(test_samples)} test images ...")
@@ -331,7 +373,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--experiment", type=int, metavar="N",
-        help="Run only experiment N (1–7) instead of all 7",
+        help="Run only experiment N (1–8) instead of all 8",
     )
     p.add_argument(
         "--force", action="store_true",
@@ -383,7 +425,7 @@ def main() -> None:
     args = parser.parse_args()
 
     # Propagate workspace and SROIE dir overrides to sub-modules before importing them
-    os.environ.setdefault("DONUT_WORKSPACE", args.workspace)
+    os.environ["DONUT_WORKSPACE"] = args.workspace
     os.environ["SROIE_DATA_DIR"] = args.sroie_dir
 
     exit_code = 0
@@ -392,13 +434,23 @@ def main() -> None:
         stage_paper(args)
     else:
         if not args.skip_install:
+            t0 = time.monotonic()
             stage_install(args)
+            print(f"  [Stage 0 elapsed: {time.monotonic()-t0:.1f}s]")
         if not args.skip_download:
+            t0 = time.monotonic()
             stage_download(args)
+            print(f"  [Stage 1 elapsed: {time.monotonic()-t0:.1f}s]")
         if not args.skip_pretrained:
+            t0 = time.monotonic()
             stage_pretrained_baseline(args)
+            print(f"  [Stage 1.5 elapsed: {time.monotonic()-t0:.1f}s]")
+        t0 = time.monotonic()
         exit_code = stage_experiments(args)
+        print(f"  [Stage 2 elapsed: {time.monotonic()-t0:.1f}s]")
+        t0 = time.monotonic()
         stage_paper(args)
+        print(f"  [Stage 3 elapsed: {time.monotonic()-t0:.1f}s]")
 
     elapsed = time.monotonic() - t_start
     _banner(f"DONE — total wall time {elapsed/60:.1f} min  |  exit code {exit_code}")

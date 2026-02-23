@@ -74,7 +74,7 @@ the large-scale CORD v2 receipt corpus, DONUT achieves 84.11\% F1 on
 SROIE~\cite{huang2019icdar} as a zero-shot CORD-to-SROIE transfer.
 
 A natural question is whether additional receipt or document datasets can
-push this further through supervised fine-tuning.  We design seven
+push this further through supervised fine-tuning.  We design eight
 controlled experiments (Table~\ref{tab:experiments}) that combine SROIE
 with progressively more diverse auxiliary data and measure the impact on
 SROIE Task-3 performance.
@@ -180,7 +180,7 @@ strings.
 \subsection{Experimental Setup}
 \label{sec:setup}
 
-Seven experiments are defined as follows:
+Eight experiments are defined as follows:
 
 \begin{enumerate}
   \item \textbf{Baseline}: SROIE only (526 train images).
@@ -190,6 +190,7 @@ Seven experiments are defined as follows:
   \item \textbf{SROIE + WildReceipt + CORD}: combined receipt datasets.
   \item \textbf{SROIE + SROIE-NER + CORD}: NER view combined with CORD.
   \item \textbf{SROIE + All}: all four available datasets combined.
+  \item \textbf{SROIE + Invoices-DONUT}: adds structured invoice images for cross-domain transfer.
 \end{enumerate}
 
 All experiments share identical hyperparameters and evaluate on the same
@@ -224,7 +225,7 @@ Invoices-DONUT   & 800   & 7+ & EN & Invoices \\
 \subsection{Per-Experiment Results}
 
 \begin{table*}[t]
-\caption{Per-Experiment Results on SROIE Test Set}
+\caption{Per-Experiment Results on SROIE Test Set (N=100 test images)}
 \label{tab:experiments}
 \centering
 \begin{tabular}{clrcccc}
@@ -232,7 +233,7 @@ Invoices-DONUT   & 800   & 7+ & EN & Invoices \\
 \textbf{Exp} & \textbf{Training Data} & \textbf{Train Samples} &
 \textbf{Precision} & \textbf{Recall} & \textbf{F1} & \textbf{Exact Match} \\
 \midrule
-1 & SROIE only           & 526   & \VAR{exp1_prec} & \VAR{exp1_rec} & \VAR{exp1_f1} & \VAR{exp1_em} \\
+1 & SROIE only           & \VAR{exp1_n}   & \VAR{exp1_prec} & \VAR{exp1_rec} & \VAR{exp1_f1} & \VAR{exp1_em} \\
 2 & +WildReceipt         & \VAR{exp2_n} & \VAR{exp2_prec} & \VAR{exp2_rec} & \VAR{exp2_f1} & \VAR{exp2_em} \\
 3 & +SROIE-NER           & \VAR{exp3_n} & \VAR{exp3_prec} & \VAR{exp3_rec} & \VAR{exp3_f1} & \VAR{exp3_em} \\
 4 & +CORD                & \VAR{exp4_n} & \VAR{exp4_prec} & \VAR{exp4_rec} & \VAR{exp4_f1} & \VAR{exp4_em} \\
@@ -249,7 +250,7 @@ Invoices-DONUT   & 800   & 7+ & EN & Invoices \\
 \subsection{Per-Field Breakdown}
 
 \begin{table*}[t]
-\caption{Per-Field F1 and NED for Each Experiment}
+\caption{Per-Field F1 and NED for Each Experiment (N=100 test images)}
 \label{tab:perfield}
 \centering
 \begin{tabular}{clcccccccc}

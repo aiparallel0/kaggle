@@ -82,6 +82,9 @@ class SROIEDataset(Dataset):
 
 
 def main():
+    from transformers import set_seed as _set_seed
+    _set_seed(42)  # Sets random, numpy, torch, and CUDA seeds for reproducibility
+
     processor = DonutProcessor.from_pretrained("naver-clova-ix/donut-base-finetuned-cord-v2")
     model = VisionEncoderDecoderModel.from_pretrained("naver-clova-ix/donut-base-finetuned-cord-v2")
 
@@ -94,8 +97,10 @@ def main():
 
     sroie_dir = _get_sroie_dir()
     train_ds = SROIEDataset(processor, sroie_dir / "img", sroie_dir / "key")
+    workspace = os.environ.get("DONUT_WORKSPACE", "/workspace")
+    output_dir = os.path.join(workspace, "donut-sroie-finetuned")
     args = Seq2SeqTrainingArguments(
-        output_dir="/workspace/donut-sroie-finetuned",
+        output_dir=output_dir,
         # FIX (BUG 6): Aligned to 5 epochs across train.py and run_experiments.py for reproducibility.
         # Previously train.py used 10, run_experiments.py used 5, producing incomparable models.
         num_train_epochs=5,        per_device_train_batch_size=4,
@@ -105,10 +110,11 @@ def main():
         save_strategy="epoch",
         save_total_limit=1,  # Aligned with run_experiments.py for consistency
         predict_with_generate=True,
-        fp16=True,
+        fp16=torch.cuda.is_available(),
         logging_steps=20,
         dataloader_num_workers=4,
         remove_unused_columns=False,
+        seed=42,
     )
 
     trainer = Seq2SeqTrainer(
@@ -118,8 +124,8 @@ def main():
     )
 
     trainer.train()
-    model.save_pretrained("/workspace/donut-sroie-finetuned")
-    processor.save_pretrained("/workspace/donut-sroie-finetuned")
+    model.save_pretrained(output_dir)
+    processor.save_pretrained(output_dir)
     print("TRAINING_COMPLETE")
 
 if __name__ == "__main__":

@@ -18,8 +18,9 @@ import urllib.request
 from pathlib import Path
 from typing import List, Tuple, Dict
 
-# Where auxiliary datasets are stored
-DATASETS_DIR = Path("/workspace/datasets")
+# Where auxiliary datasets are stored — respects DONUT_WORKSPACE env var.
+def _get_datasets_dir() -> Path:
+    return Path(os.environ.get("DONUT_WORKSPACE", "/workspace")) / "datasets"
 
 # BUG C FIX: module-level constant was evaluated once at import time, so
 # os.environ["SROIE_DATA_DIR"] set later in run_all.py had no effect.
@@ -180,10 +181,19 @@ _WILDRECEIPT_IDX_TO_FIELD = {
 
 def _download_wildreceipt() -> Path:
     """Download WildReceipt from OpenMMLab tar (confirmed working URL)."""
-    dest = _ensure_dir(DATASETS_DIR / "wildreceipt")
+    dest = _ensure_dir(_get_datasets_dir() / "wildreceipt")
     marker = dest / ".downloaded"
     if marker.exists():
-        return dest
+        # Validate cache: ensure train.txt exists inside the extracted directory.
+        # A partial download or failed extraction would leave a stale marker.
+        if not (dest / "wildreceipt" / "train.txt").exists():
+            print(
+                "[WildReceipt] Cache marker present but train.txt missing — re-downloading.",
+                file=sys.stderr,
+            )
+            marker.unlink(missing_ok=True)
+        else:
+            return dest
 
     url = _WILDRECEIPT_URL
     tar_path = dest / "wildreceipt.tar"
@@ -192,7 +202,11 @@ def _download_wildreceipt() -> Path:
         _download_with_progress(url, tar_path)
         print("[WildReceipt] Extracting tar ...")
         with tarfile.open(str(tar_path)) as tf:
-            tf.extractall(str(dest))
+            # Use filter='data' on Python 3.12+ to prevent path-traversal attacks.
+            if sys.version_info >= (3, 12):
+                tf.extractall(str(dest), filter="data")
+            else:
+                tf.extractall(str(dest))
         tar_path.unlink(missing_ok=True)
         marker.touch()
         print("[WildReceipt] Download and extraction complete.")
@@ -286,7 +300,7 @@ def _download_sroie_ner() -> Path:
     datasets-server API and relies on load_sroie_ner() to resolve image_path
     stems against the local SROIE image directory — no embedded images needed.
     """
-    dest = _ensure_dir(DATASETS_DIR / "sroie_ner")
+    dest = _ensure_dir(_get_datasets_dir() / "sroie_ner")
     marker = dest / ".downloaded"
     parquet_dest = dest / "train.parquet"
 
@@ -461,6 +475,14 @@ def load_sroie_ner() -> List[Sample]:
     if test_img_dir.exists():
         test_stems = {p.stem for p in test_img_dir.iterdir() if p.is_file()}
         samples = [(p, gt) for p, gt in samples if p.stem not in test_stems]
+    else:
+        print(
+            "[SROIE-NER] WARNING: test_img/ directory not found — cannot filter test-set images. "
+            "Call stage_install() first to create the test split. Returning empty list to "
+            "prevent train/test leakage.",
+            file=sys.stderr,
+        )
+        return []
 
     return samples
 
@@ -471,10 +493,19 @@ def load_sroie_ner() -> List[Sample]:
 
 def _download_cord() -> Path:
     """Download CORD from the HuggingFace datasets hub."""
-    dest = _ensure_dir(DATASETS_DIR / "cord")
+    dest = _ensure_dir(_get_datasets_dir() / "cord")
     marker = dest / ".downloaded"
     if marker.exists():
-        return dest
+        # Validate cache: ensure the HF dataset directory exists.
+        # A partial download would leave a stale marker without usable data.
+        if not (dest / "hf_cache").exists():
+            print(
+                "[CORD] Cache marker present but hf_cache/ missing — re-downloading.",
+                file=sys.stderr,
+            )
+            marker.unlink(missing_ok=True)
+        else:
+            return dest
 
     try:
         from datasets import load_dataset  # type: ignore
@@ -559,7 +590,7 @@ def load_cord() -> List[Sample]:
 
 def _download_invoices_donut() -> Path:
     """Download Invoices-DONUT from the HuggingFace datasets hub."""
-    dest = _ensure_dir(DATASETS_DIR / "invoices_donut")
+    dest = _ensure_dir(_get_datasets_dir() / "invoices_donut")
     marker = dest / ".downloaded"
     if marker.exists():
         return dest
@@ -685,12 +716,14 @@ def get_combined_dataset(dataset_names: List[str]) -> List[Sample]:
         Combined list of (Path, dict) tuples.
     """
     combined: List[Sample] = []
+    per_loader_counts: Dict[str, int] = {}
     for name in dataset_names:
         loader = _LOADERS.get(name)
         if loader is None:
             raise ValueError(f"Unknown dataset '{name}'. Valid: {list(_LOADERS)}")
         print(f"[dataset_loaders] Loading '{name}' ...")
         data = loader()
+        per_loader_counts[name] = len(data)
         print(f"[dataset_loaders] '{name}' → {len(data)} samples")
         # FIX (BUG 9): Loud warning when a requested dataset returns 0 samples,
         # so experiments silently degrading to fewer datasets are immediately visible.
@@ -701,5 +734,8 @@ def get_combined_dataset(dataset_names: List[str]) -> List[Sample]:
                 file=sys.stderr,
             )
         combined.extend(data)
+    # Print per-loader summary so users can see exactly which loaders contributed samples
+    counts_summary = ", ".join(f"{n}={c}" for n, c in per_loader_counts.items())
+    print(f"[dataset_loaders] Per-loader counts: {counts_summary}")
     print(f"[dataset_loaders] Total combined samples: {len(combined)}")
     return combined

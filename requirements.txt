@@ -1,5 +1,6 @@
-torch
-transformers
+# Requires Python >= 3.10
+torch>=2.0.0
+transformers>=4.30.0
 accelerate>=1.1.0
 sentencepiece
 Pillow
@@ -9,4 +10,5 @@ tqdm
 huggingface_hub
 pandas
 pyarrow
-datasets
+datasets>=2.14.0
+protobuf

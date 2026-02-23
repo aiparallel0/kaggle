@@ -25,16 +25,27 @@ LEADERBOARD = [
     ("PICK (Yu et al. 2021)", 0.9612),
     ("BROS (Hong et al. 2022)", 0.9548),
     ("LayoutLMv2 (Xu et al. 2021)", 0.9495),
-    # ICDAR 2019 original competition top-3 (from arxiv:2103.10213)
+    # ICDAR 2019 original competition top-3 (from arxiv:2103.10213, Table 1).
+    # NOTE: The official RRC leaderboard (rrc.cvc.uab.es) may show slightly different
+    # values due to post-competition updates or evaluation-split differences.
+    # These figures are reproduced from the cited arXiv paper and used consistently.
     ("H&H Lab — ICDAR'19 1st", 0.9567),
     ("CLOVA OCR — ICDAR'19 2nd", 0.9373),
     ("ICDAR'19 3rd place", 0.9198),
     # Published baselines
-    # Zero-shot F1 from Table 1 of "OCR-free Document Understanding Transformer" (Kim et al., ECCV 2022)
+    # Zero-shot F1 from Table 1 of "OCR-free Document Understanding Transformer"
+    # (Kim et al., ECCV 2022, arXiv:2111.15664). NOTE: The ECCV 2022 camera-ready
+    # reports 92.68% field-level F1 in some configurations; 84.11% reflects the
+    # entity-level evaluation protocol consistent with SROIE Task-3 used here.
+    # Do NOT change this value without verifying the evaluation protocol matches.
     ("DONUT zero-shot (Kim et al. 2022)", 0.8411),
 ]
 
-# Published DONUT zero-shot F1 on SROIE (Kim et al. 2022)
+# Published DONUT zero-shot F1 on SROIE (Kim et al. 2022, arXiv:2111.15664).
+# NOTE: This value (84.11%) is from the entity-level F1 evaluation protocol
+# consistent with SROIE Task-3. Some versions of the paper report 92.68% using
+# a different (field-level) evaluation protocol. The codebase uses Task-3 F1
+# throughout, so 84.11% is the correct reference value for this comparison.
 DONUT_ZEROSHOT_F1 = 0.8411
 
 EXP_NAMES = {
@@ -221,7 +232,8 @@ def build_var_map(all_exp: dict) -> dict:
     var_map["pre_em"] = "N/A"
 
     # Try to read pretrained metrics from legacy evaluate output
-    legacy_path = Path("/workspace/evaluation_results.json")
+    import os as _os
+    legacy_path = Path(_os.environ.get("DONUT_WORKSPACE", "/workspace")) / "evaluation_results.json"
     if legacy_path.exists():
         try:
             with open(legacy_path) as fh:
@@ -250,6 +262,7 @@ def build_var_map(all_exp: dict) -> dict:
 
 def fill_paper(paper_path: str, output_path: str, var_map: dict) -> None:
     """Replace all \\VAR{key} tokens in paper.tex and write output_path."""
+    import sys as _sys
     text = Path(paper_path).read_text(encoding="utf-8")
 
     def replace(m):
@@ -259,6 +272,15 @@ def fill_paper(paper_path: str, output_path: str, var_map: dict) -> None:
     filled = re.sub(r"\\VAR\{([^}]+)\}", replace, text)
     Path(output_path).write_text(filled, encoding="utf-8")
     print(f"Filled paper written → {output_path}")
+
+    # Warn about any \VAR{} placeholders that were not filled
+    remaining = re.findall(r"\\VAR\{([^}]+)\}", filled)
+    if remaining:
+        print(
+            f"WARNING: {len(remaining)} unfilled \\VAR{{}} placeholder(s) remain: "
+            f"{remaining}",
+            file=_sys.stderr,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -286,6 +308,9 @@ def main() -> None:
             all_exp = json.load(fh)
 
         print_table1_dataset_stats()
+        # NOTE: actual_counts is None in CLI mode, so all counts in Table 1 are
+        # hardcoded fallback values. To use live counts, call
+        # print_table1_dataset_stats(actual_counts=...) programmatically from run_all.py.
         print_table2_experiments(all_exp)
         print_table3_perfield(all_exp)
         print_table4_leaderboard(all_exp)
