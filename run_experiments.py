@@ -346,14 +346,6 @@ def train_experiment(
     # Add SROIE special tokens
     processor.tokenizer.add_special_tokens({"additional_special_tokens": NEW_TOKENS})
     model.decoder.resize_token_embeddings(len(processor.tokenizer))
-
-    # After resize, embed_tokens and lm_head are separate tensors with
-    # independent random init for the new tokens.  Set tie_word_embeddings=False
-    # so save_pretrained() saves BOTH weights independently.  Without this,
-    # the saved checkpoint omits lm_head (or tie_weights() overwrites the
-    # learned lm_head with embed_tokens), causing F1=0 on reload.
-    model.decoder.config.tie_word_embeddings = False
-
     model.config.pad_token_id = processor.tokenizer.pad_token_id
     model.config.decoder_start_token_id = processor.tokenizer.convert_tokens_to_ids(
         ["<s_sroie>"]

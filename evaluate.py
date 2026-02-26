@@ -125,18 +125,18 @@ class EvaluationResult:
 # ---------------------------------------------------------------------------
 
 def load_model_with_tied_weights(model_path: str, device: str = DEVICE):
-    """Load a VisionEncoderDecoderModel, handling both tied and untied checkpoints.
+    """Load a VisionEncoderDecoderModel and re-tie lm_head weights.
 
-    Checkpoints saved with ``tie_word_embeddings=False`` (the correct setting
-    after ``resize_token_embeddings()``) already contain both lm_head and
-    embed_tokens weights independently — no re-tying needed.
+    After save_pretrained(), the checkpoint may not include
+    ``decoder.lm_head.weight`` because it was tied to the embedding matrix.
+    When from_pretrained() loads such a checkpoint, the lm_head ends up with
+    random weights, causing garbage generation (F1 = 0).
 
-    Legacy checkpoints with ``tie_word_embeddings=True`` may have a missing
-    or corrupted lm_head; for those, we attempt best-effort re-tying.
+    This function explicitly re-ties the weights after loading.
     """
     model = VisionEncoderDecoderModel.from_pretrained(model_path)
 
-    # Only re-tie for legacy checkpoints that still expect tied weights
+    # Re-tie decoder.lm_head.weight to the embedding matrix
     _retie_decoder_head(model)
 
     model = model.to(device)
@@ -145,27 +145,13 @@ def load_model_with_tied_weights(model_path: str, device: str = DEVICE):
 
 
 def _retie_decoder_head(model) -> None:
-    """Conditionally re-tie decoder.lm_head.weight to embed_tokens.weight.
+    """Explicitly re-tie decoder.lm_head.weight to embed_tokens.weight.
 
-    If the checkpoint was saved with ``tie_word_embeddings=False`` (new
-    behaviour after the resize_token_embeddings fix), both weights were
-    saved independently and are already correct — skip re-tying.
-
-    If ``tie_word_embeddings=True`` (legacy), attempt re-tying as a
-    best-effort fix for checkpoints where lm_head may have been lost.
+    This fixes the critical bug where save_pretrained() omits the tied
+    lm_head weight from the checkpoint, and from_pretrained() then
+    initialises it randomly — producing garbage tokens.
     """
     decoder = model.decoder
-
-    # New checkpoints: tie_word_embeddings=False means both weights were
-    # saved independently and are already correct.  Don't re-tie.
-    if not getattr(decoder.config, "tie_word_embeddings", True):
-        logger.info(
-            "tie_word_embeddings=False — lm_head saved independently, "
-            "skipping re-tie."
-        )
-        return
-
-    # Legacy path: try to re-tie for old checkpoints with tied config
     if hasattr(decoder, "lm_head") and hasattr(decoder, "model"):
         embed_tokens = None
         # Navigate the MBart / decoder model structure
@@ -192,7 +178,7 @@ def _retie_decoder_head(model) -> None:
     assert model.decoder.lm_head.weight is not None, (
         "decoder.lm_head.weight is None after _retie_decoder_head() — "
         "weight tying failed. Check that the checkpoint was saved with "
-        "tie_word_embeddings=False or that embed_tokens exists."
+        "model.tie_weights() or that embed_tokens exists."
     )
 
 
@@ -410,6 +396,7 @@ class DonutEvaluator:
             pixel_values,
             decoder_input_ids=decoder_input_ids,
             max_length=self.max_length,
+            early_stopping=True,
             use_cache=True,
             num_beams=1,
             bad_words_ids=[[self.processor.tokenizer.unk_token_id]],
@@ -794,7 +781,7 @@ def print_results(pretrained_m, finetuned_m):
         ("PICK (Yu et al. 2021)", 0.9612),
         ("BROS (Hong et al. 2022)", 0.9548),
         ("LayoutLMv2 (Xu et al. 2021)", 0.9495),
-        ("DONUT SROIE fine-tuned (Kim 2022)", 0.8411),
+        ("DONUT zero-shot (Kim et al. 2022)", 0.8411),
         ("Our pretrained (CORD zero-shot)", pretrained_m["global_f1"]),
         ("Our fine-tuned (this work)", finetuned_m["global_f1"]),
     ]

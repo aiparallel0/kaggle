@@ -29,9 +29,10 @@ This script is kept for backward compatibility and ad-hoc single-model
 training/evaluation outside the experiment framework.
 
 Critical bug fixes in this version:
-  - Sets config.tie_word_embeddings=False after resize_token_embeddings()
-    so that lm_head and embed_tokens are saved independently (prevents
-    F1=0 on reload caused by tie_weights() destroying learned lm_head).
+  - Calls model.tie_weights() before save_pretrained() so that the tied
+    decoder.lm_head.weight is correctly persisted (prevents F1=0 on reload).
+  - After loading with from_pretrained(), re-ties lm_head via
+    load_model_with_tied_weights from evaluate.py.
   - Key file loading: try .txt first, then .json (BUG A/E fix).
   - Zero-sample guard: raises ValueError if training dataset is empty.
 
@@ -412,17 +413,22 @@ class DonutTrainer:
         save_dir = Path(path) if path is not None else self._output_dir
         save_dir.mkdir(parents=True, exist_ok=True)
 
-        # NOTE: Do NOT call model.tie_weights() here.  After
-        # resize_token_embeddings(), lm_head and embed_tokens are independent
-        # tensors trained separately.  Calling tie_weights() would OVERWRITE
-        # the learned lm_head with embed_tokens, destroying the output
-        # projection and causing F1=0 on reload.  Instead, we set
-        # config.tie_word_embeddings=False at model setup time so
-        # save_pretrained() persists both weights independently.
+        # Critical: tie weights before saving so lm_head is not omitted
+        self.model.tie_weights()
+        logger.info(
+            "Called model.tie_weights() before save_pretrained() to "
+            "prevent lm_head weight loss."
+        )
+
         self.model.save_pretrained(str(save_dir))
         self.processor.save_pretrained(str(save_dir))
 
-        logger.info("Model + processor saved → %s", save_dir)
+        logger.warning(
+            "Tied-weight save complete → %s. When loading this checkpoint, "
+            "use evaluate.load_model_with_tied_weights() to re-tie "
+            "decoder.lm_head.weight after from_pretrained().",
+            save_dir,
+        )
         print(f"Model + processor saved → {save_dir}")
 
     # ------------------------------------------------------------------
@@ -473,14 +479,6 @@ def main():
         {"additional_special_tokens": NEW_TOKENS},
     )
     model.decoder.resize_token_embeddings(len(processor.tokenizer))
-
-    # After resize, embed_tokens and lm_head are separate tensors with
-    # independent random init for the new tokens.  Set tie_word_embeddings=False
-    # so save_pretrained() saves BOTH weights independently.  Without this,
-    # the saved checkpoint omits lm_head (or tie_weights() overwrites the
-    # learned lm_head with embed_tokens), causing F1=0 on reload.
-    model.decoder.config.tie_word_embeddings = False
-
     model.config.pad_token_id = processor.tokenizer.pad_token_id
     model.config.decoder_start_token_id = (
         processor.tokenizer.convert_tokens_to_ids(["<s_sroie>"])[0]

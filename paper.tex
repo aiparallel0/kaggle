@@ -1,8 +1,8 @@
 % paper.tex — "Multi-Dataset Fine-Tuning of DONUT for Receipt Information
 % Extraction: A Systematic Study"
 %
-% Placeholder values use the convention VAR{key} (with backslash prefix)
-% and are replaced automatically by inject_results.py.
+% Placeholder values use the convention \VAR{experiment_metric} and are
+% replaced automatically by inject_results.py.
 %
 % Compile with: pdflatex paper.tex  (twice for cross-references)
 
@@ -80,9 +80,8 @@ model, which makes them sensitive to OCR errors and page layout variations.
 DONUT~\cite{kim2022donut} removes the OCR dependency entirely: a
 Vision Transformer encoder reads the image directly and an autoregressive
 decoder generates structured JSON-like output token by token.  Pretrained on
-the large-scale CORD v2 receipt corpus and then fine-tuned on SROIE,
-DONUT achieves 84.11\% entity-level F1 on the SROIE
-benchmark~\cite{huang2019icdar}.
+the large-scale CORD v2 receipt corpus, DONUT achieves 84.11\% F1 on
+SROIE~\cite{huang2019icdar} as a zero-shot CORD-to-SROIE transfer.
 
 A natural question is whether additional receipt or document datasets can
 push this further through supervised fine-tuning.  We design eight
@@ -323,12 +322,12 @@ LayoutLMv2~\cite{xu2021layoutlmv2}     & 94.95 \\
 H\&H Lab — ICDAR'19 1st~\cite{huang2019icdar}  & 95.67 \\
 CLOVA OCR — ICDAR'19 2nd~\cite{huang2019icdar}  & 93.73 \\
 ICDAR'19 3rd place~\cite{huang2019icdar}         & 91.98 \\
-DONUT (SROIE fine-tuned)~\cite{kim2022donut}  & 84.11 \\
+DONUT (published)~\cite{kim2022donut}  & 84.11 \\
 \midrule
 Ours — CORD zero-shot$^\dagger$    & \VAR{pre_f1_pct} \\
 Ours — best fine-tuned   & \VAR{best_f1_pct} \\
 \bottomrule
-\multicolumn{2}{l}{\footnotesize $^\dagger$~CORD$\to$SROIE transfer without SROIE fine-tuning.}
+\multicolumn{2}{l}{\footnotesize $^\dagger$~Zero-shot transfer, no SROIE fine-tuning.}
 \end{tabular}
 \end{table}
 
@@ -366,13 +365,12 @@ well-covered.
 
 \subsection{Comparison with Published DONUT}
 
-The published DONUT result of 84.11\% was obtained by fine-tuning the
-CORD-pretrained checkpoint on the SROIE training set.  Our Experiment~1
-replicates this setup with an 80/10/10 split (500 train images) and achieves
-\VAR{exp1_f1}.  The best configuration (Experiment~\VAR{best_exp}) achieves
-\VAR{best_f1}, a gain of \VAR{gain_over_published} F1 points over the
-published result, demonstrating that multi-dataset fine-tuning provides
-meaningful improvements beyond single-dataset training.
+The published DONUT result of 84.11\% was obtained without SROIE-specific
+fine-tuning.  Our Experiment~1 (SROIE fine-tuning only) reaches
+\VAR{exp1_f1}, demonstrating the effectiveness of even minimal supervised
+adaptation.  The best configuration (Experiment~\VAR{best_exp}) achieves
+\VAR{best_f1}, a gain of \VAR{gain_over_published} points over the published
+zero-shot result.
 
 % ------------------------------------------------------------------
 % Section 6 — Conclusion
