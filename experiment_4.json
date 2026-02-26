@@ -1,0 +1,30 @@
+{
+  "experiment_id": 4,
+  "name": "SROIE + CORD",
+  "datasets": [
+    "sroie",
+    "cord"
+  ],
+  "config": {
+    "max_epochs": 30,
+    "learning_rate": 5e-05,
+    "per_device_train_batch_size": 4,
+    "early_stopping_patience": 5,
+    "base_model": "naver-clova-ix/donut-base-finetuned-cord-v2"
+  },
+  "num_train_samples": 1256,
+  "metrics": {
+    "global_precision": 0.0,
+    "global_recall": 0.0,
+    "global_f1": 0,
+    "overall_exact_match": 0.0,
+    "company_f1": 0,
+    "company_ned": 1.0,
+    "date_f1": 0,
+    "date_ned": 0.9327,
+    "address_f1": 0,
+    "address_ned": 0.9038,
+    "total_f1": 0,
+    "total_ned": 0.9688
+  }
+}
