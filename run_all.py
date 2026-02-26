@@ -248,21 +248,33 @@ def stage_install(args) -> StageResult:
     test_img_dir.mkdir(exist_ok=True)
     test_key_dir.mkdir(exist_ok=True)
 
-    def _copy_split(img_list, dst_img_dir, dst_key_dir):
+    def _move_split(img_list, dst_img_dir, dst_key_dir):
+        """Move (not copy) val/test images out of img/ so train set is clean."""
         for img_path in img_list:
-            shutil.copy2(str(img_path), str(dst_img_dir / img_path.name))
+            shutil.move(str(img_path), str(dst_img_dir / img_path.name))
             for ext in [".txt", ".json"]:
                 key_src = key_dir / (img_path.stem + ext)
                 if key_src.exists():
-                    shutil.copy2(str(key_src), str(dst_key_dir / key_src.name))
+                    shutil.move(str(key_src), str(dst_key_dir / key_src.name))
                     break
 
-    _copy_split(val_imgs, val_img_dir, val_key_dir)
-    _copy_split(test_imgs, test_img_dir, test_key_dir)
+    _move_split(val_imgs, val_img_dir, val_key_dir)
+    _move_split(test_imgs, test_img_dir, test_key_dir)
 
-    print(f"  Train images : {len(train_imgs)}")
-    print(f"  Val images   : {len(val_imgs)}")
-    print(f"  Test images  : {len(test_imgs)}")
+    # Verify: img/ should now contain exactly the train images
+    remaining = sum(
+        1 for p in img_dir.iterdir()
+        if p.is_file() and p.suffix.lower() in image_exts
+    )
+    print(f"  Train images : {remaining} (in img/, after moving val+test out)")
+    print(f"  Val images   : {len(val_imgs)} (in val_img/)")
+    print(f"  Test images  : {len(test_imgs)} (in test_img/)")
+    if remaining != len(train_imgs):
+        print(
+            f"  WARNING: Expected {len(train_imgs)} train images in img/ "
+            f"but found {remaining}",
+            file=sys.stderr,
+        )
     print(f"  SROIE data ready at {sroie_data_dir}")
 
     return StageResult(name="SROIE Install", duration=0.0, exit_status=0,
