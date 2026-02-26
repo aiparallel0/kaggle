@@ -72,17 +72,19 @@ LEADERBOARD: List[Tuple[str, float]] = [
     ("CLOVA OCR — ICDAR'19 2nd", 0.9373),
     ("ICDAR'19 3rd place", 0.9198),
 
-    # DONUT zero-shot: Kim et al. 2022, "OCR-free Document Understanding Transformer"
+    # DONUT SROIE fine-tuned: Kim et al. 2022, "OCR-free Document Understanding Transformer"
     # Table 1, entity-level F1 on SROIE. arXiv:2111.15664
-    ("DONUT zero-shot (Kim et al. 2022)", 0.8411),
+    # NOTE: This is the SROIE fine-tuned result (not zero-shot CORD transfer).
+    ("DONUT (SROIE fine-tuned, Kim et al. 2022)", 0.8411),
 ]
 
-# Published DONUT zero-shot F1 on SROIE (Kim et al. 2022, arXiv:2111.15664).
-# NOTE: This value (84.11%) is from the entity-level F1 evaluation protocol
-# consistent with SROIE Task-3.  Some versions of the paper report 92.68% using
-# a different (field-level) evaluation protocol.  The codebase uses Task-3 F1
-# throughout, so 84.11% is the correct reference value for this comparison.
-DONUT_ZEROSHOT_F1 = 0.8411  # arXiv:2111.15664, Table 1, entity-level F1
+# Published DONUT F1 on SROIE (Kim et al. 2022, arXiv:2111.15664).
+# NOTE: This value (84.11%) is from fine-tuning the CORD-pretrained DONUT on
+# SROIE, evaluated with the entity-level F1 protocol consistent with SROIE
+# Task-3.  Some versions of the paper report 92.68% using a different
+# (field-level) evaluation protocol.  The codebase uses Task-3 F1 throughout,
+# so 84.11% is the correct reference value for this comparison.
+DONUT_PUBLISHED_F1 = 0.8411  # arXiv:2111.15664, Table 1, entity-level F1
 
 EXP_NAMES: Dict[str, str] = {
     "1": "SROIE only",
@@ -219,7 +221,7 @@ class PaperInjector:
             exp1_f1 = all_exp.get("1", {}).get("metrics", {}).get("global_f1", 0.0)
             exp4_f1 = all_exp.get("4", {}).get("metrics", {}).get("global_f1", 0.0)
             var_map["gain_1_4"] = f"{(exp4_f1 - exp1_f1):+.4f}"
-            var_map["gain_over_published"] = f"{(best_f1 - DONUT_ZEROSHOT_F1):+.4f}"
+            var_map["gain_over_published"] = f"{(best_f1 - DONUT_PUBLISHED_F1):+.4f}"
         except Exception:
             var_map["gain_1_4"] = "N/A"
             var_map["gain_over_published"] = "N/A"
@@ -263,8 +265,8 @@ class PaperInjector:
             "H&H Lab — ICDAR'19 1st": 0.9567,
             "CLOVA OCR — ICDAR'19 2nd": 0.9373,
             "ICDAR'19 3rd place": 0.9198,
-            # DONUT zero-shot: Kim et al. 2022, arXiv:2111.15664, Table 1
-            "DONUT zero-shot (Kim et al. 2022)": 0.8411,
+            # DONUT SROIE fine-tuned: Kim et al. 2022, arXiv:2111.15664, Table 1
+            "DONUT (SROIE fine-tuned, Kim et al. 2022)": 0.8411,
         }
         lb_dict = {name: score for name, score in LEADERBOARD}
         for name, score in expected.items():
