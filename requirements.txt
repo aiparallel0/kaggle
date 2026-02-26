@@ -1,108 +1,16 @@
-# MIT License
-# Copyright (c) 2026 DONUT-SROIE Contributors
-# See LICENSE file for full terms.
-
-# ============================================================
-# Python Version Requirement
-# ============================================================
-# Requires Python >= 3.10
-# This project relies on modern typing syntax (X | Y unions),
-# match-case statements, and performance improvements
-# available only in CPython 3.10+.
-
-# ============================================================
-# Core ML Framework
-# ============================================================
-# PyTorch: Neural network framework. >=2.0 for compile() and
-# improved CUDA support. Pinned floor only — ceiling managed
-# by transformers compatibility.
 torch>=2.0.0
-
-# Transformers: HuggingFace model hub, DonutProcessor,
-# VisionEncoderDecoderModel, Seq2SeqTrainer.
-# >=4.36 for Donut model fixes, <5.0 for API stability.
-transformers>=4.36.0,<5.0.0
-
-# Accelerate: Distributed and mixed-precision training
-# orchestration. Used by Seq2SeqTrainer under the hood.
-# >=1.1.0 for stable FSDP and DeepSpeed integration.
-accelerate>=1.1.0
-
-# ============================================================
-# Tokenisation & Text Processing
-# ============================================================
-# SentencePiece: Sub-word tokeniser backend required by the
-# DONUT (XLMRoberta-based) tokeniser. No upper pin — the C
-# extension API is stable.
-sentencepiece
-
-# ============================================================
-# Image Handling
-# ============================================================
-# Pillow: Image open / resize / convert used in dataset
-# loaders and DonutProcessor. >=9.0 for improved WEBP and
-# security patches.
+torchvision>=0.15.0
+transformers>=4.35.0
+datasets>=2.14.0
+ultralytics>=8.0.0       # YOLOv8
 Pillow>=9.0.0
-
-# ============================================================
-# Evaluation Metrics
-# ============================================================
-# editdistance: Fast Levenshtein distance implementation
-# (C extension). Used to compute Normalised Edit Distance
-# (NED) in evaluate.py. >=0.6 for the optimised C backend.
-editdistance>=0.6.0
-
-# ============================================================
-# Numeric & Data Utilities
-# ============================================================
-# NumPy: Fundamental array operations used throughout
-# training and evaluation. >=1.24 for NEP-50 promotion rules
-# and full Python 3.10+ support.
+opencv-python>=4.7.0
 numpy>=1.24.0
-
-# Pandas: DataFrame manipulation for loading SROIE-NER
-# parquet ground-truth files and aggregating evaluation
-# results. >=2.0 for copy-on-write and pyarrow-backed
-# string dtype.
 pandas>=2.0.0
-
-# PyArrow: Columnar in-memory format and Parquet reader.
-# Required by pandas for `.read_parquet()` and by the
-# datasets library for memory-mapped tables. >=12.0 for
-# stable string/large_string interop.
-pyarrow>=12.0.0
-
-# ============================================================
-# Progress & System Monitoring
-# ============================================================
-# tqdm: Progress bars for training loops and dataset
-# iteration. >=4.60 for `rich` integration and improved
-# notebook support.
-tqdm>=4.60.0
-
-# psutil: Cross-platform system and process utilities.
-# Used to check available RAM before enabling in-memory
-# dataset caching. >=5.9 for accurate cgroup-v2 memory
-# reporting inside containers.
-psutil>=5.9.0
-
-# ============================================================
-# HuggingFace Ecosystem
-# ============================================================
-# huggingface_hub: Authenticated model and dataset downloads,
-# model card utilities, and Hub API client. >=0.20 for the
-# new hf_transfer download backend.
-huggingface_hub>=0.20.0
-
-# Datasets: HuggingFace datasets library for streaming and
-# memory-mapped dataset loading (WildReceipt, CORD).
-# >=2.14 for trust_remote_code support, <5.0 for API compat.
-datasets>=2.14.0,<5.0.0
-
-# ============================================================
-# NOTE: The following standard-library modules are imported
-# in the codebase but do NOT require installation:
-#   - hashlib   (cryptographic hashing for cache keys)
-#   - logging   (structured log output)
-#   - json, os, re, pathlib, collections, typing, etc.
-# ============================================================
+scikit-learn>=1.3.0
+matplotlib>=3.7.0
+seaborn>=0.12.0
+jiwer>=3.0.0             # WER/CER metrics
+tqdm>=4.65.0
+accelerate>=0.24.0
+sentencepiece>=0.1.99
