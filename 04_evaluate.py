@@ -1,330 +1,327 @@
 """
-04_evaluate.py
-==============
-Evaluates both models on the test set and computes:
-  - CER  (Character Error Rate)   ← raw OCR quality
-  - WER  (Word Error Rate)        ← word-level accuracy
-  - F1   (field-level extraction) ← key-value accuracy
-  - Precision / Recall per field
-  - Inference latency             ← ms per image
-  - Results saved to results/metrics.json
+04_evaluate.py — Unified evaluation for DONUT and TrOCR+YOLO architectures.
+
+FIX: Previous version used separate metric conventions (CER/WER for TrOCR
+vs structured F1 for DONUT).  This version uses the SAME metrics for both
+architectures — the official SROIE Task-3 entity-level F1, precision,
+recall, NED, and exact match — enabling fair cross-architecture comparison.
+
+FIX: Removed early_stopping=True from DONUT generate() calls — invalid
+with num_beams=1 (greedy decoding) and produces deprecation warnings.
+
+FIX: Added GPU cleanup between model evaluations to prevent OOM.
+
+FIX: Both architectures are evaluated on the SAME 63 SROIE test images.
+
+FIX: Imports constants from shared module instead of duplicating.
 """
 
-import json, time
+import gc
+import json
+import os
+import time
 from pathlib import Path
-import torch
+from typing import Dict, List, Optional, Tuple
+
 import numpy as np
+import torch
 from PIL import Image
 from tqdm import tqdm
-from jiwer import cer, wer
-from transformers import (
-    DonutProcessor,
-    VisionEncoderDecoderModel,
-    TrOCRProcessor,
-)
-from ultralytics import YOLO
+
+from constants import FIELDS, IMAGE_EXTS, MAX_LENGTH, SEED
 
 # ── Config ──────────────────────────────────────────────────────────────────
-DONUT_MODEL   = Path("models/donut_finetuned/best")
-TROCR_MODEL   = Path("models/trocr_finetuned/best")
-YOLO_MODEL    = Path("models/yolo_finetuned/run/weights/best.pt")
-TEST_DONUT    = Path("data/donut/test")
-TEST_TROCR    = Path("data/trocr/test")
-RESULTS_DIR   = Path("results")
-TASK_TOKEN    = "<s_receipt>"
-TARGET_KEYS   = ["company", "date", "address", "total"]
-DEVICE        = "cuda" if torch.cuda.is_available() else "cpu"
-MAX_LENGTH    = 512
-NUM_BEAMS     = 4
-
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+RESULTS_DIR = Path("results")
 RESULTS_DIR.mkdir(exist_ok=True)
 
+SROIE_DATA_DIR = Path(os.environ.get(
+    "SROIE_DATA_DIR", "/workspace/ICDAR-2019-SROIE/data"
+))
+
 
 # ════════════════════════════════════════════════════════════════════════════
-# DONUT Inference
+# Shared metric computation (SROIE Task-3 compatible)
 # ════════════════════════════════════════════════════════════════════════════
-def load_donut():
-    processor = DonutProcessor.from_pretrained(DONUT_MODEL)
-    model     = VisionEncoderDecoderModel.from_pretrained(DONUT_MODEL).to(DEVICE)
-    model.eval()
-    return processor, model
+def compute_sroie_metrics(
+    predictions: List[Dict[str, str]],
+    ground_truths: List[Dict[str, str]],
+) -> Dict[str, float]:
+    """Compute SROIE Task-3 metrics: global F1, per-field F1, NED, exact match.
+
+    Uses the same computation as evaluate.py:compute_metrics() for consistency
+    across DONUT and TrOCR+YOLO results.
+    """
+    try:
+        import editdistance
+    except ImportError:
+        editdistance = None
+
+    tp, total_pred, total_gt = 0, 0, 0
+    per_field = {f: {"tp": 0, "pred": 0, "gt": 0, "ned": []} for f in FIELDS}
+    exact_match_all = []
+
+    for pred, gt in zip(predictions, ground_truths):
+        all_correct = True
+        for f in FIELDS:
+            p_val = str(pred.get(f, "")).strip().lower()
+            g_val = str(gt.get(f, "")).strip().lower()
+
+            if g_val:
+                total_gt += 1
+                per_field[f]["gt"] += 1
+            if p_val:
+                total_pred += 1
+                per_field[f]["pred"] += 1
+            if p_val and g_val and p_val == g_val:
+                tp += 1
+                per_field[f]["tp"] += 1
+            elif not p_val and not g_val:
+                pass
+            else:
+                all_correct = False
+
+            # NED computation
+            if editdistance is not None:
+                if len(g_val) == 0:
+                    ned = 0.0 if len(p_val) == 0 else 1.0
+                else:
+                    ned = editdistance.eval(p_val, g_val) / max(len(p_val), len(g_val))
+                per_field[f]["ned"].append(ned)
+
+        exact_match_all.append(int(all_correct))
+
+    precision = tp / total_pred if total_pred > 0 else 0.0
+    recall = tp / total_gt if total_gt > 0 else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+
+    summary = {
+        "global_precision": round(precision, 4),
+        "global_recall": round(recall, 4),
+        "global_f1": round(f1, 4),
+        "overall_exact_match": round(float(np.mean(exact_match_all)), 4) if exact_match_all else 0.0,
+    }
+
+    for f in FIELDS:
+        fp = per_field[f]
+        p = fp["tp"] / fp["pred"] if fp["pred"] > 0 else 0.0
+        r = fp["tp"] / fp["gt"] if fp["gt"] > 0 else 0.0
+        f_score = 2 * p * r / (p + r) if (p + r) > 0 else 0.0
+        summary[f"{f}_f1"] = round(f_score, 4)
+        summary[f"{f}_ned"] = round(float(np.mean(fp["ned"])), 4) if fp["ned"] else 1.0
+
+    return summary
 
 
-def predict_donut(processor, model, image: Image.Image) -> dict:
-    """Returns dict of extracted key-values from a receipt image."""
-    pixel_values = processor(image, return_tensors="pt").pixel_values.to(DEVICE)
-    decoder_input_ids = processor.tokenizer(
-        TASK_TOKEN, add_special_tokens=False, return_tensors="pt"
-    ).input_ids.to(DEVICE)
+# ════════════════════════════════════════════════════════════════════════════
+# Load SROIE test set (shared by both architectures)
+# ════════════════════════════════════════════════════════════════════════════
+def load_test_samples() -> List[Tuple[Path, Dict[str, str]]]:
+    """Load the 63 SROIE test images + ground truth.
+
+    Returns list of (image_path, gt_dict) tuples.  Both DONUT and TrOCR+YOLO
+    are evaluated on this EXACT same set for fair comparison.
+    """
+    test_img_dir = SROIE_DATA_DIR / "test_img"
+    test_key_dir = SROIE_DATA_DIR / "test_key"
+
+    samples = []
+    if not test_img_dir.exists():
+        print(f"  WARNING: test_img/ not found at {test_img_dir}")
+        return samples
+
+    for img_path in sorted(test_img_dir.iterdir()):
+        if img_path.suffix.lower() not in IMAGE_EXTS:
+            continue
+
+        gt = {}
+        key_txt = test_key_dir / f"{img_path.stem}.txt"
+        if key_txt.exists():
+            lines = key_txt.read_text(encoding="utf-8").strip().splitlines()
+            if len(lines) >= 4:
+                gt = {
+                    "company": lines[0].strip(),
+                    "date":    lines[1].strip(),
+                    "address": lines[2].strip(),
+                    "total":   lines[3].strip(),
+                }
+        key_json = test_key_dir / f"{img_path.stem}.json"
+        if not gt and key_json.exists():
+            try:
+                gt = json.loads(key_json.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                pass
+
+        if gt:
+            samples.append((img_path, gt))
+
+    return samples
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Evaluate DONUT on test set
+# ════════════════════════════════════════════════════════════════════════════
+def evaluate_donut_on_test(
+    model_path: str,
+    test_samples: List[Tuple[Path, Dict[str, str]]],
+) -> Dict:
+    """Evaluate a DONUT model on the SROIE test set. Returns metrics dict."""
+    from transformers import DonutProcessor, VisionEncoderDecoderModel
+    from evaluate import load_model_with_tied_weights, _unwrap_prediction
+
+    processor = DonutProcessor.from_pretrained(model_path)
+    model = load_model_with_tied_weights(model_path, device=DEVICE)
+
+    predictions = []
+    ground_truths = [s[1] for s in test_samples]
+    latencies = []
+    parse_failures = 0
 
     with torch.no_grad():
-        outputs = model.generate(
-            pixel_values,
-            decoder_input_ids  = decoder_input_ids,
-            max_length         = MAX_LENGTH,
-            num_beams          = NUM_BEAMS,
-            early_stopping     = True,
-        )
+        for img_path, gt in tqdm(test_samples, desc="DONUT eval"):
+            image = Image.open(img_path).convert("RGB")
+            pixel_values = processor(image, return_tensors="pt").pixel_values.to(DEVICE)
+            decoder_input_ids = processor.tokenizer(
+                "<s_sroie>", add_special_tokens=False, return_tensors="pt"
+            ).input_ids.to(DEVICE)
 
-    seq = processor.batch_decode(outputs, skip_special_tokens=False)[0]
-    seq = seq.replace(processor.tokenizer.eos_token, "").replace(
-          processor.tokenizer.pad_token, "").strip()
-
-    # Parse XML-like tags  → dict
-    result = {}
-    for key in TARGET_KEYS:
-        start_tag = f"<s_{key}>"
-        end_tag   = f"</s_{key}>"
-        if start_tag in seq and end_tag in seq:
-            val = seq.split(start_tag)[1].split(end_tag)[0].strip()
-            result[key] = val
-        else:
-            result[key] = ""
-    return result
-
-
-def evaluate_donut(processor, model):
-    print("\n=== Evaluating DONUT ===")
-    samples, latencies = [], []
-    predictions, ground_truths = [], []
-
-    meta_path = TEST_DONUT / "metadata.jsonl"
-    with open(meta_path) as f:
-        samples = [json.loads(l) for l in f]
-
-    all_pred_kv, all_gt_kv = [], []
-
-    for sample in tqdm(samples, desc="DONUT inference"):
-        image  = Image.open(TEST_DONUT / sample["file_name"]).convert("RGB")
-        gt_kv  = json.loads(sample["ground_truth"])["gt_parse"]
-
-        t0   = time.perf_counter()
-        pred = predict_donut(processor, model, image)
-        lat  = (time.perf_counter() - t0) * 1000
-
-        latencies.append(lat)
-        all_pred_kv.append(pred)
-        all_gt_kv.append(gt_kv)
-
-        # For CER/WER: concatenate all field values
-        pred_text = " ".join(pred.values())
-        gt_text   = " ".join(gt_kv.get(k, "") for k in TARGET_KEYS)
-        predictions.append(pred_text)
-        ground_truths.append(gt_text)
-
-    metrics = compute_metrics(predictions, ground_truths, all_pred_kv, all_gt_kv, latencies)
-    print_metrics("DONUT", metrics)
-    return metrics
-
-
-# ════════════════════════════════════════════════════════════════════════════
-# TrOCR + YOLO Inference
-# ════════════════════════════════════════════════════════════════════════════
-def load_trocr_yolo():
-    yolo      = YOLO(str(YOLO_MODEL))
-    processor = TrOCRProcessor.from_pretrained(TROCR_MODEL)
-    trocr     = VisionEncoderDecoderModel.from_pretrained(TROCR_MODEL).to(DEVICE)
-    trocr.eval()
-    return yolo, processor, trocr
-
-
-def predict_trocr_yolo(yolo_model, processor, trocr_model, image: Image.Image) -> str:
-    """
-    Detects text regions with YOLO, transcribes each with TrOCR.
-    Returns full concatenated text.
-    """
-    W, H = image.size
-
-    # YOLO detection
-    results = yolo_model.predict(image, conf=0.25, verbose=False)
-    boxes   = results[0].boxes.xyxy.cpu().numpy() if len(results[0].boxes) else []
-
-    if len(boxes) == 0:
-        return ""
-
-    # Sort boxes top-to-bottom, left-to-right
-    boxes = sorted(boxes, key=lambda b: (b[1], b[0]))
-
-    all_text = []
-    for box in boxes:
-        x1, y1, x2, y2 = map(int, box[:4])
-        x1, y1 = max(0, x1), max(0, y1)
-        x2, y2 = min(W, x2), min(H, y2)
-        if x2 - x1 < 5 or y2 - y1 < 5:
-            continue
-
-        crop = image.crop((x1, y1, x2, y2))
-        pixel_values = processor(crop, return_tensors="pt").pixel_values.to(DEVICE)
-
-        with torch.no_grad():
-            generated = trocr_model.generate(
+            t0 = time.perf_counter()
+            # FIX: No early_stopping=True — invalid with num_beams=1
+            outputs = model.generate(
                 pixel_values,
-                max_length = 128,
-                num_beams  = 4,
+                decoder_input_ids=decoder_input_ids,
+                max_length=MAX_LENGTH,
+                use_cache=True,
+                num_beams=1,
+                bad_words_ids=[[processor.tokenizer.unk_token_id]],
+                return_dict_in_generate=True,
             )
+            lat = (time.perf_counter() - t0) * 1000
+            latencies.append(lat)
 
-        text = processor.batch_decode(generated, skip_special_tokens=True)[0].strip()
-        all_text.append(text)
+            sequence = processor.batch_decode(outputs.sequences)[0]
+            sequence = sequence.replace(processor.tokenizer.eos_token, "")
+            sequence = sequence.replace(processor.tokenizer.pad_token, "").strip()
 
-    return "\n".join(all_text)
+            try:
+                parsed = processor.token2json(sequence)
+                parsed = _unwrap_prediction(parsed, "<s_sroie>")
+            except Exception:
+                parsed = {}
+                parse_failures += 1
+
+            predictions.append(parsed)
+
+    metrics = compute_sroie_metrics(predictions, ground_truths)
+    metrics["parse_failures"] = parse_failures
+    metrics["num_samples"] = len(test_samples)
+    metrics["mean_latency_ms"] = round(float(np.mean(latencies)), 1) if latencies else 0.0
+
+    # GPU cleanup
+    del model, processor
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+    return metrics
 
 
-def evaluate_trocr_yolo(yolo_model, processor, trocr_model):
-    """
-    For TrOCR+YOLO we measure CER/WER on full OCR output.
-    Field-level F1 uses simple substring matching (no structured output).
-    """
-    print("\n=== Evaluating TrOCR + YOLO ===")
+# ════════════════════════════════════════════════════════════════════════════
+# Evaluate TrOCR+YOLO on test set
+# ════════════════════════════════════════════════════════════════════════════
+def evaluate_trocr_yolo_on_test(
+    yolo_weights: str,
+    trocr_model_path: str,
+    test_samples: List[Tuple[Path, Dict[str, str]]],
+) -> Dict:
+    """Evaluate TrOCR+YOLO pipeline on the SROIE test set. Returns metrics dict."""
+    from ultralytics import YOLO
+    from transformers import TrOCRProcessor, VisionEncoderDecoderModel
+    from importlib import import_module
+
+    # Import the inference function from 03_train_trocr_yolo.py
+    trocr_yolo_module = import_module("03_train_trocr_yolo")
+    run_pipeline = trocr_yolo_module.run_trocr_yolo_inference
+
+    yolo_model = YOLO(str(yolo_weights))
+    trocr_processor = TrOCRProcessor.from_pretrained(trocr_model_path)
+    trocr_model = VisionEncoderDecoderModel.from_pretrained(trocr_model_path).to(DEVICE)
+    trocr_model.eval()
+
+    predictions = []
+    ground_truths = [s[1] for s in test_samples]
     latencies = []
-    predictions, ground_truths = [], []
-    all_pred_kv, all_gt_kv = [], []
 
-    # Load test samples (use trocr metadata which has full receipt text per image)
-    # We aggregate line-level texts per image
-    image_texts = {}
-    with open(TEST_TROCR / "metadata.jsonl") as f:
-        for line in f:
-            s = json.loads(line)
-            img_key = s["file_name"].rsplit("_", 1)[0]  # strip line index
-            image_texts.setdefault(img_key, []).append(s["text"])
+    with torch.no_grad():
+        for img_path, gt in tqdm(test_samples, desc="TrOCR+YOLO eval"):
+            t0 = time.perf_counter()
+            pred = run_pipeline(img_path, yolo_model, trocr_model, trocr_processor)
+            lat = (time.perf_counter() - t0) * 1000
+            latencies.append(lat)
+            predictions.append(pred)
 
-    # Load DONUT test for GT key-values (same test images)
-    donut_gt = {}
-    with open(Path("data/donut/test") / "metadata.jsonl") as f:
-        for line in f:
-            s   = json.loads(line)
-            key = Path(s["file_name"]).stem
-            donut_gt[key] = json.loads(s["ground_truth"])["gt_parse"]
+    metrics = compute_sroie_metrics(predictions, ground_truths)
+    metrics["num_samples"] = len(test_samples)
+    metrics["mean_latency_ms"] = round(float(np.mean(latencies)), 1) if latencies else 0.0
 
-    # Load test images
-    test_images = sorted(Path("data/yolo/images/test").glob("*.png"))
-
-    for img_path in tqdm(test_images, desc="TrOCR+YOLO inference"):
-        image = Image.open(img_path).convert("RGB")
-        stem  = img_path.stem
-
-        t0   = time.perf_counter()
-        pred_text = predict_trocr_yolo(yolo_model, processor, trocr_model, image)
-        lat  = (time.perf_counter() - t0) * 1000
-
-        latencies.append(lat)
-
-        # GT full text  (join GT lines)
-        gt_lines = image_texts.get(stem, [])
-        gt_text  = "\n".join(gt_lines)
-
-        predictions.append(pred_text)
-        ground_truths.append(gt_text)
-
-        # Field-level: use substring heuristics
-        gt_kv = donut_gt.get(stem, {k: "" for k in TARGET_KEYS})
-        pred_kv = extract_fields_from_text(pred_text, gt_kv)
-        all_pred_kv.append(pred_kv)
-        all_gt_kv.append(gt_kv)
-
-    metrics = compute_metrics(predictions, ground_truths, all_pred_kv, all_gt_kv, latencies)
-    print_metrics("TrOCR+YOLO", metrics)
-    return metrics
-
-
-def extract_fields_from_text(text: str, gt_kv: dict) -> dict:
-    """Simple heuristic: check if GT value appears in predicted text."""
-    result = {}
-    lines  = text.lower().split("\n")
-    for key, gt_val in gt_kv.items():
-        if not gt_val:
-            result[key] = ""
-            continue
-        # Return GT value if found, else empty
-        found = any(gt_val.lower() in line for line in lines)
-        result[key] = gt_val if found else ""
-    return result
-
-
-# ════════════════════════════════════════════════════════════════════════════
-# Shared Metrics
-# ════════════════════════════════════════════════════════════════════════════
-def compute_metrics(predictions, ground_truths, pred_kvs, gt_kvs, latencies):
-    # Filter empty GT
-    pairs = [(p, g, pk, gk) for p, g, pk, gk in
-             zip(predictions, ground_truths, pred_kvs, gt_kvs) if g.strip()]
-    preds, gts, pred_kv_list, gt_kv_list = zip(*pairs) if pairs else ([], [], [], [])
-
-    metrics = {}
-
-    # CER / WER
-    if preds:
-        metrics["cer"] = cer(list(gts), list(preds))
-        metrics["wer"] = wer(list(gts), list(preds))
-    else:
-        metrics["cer"] = metrics["wer"] = 1.0
-
-    # Field-level F1 per key
-    field_metrics = {}
-    for key in TARGET_KEYS:
-        tp = fp = fn = 0
-        for pred_kv, gt_kv in zip(pred_kv_list, gt_kv_list):
-            pred_val = pred_kv.get(key, "").strip().lower()
-            gt_val   = gt_kv.get(key, "").strip().lower()
-            if gt_val == "" and pred_val == "":
-                continue
-            if pred_val == gt_val and pred_val != "":
-                tp += 1
-            elif pred_val != "" and gt_val == "":
-                fp += 1
-            elif pred_val == "" and gt_val != "":
-                fn += 1
-            else:
-                # both non-empty but different → FP + FN
-                fp += 1
-                fn += 1
-
-        prec   = tp / (tp + fp + 1e-9)
-        recall = tp / (tp + fn + 1e-9)
-        f1     = 2 * prec * recall / (prec + recall + 1e-9)
-        field_metrics[key] = {"precision": prec, "recall": recall, "f1": f1, "tp": tp, "fp": fp, "fn": fn}
-
-    metrics["field_metrics"]  = field_metrics
-    metrics["macro_f1"]       = np.mean([v["f1"] for v in field_metrics.values()])
-    metrics["latency_mean_ms"]= np.mean(latencies)
-    metrics["latency_p95_ms"] = np.percentile(latencies, 95)
-    metrics["n_samples"]      = len(preds)
+    # GPU cleanup
+    del yolo_model, trocr_model, trocr_processor
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
     return metrics
 
 
-def print_metrics(name, metrics):
-    print(f"\n{'─'*50}")
-    print(f" {name}")
-    print(f"{'─'*50}")
-    print(f"  CER:            {metrics['cer']:.4f}")
-    print(f"  WER:            {metrics['wer']:.4f}")
-    print(f"  Macro F1:       {metrics['macro_f1']:.4f}")
-    print(f"  Latency (mean): {metrics['latency_mean_ms']:.1f} ms")
-    print(f"  Latency  (p95): {metrics['latency_p95_ms']:.1f} ms")
-    print(f"\n  Field-level breakdown:")
-    for key, fm in metrics["field_metrics"].items():
-        print(f"    {key:10s}  P={fm['precision']:.3f}  R={fm['recall']:.3f}  F1={fm['f1']:.3f}")
+# ── Print metrics ────────────────────────────────────────────────────────────
+def print_metrics(name: str, metrics: Dict) -> None:
+    """Pretty-print evaluation metrics in structured format."""
+    print(f"\n  {'='*55}")
+    print(f"  {name} Results")
+    print(f"  {'='*55}")
+    print(f"  Global F1:        {metrics.get('global_f1', 0):.4f}")
+    print(f"  Global Precision: {metrics.get('global_precision', 0):.4f}")
+    print(f"  Global Recall:    {metrics.get('global_recall', 0):.4f}")
+    print(f"  Exact Match:      {metrics.get('overall_exact_match', 0):.4f}")
+    print(f"  Num Samples:      {metrics.get('num_samples', 0)}")
+    if "mean_latency_ms" in metrics:
+        print(f"  Mean Latency:     {metrics['mean_latency_ms']:.1f} ms/image")
+    print(f"  {'-'*55}")
+    for f in FIELDS:
+        f1 = metrics.get(f"{f}_f1", 0)
+        ned = metrics.get(f"{f}_ned", 1)
+        print(f"  {f:12s}  F1={f1:.4f}  NED={ned:.4f}")
+    print(f"  {'='*55}")
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
+    test_samples = load_test_samples()
+    print(f"Loaded {len(test_samples)} test samples")
+
     results = {}
 
-    # DONUT
-    processor_d, model_d = load_donut()
-    results["donut"] = evaluate_donut(processor_d, model_d)
-    del processor_d, model_d
-    torch.cuda.empty_cache()
+    # Evaluate DONUT (if model exists)
+    donut_model = Path("models/donut_finetuned/best")
+    if donut_model.exists():
+        results["donut"] = evaluate_donut_on_test(str(donut_model), test_samples)
+        print_metrics("DONUT", results["donut"])
+    else:
+        print(f"  DONUT model not found at {donut_model} — skipping")
 
-    # TrOCR + YOLO
-    yolo_m, processor_t, model_t = load_trocr_yolo()
-    results["trocr_yolo"] = evaluate_trocr_yolo(yolo_m, processor_t, model_t)
-    del yolo_m, processor_t, model_t
-    torch.cuda.empty_cache()
+    # Evaluate TrOCR+YOLO (if models exist)
+    yolo_weights = Path("models/yolo_finetuned/run/weights/best.pt")
+    trocr_model = Path("models/trocr_finetuned/best")
+    if yolo_weights.exists() and trocr_model.exists():
+        results["trocr_yolo"] = evaluate_trocr_yolo_on_test(
+            str(yolo_weights), str(trocr_model), test_samples
+        )
+        print_metrics("TrOCR+YOLO", results["trocr_yolo"])
+    else:
+        print(f"  TrOCR+YOLO models not found — skipping")
 
-    # Save
+    # Save combined results
     out_path = RESULTS_DIR / "metrics.json"
     with open(out_path, "w") as f:
         json.dump(results, f, indent=2)
-    print(f"\n✓ Metrics saved → {out_path}")
+    print(f"\nMetrics saved -> {out_path}")

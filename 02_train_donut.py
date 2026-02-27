@@ -1,54 +1,67 @@
 """
-02_train_donut.py
-=================
-Fine-tune DONUT (naver-clova-ix/donut-base) on receipt images.
-Output: structured JSON with fields  company / date / address / total.
+02_train_donut.py — Standalone DONUT fine-tuning (reference implementation).
 
-Training strategy:
-  - Encoder (Swin): partially frozen (bottom 2 layers frozen)
-  - Decoder (BART): fully trainable
-  - Task token: <s_receipt>
+WARNING: This is a reference script.  For the full 8-experiment pipeline,
+use ``python run_all.py``.  This script is provided for ad-hoc training
+outside the experiment framework.
+
+FIX: Applied lm_head weight tying fix — sets tie_word_embeddings=False after
+resize_token_embeddings() so lm_head and embed_tokens are saved independently.
+Without this, the saved checkpoint loses the learned lm_head weights and
+reloaded models produce garbage output (F1=0).
+
+FIX: Imports constants from shared constants.py instead of duplicating.
+
+FIX: Added GPU memory cleanup after training.
 """
 
-import os, json
+import gc
+import json
+import os
 from pathlib import Path
+
 import torch
-from torch.utils.data import Dataset, DataLoader
+from PIL import Image
+from torch.utils.data import DataLoader, Dataset
+from tqdm import tqdm
 from transformers import (
     DonutProcessor,
     VisionEncoderDecoderModel,
     get_scheduler,
 )
-from PIL import Image
-from tqdm import tqdm
-import numpy as np
+
+from constants import FIELDS, MAX_LENGTH, SEED, BASE_MODEL
 
 # ── Config ──────────────────────────────────────────────────────────────────
-MODEL_ID       = "naver-clova-ix/donut-base"
-DATA_DIR       = Path("data/donut")
-OUTPUT_DIR     = Path("models/donut_finetuned")
-MAX_LENGTH     = 512          # max decoder tokens
-IMAGE_SIZE     = (1280, 960)  # (height, width) – DONUT default
-BATCH_SIZE     = 2
-GRAD_ACCUM     = 4            # effective batch = 8
-EPOCHS         = 10
-LR             = 5e-5
-WARMUP_RATIO   = 0.1
-TASK_TOKEN     = "<s_receipt>"
-SAVE_STEPS     = 200
-DEVICE         = "cuda" if torch.cuda.is_available() else "cpu"
+MODEL_ID = BASE_MODEL
+DATA_DIR = Path("data/donut")
+OUTPUT_DIR = Path("models/donut_finetuned")
+IMAGE_SIZE = (1280, 960)  # (height, width) — DONUT default
+BATCH_SIZE = 2
+GRAD_ACCUM = 4            # effective batch = 8
+EPOCHS = 10
+LR = 5e-5
+WARMUP_RATIO = 0.1
+TASK_TOKEN = "<s_sroie>"
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
 
 # ── Dataset ──────────────────────────────────────────────────────────────────
 class DonutReceiptDataset(Dataset):
     def __init__(self, data_dir: Path, processor: DonutProcessor, max_length: int):
-        self.data_dir   = data_dir
-        self.processor  = processor
+        self.data_dir = data_dir
+        self.processor = processor
         self.max_length = max_length
-        self.samples    = []
+        self.samples = []
 
         meta_path = data_dir / "metadata.jsonl"
+        if not meta_path.exists():
+            raise FileNotFoundError(
+                f"metadata.jsonl not found at {meta_path}. "
+                "Run 01_dataset_preparation.py first."
+            )
         with open(meta_path) as f:
             for line in f:
                 self.samples.append(json.loads(line))
@@ -61,17 +74,16 @@ class DonutReceiptDataset(Dataset):
         img_path = self.data_dir / sample["file_name"]
         image = Image.open(img_path).convert("RGB")
 
-        # Processor encodes image
         pixel_values = self.processor(
             image, return_tensors="pt"
         ).pixel_values.squeeze(0)
 
-        # Ground-truth sequence:  <s_receipt><company>...</company>...<s_receipt/>
         gt = json.loads(sample["ground_truth"])["gt_parse"]
         target_sequence = TASK_TOKEN
-        for key, val in gt.items():
+        for key in FIELDS:
+            val = gt.get(key, "")
             target_sequence += f"<s_{key}>{val}</s_{key}>"
-        target_sequence += f"</{TASK_TOKEN[1:]}"   # closing tag
+        target_sequence += "</s_sroie>"
 
         labels = self.processor.tokenizer(
             target_sequence,
@@ -82,9 +94,7 @@ class DonutReceiptDataset(Dataset):
             return_tensors="pt",
         ).input_ids.squeeze(0)
 
-        # Mask padding tokens in loss
         labels[labels == self.processor.tokenizer.pad_token_id] = -100
-
         return {"pixel_values": pixel_values, "labels": labels}
 
 
@@ -92,22 +102,27 @@ class DonutReceiptDataset(Dataset):
 def train():
     print(f"Loading DONUT model: {MODEL_ID}")
     processor = DonutProcessor.from_pretrained(MODEL_ID)
-    model     = VisionEncoderDecoderModel.from_pretrained(MODEL_ID)
+    model = VisionEncoderDecoderModel.from_pretrained(MODEL_ID)
 
-    # Add task-specific tokens
-    new_tokens = [TASK_TOKEN, "</s_receipt>",
-                  "<s_company>", "</s_company>",
-                  "<s_date>",    "</s_date>",
-                  "<s_address>", "</s_address>",
-                  "<s_total>",   "</s_total>"]
-    processor.tokenizer.add_special_tokens({"additional_special_tokens": new_tokens})
+    # Add task-specific tokens (same as run_experiments.py / train.py)
+    from constants import NEW_TOKENS
+    processor.tokenizer.add_special_tokens(
+        {"additional_special_tokens": NEW_TOKENS}
+    )
     model.decoder.resize_token_embeddings(len(processor.tokenizer))
 
-    # Decoder config
-    model.config.decoder_start_token_id = processor.tokenizer.convert_tokens_to_ids(TASK_TOKEN)
-    model.config.pad_token_id           = processor.tokenizer.pad_token_id
-    model.config.eos_token_id           = processor.tokenizer.eos_token_id
-    model.config.max_length             = MAX_LENGTH
+    # FIX: After resize_token_embeddings(), lm_head and embed_tokens are
+    # separate tensors.  Set tie_word_embeddings=False so save_pretrained()
+    # saves BOTH weights independently.  Without this, reloading the
+    # checkpoint produces garbage output (F1=0).
+    model.decoder.config.tie_word_embeddings = False
+
+    model.config.decoder_start_token_id = processor.tokenizer.convert_tokens_to_ids(
+        TASK_TOKEN
+    )
+    model.config.pad_token_id = processor.tokenizer.pad_token_id
+    model.config.eos_token_id = processor.tokenizer.eos_token_id
+    model.config.max_length = MAX_LENGTH
 
     # Partially freeze encoder (freeze bottom 2 Swin stages)
     for name, param in model.encoder.named_parameters():
@@ -117,23 +132,32 @@ def train():
     model = model.to(DEVICE)
 
     train_ds = DonutReceiptDataset(DATA_DIR / "train", processor, MAX_LENGTH)
-    val_ds   = DonutReceiptDataset(DATA_DIR / "test",  processor, MAX_LENGTH)
+    val_ds = DonutReceiptDataset(DATA_DIR / "test", processor, MAX_LENGTH)
 
-    train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True,  num_workers=2)
-    val_loader   = DataLoader(val_ds,   batch_size=BATCH_SIZE, shuffle=False, num_workers=2)
+    if len(train_ds) == 0:
+        raise ValueError("Training dataset is empty — check data paths.")
+
+    train_loader = DataLoader(
+        train_ds, batch_size=BATCH_SIZE, shuffle=True, num_workers=2
+    )
+    val_loader = DataLoader(
+        val_ds, batch_size=BATCH_SIZE, shuffle=False, num_workers=2
+    )
 
     optimizer = torch.optim.AdamW(
         filter(lambda p: p.requires_grad, model.parameters()), lr=LR
     )
-    total_steps    = (len(train_loader) // GRAD_ACCUM) * EPOCHS
-    warmup_steps   = int(total_steps * WARMUP_RATIO)
+    total_steps = (len(train_loader) // GRAD_ACCUM) * EPOCHS
+    warmup_steps = int(total_steps * WARMUP_RATIO)
     scheduler = get_scheduler(
-        "cosine", optimizer, num_warmup_steps=warmup_steps, num_training_steps=total_steps
+        "cosine", optimizer,
+        num_warmup_steps=warmup_steps,
+        num_training_steps=total_steps,
     )
 
     best_val_loss = float("inf")
-    global_step   = 0
-    history       = {"train_loss": [], "val_loss": []}
+    global_step = 0
+    history = {"train_loss": [], "val_loss": []}
 
     for epoch in range(EPOCHS):
         model.train()
@@ -143,10 +167,10 @@ def train():
         pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{EPOCHS} [train]")
         for step, batch in enumerate(pbar):
             pixel_values = batch["pixel_values"].to(DEVICE)
-            labels       = batch["labels"].to(DEVICE)
+            labels = batch["labels"].to(DEVICE)
 
             outputs = model(pixel_values=pixel_values, labels=labels)
-            loss    = outputs.loss / GRAD_ACCUM
+            loss = outputs.loss / GRAD_ACCUM
             loss.backward()
             epoch_loss += loss.item() * GRAD_ACCUM
 
@@ -167,7 +191,7 @@ def train():
         with torch.no_grad():
             for batch in tqdm(val_loader, desc=f"Epoch {epoch+1}/{EPOCHS} [val]"):
                 pixel_values = batch["pixel_values"].to(DEVICE)
-                labels       = batch["labels"].to(DEVICE)
+                labels = batch["labels"].to(DEVICE)
                 outputs = model(pixel_values=pixel_values, labels=labels)
                 val_loss += outputs.loss.item()
 
@@ -180,7 +204,7 @@ def train():
             best_val_loss = avg_val
             model.save_pretrained(OUTPUT_DIR / "best")
             processor.save_pretrained(OUTPUT_DIR / "best")
-            print(f"  ✓ Best model saved (val_loss={best_val_loss:.4f})")
+            print(f"  Best model saved (val_loss={best_val_loss:.4f})")
 
     # Save final + history
     model.save_pretrained(OUTPUT_DIR / "final")
@@ -189,6 +213,13 @@ def train():
         json.dump(history, f, indent=2)
 
     print(f"\nDONUT training complete. Best val_loss={best_val_loss:.4f}")
+
+    # FIX: GPU cleanup after training to free VRAM for subsequent stages.
+    del model, optimizer, scheduler
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
     return history
 
 

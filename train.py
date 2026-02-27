@@ -76,23 +76,13 @@ from transformers import (
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Constants
+# Constants — imported from shared constants.py (eliminates 5x duplication)
 # ---------------------------------------------------------------------------
 
-FIELDS = ["company", "date", "address", "total"]
-MAX_LENGTH = 512
-IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".webp"}
-
-NEW_TOKENS = [
-    "<s_sroie>", "</s_sroie>",
-    "<s_company>", "</s_company>",
-    "<s_date>",    "</s_date>",
-    "<s_address>", "</s_address>",
-    "<s_total>",   "</s_total>",
-]
-
-BASE_MODEL = "naver-clova-ix/donut-base-finetuned-cord-v2"
-SEED = 42
+# FIX: Previously FIELDS, MAX_LENGTH, IMAGE_EXTS, NEW_TOKENS, BASE_MODEL,
+# SEED were defined independently here and in 4 other files, risking silent
+# drift if any file was updated without updating the others.
+from constants import FIELDS, MAX_LENGTH, IMAGE_EXTS, NEW_TOKENS, BASE_MODEL, SEED
 
 
 # BUG C FIX: Use a function so the env var is re-read at call time, not cached
