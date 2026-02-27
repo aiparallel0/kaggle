@@ -67,10 +67,9 @@ except ImportError as e:
              "ultralytics pillow editdistance matplotlib tqdm numpy")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Constants — mirrors constants.py in the project
+# Constants — imported from single source of truth (constants.py)
 # ─────────────────────────────────────────────────────────────────────────────
-FIELDS: List[str] = ["company", "date", "address", "total"]
-IMAGE_EXTS = frozenset({".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".webp"})
+from constants import FIELDS, IMAGE_EXTS, BASE_MODEL
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Data structures
@@ -912,7 +911,7 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--donut_model", type=str,
-        default="naver-clova-ix/donut-base-finetuned-cord-v2",
+        default=BASE_MODEL,
         help="DONUT model ID (HuggingFace) or local path",
     )
     p.add_argument(
