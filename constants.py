@@ -16,7 +16,9 @@ IMAGE_EXTS: FrozenSet[str] = frozenset({
 })
 
 # Maximum decoder token length for DONUT fine-tuning and inference.
-MAX_LENGTH: int = 512
+# Increased from 512 to 768 to reduce truncation of long address fields,
+# which was the weakest-performing SROIE field.
+MAX_LENGTH: int = 768
 
 # Base model checkpoint — CORD-pretrained DONUT used as starting point.
 BASE_MODEL: str = "naver-clova-ix/donut-base-finetuned-cord-v2"

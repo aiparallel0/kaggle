@@ -327,10 +327,15 @@ class DonutTrainer:
         do_eval = self.val_dataset is not None and len(self.val_dataset) > 0
         optimal_workers = _optimal_num_workers()
 
+        # Detect bf16 support (Ampere+ GPUs including Blackwell) — prefer over fp16
+        use_bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
+        use_fp16 = torch.cuda.is_available() and not use_bf16
+
         training_args = Seq2SeqTrainingArguments(
             output_dir=str(self._output_dir),
             num_train_epochs=self.config.max_epochs,
             per_device_train_batch_size=self.config.per_device_train_batch_size,
+            gradient_accumulation_steps=getattr(self.config, "gradient_accumulation_steps", 2),
             learning_rate=self.config.learning_rate,
             warmup_steps=getattr(self.config, "warmup_steps", 100),
             weight_decay=getattr(self.config, "weight_decay", 0.01),
@@ -341,7 +346,8 @@ class DonutTrainer:
             metric_for_best_model="eval_loss" if do_eval else None,
             greater_is_better=False if do_eval else None,
             predict_with_generate=True,
-            fp16=torch.cuda.is_available(),
+            bf16=use_bf16,
+            fp16=use_fp16,
             logging_steps=20,
             # PERFORMANCE: Optimized DataLoader settings
             dataloader_num_workers=optimal_workers,
@@ -433,10 +439,11 @@ class _StandaloneConfig:
 
     max_epochs: int = 30
     learning_rate: float = 5e-5
-    per_device_train_batch_size: int = 4
-    early_stopping_patience: int = 5
+    per_device_train_batch_size: int = 16
+    early_stopping_patience: int = 3
     warmup_steps: int = 100
     weight_decay: float = 0.01
+    gradient_accumulation_steps: int = 2
     seed: int = SEED
     output_dir: str = ""
 

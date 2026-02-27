@@ -5,7 +5,7 @@
 This repository implements a systematic study of **multi-dataset fine-tuning for receipt Key Information Extraction (KIE)** using two model architectures:
 
 1. **DONUT** (Document Understanding Transformer) — end-to-end vision-language model, `naver-clova-ix/donut-base-finetuned-cord-v2` as base checkpoint
-2. **TrOCR + YOLOv8** — two-stage OCR pipeline: YOLOv8n detects text regions, TrOCR reads crops, heuristics assign fields
+2. **TrOCR + YOLOv8** — two-stage OCR pipeline: YOLOv8x detects text regions, TrOCR reads crops, heuristics assign fields
 
 The goal is to evaluate how adding auxiliary training datasets (WildReceipt, CORD, Invoices-DONUT) to SROIE fine-tuning affects performance on the SROIE Task-3 benchmark, across 8 dataset-combination experiments. Results are automatically compiled into a LaTeX research paper.
 
@@ -50,7 +50,7 @@ kaggle/
 | Category | Libraries / Tools |
 |---|---|
 | Deep Learning | PyTorch ≥2.0, Transformers ≥4.35, Accelerate ≥0.24 |
-| Vision-Language | DONUT (`VisionEncoderDecoderModel`), TrOCR (`microsoft/trocr-base-printed`) |
+| Vision-Language | DONUT (`VisionEncoderDecoderModel`), TrOCR (`microsoft/trocr-large-printed`) |
 | Object Detection | YOLOv8 (`ultralytics ≥8.0`) |
 | Datasets | HuggingFace `datasets ≥2.14`, Pillow, OpenCV |
 | Metrics | `editdistance` (NED), `jiwer` (WER/CER), `scikit-learn` |
@@ -174,7 +174,7 @@ from constants import FIELDS, IMAGE_EXTS, MAX_LENGTH, BASE_MODEL, SEED, NEW_TOKE
 |---|---|---|
 | `FIELDS` | `["company", "date", "address", "total"]` | SROIE Task-3 target fields |
 | `IMAGE_EXTS` | `frozenset({".jpg", ".jpeg", ...})` | Accepted image extensions |
-| `MAX_LENGTH` | `512` | DONUT decoder max token length |
+| `MAX_LENGTH` | `768` | DONUT decoder max token length |
 | `BASE_MODEL` | `"naver-clova-ix/donut-base-finetuned-cord-v2"` | Base DONUT checkpoint |
 | `SEED` | `42` | Global random seed |
 | `NEW_TOKENS` | `["<s_sroie>", ...]` | SROIE special tokens added to tokenizer |
@@ -259,10 +259,10 @@ Each experiment saves `results/experiment_N.json`:
 
 Two-stage pipeline (`03_train_trocr_yolo.py`, called by `run_all.py`):
 
-1. **YOLOv8n** (`yolov8n.pt`) — detects text regions as bounding boxes
-   - Config: `YOLO_EPOCHS=50`, `YOLO_IMG_SIZE=640`, `YOLO_BATCH=8`
-2. **TrOCR** (`microsoft/trocr-base-printed`) — reads text from cropped regions
-   - Config: `TROCR_EPOCHS=10`, `TROCR_BATCH=8`, `TROCR_LR=5e-5`, `TROCR_MAX_LEN=128`
+1. **YOLOv8x** (`yolov8x.pt`) — detects text regions as bounding boxes
+   - Config: `YOLO_EPOCHS=50`, `YOLO_IMG_SIZE=640`, `YOLO_BATCH=32`
+2. **TrOCR** (`microsoft/trocr-large-printed`) — reads text from cropped regions
+   - Config: `TROCR_EPOCHS=10`, `TROCR_BATCH=16`, `TROCR_LR=5e-5`, `TROCR_MAX_LEN=128`
 3. **Rule-based heuristics** — assign extracted text to SROIE fields
 
 YOLO training data: YAML at `data/yolo/dataset.yaml`. TrOCR crops: `data/trocr/`.

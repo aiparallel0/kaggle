@@ -53,7 +53,7 @@ class TestMaxLength:
         assert MAX_LENGTH > 0
 
     def test_max_length_value(self):
-        assert MAX_LENGTH == 512
+        assert MAX_LENGTH == 768
 
 
 class TestBaseModel:

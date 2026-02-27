@@ -336,10 +336,11 @@ class DonutEvaluator:
                 max_length=self.max_length,
                 use_cache=True,
                 num_beams=1,
+                repetition_penalty=1.5,
+                no_repeat_ngram_size=3,
                 bad_words_ids=[[self.processor.tokenizer.unk_token_id]],
                 return_dict_in_generate=True,
             )
-
         raw_tokens = self.processor.batch_decode(outputs.sequences)[0]
         cleaned = raw_tokens.replace(self.processor.tokenizer.eos_token, "")
         cleaned = cleaned.replace(self.processor.tokenizer.pad_token, "").strip()
@@ -429,6 +430,8 @@ class DonutEvaluator:
             max_length=self.max_length,
             use_cache=True,
             num_beams=1,
+            repetition_penalty=1.5,
+            no_repeat_ngram_size=3,
             bad_words_ids=[[self.processor.tokenizer.unk_token_id]],
             return_dict_in_generate=True,
         )
@@ -586,6 +589,8 @@ def run_inference(model, processor, image_path, task_prompt, max_length=512,
         max_length=max_length,
         use_cache=True,
         num_beams=1,
+        repetition_penalty=1.5,
+        no_repeat_ngram_size=3,
         bad_words_ids=[[processor.tokenizer.unk_token_id]],
         return_dict_in_generate=True,
     )

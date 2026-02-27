@@ -8,8 +8,8 @@ This ensures a fair, matched experimental design for cross-architecture
 comparison.
 
 Architecture:
-  Stage 1: YOLOv8n detects text regions (~3.2M params)
-  Stage 2: TrOCR-base reads text from crops (~334M params)
+  Stage 1: YOLOv8x detects text regions (~68.2M params)
+  Stage 2: TrOCR-large reads text from crops (~558M params)
   Stage 3: Rule-based heuristics assign fields to extracted text
 
 FIX: Added GPU cleanup between experiments.
@@ -37,13 +37,13 @@ from transformers import (
 from constants import FIELDS, SEED
 
 # ── Config ──────────────────────────────────────────────────────────────────
-TROCR_MODEL_ID = "microsoft/trocr-base-printed"
-YOLO_BASE = "yolov8n.pt"  # nano — faster training, ~3.2M params
+TROCR_MODEL_ID = "microsoft/trocr-large-printed"
+YOLO_BASE = "yolov8x.pt"  # extra-large — leverages available GPU VRAM (~95GB)
 YOLO_EPOCHS = 50
 YOLO_IMG_SIZE = 640
-YOLO_BATCH = 8
+YOLO_BATCH = 32
 TROCR_EPOCHS = 10
-TROCR_BATCH = 8
+TROCR_BATCH = 16
 TROCR_LR = 5e-5
 TROCR_MAX_LEN = 128
 GRAD_ACCUM = 4

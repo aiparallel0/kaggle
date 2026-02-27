@@ -37,8 +37,8 @@ MODEL_ID = BASE_MODEL
 DATA_DIR = Path("data/donut")
 OUTPUT_DIR = Path("models/donut_finetuned")
 IMAGE_SIZE = (1280, 960)  # (height, width) — DONUT default
-BATCH_SIZE = 2
-GRAD_ACCUM = 4            # effective batch = 8
+BATCH_SIZE = 8
+GRAD_ACCUM = 2            # effective batch = 16
 EPOCHS = 10
 LR = 5e-5
 WARMUP_RATIO = 0.1
