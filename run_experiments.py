@@ -95,9 +95,9 @@ class ExperimentConfig:
     epochs: int = 30
     lr: float = 5e-5
     batch_size: int = 16
-    seed: int = 42
+    seed: int = SEED
     early_stopping_patience: int = 3
-    base_model: str = "naver-clova-ix/donut-base-finetuned-cord-v2"
+    base_model: str = BASE_MODEL
     warmup_steps: int = 100
     weight_decay: float = 0.01
     max_length: int = MAX_LENGTH

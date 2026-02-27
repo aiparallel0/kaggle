@@ -68,7 +68,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List
 
-from constants import IMAGE_EXTS
+from constants import BASE_MODEL, IMAGE_EXTS, SEED
 
 
 # ---------------------------------------------------------------------------
@@ -213,7 +213,7 @@ def stage_install(args) -> StageResult:
 
     # 80/10/10 split with seed 42
     # Official test split has no public ground truth — use our own split instead.
-    rng = random.Random(42)
+    rng = random.Random(SEED)
     shuffled = list(valid_images)
     rng.shuffle(shuffled)
     n = len(shuffled)
@@ -364,7 +364,7 @@ def stage_download(args) -> StageResult:
     print("\n  Pre-downloading base model (blocking) ...")
     try:
         from transformers import DonutProcessor, VisionEncoderDecoderModel
-        model_id = "naver-clova-ix/donut-base-finetuned-cord-v2"
+        model_id = BASE_MODEL
         DonutProcessor.from_pretrained(model_id)
         VisionEncoderDecoderModel.from_pretrained(model_id)
         print("  Base model cached ✓")
@@ -408,7 +408,7 @@ def stage_pretrained_baseline(args) -> StageResult:
     ground_truths = [s[1] for s in test_samples]
     image_paths = [s[0] for s in test_samples]
 
-    pretrained_model_id = "naver-clova-ix/donut-base-finetuned-cord-v2"
+    pretrained_model_id = BASE_MODEL
     print(f"  Loading pretrained model: {pretrained_model_id}")
     pre_processor = DonutProcessor.from_pretrained(pretrained_model_id)
     pre_model = VisionEncoderDecoderModel.from_pretrained(pretrained_model_id).to(

@@ -53,7 +53,7 @@ from tqdm import tqdm
 
 # FIX: Import shared constants from single source of truth (constants.py)
 # instead of duplicating FIELDS/IMAGE_EXTS independently in this file.
-from constants import DEVICE, FIELDS, IMAGE_EXTS, _get_sroie_dir
+from constants import BASE_MODEL, DEVICE, FIELDS, IMAGE_EXTS, _get_sroie_dir
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -862,12 +862,8 @@ def main():
 
     # Load pretrained (CORD) — hub model, no re-tying needed
     print("Loading pretrained model (CORD)...")
-    pre_processor = DonutProcessor.from_pretrained(
-        "naver-clova-ix/donut-base-finetuned-cord-v2"
-    )
-    pre_model = VisionEncoderDecoderModel.from_pretrained(
-        "naver-clova-ix/donut-base-finetuned-cord-v2"
-    ).to(DEVICE)
+    pre_processor = DonutProcessor.from_pretrained(BASE_MODEL)
+    pre_model = VisionEncoderDecoderModel.from_pretrained(BASE_MODEL).to(DEVICE)
     pre_model.eval()
 
     # Load fine-tuned — apply weight re-tying fix

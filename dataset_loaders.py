@@ -70,7 +70,7 @@ except Exception:
 
 # FIX: Import shared constants from single source of truth (constants.py)
 # instead of defining EMPTY_GT and IMAGE_EXTS independently here.
-from constants import EMPTY_GT, IMAGE_EXTS as _IMAGE_EXTS_SET, FIELDS, _get_sroie_dir
+from constants import EMPTY_GT, IMAGE_EXTS as _IMAGE_EXTS_SET, FIELDS, SEED, _get_sroie_dir
 
 # ── Type alias ────────────────────────────────────────────────────────
 Sample = Tuple[Path, Dict[str, str]]
@@ -1049,7 +1049,7 @@ def split_dataset(
     train_ratio: float = 0.70,
     val_ratio: float = 0.15,
     test_ratio: float = 0.15,
-    seed: int = 42,
+    seed: int = SEED,
 ) -> Tuple[List[Sample], List[Sample], List[Sample]]:
     """Split a dataset into train/val/test with a fixed seed.
 
@@ -1134,12 +1134,12 @@ def get_combined_dataset(
                 )
         else:
             # Auxiliary datasets: 70/15/15 split
-            train_split, val_split, _ = split_dataset(data, seed=42)
+            train_split, val_split, _ = split_dataset(data, seed=SEED)
             combined_train.extend(train_split)
             combined_val.extend(val_split)
 
     # Fixed-seed shuffle to interleave samples from different datasets
-    rng = random.Random(42)
+    rng = random.Random(SEED)
     rng.shuffle(combined_train)
     rng.shuffle(combined_val)
 
