@@ -68,7 +68,7 @@ from evaluate import compute_metrics, run_inference
 # FIX: Import shared constants from single source of truth (constants.py)
 # instead of duplicating FIELDS/IMAGE_EXTS/etc. independently in this file.
 from constants import FIELDS, MAX_LENGTH, IMAGE_EXTS, NEW_TOKENS, BASE_MODEL, SEED, \
-    DEVICE, WORKSPACE, set_seed
+    DEVICE, WORKSPACE, set_seed, _gpu_cleanup
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -397,7 +397,6 @@ def train_experiment(
     # FIX: Explicit GPU cleanup between experiments to prevent OOM on GPUs
     # with limited VRAM.  The RTX 4090 has 24GB — sufficient for DONUT but
     # running 8+ experiments sequentially without cleanup risks fragmentation.
-    from constants import _gpu_cleanup
     _gpu_cleanup(model, processor, trainer, train_ds)
     if val_ds is not None:
         del val_ds
@@ -599,7 +598,6 @@ def main() -> None:
         _base_model = VisionEncoderDecoderModel.from_pretrained(_cfg.base_model)
         for exp_id in EXPERIMENTS:
             run_experiment(exp_id, base_processor=_base_processor, base_model=_base_model)
-        from constants import _gpu_cleanup
         _gpu_cleanup(_base_model, _base_processor)
         save_summary()
     else:

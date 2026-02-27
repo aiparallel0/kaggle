@@ -27,7 +27,7 @@ from pathlib import Path
 import torch
 from transformers import DonutProcessor, VisionEncoderDecoderModel
 
-from constants import FIELDS, MAX_LENGTH, SEED, BASE_MODEL, NEW_TOKENS
+from constants import FIELDS, MAX_LENGTH, SEED, BASE_MODEL, NEW_TOKENS, _gpu_cleanup
 
 # ── Config ──────────────────────────────────────────────────────────────────
 MODEL_ID = BASE_MODEL
@@ -142,7 +142,6 @@ def train():
     print(f"\nDONUT training complete.")
 
     # FIX: GPU cleanup after training to free VRAM for subsequent stages.
-    from constants import _gpu_cleanup
     _gpu_cleanup(model, processor, trainer, train_ds, val_ds)
 
     return history

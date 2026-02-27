@@ -27,6 +27,7 @@ from typing import Dict, List, Optional, Tuple
 from PIL import Image
 
 from constants import FIELDS, IMAGE_EXTS
+from dataset_loaders import _load_key_file
 
 # ── Config ────────────────────────────────────────────────────────────────────
 DATA_DIR = Path("data")
@@ -65,22 +66,6 @@ def _find_box_dir(split: str) -> Optional[Path]:
         if p.exists() and any(p.iterdir()):
             return p
     return None
-
-
-# ── SROIE key file reader ─────────────────────────────────────────────────────
-def _load_key_file(key_dir: Path, stem: str) -> Dict[str, str]:
-    """Load a SROIE .txt key file (4-line format: company/date/address/total)."""
-    key_file = key_dir / f"{stem}.txt"
-    if key_file.exists():
-        lines = key_file.read_text(encoding="utf-8").strip().splitlines()
-        if len(lines) >= 4:
-            return {
-                "company": lines[0].strip(),
-                "date":    lines[1].strip(),
-                "address": lines[2].strip(),
-                "total":   lines[3].strip(),
-            }
-    return {}
 
 
 # ── OCR bbox file reader ──────────────────────────────────────────────────────
