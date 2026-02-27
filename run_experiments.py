@@ -108,13 +108,14 @@ class ExperimentConfig:
     datasets: List[str]
     epochs: int = 30
     lr: float = 5e-5
-    batch_size: int = 4
+    batch_size: int = 16
     seed: int = 42
-    early_stopping_patience: int = 5
+    early_stopping_patience: int = 3
     base_model: str = "naver-clova-ix/donut-base-finetuned-cord-v2"
     warmup_steps: int = 100
     weight_decay: float = 0.01
     max_length: int = 512
+    gradient_accumulation_steps: int = 2
     description: str = ""
     experiment_id: int = 0
 
@@ -219,6 +220,7 @@ TRAIN_CONFIG: Dict[str, Any] = {
     "weight_decay": _default_config.weight_decay,
     "max_length": _default_config.max_length,
     "seed": _default_config.seed,
+    "gradient_accumulation_steps": _default_config.gradient_accumulation_steps,
 }
 
 
