@@ -50,6 +50,19 @@ RESULTS_DIR = Path("results")
 YOLO_DATA_YAML = Path("data/yolo/dataset.yaml")
 TROCR_DATA_DIR = Path("data/trocr")
 
+# Pre-compiled regex patterns for field assignment heuristics — compiled once
+# at module load instead of on every call to assign_fields_heuristic().
+_DATE_RE = re.compile(
+    r'\d{1,2}[/\-\.]\d{1,2}[/\-\.]\d{2,4}'
+    r'|\d{4}[/\-\.]\d{1,2}[/\-\.]\d{1,2}'
+)
+_TOTAL_RE = re.compile(
+    r'(?:total|amount|sum|due|grand)\s*[:\-]?\s*[\$\£\€]?\s*\d+[.,]\d{2}',
+    re.IGNORECASE,
+)
+_MONEY_RE = re.compile(r'[\$\£\€]?\s*\d+[.,]\d{2}\s*$')
+_NUMBER_RE = re.compile(r'[\d]+[.,][\d]{2}')
+
 
 # ════════════════════════════════════════════════════════════════════════════
 # TrOCR Dataset
@@ -304,17 +317,11 @@ def _assign_fields_heuristic(ocr_lines: List[Dict]) -> Dict[str, str]:
     sorted_lines = sorted(ocr_lines, key=lambda x: x.get("y", 0))
 
     # Date pattern
-    date_pattern = re.compile(
-        r'\d{1,2}[/\-\.]\d{1,2}[/\-\.]\d{2,4}'
-        r'|\d{4}[/\-\.]\d{1,2}[/\-\.]\d{1,2}'
-    )
+    date_pattern = _DATE_RE
     # Total pattern: currency symbols or "total" keyword followed by numbers
-    total_pattern = re.compile(
-        r'(?:total|amount|sum|due|grand)\s*[:\-]?\s*[\$\£\€]?\s*\d+[.,]\d{2}',
-        re.IGNORECASE,
-    )
+    total_pattern = _TOTAL_RE
     # Generic money pattern
-    money_pattern = re.compile(r'[\$\£\€]?\s*\d+[.,]\d{2}\s*$')
+    money_pattern = _MONEY_RE
 
     used = set()
 
@@ -335,7 +342,7 @@ def _assign_fields_heuristic(ocr_lines: List[Dict]) -> Dict[str, str]:
             i >= len(sorted_lines) - 3 and money_pattern.search(text)
         ):
             # Extract just the number
-            numbers = re.findall(r'[\d]+[.,][\d]{2}', text)
+            numbers = _NUMBER_RE.findall(text)
             result["total"] = numbers[-1] if numbers else text.strip()
             used.add(i)
             break

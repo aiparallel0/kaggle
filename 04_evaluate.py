@@ -27,7 +27,8 @@ import torch
 from PIL import Image
 from tqdm import tqdm
 
-from constants import FIELDS, IMAGE_EXTS, MAX_LENGTH, SEED, DEVICE
+from constants import FIELDS, IMAGE_EXTS, MAX_LENGTH, SEED, DEVICE, _gpu_cleanup
+from dataset_loaders import _load_key_file
 
 # ── Config ──────────────────────────────────────────────────────────────────
 RESULTS_DIR = Path("results")
@@ -53,6 +54,9 @@ def load_test_samples() -> List[Tuple[Path, Dict[str, str]]]:
 
     Returns list of (image_path, gt_dict) tuples.  Both DONUT and TrOCR+YOLO
     are evaluated on this EXACT same set for fair comparison.
+
+    Uses _load_key_file from dataset_loaders (single source of truth for
+    SROIE key file parsing) instead of duplicating the .txt/.json logic.
     """
     test_img_dir = SROIE_DATA_DIR / "test_img"
     test_key_dir = SROIE_DATA_DIR / "test_key"
@@ -66,24 +70,7 @@ def load_test_samples() -> List[Tuple[Path, Dict[str, str]]]:
         if img_path.suffix.lower() not in IMAGE_EXTS:
             continue
 
-        gt = {}
-        key_txt = test_key_dir / f"{img_path.stem}.txt"
-        if key_txt.exists():
-            lines = key_txt.read_text(encoding="utf-8").strip().splitlines()
-            if len(lines) >= 4:
-                gt = {
-                    "company": lines[0].strip(),
-                    "date":    lines[1].strip(),
-                    "address": lines[2].strip(),
-                    "total":   lines[3].strip(),
-                }
-        key_json = test_key_dir / f"{img_path.stem}.json"
-        if not gt and key_json.exists():
-            try:
-                gt = json.loads(key_json.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                pass
-
+        gt = _load_key_file(test_key_dir, img_path.stem)
         if gt:
             samples.append((img_path, gt))
 
@@ -150,7 +137,6 @@ def evaluate_donut_on_test(
     metrics["mean_latency_ms"] = round(float(np.mean(latencies)), 1) if latencies else 0.0
 
     # GPU cleanup
-    from constants import _gpu_cleanup
     _gpu_cleanup(model, processor)
 
     return metrics
@@ -195,7 +181,6 @@ def evaluate_trocr_yolo_on_test(
     metrics["mean_latency_ms"] = round(float(np.mean(latencies)), 1) if latencies else 0.0
 
     # GPU cleanup
-    from constants import _gpu_cleanup
     _gpu_cleanup(yolo_model, trocr_model, trocr_processor)
 
     return metrics

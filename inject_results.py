@@ -51,6 +51,10 @@ from typing import Dict, List, Optional, Tuple
 # FIX: FIELDS was duplicated independently here and in 4 other files.
 from constants import FIELDS
 
+# Pre-compiled regex for \VAR{...} template placeholders — compiled once at
+# module load rather than on every fill() call.
+_VAR_RE = re.compile(r"\\VAR\{([^}]+)\}")
+
 LEADERBOARD: List[Tuple[str, float]] = [
     # LayoutLMv3: Huang et al. 2022, "LayoutLMv3: Pre-training for Document AI"
     # Table 6, SROIE entity-level F1. DOI: 10.1145/3503161.3548112
@@ -278,9 +282,9 @@ class PaperInjector:
             key = m.group(1)
             return var_map.get(key, m.group(0))
 
-        filled = re.sub(r"\\VAR\{([^}]+)\}", _replace, text)
+        filled = _VAR_RE.sub(_replace, text)
 
-        remaining = re.findall(r"\\VAR\{([^}]+)\}", filled)
+        remaining = _VAR_RE.findall(filled)
         if remaining:
             raise UnresolvedVarError(
                 f"{len(remaining)} unresolved \\VAR{{}} placeholder(s): {remaining}"
