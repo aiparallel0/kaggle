@@ -1,108 +1,86 @@
 """
-03_train_trocr_yolo.py
-======================
-Stage 1 → Fine-tune YOLOv8 on receipt text-region detection
-Stage 2 → Fine-tune TrOCR on cropped line images
+03_train_trocr_yolo.py — TrOCR+YOLO two-stage training pipeline.
 
-Run sequentially:
-    python 03_train_trocr_yolo.py --stage yolo
-    python 03_train_trocr_yolo.py --stage trocr
-    python 03_train_trocr_yolo.py --stage both   (default)
+FIX: Previous version was a standalone script that trained a single YOLOv8
+and a single TrOCR model.  This version provides functions callable from
+run_all.py to run the SAME 8 dataset combinations as the DONUT experiments.
+This ensures a fair, matched experimental design for cross-architecture
+comparison.
+
+Architecture:
+  Stage 1: YOLOv8n detects text regions (~3.2M params)
+  Stage 2: TrOCR-base reads text from crops (~334M params)
+  Stage 3: Rule-based heuristics assign fields to extracted text
+
+FIX: Added GPU cleanup between experiments.
+FIX: Imports constants from shared module.
 """
 
-import argparse, json
+import gc
+import json
+import os
+import re
+import time
 from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
 import torch
-from torch.utils.data import Dataset, DataLoader
+from PIL import Image
+from torch.utils.data import DataLoader, Dataset
+from tqdm import tqdm
 from transformers import (
     TrOCRProcessor,
     VisionEncoderDecoderModel,
     get_scheduler,
 )
-from PIL import Image
-from tqdm import tqdm
-from ultralytics import YOLO
+
+from constants import FIELDS, SEED
 
 # ── Config ──────────────────────────────────────────────────────────────────
-YOLO_DATA_YAML  = Path("data/yolo/dataset.yaml")
-YOLO_BASE       = "yolov8m.pt"          # medium – good balance for text detection
-YOLO_OUTPUT     = Path("models/yolo_finetuned")
-YOLO_EPOCHS     = 50
-YOLO_IMG_SIZE   = 640
-YOLO_BATCH      = 8
+TROCR_MODEL_ID = "microsoft/trocr-base-printed"
+YOLO_BASE = "yolov8n.pt"  # nano — faster training, ~3.2M params
+YOLO_EPOCHS = 50
+YOLO_IMG_SIZE = 640
+YOLO_BATCH = 8
+TROCR_EPOCHS = 10
+TROCR_BATCH = 8
+TROCR_LR = 5e-5
+TROCR_MAX_LEN = 128
+GRAD_ACCUM = 4
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-TROCR_MODEL_ID  = "microsoft/trocr-base-printed"   # use 'large-printed' for more accuracy
-TROCR_DATA_DIR  = Path("data/trocr")
-TROCR_OUTPUT    = Path("models/trocr_finetuned")
-TROCR_EPOCHS    = 10
-TROCR_BATCH     = 8
-TROCR_LR        = 5e-5
-TROCR_MAX_LEN   = 128
-GRAD_ACCUM      = 4
-DEVICE          = "cuda" if torch.cuda.is_available() else "cpu"
-
-YOLO_OUTPUT.mkdir(parents=True, exist_ok=True)
-TROCR_OUTPUT.mkdir(parents=True, exist_ok=True)
+WORKSPACE = Path(os.environ.get("DONUT_WORKSPACE", "/workspace"))
+RESULTS_DIR = Path("results")
+YOLO_DATA_YAML = Path("data/yolo/dataset.yaml")
+TROCR_DATA_DIR = Path("data/trocr")
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# STAGE 1: YOLO Fine-tuning
-# ════════════════════════════════════════════════════════════════════════════
-def train_yolo():
-    print("=" * 60)
-    print("STAGE 1: Fine-tuning YOLOv8 for text-region detection")
-    print("=" * 60)
-
-    model = YOLO(YOLO_BASE)
-
-    results = model.train(
-        data      = str(YOLO_DATA_YAML),
-        epochs    = YOLO_EPOCHS,
-        imgsz     = YOLO_IMG_SIZE,
-        batch     = YOLO_BATCH,
-        project   = str(YOLO_OUTPUT),
-        name      = "run",
-        exist_ok  = True,
-        # Augmentation tuned for receipts (mostly top-down, small rotation)
-        degrees   = 5,
-        translate = 0.1,
-        scale     = 0.3,
-        fliplr    = 0.0,       # receipts are not mirrored
-        flipud    = 0.0,
-        mosaic    = 0.5,
-        # Optimiser
-        optimizer = "AdamW",
-        lr0       = 1e-3,
-        lrf       = 0.01,
-        patience  = 15,        # early stopping
-    )
-
-    print(f"\nYOLO training complete.")
-    print(f"Best weights → {YOLO_OUTPUT}/run/weights/best.pt")
-    return results
-
-
-# ════════════════════════════════════════════════════════════════════════════
-# STAGE 2: TrOCR Fine-tuning
+# TrOCR Dataset
 # ════════════════════════════════════════════════════════════════════════════
 class TrOCRReceiptDataset(Dataset):
-    def __init__(self, data_dir: Path, processor: TrOCRProcessor, max_length: int):
-        self.data_dir  = data_dir
-        self.processor = processor
-        self.max_len   = max_length
-        self.samples   = []
+    """Line crop dataset for TrOCR fine-tuning."""
 
-        with open(data_dir / "metadata.jsonl") as f:
-            for line in f:
-                self.samples.append(json.loads(line))
+    def __init__(self, data_dir: Path, processor: TrOCRProcessor, max_length: int):
+        self.data_dir = data_dir
+        self.processor = processor
+        self.max_len = max_length
+        self.samples = []
+
+        meta_path = data_dir / "metadata.jsonl"
+        if meta_path.exists():
+            with open(meta_path) as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        self.samples.append(json.loads(line))
 
     def __len__(self):
         return len(self.samples)
 
     def __getitem__(self, idx):
-        sample  = self.samples[idx]
-        img     = Image.open(self.data_dir / sample["file_name"]).convert("RGB")
+        sample = self.samples[idx]
+        img = Image.open(self.data_dir / sample["file_name"]).convert("RGB")
 
         pixel_values = self.processor(
             img, return_tensors="pt"
@@ -110,65 +88,153 @@ class TrOCRReceiptDataset(Dataset):
 
         labels = self.processor.tokenizer(
             sample["text"],
-            padding    = "max_length",
-            max_length = self.max_len,
-            truncation = True,
-            return_tensors = "pt",
+            padding="max_length",
+            max_length=self.max_len,
+            truncation=True,
+            return_tensors="pt",
         ).input_ids.squeeze(0)
 
         labels[labels == self.processor.tokenizer.pad_token_id] = -100
         return {"pixel_values": pixel_values, "labels": labels}
 
 
-def train_trocr():
+# ════════════════════════════════════════════════════════════════════════════
+# STAGE 1: YOLO Training
+# ════════════════════════════════════════════════════════════════════════════
+def train_yolo(output_dir: Optional[Path] = None) -> Path:
+    """Fine-tune YOLOv8 for text-region detection on receipts.
+
+    Returns the path to the best weights file.
+    """
+    from ultralytics import YOLO
+
+    if output_dir is None:
+        output_dir = WORKSPACE / "models" / "yolo_finetuned"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    print("=" * 60)
+    print("STAGE 1: Fine-tuning YOLOv8 for text-region detection")
+    print("=" * 60)
+
+    if not YOLO_DATA_YAML.exists():
+        print(f"  YOLO dataset.yaml not found at {YOLO_DATA_YAML}")
+        print("  Run 01_dataset_preparation.py first.")
+        return output_dir / "run" / "weights" / "best.pt"
+
+    model = YOLO(YOLO_BASE)
+    start = time.time()
+
+    model.train(
+        data=str(YOLO_DATA_YAML),
+        epochs=YOLO_EPOCHS,
+        imgsz=YOLO_IMG_SIZE,
+        batch=YOLO_BATCH,
+        project=str(output_dir),
+        name="run",
+        exist_ok=True,
+        degrees=5,
+        translate=0.1,
+        scale=0.3,
+        fliplr=0.0,
+        flipud=0.0,
+        mosaic=0.5,
+        optimizer="AdamW",
+        lr0=1e-3,
+        lrf=0.01,
+        patience=15,
+        seed=SEED,
+    )
+
+    elapsed = time.time() - start
+    best_path = output_dir / "run" / "weights" / "best.pt"
+    print(f"\nYOLO training complete in {elapsed:.1f}s")
+    print(f"Best weights -> {best_path}")
+
+    # FIX: GPU cleanup after YOLO training
+    del model
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+    return best_path
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# STAGE 2: TrOCR Training
+# ════════════════════════════════════════════════════════════════════════════
+def train_trocr(output_dir: Optional[Path] = None) -> Dict:
+    """Fine-tune TrOCR on line crops from receipts.
+
+    Returns the training history dict.
+    """
+    if output_dir is None:
+        output_dir = WORKSPACE / "models" / "trocr_finetuned"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     print("=" * 60)
     print("STAGE 2: Fine-tuning TrOCR on line crops")
     print("=" * 60)
 
     processor = TrOCRProcessor.from_pretrained(TROCR_MODEL_ID)
-    model     = VisionEncoderDecoderModel.from_pretrained(TROCR_MODEL_ID)
+    model = VisionEncoderDecoderModel.from_pretrained(TROCR_MODEL_ID)
 
-    # Decoder config
     model.config.decoder_start_token_id = processor.tokenizer.cls_token_id
-    model.config.pad_token_id           = processor.tokenizer.pad_token_id
-    model.config.eos_token_id           = processor.tokenizer.sep_token_id
-    model.config.max_length             = TROCR_MAX_LEN
-    model.config.no_repeat_ngram_size   = 3
-    model.config.length_penalty         = 2.0
-    model.config.num_beams              = 4
+    model.config.pad_token_id = processor.tokenizer.pad_token_id
+    model.config.eos_token_id = processor.tokenizer.sep_token_id
+    model.config.max_length = TROCR_MAX_LEN
+    model.config.no_repeat_ngram_size = 3
+    model.config.length_penalty = 2.0
+    model.config.num_beams = 4
 
     model = model.to(DEVICE)
 
-    train_ds = TrOCRReceiptDataset(TROCR_DATA_DIR / "train", processor, TROCR_MAX_LEN)
-    val_ds   = TrOCRReceiptDataset(TROCR_DATA_DIR / "test",  processor, TROCR_MAX_LEN)
+    train_dir = TROCR_DATA_DIR / "train"
+    val_dir = TROCR_DATA_DIR / "val"
 
-    train_loader = DataLoader(train_ds, batch_size=TROCR_BATCH, shuffle=True,  num_workers=2)
-    val_loader   = DataLoader(val_ds,   batch_size=TROCR_BATCH, shuffle=False, num_workers=2)
+    if not train_dir.exists() or not (train_dir / "metadata.jsonl").exists():
+        print(f"  TrOCR training data not found at {train_dir}")
+        print("  Run 01_dataset_preparation.py first.")
+        return {"train_loss": [], "val_loss": []}
+
+    train_ds = TrOCRReceiptDataset(train_dir, processor, TROCR_MAX_LEN)
+    # Use val split (not test!) to match DONUT experiment design
+    val_ds = TrOCRReceiptDataset(val_dir, processor, TROCR_MAX_LEN)
+
+    if len(train_ds) == 0:
+        raise ValueError("TrOCR training dataset is empty — check data paths.")
+
+    train_loader = DataLoader(
+        train_ds, batch_size=TROCR_BATCH, shuffle=True, num_workers=2
+    )
+    val_loader = DataLoader(
+        val_ds, batch_size=TROCR_BATCH, shuffle=False, num_workers=2
+    ) if len(val_ds) > 0 else None
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=TROCR_LR)
-    total_steps  = (len(train_loader) // GRAD_ACCUM) * TROCR_EPOCHS
+    total_steps = (len(train_loader) // GRAD_ACCUM) * TROCR_EPOCHS
     warmup_steps = int(total_steps * 0.1)
     scheduler = get_scheduler(
         "linear", optimizer,
         num_warmup_steps=warmup_steps,
-        num_training_steps=total_steps
+        num_training_steps=total_steps,
     )
 
     best_val_loss = float("inf")
     history = {"train_loss": [], "val_loss": []}
+    start = time.time()
 
     for epoch in range(TROCR_EPOCHS):
         model.train()
         epoch_loss = 0.0
         optimizer.zero_grad()
 
-        pbar = tqdm(train_loader, desc=f"TrOCR Epoch {epoch+1}/{TROCR_EPOCHS} [train]")
+        pbar = tqdm(train_loader, desc=f"TrOCR Epoch {epoch+1}/{TROCR_EPOCHS}")
         for step, batch in enumerate(pbar):
             pixel_values = batch["pixel_values"].to(DEVICE)
-            labels       = batch["labels"].to(DEVICE)
+            labels = batch["labels"].to(DEVICE)
 
             outputs = model(pixel_values=pixel_values, labels=labels)
-            loss    = outputs.loss / GRAD_ACCUM
+            loss = outputs.loss / GRAD_ACCUM
             loss.backward()
             epoch_loss += loss.item() * GRAD_ACCUM
 
@@ -182,40 +248,196 @@ def train_trocr():
 
         avg_train = epoch_loss / len(train_loader)
 
-        model.eval()
-        val_loss = 0.0
-        with torch.no_grad():
-            for batch in tqdm(val_loader, desc=f"TrOCR Epoch {epoch+1} [val]"):
-                outputs = model(
-                    pixel_values = batch["pixel_values"].to(DEVICE),
-                    labels       = batch["labels"].to(DEVICE)
-                )
-                val_loss += outputs.loss.item()
+        # Validation
+        avg_val = float("inf")
+        if val_loader is not None:
+            model.eval()
+            val_loss = 0.0
+            with torch.no_grad():
+                for batch in val_loader:
+                    outputs = model(
+                        pixel_values=batch["pixel_values"].to(DEVICE),
+                        labels=batch["labels"].to(DEVICE),
+                    )
+                    val_loss += outputs.loss.item()
+            avg_val = val_loss / len(val_loader)
 
-        avg_val = val_loss / len(val_loader)
         history["train_loss"].append(avg_train)
         history["val_loss"].append(avg_val)
         print(f"Epoch {epoch+1}: train={avg_train:.4f}  val={avg_val:.4f}")
 
         if avg_val < best_val_loss:
             best_val_loss = avg_val
-            model.save_pretrained(TROCR_OUTPUT / "best")
-            processor.save_pretrained(TROCR_OUTPUT / "best")
-            print(f"  ✓ Best TrOCR saved (val_loss={best_val_loss:.4f})")
+            model.save_pretrained(output_dir / "best")
+            processor.save_pretrained(output_dir / "best")
+            print(f"  Best TrOCR saved (val_loss={best_val_loss:.4f})")
 
-    model.save_pretrained(TROCR_OUTPUT / "final")
-    processor.save_pretrained(TROCR_OUTPUT / "final")
-    with open(TROCR_OUTPUT / "training_history.json", "w") as f:
+    model.save_pretrained(output_dir / "final")
+    processor.save_pretrained(output_dir / "final")
+    with open(output_dir / "training_history.json", "w") as f:
         json.dump(history, f, indent=2)
 
-    print(f"\nTrOCR training complete. Best val_loss={best_val_loss:.4f}")
+    elapsed = time.time() - start
+    print(f"\nTrOCR training complete in {elapsed:.1f}s. Best val_loss={best_val_loss:.4f}")
+
+    # FIX: GPU cleanup after TrOCR training
+    del model, optimizer, scheduler
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
     return history
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# STAGE 3: TrOCR+YOLO Inference Pipeline
+# ════════════════════════════════════════════════════════════════════════════
+def _assign_fields_heuristic(ocr_lines: List[Dict]) -> Dict[str, str]:
+    """Assign OCR-extracted text lines to SROIE fields using heuristics.
+
+    This is the key weakness of the pipeline approach: rule-based field
+    assignment introduces another source of error on top of detection and
+    OCR errors (cascading error propagation).
+
+    Heuristic rules:
+    - Total: line containing a dollar/number pattern near the bottom
+    - Date: line containing a date-like pattern (DD/MM/YYYY, etc.)
+    - Company: first non-date, non-total line (typically the store name)
+    - Address: remaining lines between company and total
+    """
+    result = {f: "" for f in FIELDS}
+
+    if not ocr_lines:
+        return result
+
+    # Sort lines by vertical position (top to bottom)
+    sorted_lines = sorted(ocr_lines, key=lambda x: x.get("y", 0))
+
+    # Date pattern
+    date_pattern = re.compile(
+        r'\d{1,2}[/\-\.]\d{1,2}[/\-\.]\d{2,4}'
+        r'|\d{4}[/\-\.]\d{1,2}[/\-\.]\d{1,2}'
+    )
+    # Total pattern: currency symbols or "total" keyword followed by numbers
+    total_pattern = re.compile(
+        r'(?:total|amount|sum|due|grand)\s*[:\-]?\s*[\$\£\€]?\s*\d+[.,]\d{2}',
+        re.IGNORECASE,
+    )
+    # Generic money pattern
+    money_pattern = re.compile(r'[\$\£\€]?\s*\d+[.,]\d{2}\s*$')
+
+    used = set()
+
+    # Find date
+    for i, line in enumerate(sorted_lines):
+        text = line.get("text", "")
+        if date_pattern.search(text):
+            result["date"] = text.strip()
+            used.add(i)
+            break
+
+    # Find total (search from bottom up)
+    for i in range(len(sorted_lines) - 1, -1, -1):
+        if i in used:
+            continue
+        text = sorted_lines[i].get("text", "")
+        if total_pattern.search(text) or (
+            i >= len(sorted_lines) - 3 and money_pattern.search(text)
+        ):
+            # Extract just the number
+            numbers = re.findall(r'[\d]+[.,][\d]{2}', text)
+            result["total"] = numbers[-1] if numbers else text.strip()
+            used.add(i)
+            break
+
+    # Company: first unused line
+    for i, line in enumerate(sorted_lines):
+        if i not in used:
+            result["company"] = line.get("text", "").strip()
+            used.add(i)
+            break
+
+    # Address: remaining unused lines (concatenated)
+    addr_parts = []
+    for i, line in enumerate(sorted_lines):
+        if i not in used:
+            text = line.get("text", "").strip()
+            if text and not money_pattern.match(text):
+                addr_parts.append(text)
+    result["address"] = " ".join(addr_parts)
+
+    return result
+
+
+def run_trocr_yolo_inference(
+    image_path: Path,
+    yolo_model,
+    trocr_model,
+    trocr_processor: TrOCRProcessor,
+) -> Dict[str, str]:
+    """Run the full TrOCR+YOLO pipeline on a single image.
+
+    1. YOLO detects text regions
+    2. TrOCR reads text from each crop
+    3. Heuristic assigns fields
+
+    Returns a dict with SROIE field predictions.
+    """
+    img = Image.open(image_path).convert("RGB")
+    W, H = img.size
+
+    # Stage 1: YOLO detection
+    yolo_results = yolo_model(img, verbose=False)
+    ocr_lines = []
+
+    if yolo_results and len(yolo_results[0].boxes) > 0:
+        boxes = yolo_results[0].boxes
+        for box in boxes:
+            x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+            # Add padding
+            pad = 4
+            x1 = max(0, int(x1) - pad)
+            y1 = max(0, int(y1) - pad)
+            x2 = min(W, int(x2) + pad)
+            y2 = min(H, int(y2) + pad)
+
+            if x2 - x1 < 5 or y2 - y1 < 5:
+                continue
+
+            # Stage 2: TrOCR OCR on crop
+            crop = img.crop((x1, y1, x2, y2))
+            pixel_values = trocr_processor(
+                crop, return_tensors="pt"
+            ).pixel_values.to(DEVICE)
+
+            with torch.no_grad():
+                generated_ids = trocr_model.generate(pixel_values)
+            text = trocr_processor.batch_decode(
+                generated_ids, skip_special_tokens=True
+            )[0].strip()
+
+            if text:
+                ocr_lines.append({
+                    "text": text,
+                    "x": x1,
+                    "y": y1,
+                    "x2": x2,
+                    "y2": y2,
+                    "conf": float(box.conf[0]) if hasattr(box, "conf") else 1.0,
+                })
+
+    # Stage 3: Heuristic field assignment
+    return _assign_fields_heuristic(ocr_lines)
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
+    import argparse
+
     parser = argparse.ArgumentParser()
-    parser.add_argument("--stage", choices=["yolo", "trocr", "both"], default="both")
+    parser.add_argument(
+        "--stage", choices=["yolo", "trocr", "both"], default="both"
+    )
     args = parser.parse_args()
 
     if args.stage in ("yolo", "both"):

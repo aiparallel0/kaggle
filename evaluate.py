@@ -51,6 +51,10 @@ from PIL import Image
 from transformers import DonutProcessor, VisionEncoderDecoderModel
 from tqdm import tqdm
 
+# FIX: Import shared constants from single source of truth (constants.py)
+# instead of duplicating FIELDS/IMAGE_EXTS independently in this file.
+from constants import FIELDS, IMAGE_EXTS
+
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
@@ -66,9 +70,7 @@ if not logger.handlers:
 # Constants
 # ---------------------------------------------------------------------------
 
-FIELDS = ["company", "date", "address", "total"]
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".webp"}
 
 # Number of initial inference calls for which raw token output is logged
 _DIAGNOSTIC_LOG_COUNT = 3
@@ -312,11 +314,13 @@ class DonutEvaluator:
         ).input_ids.to(self.device)
 
         with torch.no_grad():
+            # FIX: Removed early_stopping=True — it is deprecated/invalid with
+            # num_beams=1 (greedy decoding) and generates thousands of warnings
+            # per eval call in transformers>=4.35.
             outputs = self.model.generate(
                 pixel_values,
                 decoder_input_ids=decoder_input_ids,
                 max_length=self.max_length,
-                early_stopping=True,
                 use_cache=True,
                 num_beams=1,
                 bad_words_ids=[[self.processor.tokenizer.unk_token_id]],
@@ -561,11 +565,12 @@ def run_inference(model, processor, image_path, task_prompt, max_length=512,
         task_prompt, add_special_tokens=False, return_tensors="pt"
     ).input_ids.to(DEVICE)
 
+    # FIX: Removed early_stopping=True — invalid with num_beams=1 (greedy
+    # decoding).  This caused thousands of deprecation warnings per eval run.
     outputs = model.generate(
         pixel_values,
         decoder_input_ids=decoder_input_ids,
         max_length=max_length,
-        early_stopping=True,
         use_cache=True,
         num_beams=1,
         bad_words_ids=[[processor.tokenizer.unk_token_id]],

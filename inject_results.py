@@ -45,10 +45,11 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 # ---------------------------------------------------------------------------
-# Constants
+# Constants — imported from shared module to avoid duplication
 # ---------------------------------------------------------------------------
 
-FIELDS = ["company", "date", "address", "total"]
+# FIX: FIELDS was duplicated independently here and in 4 other files.
+from constants import FIELDS
 
 LEADERBOARD: List[Tuple[str, float]] = [
     # LayoutLMv3: Huang et al. 2022, "LayoutLMv3: Pre-training for Document AI"
@@ -226,6 +227,44 @@ class PaperInjector:
             var_map["gain_1_4"] = "N/A"
             var_map["gain_over_published"] = "N/A"
 
+        # FIX: TrOCR+YOLO results — inject variables for dual-architecture
+        # comparison table in paper.tex.  Reads from trocr_yolo_results.json.
+        trocr_path = self.results_dir / "trocr_yolo_results.json"
+        if trocr_path.exists():
+            try:
+                with open(trocr_path) as fh:
+                    trocr_all = json.load(fh)
+                for exp_id_str, res in trocr_all.items():
+                    m = res.get("metrics", {})
+                    n = res.get("num_train_samples", 0)
+                    eid = exp_id_str
+                    var_map[f"trocr_exp{eid}_n"] = f"{n:,}"
+                    var_map[f"trocr_exp{eid}_prec"] = _safe(m, "global_precision")
+                    var_map[f"trocr_exp{eid}_rec"] = _safe(m, "global_recall")
+                    var_map[f"trocr_exp{eid}_f1"] = _safe(m, "global_f1")
+                    var_map[f"trocr_exp{eid}_em"] = _safe(m, "overall_exact_match")
+                    for field in FIELDS:
+                        var_map[f"trocr_exp{eid}_{field}_f1"] = _safe(m, f"{field}_f1")
+                        var_map[f"trocr_exp{eid}_{field}_ned"] = _safe(m, f"{field}_ned")
+
+                # Best TrOCR+YOLO result
+                trocr_best_f1 = 0.0
+                trocr_best_exp = "1"
+                for exp_id_str, res in trocr_all.items():
+                    f1 = res.get("metrics", {}).get("global_f1", 0.0)
+                    if f1 > trocr_best_f1:
+                        trocr_best_f1 = f1
+                        trocr_best_exp = exp_id_str
+                var_map["trocr_best_f1"] = f"{trocr_best_f1:.4f}"
+                var_map["trocr_best_f1_pct"] = f"{trocr_best_f1 * 100:.2f}"
+                var_map["trocr_best_exp"] = trocr_best_exp
+            except Exception:
+                pass
+
+        # Ensure TrOCR vars have fallback values if file was missing
+        for key in ["trocr_best_f1", "trocr_best_f1_pct", "trocr_best_exp"]:
+            var_map.setdefault(key, "N/A")
+
         return var_map
 
     # -- fill ---------------------------------------------------------------
@@ -399,6 +438,48 @@ def print_table4_leaderboard(all_exp: dict) -> None:
     for name, score in sorted(entries, key=lambda x: x[1], reverse=True):
         marker = " % <-- ours" if "Ours" in name else ""
         print(f"{name} & {score*100:.2f} \\\\{marker}")
+    print()
+
+
+def print_table5_trocr_yolo(trocr_exp: dict) -> None:
+    """Print Table 5: TrOCR+YOLO Per-Experiment Results rows.
+
+    FIX: New function added for dual-architecture comparison.
+    Previously the pipeline only generated DONUT tables.
+    """
+    print("% === TABLE 5: TrOCR+YOLO Per-Experiment Results ===")
+    print("% Exp & Training Data & Train Samples & Precision & Recall & F1 & Exact Match \\\\")
+    for exp_id_str in sorted(trocr_exp, key=lambda x: int(x)):
+        res = trocr_exp[exp_id_str]
+        m = res.get("metrics", {})
+        name = EXP_NAMES.get(exp_id_str, res.get("name", ""))
+        n = res.get("num_train_samples", 0)
+        print(
+            f"{exp_id_str} & {name} & {n:,} & "
+            f"{_safe(m, 'global_precision')} & "
+            f"{_safe(m, 'global_recall')} & "
+            f"{_safe(m, 'global_f1')} & "
+            f"{_safe(m, 'overall_exact_match')} \\\\"
+        )
+    print()
+
+
+def print_table6_cross_architecture(donut_exp: dict, trocr_exp: dict) -> None:
+    """Print Table 6: Cross-Architecture Comparison (DONUT vs TrOCR+YOLO).
+
+    FIX: New function for the dual-architecture comparison that is the
+    core scientific contribution of this paper.
+    """
+    print("% === TABLE 6: Cross-Architecture Comparison ===")
+    print("% Exp & Training Data & DONUT F1 & TrOCR+YOLO F1 & Delta \\\\")
+    for exp_id_str in sorted(set(donut_exp) | set(trocr_exp), key=lambda x: int(x)):
+        name = EXP_NAMES.get(exp_id_str, f"Exp {exp_id_str}")
+        d_f1 = donut_exp.get(exp_id_str, {}).get("metrics", {}).get("global_f1", 0.0)
+        t_f1 = trocr_exp.get(exp_id_str, {}).get("metrics", {}).get("global_f1", 0.0)
+        delta = d_f1 - t_f1
+        print(
+            f"{exp_id_str} & {name} & {d_f1:.4f} & {t_f1:.4f} & {delta:+.4f} \\\\"
+        )
     print()
 
 

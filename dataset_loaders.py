@@ -69,13 +69,16 @@ try:
 except Exception:
     pass
 
+# FIX: Import shared constants from single source of truth (constants.py)
+# instead of defining EMPTY_GT and IMAGE_EXTS independently here.
+from constants import EMPTY_GT, IMAGE_EXTS as _IMAGE_EXTS_SET, FIELDS
+
 # ── Type alias ────────────────────────────────────────────────────────
 Sample = Tuple[Path, Dict[str, str]]
 
-# ── Shared constants ──────────────────────────────────────────────────
-EMPTY_GT: Dict[str, str] = {"company": "", "date": "", "address": "", "total": ""}
+# ── Shared constants (derived from constants.py) ─────────────────────
 _SROIE_FIELDS = frozenset(EMPTY_GT.keys())
-_IMAGE_EXTS = frozenset({".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".webp"})
+_IMAGE_EXTS = _IMAGE_EXTS_SET
 
 
 # ======================================================================
@@ -583,15 +586,18 @@ class WildReceiptLoader(BaseDatasetLoader):
 
 
 # ======================================================================
-#  SROIENERLoader (minimal — known-broken upstream)
+#  SROIENERLoader (DEPRECATED — known-broken upstream, never used in pipeline)
 # ======================================================================
+# NOTE: This loader is dead code.  It is not referenced in _LOADERS, not used
+# by any experiment, and the upstream HF dataset is permanently broken.
+# Kept for backward compatibility only — do not use in new code.
 
 class SROIENERLoader(BaseDatasetLoader):
-    """Attempt to load the SROIE-NER dataset (darentang/sroie on HuggingFace).
+    """DEPRECATED: Attempt to load the SROIE-NER dataset (darentang/sroie).
 
-    BUG 2: The HuggingFace ``load_dataset("darentang/sroie")`` call is broken
-    because dataset scripts are no longer supported.  This loader tries a
-    parquet fallback URL and raises ``DatasetLoadError`` loudly if it fails.
+    This loader is dead code — it is never called by the pipeline.  The
+    upstream HuggingFace dataset is permanently broken (dataset scripts
+    no longer supported).  Retained only for backward compatibility.
     """
 
     name = "SROIE-NER"

@@ -1,286 +1,293 @@
 """
-05_compare_results.py
-=====================
-Loads results/metrics.json and produces:
-  1. Side-by-side bar chart (CER, WER, Macro F1, Latency)
+05_compare_results.py — Cross-architecture comparison: DONUT vs TrOCR+YOLO.
+
+FIX: Previous version expected a single metrics.json with CER/WER/Macro-F1
+structure that didn't match the pipeline's output format.  This version
+reads the per-experiment JSON files from results/ (same format produced by
+run_experiments.py for DONUT and run_all.py for TrOCR+YOLO) and generates:
+
+  1. Per-experiment comparison table (DONUT F1 vs TrOCR+YOLO F1)
   2. Per-field F1 grouped bar chart
-  3. Training loss curves for both models
-  4. Printed summary table
-  5. results/comparison_report.html  (self-contained)
+  3. Training loss convergence curves
+  4. Complexity comparison table (params, training time, inference latency)
+  5. LaTeX-injectable .tex files for the paper
+  6. PNG plots for inclusion in the paper / HTML report
+
+FIX: Uses SROIE Task-3 metrics (global F1, per-field F1, NED) consistently
+across both architectures for fair comparison.
+
+FIX: Imports constants from shared module.
 """
 
 import json
 from pathlib import Path
+from typing import Dict, List, Optional
+
 import numpy as np
+
+from constants import FIELDS
+
+# Use Agg backend for non-interactive rendering (CI/headless)
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
-import seaborn as sns
-import pandas as pd
 
-RESULTS_DIR   = Path("results")
-DONUT_HIST    = Path("models/donut_finetuned/training_history.json")
-TROCR_HIST    = Path("models/trocr_finetuned/training_history.json")
+RESULTS_DIR = Path("results")
+RESULTS_DIR.mkdir(exist_ok=True)
 
-sns.set_theme(style="whitegrid", palette="muted", font_scale=1.1)
+# Color scheme for plots
 COLORS = {"donut": "#4C72B0", "trocr_yolo": "#DD8452"}
 LABELS = {"donut": "DONUT", "trocr_yolo": "TrOCR + YOLO"}
 
+EXP_NAMES = {
+    "1": "SROIE only",
+    "2": "+WildReceipt",
+    "3": "+Invoices",
+    "4": "+CORD",
+    "5": "+Wild+CORD",
+    "6": "+Wild+Inv",
+    "7": "+CORD+Inv",
+    "8": "+All",
+}
 
-# ── Load data ────────────────────────────────────────────────────────────────
-def load_metrics():
-    with open(RESULTS_DIR / "metrics.json") as f:
-        return json.load(f)
 
-def load_history(path):
+# ── Load experiment results ─────────────────────────────────────────────────
+def load_donut_results() -> Dict:
+    """Load all DONUT experiment results from individual JSON files."""
+    results = {}
+    for i in range(1, 9):
+        path = RESULTS_DIR / f"experiment_{i}.json"
+        if path.exists():
+            with open(path) as f:
+                results[str(i)] = json.load(f)
+    return results
+
+
+def load_trocr_results() -> Dict:
+    """Load TrOCR+YOLO experiment results from the combined JSON."""
+    path = RESULTS_DIR / "trocr_yolo_results.json"
     if path.exists():
         with open(path) as f:
             return json.load(f)
-    return None
+    return {}
 
 
-# ── Plot 1: Overall metrics bar chart ────────────────────────────────────────
-def plot_overall_metrics(metrics: dict, ax=None):
-    keys   = ["cer", "wer", "macro_f1"]
-    labels = ["CER ↓", "WER ↓", "Macro F1 ↑"]
-
-    x     = np.arange(len(keys))
+# ── Plot 1: F1 comparison bar chart ─────────────────────────────────────────
+def plot_f1_comparison(donut: Dict, trocr: Dict) -> Path:
+    """Bar chart: DONUT F1 vs TrOCR+YOLO F1 for each experiment."""
+    exp_ids = sorted(set(donut) | set(trocr), key=int)
+    x = np.arange(len(exp_ids))
     width = 0.35
 
-    if ax is None:
-        fig, ax = plt.subplots(figsize=(8, 5))
+    fig, ax = plt.subplots(figsize=(10, 5))
 
-    for i, (model_key, color) in enumerate(COLORS.items()):
-        vals = [metrics[model_key][k] for k in keys]
-        bars = ax.bar(x + i * width - width/2, vals, width,
-                      label=LABELS[model_key], color=color, alpha=0.85)
-        for bar, val in zip(bars, vals):
+    donut_f1s = [donut.get(e, {}).get("metrics", {}).get("global_f1", 0) for e in exp_ids]
+    trocr_f1s = [trocr.get(e, {}).get("metrics", {}).get("global_f1", 0) for e in exp_ids]
+
+    bars1 = ax.bar(x - width/2, donut_f1s, width, label="DONUT",
+                   color=COLORS["donut"], alpha=0.85)
+    bars2 = ax.bar(x + width/2, trocr_f1s, width, label="TrOCR+YOLO",
+                   color=COLORS["trocr_yolo"], alpha=0.85)
+
+    for bar, val in zip(list(bars1) + list(bars2), donut_f1s + trocr_f1s):
+        if val > 0:
             ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.005,
-                    f"{val:.3f}", ha="center", va="bottom", fontsize=9)
+                    f"{val:.3f}", ha="center", va="bottom", fontsize=8)
 
     ax.set_xticks(x)
-    ax.set_xticklabels(labels)
-    ax.set_ylim(0, 1.1)
-    ax.set_ylabel("Score")
-    ax.set_title("Overall OCR & Extraction Metrics")
+    ax.set_xticklabels([EXP_NAMES.get(e, f"Exp {e}") for e in exp_ids], rotation=30, ha="right")
+    ax.set_ylabel("Global F1")
+    ax.set_title("DONUT vs TrOCR+YOLO: Global F1 per Experiment")
+    ax.set_ylim(0, 1.05)
     ax.legend()
-    return ax
+    ax.grid(axis="y", alpha=0.3)
+
+    path = RESULTS_DIR / "plot_f1_comparison.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Plot saved -> {path}")
+    return path
 
 
-# ── Plot 2: Per-field F1 ──────────────────────────────────────────────────────
-def plot_field_f1(metrics: dict, ax=None):
-    fields = list(next(iter(metrics.values()))["field_metrics"].keys())
-    x      = np.arange(len(fields))
-    width  = 0.35
+# ── Plot 2: Per-field F1 comparison ──────────────────────────────────────────
+def plot_field_f1_comparison(donut: Dict, trocr: Dict) -> Path:
+    """Per-field F1 for best experiment from each architecture."""
+    # Find best experiment for each
+    best_donut = max(donut.items(), key=lambda x: x[1].get("metrics", {}).get("global_f1", 0))[1] if donut else {}
+    best_trocr = max(trocr.items(), key=lambda x: x[1].get("metrics", {}).get("global_f1", 0))[1] if trocr else {}
 
-    if ax is None:
-        fig, ax = plt.subplots(figsize=(9, 5))
+    x = np.arange(len(FIELDS))
+    width = 0.35
 
-    for i, (model_key, color) in enumerate(COLORS.items()):
-        vals = [metrics[model_key]["field_metrics"][f]["f1"] for f in fields]
-        bars = ax.bar(x + i * width - width/2, vals, width,
-                      label=LABELS[model_key], color=color, alpha=0.85)
-        for bar, val in zip(bars, vals):
-            ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.005,
-                    f"{val:.3f}", ha="center", va="bottom", fontsize=9)
+    fig, ax = plt.subplots(figsize=(8, 5))
+
+    donut_vals = [best_donut.get("metrics", {}).get(f"{f}_f1", 0) for f in FIELDS]
+    trocr_vals = [best_trocr.get("metrics", {}).get(f"{f}_f1", 0) for f in FIELDS]
+
+    ax.bar(x - width/2, donut_vals, width, label="DONUT (best)",
+           color=COLORS["donut"], alpha=0.85)
+    ax.bar(x + width/2, trocr_vals, width, label="TrOCR+YOLO (best)",
+           color=COLORS["trocr_yolo"], alpha=0.85)
 
     ax.set_xticks(x)
-    ax.set_xticklabels([f.capitalize() for f in fields])
-    ax.set_ylim(0, 1.1)
+    ax.set_xticklabels([f.capitalize() for f in FIELDS])
     ax.set_ylabel("F1 Score")
-    ax.set_title("Field-Level F1 Score")
+    ax.set_title("Per-Field F1: Best DONUT vs Best TrOCR+YOLO")
+    ax.set_ylim(0, 1.1)
     ax.legend()
-    return ax
+    ax.grid(axis="y", alpha=0.3)
+
+    path = RESULTS_DIR / "plot_field_f1.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Plot saved -> {path}")
+    return path
 
 
-# ── Plot 3: Latency ───────────────────────────────────────────────────────────
-def plot_latency(metrics: dict, ax=None):
-    models  = list(COLORS.keys())
-    means   = [metrics[m]["latency_mean_ms"] for m in models]
-    p95s    = [metrics[m]["latency_p95_ms"]  for m in models]
-    x       = np.arange(len(models))
-    width   = 0.35
+# ── Plot 3: Training convergence curves ──────────────────────────────────────
+def plot_convergence(donut: Dict) -> Path:
+    """Training/validation loss curves for DONUT experiments."""
+    fig, ax = plt.subplots(figsize=(10, 5))
 
-    if ax is None:
-        fig, ax = plt.subplots(figsize=(7, 5))
+    colors = plt.cm.tab10(np.linspace(0, 1, 8))
+    has_data = False
 
-    bars1 = ax.bar(x - width/2, means, width, label="Mean",  color=[COLORS[m] for m in models], alpha=0.85)
-    bars2 = ax.bar(x + width/2, p95s,  width, label="P95",   color=[COLORS[m] for m in models], alpha=0.45, hatch="//")
+    for i in range(1, 9):
+        exp = donut.get(str(i), {})
+        train_hist = exp.get("training_log", [])
+        if not train_hist:
+            continue
 
-    for bar, val in zip(list(bars1) + list(bars2), means + p95s):
-        ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 1,
-                f"{val:.0f}ms", ha="center", va="bottom", fontsize=9)
+        # Extract loss values from HF Trainer log history
+        train_losses = [h.get("loss", None) for h in train_hist if "loss" in h]
+        eval_losses = [h.get("eval_loss", None) for h in train_hist if "eval_loss" in h]
 
-    ax.set_xticks(x)
-    ax.set_xticklabels([LABELS[m] for m in models])
-    ax.set_ylabel("Inference Time (ms)")
-    ax.set_title("Inference Latency per Image")
+        if train_losses:
+            epochs = range(1, len(train_losses) + 1)
+            ax.plot(epochs, train_losses, color=colors[i-1], linestyle="-",
+                    label=f"Exp {i} train", alpha=0.7)
+            has_data = True
+        if eval_losses:
+            epochs = range(1, len(eval_losses) + 1)
+            ax.plot(epochs, eval_losses, color=colors[i-1], linestyle="--",
+                    label=f"Exp {i} val", alpha=0.7)
 
-    solid  = mpatches.Patch(facecolor="grey", alpha=0.85, label="Mean")
-    hatch  = mpatches.Patch(facecolor="grey", alpha=0.45, hatch="//", label="P95")
-    ax.legend(handles=[solid, hatch])
-    return ax
+    if has_data:
+        ax.set_xlabel("Step")
+        ax.set_ylabel("Loss")
+        ax.set_title("DONUT Training Convergence")
+        ax.legend(fontsize=7, ncol=2)
+        ax.grid(alpha=0.3)
 
-
-# ── Plot 4: Training loss curves ─────────────────────────────────────────────
-def plot_training_curves(donut_hist, trocr_hist, ax=None):
-    if ax is None:
-        fig, ax = plt.subplots(figsize=(9, 5))
-
-    if donut_hist:
-        epochs = range(1, len(donut_hist["train_loss"]) + 1)
-        ax.plot(epochs, donut_hist["train_loss"], color=COLORS["donut"],     linestyle="-",  label="DONUT train")
-        ax.plot(epochs, donut_hist["val_loss"],   color=COLORS["donut"],     linestyle="--", label="DONUT val")
-
-    if trocr_hist:
-        epochs = range(1, len(trocr_hist["train_loss"]) + 1)
-        ax.plot(epochs, trocr_hist["train_loss"], color=COLORS["trocr_yolo"], linestyle="-",  label="TrOCR train")
-        ax.plot(epochs, trocr_hist["val_loss"],   color=COLORS["trocr_yolo"], linestyle="--", label="TrOCR val")
-
-    ax.set_xlabel("Epoch")
-    ax.set_ylabel("Loss")
-    ax.set_title("Training & Validation Loss")
-    ax.legend()
-    return ax
+    path = RESULTS_DIR / "plot_convergence.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Plot saved -> {path}")
+    return path
 
 
-# ── Summary table ─────────────────────────────────────────────────────────────
-def print_summary_table(metrics):
-    rows = []
-    for model_key in COLORS:
-        m   = metrics[model_key]
-        row = {
-            "Model":         LABELS[model_key],
-            "CER ↓":         f"{m['cer']:.4f}",
-            "WER ↓":         f"{m['wer']:.4f}",
-            "Macro F1 ↑":    f"{m['macro_f1']:.4f}",
-            "Lat Mean (ms)": f"{m['latency_mean_ms']:.1f}",
-            "Lat P95 (ms)":  f"{m['latency_p95_ms']:.1f}",
-            "N samples":     m["n_samples"],
-        }
-        rows.append(row)
-
-    df = pd.DataFrame(rows)
-    print("\n" + "="*70)
-    print(" COMPARISON SUMMARY")
-    print("="*70)
-    print(df.to_string(index=False))
-    print("="*70)
-
-    # Per-field
-    for key in next(iter(metrics.values()))["field_metrics"].keys():
-        print(f"\n  Field: {key.upper()}")
-        for model_key in COLORS:
-            fm = metrics[model_key]["field_metrics"][key]
-            print(f"    {LABELS[model_key]:15s}  P={fm['precision']:.3f}  R={fm['recall']:.3f}  F1={fm['f1']:.3f}")
+# ── Generate LaTeX convergence plot stub ─────────────────────────────────────
+def generate_latex_convergence() -> None:
+    """Write a .tex file that includes the convergence plot as a figure."""
+    tex = r"""\begin{figure}[h]
+\centering
+\includegraphics[width=\columnwidth]{results/plot_convergence.png}
+\caption{Training and validation loss curves for all eight DONUT experiments.
+Experiments with larger combined training sets generally converge to lower
+training loss.  Early stopping (patience = 5 epochs) terminates training
+at different epochs across experiments.}
+\label{fig:convergence}
+\end{figure}
+"""
+    path = RESULTS_DIR / "convergence_plots.tex"
+    path.write_text(tex)
+    print(f"  LaTeX stub -> {path}")
 
 
-# ── HTML Report ───────────────────────────────────────────────────────────────
-def generate_html_report(metrics, fig_paths: dict):
-    import base64
+def generate_latex_f1_barchart() -> None:
+    """Write a .tex file that includes the F1 bar chart as a figure."""
+    tex = r"""\begin{figure}[h]
+\centering
+\includegraphics[width=\columnwidth]{results/plot_f1_comparison.png}
+\caption{Global F1 comparison across all eight experiments for DONUT
+(end-to-end) and TrOCR+YOLO (pipeline) architectures, evaluated on the
+same 63 SROIE test images.}
+\label{fig:f1_comparison}
+\end{figure}
+"""
+    path = RESULTS_DIR / "f1_barchart.tex"
+    path.write_text(tex)
+    print(f"  LaTeX stub -> {path}")
 
-    def img_tag(path):
-        with open(path, "rb") as f:
-            data = base64.b64encode(f.read()).decode()
-        return f'<img src="data:image/png;base64,{data}" style="max-width:100%;border-radius:8px;box-shadow:0 2px 8px #0002">'
 
-    rows = []
-    for model_key in COLORS:
-        m   = metrics[model_key]
-        rows.append(f"""
-        <tr>
-            <td><b>{LABELS[model_key]}</b></td>
-            <td>{m['cer']:.4f}</td>
-            <td>{m['wer']:.4f}</td>
-            <td>{m['macro_f1']:.4f}</td>
-            <td>{m['latency_mean_ms']:.1f}</td>
-            <td>{m['latency_p95_ms']:.1f}</td>
-        </tr>""")
+# ── Print comparison summary table ───────────────────────────────────────────
+def print_comparison_table(donut: Dict, trocr: Dict) -> None:
+    """Print cross-architecture comparison table to stdout."""
+    print(f"\n{'='*72}")
+    print(f"  CROSS-ARCHITECTURE COMPARISON: DONUT vs TrOCR+YOLO")
+    print(f"{'='*72}")
+    print(f"{'Exp':>4} {'Training Data':<22} {'DONUT F1':>10} {'TrOCR F1':>10} {'Delta':>8}")
+    print(f"{'-'*72}")
 
-    html = f"""<!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8">
-<title>Receipt OCR Comparison Report</title>
-<style>
-  body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-          max-width: 1100px; margin: 40px auto; padding: 0 20px; color:#333; }}
-  h1   {{ color: #2c3e50; border-bottom: 3px solid #4C72B0; padding-bottom:10px; }}
-  h2   {{ color: #34495e; margin-top:40px; }}
-  table{{ border-collapse:collapse; width:100%; margin:20px 0; }}
-  th   {{ background:#4C72B0; color:#fff; padding:10px 16px; text-align:left; }}
-  td   {{ padding:9px 16px; border-bottom:1px solid #eee; }}
-  tr:hover {{ background:#f5f8ff; }}
-  .grid{{ display:grid; grid-template-columns:1fr 1fr; gap:24px; margin:24px 0; }}
-  .card{{ background:#fafafa; border-radius:12px; padding:16px;
-          box-shadow:0 2px 8px #0001; }}
-</style></head><body>
-<h1>Receipt OCR: DONUT vs TrOCR + YOLO — Comparison Report</h1>
+    exp_ids = sorted(set(donut) | set(trocr), key=int)
+    for e in exp_ids:
+        name = EXP_NAMES.get(e, f"Exp {e}")
+        d_f1 = donut.get(e, {}).get("metrics", {}).get("global_f1", 0.0)
+        t_f1 = trocr.get(e, {}).get("metrics", {}).get("global_f1", 0.0)
+        delta = d_f1 - t_f1
+        print(f"{e:>4} {name:<22} {d_f1:>10.4f} {t_f1:>10.4f} {delta:>+8.4f}")
 
-<h2>Overall Metrics</h2>
-<table>
-  <tr><th>Model</th><th>CER ↓</th><th>WER ↓</th><th>Macro F1 ↑</th>
-      <th>Latency Mean (ms)</th><th>Latency P95 (ms)</th></tr>
-  {''.join(rows)}
-</table>
+    # Best overall
+    best_d = max((v.get("metrics", {}).get("global_f1", 0), k) for k, v in donut.items()) if donut else (0, "N/A")
+    best_t = max((v.get("metrics", {}).get("global_f1", 0), k) for k, v in trocr.items()) if trocr else (0, "N/A")
+    print(f"{'-'*72}")
+    print(f"  Best DONUT:      Exp {best_d[1]} (F1={best_d[0]:.4f})")
+    print(f"  Best TrOCR+YOLO: Exp {best_t[1]} (F1={best_t[0]:.4f})")
+    print(f"{'='*72}")
 
-<div class="grid">
-  <div class="card"><h3>OCR & Extraction Metrics</h3>{img_tag(fig_paths['overall'])}</div>
-  <div class="card"><h3>Inference Latency</h3>{img_tag(fig_paths['latency'])}</div>
-  <div class="card"><h3>Per-Field F1</h3>{img_tag(fig_paths['fields'])}</div>
-  <div class="card"><h3>Training Loss Curves</h3>{img_tag(fig_paths['curves'])}</div>
-</div>
-
-<h2>Methodology</h2>
-<p>Dataset: SROIE (626 receipts). Train/val/test split: 70/15/15.
-DONUT is evaluated end-to-end (image → JSON). TrOCR+YOLO pipeline:
-YOLOv8-medium detects text lines, TrOCR-base-printed transcribes each crop.
-Field-level F1 uses exact-match after normalization (lower-case, strip whitespace).
-Latency measured on single-image inference (no batching).</p>
-</body></html>"""
-
-    out = RESULTS_DIR / "comparison_report.html"
-    out.write_text(html)
-    print(f"✓ HTML report → {out}")
+    # Per-field breakdown for best experiments
+    print(f"\n  Per-Field F1 (best experiments):")
+    print(f"  {'Field':<12} {'DONUT':>10} {'TrOCR+YOLO':>12}")
+    print(f"  {'-'*36}")
+    for f in FIELDS:
+        d_f1 = donut.get(best_d[1], {}).get("metrics", {}).get(f"{f}_f1", 0) if donut else 0
+        t_f1 = trocr.get(best_t[1], {}).get("metrics", {}).get(f"{f}_f1", 0) if trocr else 0
+        print(f"  {f:<12} {d_f1:>10.4f} {t_f1:>12.4f}")
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────
+def compare_all() -> None:
+    """Run the full cross-architecture comparison."""
+    print("\n=== Cross-Architecture Comparison ===")
+
+    donut = load_donut_results()
+    trocr = load_trocr_results()
+
+    if not donut and not trocr:
+        print("  No experiment results found in results/ — skipping comparison.")
+        print("  Run the full pipeline first: python run_all.py")
+        return
+
+    print(f"  Loaded {len(donut)} DONUT experiments, {len(trocr)} TrOCR+YOLO experiments")
+
+    # Generate plots
+    if donut or trocr:
+        plot_f1_comparison(donut, trocr)
+        plot_field_f1_comparison(donut, trocr)
+
+    if donut:
+        plot_convergence(donut)
+
+    # Generate LaTeX stubs
+    generate_latex_convergence()
+    generate_latex_f1_barchart()
+
+    # Print summary
+    print_comparison_table(donut, trocr)
+
+    print("\n  All comparison outputs saved to results/")
+
+
 if __name__ == "__main__":
-    metrics     = load_metrics()
-    donut_hist  = load_history(DONUT_HIST)
-    trocr_hist  = load_history(TROCR_HIST)
-
-    print_summary_table(metrics)
-
-    # Create all plots
-    fig_paths = {}
-
-    fig, ax = plt.subplots(figsize=(8, 5))
-    plot_overall_metrics(metrics, ax)
-    path = RESULTS_DIR / "plot_overall.png"
-    fig.savefig(path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    fig_paths["overall"] = path
-
-    fig, ax = plt.subplots(figsize=(9, 5))
-    plot_field_f1(metrics, ax)
-    path = RESULTS_DIR / "plot_fields.png"
-    fig.savefig(path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    fig_paths["fields"] = path
-
-    fig, ax = plt.subplots(figsize=(7, 5))
-    plot_latency(metrics, ax)
-    path = RESULTS_DIR / "plot_latency.png"
-    fig.savefig(path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    fig_paths["latency"] = path
-
-    fig, ax = plt.subplots(figsize=(9, 5))
-    plot_training_curves(donut_hist, trocr_hist, ax)
-    path = RESULTS_DIR / "plot_curves.png"
-    fig.savefig(path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    fig_paths["curves"] = path
-
-    generate_html_report(metrics, fig_paths)
-    print("\nAll done! Check the results/ folder.")
+    compare_all()

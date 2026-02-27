@@ -66,30 +66,18 @@ from transformers import DonutProcessor, VisionEncoderDecoderModel
 import dataset_loaders
 from evaluate import compute_metrics, run_inference
 
+# FIX: Import shared constants from single source of truth (constants.py)
+# instead of duplicating FIELDS/IMAGE_EXTS/etc. independently in this file.
+from constants import FIELDS, MAX_LENGTH, IMAGE_EXTS, NEW_TOKENS, BASE_MODEL, SEED
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
 RESULTS_DIR = Path("results")
 
-BASE_MODEL = "naver-clova-ix/donut-base-finetuned-cord-v2"
 WORKSPACE = Path(os.environ.get("DONUT_WORKSPACE", "/workspace"))
-FIELDS = ["company", "date", "address", "total"]
-MAX_LENGTH = 512
-IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".webp"}
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-# NOTE: DEVICE is evaluated at import time. Both run_experiments.py and evaluate.py
-# define this constant independently; they will agree as long as GPU availability
-# does not change between module imports, which is the expected runtime assumption.
-SEED = 42
-
-NEW_TOKENS = [
-    "<s_sroie>", "</s_sroie>",
-    "<s_company>", "</s_company>",
-    "<s_date>",    "</s_date>",
-    "<s_address>", "</s_address>",
-    "<s_total>",   "</s_total>",
-]
 
 
 def set_seed(seed: int = SEED) -> None:
@@ -208,10 +196,14 @@ EXPERIMENTS: Dict[int, ExperimentConfig] = {
 }
 
 # ---------------------------------------------------------------------------
-# TRAIN_CONFIG — backward compatibility for result JSON cache validation
+# TRAIN_CONFIG — cache validation for result JSON files
 # ---------------------------------------------------------------------------
-# Derived from ExperimentConfig defaults so there is exactly ONE place
-# where default hyperparameters are defined.
+# FIX: Previously only included 5 of 9 hyperparameters (max_epochs, lr,
+# batch_size, early_stopping_patience, base_model).  If warmup_steps,
+# weight_decay, max_length, or seed changed, the cache validation at
+# cached.get("config") != TRAIN_CONFIG would NOT detect stale results.
+# Now includes ALL hyperparameters from ExperimentConfig for complete
+# staleness detection.
 
 _default_config = ExperimentConfig(name="", datasets=[])
 
@@ -221,6 +213,12 @@ TRAIN_CONFIG: Dict[str, Any] = {
     "per_device_train_batch_size": _default_config.batch_size,
     "early_stopping_patience": _default_config.early_stopping_patience,
     "base_model": _default_config.base_model,
+    # FIX: These were previously missing, causing stale cache hits when
+    # warmup_steps/weight_decay/max_length/seed changed.
+    "warmup_steps": _default_config.warmup_steps,
+    "weight_decay": _default_config.weight_decay,
+    "max_length": _default_config.max_length,
+    "seed": _default_config.seed,
 }
 
 
@@ -396,6 +394,18 @@ def train_experiment(
     print(f"[Exp {exp_id}] Training complete "
           f"(duration={result.duration_seconds:.1f}s, "
           f"train={result.train_samples}, val={result.val_samples})")
+
+    # FIX: Explicit GPU cleanup between experiments to prevent OOM on GPUs
+    # with limited VRAM.  The RTX 4090 has 24GB — sufficient for DONUT but
+    # running 8+ experiments sequentially without cleanup risks fragmentation.
+    import gc
+    del model, processor, trainer, train_ds
+    if val_ds is not None:
+        del val_ds
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    print(f"[Exp {exp_id}] GPU memory released")
 
     return result.log_history
 
