@@ -56,6 +56,7 @@ Exit codes
 
 import argparse
 import json
+import logging
 import os
 import random
 import shutil
@@ -66,6 +67,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List
+
+from constants import IMAGE_EXTS
 
 
 # ---------------------------------------------------------------------------
@@ -197,12 +200,10 @@ def stage_install(args) -> StageResult:
         )
         sys.exit(2)
 
-    image_exts = {".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".webp"}
-
     # Collect all images with matching key files
     all_images = sorted(
         p for p in img_dir.iterdir()
-        if p.is_file() and p.suffix.lower() in image_exts
+        if p.is_file() and p.suffix.lower() in IMAGE_EXTS
     )
     # Keep only images that have a corresponding key file
     valid_images = [
@@ -248,7 +249,7 @@ def stage_install(args) -> StageResult:
     # Verify: img/ should now contain exactly the train images
     remaining = sum(
         1 for p in img_dir.iterdir()
-        if p.is_file() and p.suffix.lower() in image_exts
+        if p.is_file() and p.suffix.lower() in IMAGE_EXTS
     )
     print(f"  Train images : {remaining} (in img/, after moving val+test out)")
     print(f"  Val images   : {len(val_imgs)} (in val_img/)")
@@ -550,7 +551,6 @@ def stage_trocr_experiments(args) -> StageResult:
     models but evaluate field assignment with different training-set context.
     Results are saved to results/trocr_yolo_results.json.
     """
-    import gc
     import torch
 
     _banner("STAGE 4 — TrOCR+YOLO training & evaluation")
@@ -617,9 +617,8 @@ def stage_trocr_experiments(args) -> StageResult:
                 warnings.append(w)
 
         # FIX: GPU cleanup after TrOCR+YOLO stage
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        from constants import _gpu_cleanup
+        _gpu_cleanup()
 
     except Exception as exc:
         import traceback
@@ -927,6 +926,14 @@ def main() -> None:
     t_start = time.monotonic()
     parser = build_parser()
     args = parser.parse_args()
+
+    # Configure root logger so INFO from all sub-modules (evaluate.py, train.py,
+    # etc.) flows to stderr.  Module loggers propagate to root by default.
+    logging.basicConfig(
+        level=logging.INFO,
+        format="[%(levelname)s] %(name)s: %(message)s",
+        stream=sys.stderr,
+    )
 
     # Set up HuggingFace authentication for faster downloads
     _setup_hf_auth()

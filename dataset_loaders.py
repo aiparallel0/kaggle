@@ -32,7 +32,6 @@ Concrete loaders
 ----------------
 - SROIELoader        — local SROIE img/key directories
 - WildReceiptLoader  — OpenMMLab tar download
-- SROIENERLoader     — parquet fallback for broken HF "darentang/sroie"
 - CORDLoader         — HuggingFace naver-clova-ix/cord-v2
 - InvoicesDonutLoader— HuggingFace katanaml-org/invoices-donut-data-v1
 
@@ -71,7 +70,7 @@ except Exception:
 
 # FIX: Import shared constants from single source of truth (constants.py)
 # instead of defining EMPTY_GT and IMAGE_EXTS independently here.
-from constants import EMPTY_GT, IMAGE_EXTS as _IMAGE_EXTS_SET, FIELDS
+from constants import EMPTY_GT, IMAGE_EXTS as _IMAGE_EXTS_SET, FIELDS, _get_sroie_dir
 
 # ── Type alias ────────────────────────────────────────────────────────
 Sample = Tuple[Path, Dict[str, str]]
@@ -112,17 +111,6 @@ def _get_datasets_dir() -> Path:
     who set it after import time (e.g. run_all.py) get the right path.
     """
     return Path(os.environ.get("DONUT_WORKSPACE", "/workspace")) / "datasets"
-
-
-def _get_sroie_dir() -> Path:
-    """Return SROIE data root; respects SROIE_DATA_DIR env var.
-
-    BUG C FIX: module-level constant was evaluated once at import time,
-    so os.environ["SROIE_DATA_DIR"] set later in run_all.py had no
-    effect.  Use a function that re-reads the env var on every call.
-    """
-    return Path(os.environ.get("SROIE_DATA_DIR",
-                               "/workspace/ICDAR-2019-SROIE/data"))
 
 
 def _ensure_dir(path: Path) -> Path:
@@ -586,137 +574,6 @@ class WildReceiptLoader(BaseDatasetLoader):
 
 
 # ======================================================================
-#  SROIENERLoader (DEPRECATED — known-broken upstream, never used in pipeline)
-# ======================================================================
-# NOTE: This loader is dead code.  It is not referenced in _LOADERS, not used
-# by any experiment, and the upstream HF dataset is permanently broken.
-# Kept for backward compatibility only — do not use in new code.
-
-class SROIENERLoader(BaseDatasetLoader):
-    """DEPRECATED: Attempt to load the SROIE-NER dataset (darentang/sroie).
-
-    This loader is dead code — it is never called by the pipeline.  The
-    upstream HuggingFace dataset is permanently broken (dataset scripts
-    no longer supported).  Retained only for backward compatibility.
-    """
-
-    name = "SROIE-NER"
-
-    _PARQUET_URL = (
-        "https://huggingface.co/datasets/darentang/sroie/resolve/main/"
-        "data/train-00000-of-00001.parquet"
-    )
-
-    def _dest_dir(self) -> Path:
-        return _ensure_dir(_get_datasets_dir() / "sroie_ner")
-
-    def _marker(self) -> Path:
-        return self._dest_dir() / ".downloaded"
-
-    def _parquet_path(self) -> Path:
-        return self._dest_dir() / "train.parquet"
-
-    # ── public interface ──────────────────────────────────────────────
-
-    def load(self, split: str = "train") -> List[Sample]:
-        """Try to load SROIE-NER via parquet fallback.
-
-        This dataset is known to be broken upstream. The loader tries
-        the parquet URL as a best-effort fallback and raises loudly if
-        that also fails.
-        """
-        dest = self._dest_dir()
-        parquet = self._parquet_path()
-        marker = self._marker()
-
-        # Attempt download if not cached
-        if not marker.exists() or not parquet.exists():
-            try:
-                self._log(f"Attempting parquet fallback: {self._PARQUET_URL}")
-                _download_with_progress(self._PARQUET_URL, parquet)
-                marker.touch()
-            except Exception as exc:
-                raise self._fatal(
-                    f"Parquet fallback failed: {exc}. "
-                    "The upstream dataset 'darentang/sroie' is broken "
-                    "(HF dataset scripts no longer supported). "
-                    "This dataset will NOT be available."
-                ) from exc
-
-        # Try loading via pandas/pyarrow
-        try:
-            import pandas as pd  # type: ignore
-            df = pd.read_parquet(str(parquet))
-        except ImportError:
-            raise self._fatal(
-                "pandas/pyarrow not installed — cannot read parquet file. "
-                "Install with: pip install pandas pyarrow"
-            )
-        except Exception as exc:
-            raise self._fatal(
-                f"Failed to read parquet file: {exc}"
-            ) from exc
-
-        samples: List[Sample] = []
-        img_dir = _ensure_dir(dest / "images")
-
-        for idx, row in df.iterrows():
-            gt: Dict[str, str] = {k: "" for k in EMPTY_GT}
-            # Map NER fields to SROIE schema if present
-            for field in _SROIE_FIELDS:
-                val = row.get(field, "")
-                if val and isinstance(val, str):
-                    gt[field] = val.strip()
-
-            # Handle image data — may be bytes or a path
-            image_data = row.get("image")
-            if image_data is not None:
-                img_path = img_dir / f"sroie_ner_{idx:06d}.png"
-                if not img_path.exists():
-                    if isinstance(image_data, bytes):
-                        img_path.write_bytes(image_data)
-                    elif isinstance(image_data, dict) and "bytes" in image_data:
-                        img_path.write_bytes(image_data["bytes"])
-                    else:
-                        continue
-                samples.append((img_path, gt))
-
-        return _validate_samples_nonempty(samples, self.name)
-
-    def validate_cache(self) -> bool:
-        """Check that the parquet file exists and can be read."""
-        parquet = self._parquet_path()
-        if not parquet.exists():
-            return False
-        try:
-            import pandas as pd  # type: ignore
-            df = pd.read_parquet(str(parquet))
-            return len(df) > 0
-        except Exception:
-            return False
-
-    def clear_cache(self) -> None:
-        """Remove SROIE-NER cache."""
-        import shutil
-        dest = self._dest_dir()
-        if dest.exists():
-            shutil.rmtree(dest, ignore_errors=True)
-            self._log("Cache cleared.")
-
-    def sample_count(self, split: str = "train") -> int:
-        """Return row count from parquet without full load."""
-        parquet = self._parquet_path()
-        if not parquet.exists():
-            return 0
-        try:
-            import pandas as pd  # type: ignore
-            df = pd.read_parquet(str(parquet))
-            return len(df)
-        except Exception:
-            return 0
-
-
-# ======================================================================
 #  CORDLoader
 # ======================================================================
 
@@ -1100,7 +957,6 @@ class InvoicesDonutLoader(BaseDatasetLoader):
 
 _sroie_loader: Optional[SROIELoader] = None
 _wildreceipt_loader: Optional[WildReceiptLoader] = None
-_sroie_ner_loader: Optional[SROIENERLoader] = None
 _cord_loader: Optional[CORDLoader] = None
 _invoices_donut_loader: Optional[InvoicesDonutLoader] = None
 
@@ -1117,13 +973,6 @@ def _get_wildreceipt_loader() -> WildReceiptLoader:
     if _wildreceipt_loader is None:
         _wildreceipt_loader = WildReceiptLoader()
     return _wildreceipt_loader
-
-
-def _get_sroie_ner_loader() -> SROIENERLoader:
-    global _sroie_ner_loader
-    if _sroie_ner_loader is None:
-        _sroie_ner_loader = SROIENERLoader()
-    return _sroie_ner_loader
 
 
 def _get_cord_loader() -> CORDLoader:
@@ -1171,11 +1020,6 @@ def load_sroie_val() -> List[Sample]:
 def load_wildreceipt() -> List[Sample]:
     """Load WildReceipt — compatibility wrapper for WildReceiptLoader."""
     return _get_wildreceipt_loader().load("train")
-
-
-def load_sroie_ner() -> List[Sample]:
-    """Load SROIE-NER — compatibility wrapper for SROIENERLoader."""
-    return _get_sroie_ner_loader().load("train")
 
 
 def load_cord() -> List[Sample]:

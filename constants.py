@@ -5,7 +5,10 @@
 # evaluate.py, inject_results.py, dataset_loaders.py).  Any change had to be
 # replicated manually, risking silent drift.  All files now import from here.
 
-from typing import Dict, FrozenSet, List
+import multiprocessing
+import os
+from pathlib import Path
+from typing import Callable, Dict, FrozenSet, List
 
 # SROIE Task-3 target fields — the four key-value pairs extracted from receipts.
 FIELDS: List[str] = ["company", "date", "address", "total"]
@@ -37,3 +40,73 @@ NEW_TOKENS: List[str] = [
 
 # Empty ground-truth template matching the SROIE schema.
 EMPTY_GT: Dict[str, str] = {"company": "", "date": "", "address": "", "total": ""}
+
+# ---------------------------------------------------------------------------
+# Device — GPU if available, else CPU.
+# Uses try/except so constants.py can be imported in torch-free test envs.
+# ---------------------------------------------------------------------------
+
+try:
+    import torch as _torch
+    DEVICE: str = "cuda" if _torch.cuda.is_available() else "cpu"
+except ImportError:
+    DEVICE: str = "cpu"
+
+# ---------------------------------------------------------------------------
+# Workspace and path helpers
+# ---------------------------------------------------------------------------
+
+# Default workspace path — overridden by DONUT_WORKSPACE env var at import time.
+# run_all.py sets the env var before lazily importing sub-modules so this value
+# is correct by the time the sub-modules are first imported.
+WORKSPACE: Path = Path(os.environ.get("DONUT_WORKSPACE", "/workspace"))
+
+
+def _get_sroie_dir() -> Path:
+    """Return SROIE data root; re-reads SROIE_DATA_DIR env var at call time.
+
+    Implemented as a function (not a constant) so that callers who set the
+    env var after import time (e.g. run_all.py) get the correct path.
+    """
+    return Path(os.environ.get("SROIE_DATA_DIR", "/workspace/ICDAR-2019-SROIE/data"))
+
+
+def _optimal_num_workers() -> int:
+    """Return the optimal DataLoader num_workers based on CPU core count."""
+    return min(8, max(4, multiprocessing.cpu_count() // 2))
+
+
+def _gpu_cleanup(*objects) -> None:
+    """Delete objects, run garbage collection, and empty CUDA cache.
+
+    Use after a training/evaluation stage to free GPU memory before the
+    next stage.  Accepts any number of objects to delete; safe to call
+    with no arguments (just runs GC + empty_cache).
+    """
+    import gc
+    import torch
+    for obj in objects:
+        del obj
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
+def set_seed(seed: int = SEED) -> None:
+    """Set all random seeds for fully reproducible training runs.
+
+    Covers Python random, NumPy, PyTorch (CPU + all CUDA devices), and
+    cuDNN deterministic mode.  This is the canonical seed-setting function
+    for the entire pipeline — import and call it instead of using the
+    lighter transformers.set_seed() which only seeds the transformers RNG.
+    """
+    import random
+    import numpy as np
+    import torch
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False

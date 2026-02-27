@@ -34,7 +34,6 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 
 RESULTS_DIR = Path("results")
-RESULTS_DIR.mkdir(exist_ok=True)
 
 # Color scheme for plots
 COLORS = {"donut": "#4C72B0", "trocr_yolo": "#DD8452"}
@@ -270,6 +269,8 @@ def compare_all() -> None:
         return
 
     print(f"  Loaded {len(donut)} DONUT experiments, {len(trocr)} TrOCR+YOLO experiments")
+
+    RESULTS_DIR.mkdir(exist_ok=True)
 
     # Generate plots
     if donut or trocr:

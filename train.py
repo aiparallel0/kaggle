@@ -57,7 +57,6 @@ TRAIN_CONFIG.
 
 import json
 import logging
-import multiprocessing
 import os
 import random
 import time
@@ -85,21 +84,8 @@ logger = logging.getLogger(__name__)
 # FIX: Previously FIELDS, MAX_LENGTH, IMAGE_EXTS, NEW_TOKENS, BASE_MODEL,
 # SEED were defined independently here and in 4 other files, risking silent
 # drift if any file was updated without updating the others.
-from constants import FIELDS, MAX_LENGTH, IMAGE_EXTS, NEW_TOKENS, BASE_MODEL, SEED
-
-
-# BUG C FIX: Use a function so the env var is re-read at call time, not cached
-# at import time (run_all.py sets SROIE_DATA_DIR after this module is imported).
-def _get_sroie_dir():
-    return Path(os.environ.get(
-        "SROIE_DATA_DIR",
-        "/workspace/ICDAR-2019-SROIE/data",
-    ))
-
-def _optimal_num_workers() -> int:
-    """Calculate optimal DataLoader num_workers from available CPU cores."""
-    num_cpus = multiprocessing.cpu_count()
-    return min(8, max(4, num_cpus // 2))
+from constants import FIELDS, MAX_LENGTH, IMAGE_EXTS, NEW_TOKENS, BASE_MODEL, SEED, \
+    _get_sroie_dir, _optimal_num_workers
 
 # ---------------------------------------------------------------------------
 # TrainingResult dataclass
@@ -458,8 +444,8 @@ def main():
     Uses ``DonutTrainer`` internally with default hyperparameters that
     match ``TRAIN_CONFIG`` from ``run_experiments.py``.
     """
-    from transformers import set_seed as _set_seed
-    _set_seed(SEED)
+    from constants import set_seed
+    set_seed(SEED)
 
     processor = DonutProcessor.from_pretrained(BASE_MODEL)
     model = VisionEncoderDecoderModel.from_pretrained(BASE_MODEL)

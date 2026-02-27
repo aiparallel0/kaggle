@@ -16,7 +16,6 @@ FIX: Both architectures are evaluated on the SAME 63 SROIE test images.
 FIX: Imports constants from shared module instead of duplicating.
 """
 
-import gc
 import json
 import os
 import time
@@ -28,12 +27,10 @@ import torch
 from PIL import Image
 from tqdm import tqdm
 
-from constants import FIELDS, IMAGE_EXTS, MAX_LENGTH, SEED
+from constants import FIELDS, IMAGE_EXTS, MAX_LENGTH, SEED, DEVICE
 
 # ── Config ──────────────────────────────────────────────────────────────────
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 RESULTS_DIR = Path("results")
-RESULTS_DIR.mkdir(exist_ok=True)
 
 SROIE_DATA_DIR = Path(os.environ.get(
     "SROIE_DATA_DIR", "/workspace/ICDAR-2019-SROIE/data"
@@ -43,74 +40,9 @@ SROIE_DATA_DIR = Path(os.environ.get(
 # ════════════════════════════════════════════════════════════════════════════
 # Shared metric computation (SROIE Task-3 compatible)
 # ════════════════════════════════════════════════════════════════════════════
-def compute_sroie_metrics(
-    predictions: List[Dict[str, str]],
-    ground_truths: List[Dict[str, str]],
-) -> Dict[str, float]:
-    """Compute SROIE Task-3 metrics: global F1, per-field F1, NED, exact match.
-
-    Uses the same computation as evaluate.py:compute_metrics() for consistency
-    across DONUT and TrOCR+YOLO results.
-    """
-    try:
-        import editdistance
-    except ImportError:
-        editdistance = None
-
-    tp, total_pred, total_gt = 0, 0, 0
-    per_field = {f: {"tp": 0, "pred": 0, "gt": 0, "ned": []} for f in FIELDS}
-    exact_match_all = []
-
-    for pred, gt in zip(predictions, ground_truths):
-        all_correct = True
-        for f in FIELDS:
-            p_val = str(pred.get(f, "")).strip().lower()
-            g_val = str(gt.get(f, "")).strip().lower()
-
-            if g_val:
-                total_gt += 1
-                per_field[f]["gt"] += 1
-            if p_val:
-                total_pred += 1
-                per_field[f]["pred"] += 1
-            if p_val and g_val and p_val == g_val:
-                tp += 1
-                per_field[f]["tp"] += 1
-            elif not p_val and not g_val:
-                pass
-            else:
-                all_correct = False
-
-            # NED computation
-            if editdistance is not None:
-                if len(g_val) == 0:
-                    ned = 0.0 if len(p_val) == 0 else 1.0
-                else:
-                    ned = editdistance.eval(p_val, g_val) / max(len(p_val), len(g_val))
-                per_field[f]["ned"].append(ned)
-
-        exact_match_all.append(int(all_correct))
-
-    precision = tp / total_pred if total_pred > 0 else 0.0
-    recall = tp / total_gt if total_gt > 0 else 0.0
-    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
-
-    summary = {
-        "global_precision": round(precision, 4),
-        "global_recall": round(recall, 4),
-        "global_f1": round(f1, 4),
-        "overall_exact_match": round(float(np.mean(exact_match_all)), 4) if exact_match_all else 0.0,
-    }
-
-    for f in FIELDS:
-        fp = per_field[f]
-        p = fp["tp"] / fp["pred"] if fp["pred"] > 0 else 0.0
-        r = fp["tp"] / fp["gt"] if fp["gt"] > 0 else 0.0
-        f_score = 2 * p * r / (p + r) if (p + r) > 0 else 0.0
-        summary[f"{f}_f1"] = round(f_score, 4)
-        summary[f"{f}_ned"] = round(float(np.mean(fp["ned"])), 4) if fp["ned"] else 1.0
-
-    return summary
+# Import compute_metrics from evaluate.py — single source of truth for SROIE
+# Task-3 F1/NED/exact-match computation shared across DONUT and TrOCR+YOLO.
+from evaluate import compute_metrics as compute_sroie_metrics  # noqa: E402
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -218,10 +150,8 @@ def evaluate_donut_on_test(
     metrics["mean_latency_ms"] = round(float(np.mean(latencies)), 1) if latencies else 0.0
 
     # GPU cleanup
-    del model, processor
-    gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+    from constants import _gpu_cleanup
+    _gpu_cleanup(model, processor)
 
     return metrics
 
@@ -265,10 +195,8 @@ def evaluate_trocr_yolo_on_test(
     metrics["mean_latency_ms"] = round(float(np.mean(latencies)), 1) if latencies else 0.0
 
     # GPU cleanup
-    del yolo_model, trocr_model, trocr_processor
-    gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+    from constants import _gpu_cleanup
+    _gpu_cleanup(yolo_model, trocr_model, trocr_processor)
 
     return metrics
 
@@ -321,6 +249,7 @@ if __name__ == "__main__":
         print(f"  TrOCR+YOLO models not found — skipping")
 
     # Save combined results
+    RESULTS_DIR.mkdir(exist_ok=True)
     out_path = RESULTS_DIR / "metrics.json"
     with open(out_path, "w") as f:
         json.dump(results, f, indent=2)

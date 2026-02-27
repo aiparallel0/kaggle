@@ -16,9 +16,7 @@ FIX: Added GPU cleanup between experiments.
 FIX: Imports constants from shared module.
 """
 
-import gc
 import json
-import os
 import re
 import time
 from pathlib import Path
@@ -34,7 +32,7 @@ from transformers import (
     get_scheduler,
 )
 
-from constants import FIELDS, SEED
+from constants import FIELDS, SEED, DEVICE, WORKSPACE, _optimal_num_workers, _gpu_cleanup
 
 # ── Config ──────────────────────────────────────────────────────────────────
 TROCR_MODEL_ID = "microsoft/trocr-large-printed"
@@ -47,9 +45,7 @@ TROCR_BATCH = 16
 TROCR_LR = 5e-5
 TROCR_MAX_LEN = 128
 GRAD_ACCUM = 4
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-WORKSPACE = Path(os.environ.get("DONUT_WORKSPACE", "/workspace"))
 RESULTS_DIR = Path("results")
 YOLO_DATA_YAML = Path("data/yolo/dataset.yaml")
 TROCR_DATA_DIR = Path("data/trocr")
@@ -151,10 +147,7 @@ def train_yolo(output_dir: Optional[Path] = None) -> Path:
     print(f"Best weights -> {best_path}")
 
     # FIX: GPU cleanup after YOLO training
-    del model
-    gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+    _gpu_cleanup(model)
 
     return best_path
 
@@ -204,10 +197,10 @@ def train_trocr(output_dir: Optional[Path] = None) -> Dict:
         raise ValueError("TrOCR training dataset is empty — check data paths.")
 
     train_loader = DataLoader(
-        train_ds, batch_size=TROCR_BATCH, shuffle=True, num_workers=2
+        train_ds, batch_size=TROCR_BATCH, shuffle=True, num_workers=_optimal_num_workers()
     )
     val_loader = DataLoader(
-        val_ds, batch_size=TROCR_BATCH, shuffle=False, num_workers=2
+        val_ds, batch_size=TROCR_BATCH, shuffle=False, num_workers=_optimal_num_workers()
     ) if len(val_ds) > 0 else None
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=TROCR_LR)
@@ -281,10 +274,7 @@ def train_trocr(output_dir: Optional[Path] = None) -> Dict:
     print(f"\nTrOCR training complete in {elapsed:.1f}s. Best val_loss={best_val_loss:.4f}")
 
     # FIX: GPU cleanup after TrOCR training
-    del model, optimizer, scheduler
-    gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+    _gpu_cleanup(model, optimizer, scheduler)
 
     return history
 
