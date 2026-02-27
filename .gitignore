@@ -63,3 +63,9 @@ hf_token.txt
 
 # Dataset cache
 data/
+
+# Test / lint caches
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
