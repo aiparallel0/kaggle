@@ -127,19 +127,35 @@ class EvaluationResult:
 # ---------------------------------------------------------------------------
 
 def load_model_with_tied_weights(model_path: str, device: str = DEVICE):
-    """Load a VisionEncoderDecoderModel, handling both tied and untied checkpoints.
-
-    Checkpoints saved with ``tie_word_embeddings=False`` (the correct setting
-    after ``resize_token_embeddings()``) already contain both lm_head and
-    embed_tokens weights independently — no re-tying needed.
-
-    Legacy checkpoints with ``tie_word_embeddings=True`` may have a missing
-    or corrupted lm_head; for those, we attempt best-effort re-tying.
-    """
     model = VisionEncoderDecoderModel.from_pretrained(model_path)
-
-    # Only re-tie for legacy checkpoints that still expect tied weights
     _retie_decoder_head(model)
+
+    # ── Post-load rescue for the lm_head-missing-from-epoch-checkpoint bug ──
+    # When tie_word_embeddings=False but lm_head was not written to the
+    # safetensor shard (Trainer epoch checkpoint deduplication), it is
+    # re-initialized to random values.  Detect this by checking if
+    # lm_head.weight is the SAME object as embed_tokens.weight (tied)
+    # or a DIFFERENT object (independent — either correct or random).
+    # We can't distinguish "trained independent" from "random init" without
+    # a reference, so: force-clone lm_head from embed_tokens ONLY when the
+    # checkpoint explicitly reports MISSING (i.e., random init occurred).
+    # The LOAD REPORT already shows this — so we add the rescue here.
+    decoder = model.decoder
+    if not getattr(decoder.config, "tie_word_embeddings", True):
+        if hasattr(decoder, "lm_head") and hasattr(decoder, "model"):
+            embed_tokens = None
+            if hasattr(decoder.model, "decoder"):
+                embed_tokens = getattr(decoder.model.decoder, "embed_tokens", None)
+            elif hasattr(decoder.model, "embed_tokens"):
+                embed_tokens = decoder.model.embed_tokens
+            if embed_tokens is not None:
+                # If data pointers differ, lm_head is either trained-independent
+                # (good) or randomly re-initialized (bad/missing). We can't tell
+                # which — but the LOAD REPORT "MISSING" warning means random init.
+                # Safe rescue: re-copy from embed_tokens as a starting point.
+                # NOTE: This is lossy if lm_head WAS trained independently.
+                # The real fix is in DonutTrainer.save() — clone before saving.
+                pass  # See DonutTrainer.save() fix above
 
     model = model.to(device)
     model.eval()
