@@ -5,9 +5,9 @@
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
 # in the Software without restriction, including without limitation the rights
-# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-# copies of the Software, and to permit persons to whom the Software is
-# furnished to do so, subject to the following conditions:
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
 #
 # The above copyright notice and this permission notice shall be included in all
 # copies or substantial portions of the Software.
@@ -34,6 +34,9 @@ Critical bug fixes in this version:
     F1=0 on reload caused by tie_weights() destroying learned lm_head).
   - Key file loading: try .txt first, then .json (BUG A/E fix).
   - Zero-sample guard: raises ValueError if training dataset is empty.
+  - INDENTATION FIX: save() and _output_dir were indented at 1 space
+    (module level) instead of 4 spaces (class body), causing an
+    IndentationError on import that crashed ALL 8 DONUT experiments.
 
 Classes
 -------
@@ -93,12 +96,10 @@ def _get_sroie_dir():
         "/workspace/ICDAR-2019-SROIE/data",
     ))
 
-
 def _optimal_num_workers() -> int:
     """Calculate optimal DataLoader num_workers from available CPU cores."""
     num_cpus = multiprocessing.cpu_count()
     return min(8, max(4, num_cpus // 2))
-
 
 # ---------------------------------------------------------------------------
 # TrainingResult dataclass
@@ -133,8 +134,7 @@ class SROIEDataset(Dataset):
         Maximum token length for the decoder target sequence.
     """
 
-    def __init__(
-        self,
+    def __init__(self,
         processor: DonutProcessor,
         img_dir,
         key_dir,
@@ -292,7 +292,7 @@ class DonutTrainer:
         If ``train_dataset`` is empty (zero samples).
     """
 
-    def __init__(
+    def __init__([
         self,
         config,
         processor: DonutProcessor,
@@ -383,30 +383,35 @@ class DonutTrainer:
     # Saving
     # ------------------------------------------------------------------
 
- def save(self, path: Optional[Path] = None) -> None:
-    save_dir = Path(path) if path is not None else self._output_dir
-    save_dir.mkdir(parents=True, exist_ok=True)
+    def save(self, path: Optional[Path] = None) -> None:
+        """Save the fine-tuned model and processor to disk.
 
-    # ── lm_head detach fix ──────────────────────────────────────────────
-    # load_best_model_at_end re-loads the best epoch checkpoint via
-    # from_pretrained().  Per-epoch checkpoints may not have serialized
-    # lm_head independently (even with tie_word_embeddings=False) because
-    # safetensors deduplicates tensors sharing a data pointer.  After
-    # resize_token_embeddings(), base-vocab rows can still share a pointer
-    # with embed_tokens.  We force a deep copy so save_pretrained() writes
-    # lm_head as a fully independent tensor with no shared pointer.
-    import copy
-    decoder = self.model.decoder
-    if hasattr(decoder, "lm_head"):
-        decoder.lm_head.weight = torch.nn.Parameter(
-            decoder.lm_head.weight.data.clone()
-        )
-    # ────────────────────────────────────────────────────────────────────
+        INDENTATION FIX: this method was previously indented with 1 space
+        instead of 4, making Python treat it as module-level code and raising
+        an IndentationError on import — which crashed all 8 DONUT experiments.
+        """
+        save_dir = Path(path) if path is not None else self._output_dir
+        save_dir.mkdir(parents=True, exist_ok=True)
 
-    self.model.save_pretrained(str(save_dir))
-    self.processor.save_pretrained(str(save_dir))
-    logger.info("Model + processor saved → %s", save_dir)
-    print(f"Model + processor saved → {save_dir}")
+        # ── lm_head detach fix ─────────────────────────────────────────────
+        # load_best_model_at_end re-loads the best epoch checkpoint via
+        # from_pretrained().  Per-epoch checkpoints may not have serialized
+        # lm_head independently (even with tie_word_embeddings=False) because
+        # safetensors deduplicates tensors sharing a data pointer.  After
+        # resize_token_embeddings(), base-vocab rows can still share a pointer
+        # with embed_tokens.  We force a deep copy so save_pretrained() writes
+        # lm_head as a fully independent tensor with no shared pointer.
+        decoder = self.model.decoder
+        if hasattr(decoder, "lm_head"):
+            decoder.lm_head.weight = torch.nn.Parameter(
+                decoder.lm_head.weight.data.clone()
+            )
+        # ──────────────────────────────────────────────────────────────────
+
+        self.model.save_pretrained(str(save_dir))
+        self.processor.save_pretrained(str(save_dir))
+        logger.info("Model + processor saved → %s", save_dir)
+        print(f"Model + processor saved → {save_dir}")
 
     # ------------------------------------------------------------------
     # Internals
@@ -422,8 +427,7 @@ class DonutTrainer:
 # Lightweight config for standalone main()
 # ---------------------------------------------------------------------------
 
-@dataclass
-class _StandaloneConfig:
+dataclass class _StandaloneConfig:
     """Minimal config matching TRAIN_CONFIG defaults for legacy main()."""
 
     max_epochs: int = 30
