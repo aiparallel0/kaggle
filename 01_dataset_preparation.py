@@ -9,6 +9,11 @@ from the local img/key directories.  This ensures:
   - No data leakage (test images never appear in training)
   - No redundant re-download
 
+FIX (trocr_train: 0): box_dir was only set for the train split AND only
+when SROIE_DATA_DIR/box/ exists.  For val/test splits and when box/
+is absent, the code now falls back to key-file full-image crops for ALL splits
+so TrOCR always has training data.
+
 Output directories:
   data/yolo/images/{train,val,test}/  + data/yolo/labels/{train,val,test}/
   data/trocr/{train,val,test}/metadata.jsonl + line crop images
@@ -17,13 +22,13 @@ Output directories:
 import json
 import os
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from PIL import Image
 
 from constants import FIELDS, IMAGE_EXTS
 
-# ── Config ──────────────────────────────────────────────────────────────────
+# ── Config ────────────────────────────────────────────────────────────────────
 DATA_DIR = Path("data")
 YOLO_DIR = DATA_DIR / "yolo"
 TROCR_DIR = DATA_DIR / "trocr"
@@ -41,8 +46,28 @@ SPLIT_MAP = {
     "test":  ("test_img", "test_key"),
 }
 
+# Candidate box/ subdirectory names per split (tried in order).
+# The SROIE dataset ships one shared "box/" for train; some re-packagings
+# use split-specific names.  We probe all candidates.
+BOX_DIR_CANDIDATES: Dict[str, List[str]] = {
+    "train": ["box", "box_train", "train_box"],
+    "val":   ["box_val", "val_box", "box"],
+    "test":  ["box_test", "test_box", "box"],
+}
 
-# ── SROIE key file reader ──────────────────────────────────────────────────
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _find_box_dir(split: str) -> Optional[Path]:
+    """Return the first existing box annotation directory for a split, or None."""
+    for candidate in BOX_DIR_CANDIDATES.get(split, []):
+        p = SROIE_DATA_DIR / candidate
+        if p.exists() and any(p.iterdir()):
+            return p
+    return None
+
+
+# ── SROIE key file reader ─────────────────────────────────────────────────────
 def _load_key_file(key_dir: Path, stem: str) -> Dict[str, str]:
     """Load a SROIE .txt key file (4-line format: company/date/address/total)."""
     key_file = key_dir / f"{stem}.txt"
@@ -58,7 +83,7 @@ def _load_key_file(key_dir: Path, stem: str) -> Dict[str, str]:
     return {}
 
 
-# ── OCR bbox file reader ───────────────────────────────────────────────────
+# ── OCR bbox file reader ──────────────────────────────────────────────────────
 def _load_ocr_bboxes(box_dir: Path, stem: str) -> List[Tuple[List[int], str]]:
     """Load SROIE OCR bounding boxes from the box/ directory.
 
@@ -92,7 +117,7 @@ def _load_ocr_bboxes(box_dir: Path, stem: str) -> List[Tuple[List[int], str]]:
     return results
 
 
-# ── Line grouping ──────────────────────────────────────────────────────────
+# ── Line grouping ─────────────────────────────────────────────────────────────
 def group_words_into_lines(
     boxes: List[Tuple[List[int], str]], row_tol: int = 12
 ) -> List[Tuple[List[int], str]]:
@@ -127,7 +152,7 @@ def group_words_into_lines(
     return result
 
 
-# ── Build YOLO dataset ─────────────────────────────────────────────────────
+# ── Build YOLO dataset ────────────────────────────────────────────────────────
 def build_yolo_split(split: str) -> int:
     """Generate YOLO-format labels for one split. Returns sample count.
 
@@ -141,8 +166,8 @@ def build_yolo_split(split: str) -> int:
         print(f"  [YOLO] {split}: {img_subdir}/ not found — skipping")
         return 0
 
-    # SROIE box/ directory has OCR annotations with bboxes
-    box_dir = SROIE_DATA_DIR / "box" if split == "train" else None
+    # FIX: probe all candidate box dirs for this split
+    box_dir = _find_box_dir(split)
 
     out_img_dir = YOLO_DIR / "images" / split
     out_lbl_dir = YOLO_DIR / "labels" / split
@@ -159,7 +184,7 @@ def build_yolo_split(split: str) -> int:
 
         # Try to load OCR bboxes for YOLO labels
         boxes = []
-        if box_dir and box_dir.exists():
+        if box_dir is not None:
             raw_boxes = _load_ocr_bboxes(box_dir, img_path.stem)
             boxes = group_words_into_lines(raw_boxes)
 
@@ -168,16 +193,16 @@ def build_yolo_split(split: str) -> int:
         if not dest_img.exists():
             img.save(dest_img)
 
-        # Write YOLO label file
+        # Write YOLO label file (may be empty if no box annotations)
         lbl_path = out_lbl_dir / f"{img_path.stem}.txt"
         with open(lbl_path, "w") as f:
-            for bbox, text in boxes:
+            for bbox, _text in boxes:
                 x1, y1, x2, y2 = bbox
                 cx = max(0.0, min(1.0, ((x1 + x2) / 2) / W))
                 cy = max(0.0, min(1.0, ((y1 + y2) / 2) / H))
                 bw = max(0.0, min(1.0, (x2 - x1) / W))
                 bh = max(0.0, min(1.0, (y2 - y1) / H))
-                f.write(f"0 {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}\n")
+                f.write(f"0 {{cx:.6f}} {{cy:.6f}} {{bw:.6f}} {{bh:.6f}}\n")
 
         count += 1
 
@@ -185,20 +210,28 @@ def build_yolo_split(split: str) -> int:
     return count
 
 
-# ── Build TrOCR dataset ────────────────────────────────────────────────────
+# ── Build TrOCR dataset ───────────────────────────────────────────────────────
 def build_trocr_split(split: str) -> int:
     """Generate TrOCR line crop images + metadata for one split. Returns crop count.
 
     Each line crop is a horizontal slice of the receipt image containing one
     text line.  metadata.jsonl has {"file_name": ..., "text": ...} per crop.
-    """
+
+    FIX: Previously only the train split had a box_dir, so val/test (and train
+    when box/ is missing) produced 0 crops.  Now all splits fall back to
+    key-file full-image crops when no box annotations are found, guaranteeing
+    non-zero TrOCR training data.
+    """    
     img_subdir, key_subdir = SPLIT_MAP[split]
     img_dir = SROIE_DATA_DIR / img_subdir
-    box_dir = SROIE_DATA_DIR / "box" if split == "train" else None
+    key_dir = SROIE_DATA_DIR / key_subdir
 
     if not img_dir.exists():
         print(f"  [TrOCR] {split}: {img_subdir}/ not found — skipping")
         return 0
+
+    # FIX: probe all candidate box dirs for this split
+    box_dir = _find_box_dir(split)
 
     out_dir = TROCR_DIR / split
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -211,19 +244,20 @@ def build_trocr_split(split: str) -> int:
         img = Image.open(img_path).convert("RGB")
         W, H = img.size
 
-        # Get line-level bboxes
-        if box_dir and box_dir.exists():
+        # Get line-level bboxes from box annotations if available
+        lines: List[Tuple[List[int], str]] = []
+        if box_dir is not None:
             raw_boxes = _load_ocr_bboxes(box_dir, img_path.stem)
             lines = group_words_into_lines(raw_boxes)
-        else:
-            # Without bbox annotations, create full-image crop with key file text
-            key_dir = SROIE_DATA_DIR / key_subdir
+
+        # FIX: Always fall back to key-file full-image crop when no box data.
+        # This applies to: all val/test images, and any train image whose
+        # per-image box file is missing.
+        if not lines:
             gt = _load_key_file(key_dir, img_path.stem)
             full_text = " | ".join(gt.get(f, "") for f in FIELDS if gt.get(f))
             if full_text:
                 lines = [([0, 0, W, H], full_text)]
-            else:
-                lines = []
 
         for line_idx, (bbox, text) in enumerate(lines):
             if not text.strip():
@@ -252,7 +286,7 @@ def build_trocr_split(split: str) -> int:
     return len(records)
 
 
-# ── Write YOLO dataset.yaml ────────────────────────────────────────────────
+# ── Write YOLO dataset.yaml ───────────────────────────────────────────────────
 def write_yolo_yaml() -> None:
     """Write the dataset.yaml config required by Ultralytics YOLOv8."""
     YOLO_DIR.mkdir(parents=True, exist_ok=True)
@@ -267,7 +301,7 @@ names: ['text_region']
     print(f"  [YOLO] dataset.yaml -> {yaml_path}")
 
 
-# ── Main ────────────────────────────────────────────────────────────────────
+# ── Main ──────────────────────────────────────────────────────────────────────
 def prepare_all() -> Dict[str, int]:
     """Run full dataset preparation for YOLO + TrOCR. Returns counts dict."""
     print("\n=== Dataset Preparation for TrOCR+YOLO Pipeline ===")
