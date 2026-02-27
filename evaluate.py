@@ -147,23 +147,20 @@ def load_model_with_tied_weights(model_path: str, device: str = DEVICE):
 
 
 def _retie_decoder_head(model) -> None:
-    """Conditionally re-tie decoder.lm_head.weight to embed_tokens.weight.
-
-    If the checkpoint was saved with ``tie_word_embeddings=False`` (new
-    behaviour after the resize_token_embeddings fix), both weights were
-    saved independently and are already correct — skip re-tying.
-
-    If ``tie_word_embeddings=True`` (legacy), attempt re-tying as a
-    best-effort fix for checkpoints where lm_head may have been lost.
-    """
     decoder = model.decoder
 
-    # New checkpoints: tie_word_embeddings=False means both weights were
-    # saved independently and are already correct.  Don't re-tie.
     if not getattr(decoder.config, "tie_word_embeddings", True):
-        logger.info(
-            "tie_word_embeddings=False — lm_head saved independently, "
-            "skipping re-tie."
+        # tie_word_embeddings=False means lm_head SHOULD have been saved
+        # as an independent tensor.  Check the checkpoint actually included
+        # it — if missing it will have been randomly initialized (F1=0).
+        # As a safety net, always re-tie here; since after resize the
+        # embed_tokens and lm_head ARE trained independently, re-tying
+        # overwrites lm_head with embed_tokens which is also wrong —
+        # so instead just WARN loudly and let the caller decide.
+        logger.warning(
+            "tie_word_embeddings=False but lm_head may still be missing "
+            "from checkpoint if epoch shards were not saved correctly. "
+            "Check LOAD REPORT above for 'MISSING' status."
         )
         return
 
