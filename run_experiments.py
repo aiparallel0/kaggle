@@ -114,7 +114,7 @@ class ExperimentConfig:
     base_model: str = "naver-clova-ix/donut-base-finetuned-cord-v2"
     warmup_steps: int = 100
     weight_decay: float = 0.01
-    max_length: int = 512
+    max_length: int = MAX_LENGTH
     gradient_accumulation_steps: int = 2
     description: str = ""
     experiment_id: int = 0
