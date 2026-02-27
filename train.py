@@ -383,37 +383,30 @@ class DonutTrainer:
     # Saving
     # ------------------------------------------------------------------
 
-    def save(self, path: Optional[Path] = None) -> None:
-        """Save model and processor to disk.
+ def save(self, path: Optional[Path] = None) -> None:
+    save_dir = Path(path) if path is not None else self._output_dir
+    save_dir.mkdir(parents=True, exist_ok=True)
 
-        Before calling ``save_pretrained()``, this method explicitly invokes
-        ``model.tie_weights()`` to ensure that the tied
-        ``decoder.lm_head.weight`` is correctly persisted in the checkpoint.
+    # ── lm_head detach fix ──────────────────────────────────────────────
+    # load_best_model_at_end re-loads the best epoch checkpoint via
+    # from_pretrained().  Per-epoch checkpoints may not have serialized
+    # lm_head independently (even with tie_word_embeddings=False) because
+    # safetensors deduplicates tensors sharing a data pointer.  After
+    # resize_token_embeddings(), base-vocab rows can still share a pointer
+    # with embed_tokens.  We force a deep copy so save_pretrained() writes
+    # lm_head as a fully independent tensor with no shared pointer.
+    import copy
+    decoder = self.model.decoder
+    if hasattr(decoder, "lm_head"):
+        decoder.lm_head.weight = torch.nn.Parameter(
+            decoder.lm_head.weight.data.clone()
+        )
+    # ────────────────────────────────────────────────────────────────────
 
-        Without this step, ``save_pretrained()`` omits the tied weight and
-        a subsequent ``from_pretrained()`` loads random values for
-        ``lm_head`` — producing garbage output (F1 = 0).
-
-        Parameters
-        ----------
-        path : Path or None
-            Directory to save into.  Defaults to ``config.output_dir``.
-        """
-        save_dir = Path(path) if path is not None else self._output_dir
-        save_dir.mkdir(parents=True, exist_ok=True)
-
-        # NOTE: Do NOT call model.tie_weights() here.  After
-        # resize_token_embeddings(), lm_head and embed_tokens are independent
-        # tensors trained separately.  Calling tie_weights() would OVERWRITE
-        # the learned lm_head with embed_tokens, destroying the output
-        # projection and causing F1=0 on reload.  Instead, we set
-        # config.tie_word_embeddings=False at model setup time so
-        # save_pretrained() persists both weights independently.
-        self.model.save_pretrained(str(save_dir))
-        self.processor.save_pretrained(str(save_dir))
-
-        logger.info("Model + processor saved → %s", save_dir)
-        print(f"Model + processor saved → {save_dir}")
+    self.model.save_pretrained(str(save_dir))
+    self.processor.save_pretrained(str(save_dir))
+    logger.info("Model + processor saved → %s", save_dir)
+    print(f"Model + processor saved → {save_dir}")
 
     # ------------------------------------------------------------------
     # Internals
