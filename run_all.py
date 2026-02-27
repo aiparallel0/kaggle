@@ -30,12 +30,14 @@ Calling this one script does everything:
   2. Trains DONUT for each of the 8 experiment configurations
   3. Prepares YOLO bbox + TrOCR line crop datasets from SROIE
   4. Trains YOLOv8 + TrOCR and runs TrOCR+YOLO inference on SROIE test
-  5. Generates cross-architecture comparison plots and tables
-  6. Fills paper.tex with all real metrics → paper_filled.tex
+  5. Runs head-to-head benchmark: DONUT vs YOLOv8+TrOCR+Regex (F1, accuracy, speed)
+  6. Generates cross-architecture comparison plots and tables
+  7. Fills paper.tex with all real metrics → paper_filled.tex
 
 FIX: Added TrOCR+YOLO pipeline stages (3-5) for dual-architecture comparison.
 FIX: GPU memory cleanup between all stages to prevent OOM.
 FIX: Imports constants from shared module.
+FIX: Integrated benchmark_compare.py as Stage 5 for live head-to-head evaluation.
 
 All stages run SEQUENTIALLY to prevent GPU memory contention.
 
@@ -45,6 +47,7 @@ Usage
   python run_all.py --experiment 2       # Single DONUT experiment
   python run_all.py --paper-only         # Only generate paper from results
   python run_all.py --skip-trocr         # Skip TrOCR+YOLO stages
+  python run_all.py --skip-benchmark     # Skip head-to-head benchmark
   python run_all.py --force              # Force re-run
 
 Exit codes
@@ -634,7 +637,144 @@ def stage_trocr_experiments(args) -> StageResult:
 
 
 # ---------------------------------------------------------------------------
-# Stage 5 — Cross-architecture comparison
+# Stage 5 — Head-to-head benchmark (DONUT vs YOLOv8+TrOCR+Regex)
+# ---------------------------------------------------------------------------
+
+def stage_benchmark(args) -> StageResult:
+    """Run benchmark_compare.py: load both trained models, run inference on
+    the same SROIE test images, and produce side-by-side F1 / accuracy / speed
+    metrics with journal-ready plots.
+
+    Automatically selects the best DONUT experiment model (highest global F1)
+    and the trained YOLO best.pt from Stage 4.
+    """
+    _banner("STAGE 5 — Head-to-head benchmark (DONUT vs YOLOv8+TrOCR+Regex)")
+    warnings: List[str] = []
+
+    sroie_dir = Path(args.sroie_dir)
+    test_img_dir = sroie_dir / "test_img"
+    test_key_dir = sroie_dir / "test_key"
+    workspace = Path(args.workspace)
+
+    # --- Validate test data exists ---
+    if not test_img_dir.exists() or not test_key_dir.exists():
+        w = "SROIE test_img/ or test_key/ not found — skipping benchmark."
+        print(f"  WARNING: {w}", file=sys.stderr)
+        warnings.append(w)
+        return StageResult(name="Benchmark", duration=0.0, exit_status=1,
+                           warnings=warnings)
+
+    # --- Find best DONUT experiment model (highest global F1) ---
+    results_dir = Path("results")
+    best_f1 = -1.0
+    best_exp_id = 1  # fallback to experiment 1
+    for rfile in sorted(results_dir.glob("experiment_*.json")):
+        try:
+            with open(rfile) as fh:
+                rdata = json.load(fh)
+            f1 = rdata.get("metrics", {}).get("global_f1", 0.0)
+            eid = rdata.get("experiment_id", 0)
+            if f1 > best_f1:
+                best_f1 = f1
+                best_exp_id = eid
+        except Exception:
+            continue
+
+    donut_model_dir = workspace / "models" / f"experiment_{best_exp_id}"
+    if not donut_model_dir.exists():
+        # Fallback: try standalone fine-tuned model path
+        donut_model_dir_alt = workspace / "donut-sroie-finetuned"
+        if donut_model_dir_alt.exists():
+            donut_model_dir = donut_model_dir_alt
+        else:
+            w = (f"No fine-tuned DONUT model found at {donut_model_dir} "
+                 f"— falling back to pretrained base model.")
+            print(f"  WARNING: {w}")
+            warnings.append(w)
+            donut_model_dir = Path(BASE_MODEL)  # HuggingFace hub ID
+
+    print(f"  DONUT model  : {donut_model_dir} (experiment {best_exp_id}, F1={best_f1:.4f})")
+
+    # --- Find YOLO best.pt ---
+    yolo_weights = workspace / "models" / "yolo_finetuned" / "run" / "weights" / "best.pt"
+    skip_yolo = not yolo_weights.exists()
+    if skip_yolo:
+        w = f"YOLO weights not found at {yolo_weights} — benchmark will run DONUT only."
+        print(f"  WARNING: {w}")
+        warnings.append(w)
+    else:
+        print(f"  YOLO model   : {yolo_weights}")
+
+    print(f"  Test images  : {test_img_dir}")
+    print(f"  Test labels  : {test_key_dir}")
+
+    # --- Run benchmark_compare programmatically ---
+    try:
+        import importlib
+        bench_mod = importlib.import_module("benchmark_compare")
+
+        pairs = bench_mod.find_pairs(test_img_dir, test_key_dir)
+        print(f"  Found {len(pairs)} test image+label pairs.")
+
+        all_results = []
+
+        # Run DONUT pipeline
+        print("\n  Running DONUT inference ...")
+        donut_pipe = bench_mod.DonutPipeline(
+            model_id_or_path=str(donut_model_dir)
+        )
+        donut_result = donut_pipe.run_benchmark(pairs, desc="DONUT benchmark")
+        donut_result = bench_mod.compute_metrics(donut_result)
+        all_results.append(donut_result)
+
+        # Free GPU before next pipeline
+        import torch
+        del donut_pipe
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        import gc; gc.collect()
+
+        # Run YOLOv8+TrOCR+Regex pipeline (if weights available)
+        if not skip_yolo:
+            print("\n  Running YOLOv8+TrOCR+Regex inference ...")
+            yolo_pipe = bench_mod.TrOCRYOLOPipeline(
+                yolo_model_path=str(yolo_weights),
+            )
+            yolo_result = yolo_pipe.run_benchmark(pairs, desc="YOLO+TrOCR benchmark")
+            yolo_result = bench_mod.compute_metrics(yolo_result)
+            all_results.append(yolo_result)
+
+            del yolo_pipe
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            gc.collect()
+
+        # Print comparison report
+        bench_mod.print_report(all_results, n_samples=len(pairs))
+
+        # Save JSON + plots
+        out_dir = results_dir
+        out_dir.mkdir(parents=True, exist_ok=True)
+        bench_mod.save_json(all_results, out_dir / "benchmark_results.json")
+        bench_mod.plot_results(all_results, out_dir=out_dir / "figures")
+
+        print(f"\n  Benchmark complete — results saved to {out_dir}")
+
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        w = f"Benchmark stage failed: {type(exc).__name__}: {exc}"
+        print(f"  WARNING: {w}", file=sys.stderr)
+        warnings.append(w)
+        return StageResult(name="Benchmark", duration=0.0, exit_status=1,
+                           warnings=warnings)
+
+    return StageResult(name="Benchmark", duration=0.0, exit_status=0,
+                       warnings=warnings)
+
+
+# ---------------------------------------------------------------------------
+# Stage 6 — Cross-architecture comparison
 # ---------------------------------------------------------------------------
 
 def stage_comparison(args) -> StageResult:
@@ -643,7 +783,7 @@ def stage_comparison(args) -> StageResult:
     FIX: New stage — produces plots and LaTeX-injectable content comparing
     DONUT vs TrOCR+YOLO across all 8 experiments.
     """
-    _banner("STAGE 5 — Cross-architecture comparison")
+    _banner("STAGE 6 — Cross-architecture comparison")
     warnings: List[str] = []
 
     try:
@@ -662,7 +802,7 @@ def stage_comparison(args) -> StageResult:
 
 
 # ---------------------------------------------------------------------------
-# Stage 6 — LaTeX paper generation
+# Stage 7 — LaTeX paper generation
 # ---------------------------------------------------------------------------
 
 def stage_paper(args) -> StageResult:
@@ -674,7 +814,7 @@ def stage_paper(args) -> StageResult:
     import dataset_loaders
     import inject_results as ir  # local module
 
-    _banner("STAGE 6 — LaTeX paper generation")
+    _banner("STAGE 7 — LaTeX paper generation")
     warnings: List[str] = []
 
     results_path = Path("results") / "all_experiments.json"
@@ -804,10 +944,15 @@ class PipelineOrchestrator:
             if r.exit_status > exit_code:
                 exit_code = r.exit_status
 
-            # Stage 5 — Cross-architecture comparison
+        # Stage 5 — Head-to-head benchmark (DONUT vs YOLOv8+TrOCR+Regex)
+        if not getattr(self.args, "skip_benchmark", False):
+            self._run_stage("Benchmark", stage_benchmark)
+
+        # Stage 6 — Cross-architecture comparison
+        if not getattr(self.args, "skip_trocr", False):
             self._run_stage("Comparison", stage_comparison)
 
-        # Stage 6 — Paper generation
+        # Stage 7 — Paper generation
         self._run_stage("Paper Generation", stage_paper)
 
         print(repr(self))
@@ -838,8 +983,9 @@ class PipelineOrchestrator:
             "DONUT Experiments": "2. DONUT Experiments",
             "TrOCR Data Prep": "3. TrOCR Data Prep",
             "TrOCR+YOLO": "4. TrOCR+YOLO",
-            "Comparison": "5. Comparison",
-            "Paper Generation": "6. Paper Generation",
+            "Benchmark": "5. Benchmark H2H",
+            "Comparison": "6. Comparison",
+            "Paper Generation": "7. Paper Generation",
         }
 
         for sr in self.stages:
@@ -898,6 +1044,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--skip-trocr", action="store_true",
         help="Skip TrOCR+YOLO stages (data prep, training, evaluation)",
+    )
+    p.add_argument(
+        "--skip-benchmark", action="store_true",
+        help="Skip head-to-head benchmark (DONUT vs YOLOv8+TrOCR+Regex)",
     )
     p.add_argument(
         "--sroie-dir", default="/workspace/ICDAR-2019-SROIE/data",
