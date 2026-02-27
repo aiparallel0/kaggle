@@ -762,6 +762,10 @@ def main() -> None:
                         help="Path to paper.tex template (default: paper.tex)")
     parser.add_argument("--output", default="paper_filled.tex",
                         help="Path to write the filled paper (default: paper_filled.tex)")
+    parser.add_argument("--presentation", default="presentation.tex",
+                        help="Path to presentation.tex template (default: presentation.tex)")
+    parser.add_argument("--presentation-output", default="presentation_filled.tex",
+                        help="Path to write the filled presentation (default: presentation_filled.tex)")
     args = parser.parse_args()
 
     if args.all:
@@ -784,13 +788,22 @@ def main() -> None:
         generate_convergence_tex(args.results)
         generate_f1_barchart_tex(args.results)
 
+        var_map = build_var_map(all_exp)
+
         if Path(args.paper).exists():
-            var_map = build_var_map(all_exp)
             fill_paper(args.paper, args.output, var_map)
         else:
             print(
                 f"paper.tex not found at {args.paper}; "
                 "skipping filled paper generation."
+            )
+
+        if Path(args.presentation).exists():
+            fill_paper(args.presentation, args.presentation_output, var_map)
+        else:
+            print(
+                f"presentation.tex not found at {args.presentation}; "
+                "skipping filled presentation generation."
             )
     else:
         legacy_output()
