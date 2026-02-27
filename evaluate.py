@@ -53,32 +53,20 @@ from tqdm import tqdm
 
 # FIX: Import shared constants from single source of truth (constants.py)
 # instead of duplicating FIELDS/IMAGE_EXTS independently in this file.
-from constants import FIELDS, IMAGE_EXTS
+from constants import DEVICE, FIELDS, IMAGE_EXTS, _get_sroie_dir
 
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
 
 logger = logging.getLogger(__name__)
-if not logger.handlers:
-    _handler = logging.StreamHandler(sys.stderr)
-    _handler.setFormatter(logging.Formatter("[%(levelname)s] %(name)s: %(message)s"))
-    logger.addHandler(_handler)
-    logger.setLevel(logging.INFO)
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-
 # Number of initial inference calls for which raw token output is logged
 _DIAGNOSTIC_LOG_COUNT = 3
-
-
-def _get_sroie_dir():
-    """Re-read env var at call time (run_all.py sets it after import)."""
-    return Path(os.environ.get("SROIE_DATA_DIR", "/workspace/ICDAR-2019-SROIE/data"))
 
 
 # ---------------------------------------------------------------------------

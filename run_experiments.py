@@ -49,15 +49,14 @@ and evaluation with self-test and parse-failure thresholds.
 """
 
 import argparse
+import copy
+import gc
 import json
 import math
-import os
-import random
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-import numpy as np
 import torch
 from PIL import Image
 from torch.utils.data import Dataset
@@ -68,27 +67,14 @@ from evaluate import compute_metrics, run_inference
 
 # FIX: Import shared constants from single source of truth (constants.py)
 # instead of duplicating FIELDS/IMAGE_EXTS/etc. independently in this file.
-from constants import FIELDS, MAX_LENGTH, IMAGE_EXTS, NEW_TOKENS, BASE_MODEL, SEED
+from constants import FIELDS, MAX_LENGTH, IMAGE_EXTS, NEW_TOKENS, BASE_MODEL, SEED, \
+    DEVICE, WORKSPACE, set_seed
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
 RESULTS_DIR = Path("results")
-
-WORKSPACE = Path(os.environ.get("DONUT_WORKSPACE", "/workspace"))
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-
-
-def set_seed(seed: int = SEED) -> None:
-    """Set random seeds for reproducibility."""
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
 
 
 # ---------------------------------------------------------------------------
@@ -317,12 +303,19 @@ def train_experiment(
     samples: List[Tuple[Path, Dict]],
     output_dir: Path,
     val_samples: List[Tuple[Path, Dict]] = None,
+    base_processor=None,
+    base_model=None,
 ) -> List[Dict]:
     """Fine-tune DONUT on *samples* and save the model to *output_dir*.
 
     All hyperparameters come from ``EXPERIMENTS[exp_id]`` (an ExperimentConfig).
     Training is delegated to ``DonutTrainer`` from ``train.py``, which reads
     hyperparameters from the config via duck-typed attributes.
+
+    When *base_processor* and *base_model* are supplied (pre-loaded by the
+    caller), they are deep-copied from RAM instead of re-deserializing 800 MB
+    of safetensors from disk — reducing ~4–6 s of ``from_pretrained`` overhead
+    per experiment to a fast in-memory copy.
 
     Returns the trainer log history (list of per-step dicts) for convergence
     plot generation.
@@ -339,9 +332,13 @@ def train_experiment(
     if val_samples:
         print(f"[Exp {exp_id}] Validation set: {len(val_samples)} samples")
 
-    # Load base model and processor
-    processor = DonutProcessor.from_pretrained(config.base_model)
-    model = VisionEncoderDecoderModel.from_pretrained(config.base_model)
+    # Load base model and processor — or deep-copy from pre-loaded objects.
+    if base_processor is not None and base_model is not None:
+        processor = copy.deepcopy(base_processor)
+        model = copy.deepcopy(base_model)
+    else:
+        processor = DonutProcessor.from_pretrained(config.base_model)
+        model = VisionEncoderDecoderModel.from_pretrained(config.base_model)
 
     # Add SROIE special tokens
     processor.tokenizer.add_special_tokens({"additional_special_tokens": NEW_TOKENS})
@@ -400,13 +397,11 @@ def train_experiment(
     # FIX: Explicit GPU cleanup between experiments to prevent OOM on GPUs
     # with limited VRAM.  The RTX 4090 has 24GB — sufficient for DONUT but
     # running 8+ experiments sequentially without cleanup risks fragmentation.
-    import gc
-    del model, processor, trainer, train_ds
+    from constants import _gpu_cleanup
+    _gpu_cleanup(model, processor, trainer, train_ds)
     if val_ds is not None:
         del val_ds
     gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
     print(f"[Exp {exp_id}] GPU memory released")
 
     return result.log_history
@@ -460,13 +455,16 @@ def evaluate_experiment(exp_id: int, model_dir: Path) -> Dict:
 # Single experiment runner
 # ---------------------------------------------------------------------------
 
-def run_experiment(exp_id: int) -> Dict:
+def run_experiment(exp_id: int, base_processor=None, base_model=None) -> Dict:
     """Run a single experiment: train, evaluate, save results.
 
     Checks cache validity (datasets AND hyperparams must match) before
     reusing a previous result.  Loads data via dataset_loaders, delegates
     training to train_experiment and evaluation to evaluate_experiment,
     then saves the result JSON.
+
+    When *base_processor* and *base_model* are supplied, they are passed to
+    train_experiment() which deep-copies them instead of re-loading from disk.
     """
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     if exp_id not in EXPERIMENTS:
@@ -517,7 +515,10 @@ def run_experiment(exp_id: int) -> Dict:
     # Train
     model_dir = WORKSPACE / "models" / f"experiment_{exp_id}"
     model_dir.mkdir(parents=True, exist_ok=True)
-    log_history = train_experiment(exp_id, train_samples, model_dir, val_samples=val_samples)
+    log_history = train_experiment(
+        exp_id, train_samples, model_dir, val_samples=val_samples,
+        base_processor=base_processor, base_model=base_model,
+    )
 
     # Evaluate
     metrics = evaluate_experiment(exp_id, model_dir)
@@ -590,8 +591,16 @@ def main() -> None:
             print(f"[force] Deleted cached result: {result_file}")
 
     if args.all:
+        # Load base model once and pass to each experiment via deep-copy.
+        # This replaces 8 × from_pretrained() disk reads with 8 in-RAM deep
+        # copies — saving ~4–6 s of safetensors deserialization per experiment.
+        _cfg = EXPERIMENTS[1]
+        _base_processor = DonutProcessor.from_pretrained(_cfg.base_model)
+        _base_model = VisionEncoderDecoderModel.from_pretrained(_cfg.base_model)
         for exp_id in EXPERIMENTS:
-            run_experiment(exp_id)
+            run_experiment(exp_id, base_processor=_base_processor, base_model=_base_model)
+        from constants import _gpu_cleanup
+        _gpu_cleanup(_base_model, _base_processor)
         save_summary()
     else:
         run_experiment(args.experiment)

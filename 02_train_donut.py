@@ -12,25 +12,22 @@ reloaded models produce garbage output (F1=0).
 
 FIX: Imports constants from shared constants.py instead of duplicating.
 
+FIX: Delegates training loop to DonutTrainer from train.py instead of
+reimplementing it.  DonutReceiptDataset replaced with SROIEDataset.from_samples()
+from train.py, which uses the same target-sequence construction logic.
+
 FIX: Added GPU memory cleanup after training.
 """
 
-import gc
 import json
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
 import torch
-from PIL import Image
-from torch.utils.data import DataLoader, Dataset
-from tqdm import tqdm
-from transformers import (
-    DonutProcessor,
-    VisionEncoderDecoderModel,
-    get_scheduler,
-)
+from transformers import DonutProcessor, VisionEncoderDecoderModel
 
-from constants import FIELDS, MAX_LENGTH, SEED, BASE_MODEL
+from constants import FIELDS, MAX_LENGTH, SEED, BASE_MODEL, NEW_TOKENS
 
 # ── Config ──────────────────────────────────────────────────────────────────
 MODEL_ID = BASE_MODEL
@@ -43,69 +40,33 @@ EPOCHS = 10
 LR = 5e-5
 WARMUP_RATIO = 0.1
 TASK_TOKEN = "<s_sroie>"
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
-# ── Dataset ──────────────────────────────────────────────────────────────────
-class DonutReceiptDataset(Dataset):
-    def __init__(self, data_dir: Path, processor: DonutProcessor, max_length: int):
-        self.data_dir = data_dir
-        self.processor = processor
-        self.max_length = max_length
-        self.samples = []
-
-        meta_path = data_dir / "metadata.jsonl"
-        if not meta_path.exists():
-            raise FileNotFoundError(
-                f"metadata.jsonl not found at {meta_path}. "
-                "Run 01_dataset_preparation.py first."
-            )
-        with open(meta_path) as f:
-            for line in f:
-                self.samples.append(json.loads(line))
-
-    def __len__(self):
-        return len(self.samples)
-
-    def __getitem__(self, idx):
-        sample = self.samples[idx]
-        img_path = self.data_dir / sample["file_name"]
-        image = Image.open(img_path).convert("RGB")
-
-        pixel_values = self.processor(
-            image, return_tensors="pt"
-        ).pixel_values.squeeze(0)
-
-        gt = json.loads(sample["ground_truth"])["gt_parse"]
-        target_sequence = TASK_TOKEN
-        for key in FIELDS:
-            val = gt.get(key, "")
-            target_sequence += f"<s_{key}>{val}</s_{key}>"
-        target_sequence += "</s_sroie>"
-
-        labels = self.processor.tokenizer(
-            target_sequence,
-            add_special_tokens=False,
-            max_length=self.max_length,
-            padding="max_length",
-            truncation=True,
-            return_tensors="pt",
-        ).input_ids.squeeze(0)
-
-        labels[labels == self.processor.tokenizer.pad_token_id] = -100
-        return {"pixel_values": pixel_values, "labels": labels}
+@dataclass
+class _TrainConfig:
+    """Training configuration for standalone 02_train_donut.py."""
+    max_epochs: int = EPOCHS
+    learning_rate: float = LR
+    per_device_train_batch_size: int = BATCH_SIZE
+    early_stopping_patience: int = 3
+    warmup_steps: int = 0  # set at train time based on dataset size
+    weight_decay: float = 0.01
+    gradient_accumulation_steps: int = GRAD_ACCUM
+    seed: int = SEED
+    output_dir: str = str(OUTPUT_DIR / "best")
 
 
-# ── Training loop ────────────────────────────────────────────────────────────
+# ── Training ─────────────────────────────────────────────────────────────────
 def train():
+    from train import DonutTrainer, SROIEDataset
+
     print(f"Loading DONUT model: {MODEL_ID}")
     processor = DonutProcessor.from_pretrained(MODEL_ID)
     model = VisionEncoderDecoderModel.from_pretrained(MODEL_ID)
 
-    # Add task-specific tokens (same as run_experiments.py / train.py)
-    from constants import NEW_TOKENS
+    # Add task-specific tokens
     processor.tokenizer.add_special_tokens(
         {"additional_special_tokens": NEW_TOKENS}
     )
@@ -129,96 +90,60 @@ def train():
         if "layers.0" in name or "layers.1" in name:
             param.requires_grad = False
 
-    model = model.to(DEVICE)
+    # Load data from metadata.jsonl and convert to (Path, gt_dict) tuples
+    # for use with SROIEDataset.from_samples().
+    def _load_samples(data_dir: Path):
+        meta_path = data_dir / "metadata.jsonl"
+        if not meta_path.exists():
+            raise FileNotFoundError(
+                f"metadata.jsonl not found at {meta_path}. "
+                "Run 01_dataset_preparation.py first."
+            )
+        samples = []
+        with open(meta_path) as fh:
+            for line in fh:
+                rec = json.loads(line)
+                gt = json.loads(rec["ground_truth"])["gt_parse"]
+                samples.append((data_dir / rec["file_name"], gt))
+        return samples
 
-    train_ds = DonutReceiptDataset(DATA_DIR / "train", processor, MAX_LENGTH)
-    val_ds = DonutReceiptDataset(DATA_DIR / "test", processor, MAX_LENGTH)
+    train_samples = _load_samples(DATA_DIR / "train")
+    val_samples = _load_samples(DATA_DIR / "test")
 
-    if len(train_ds) == 0:
+    if not train_samples:
         raise ValueError("Training dataset is empty — check data paths.")
 
-    train_loader = DataLoader(
-        train_ds, batch_size=BATCH_SIZE, shuffle=True, num_workers=2
-    )
-    val_loader = DataLoader(
-        val_ds, batch_size=BATCH_SIZE, shuffle=False, num_workers=2
-    )
+    train_ds = SROIEDataset.from_samples(processor, train_samples, max_length=MAX_LENGTH)
+    val_ds = SROIEDataset.from_samples(processor, val_samples, max_length=MAX_LENGTH)
 
-    optimizer = torch.optim.AdamW(
-        filter(lambda p: p.requires_grad, model.parameters()), lr=LR
-    )
-    total_steps = (len(train_loader) // GRAD_ACCUM) * EPOCHS
-    warmup_steps = int(total_steps * WARMUP_RATIO)
-    scheduler = get_scheduler(
-        "cosine", optimizer,
-        num_warmup_steps=warmup_steps,
-        num_training_steps=total_steps,
+    # Compute absolute warmup steps for DonutTrainer
+    steps_per_epoch = max(1, len(train_ds) // (BATCH_SIZE * GRAD_ACCUM))
+    computed_warmup = int(steps_per_epoch * EPOCHS * WARMUP_RATIO)
+
+    config = _TrainConfig(warmup_steps=computed_warmup)
+    trainer = DonutTrainer(
+        config=config,
+        processor=processor,
+        model=model,
+        train_dataset=train_ds,
+        val_dataset=val_ds,
     )
 
-    best_val_loss = float("inf")
-    global_step = 0
-    history = {"train_loss": [], "val_loss": []}
+    result = trainer.train()
+    trainer.save(OUTPUT_DIR / "best")
 
-    for epoch in range(EPOCHS):
-        model.train()
-        epoch_loss = 0.0
-        optimizer.zero_grad()
+    history = {
+        "train_loss": [h.get("loss") for h in result.log_history if "loss" in h],
+        "val_loss": [h.get("eval_loss") for h in result.log_history if "eval_loss" in h],
+    }
+    with open(OUTPUT_DIR / "training_history.json", "w") as fh:
+        json.dump(history, fh, indent=2)
 
-        pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{EPOCHS} [train]")
-        for step, batch in enumerate(pbar):
-            pixel_values = batch["pixel_values"].to(DEVICE)
-            labels = batch["labels"].to(DEVICE)
-
-            outputs = model(pixel_values=pixel_values, labels=labels)
-            loss = outputs.loss / GRAD_ACCUM
-            loss.backward()
-            epoch_loss += loss.item() * GRAD_ACCUM
-
-            if (step + 1) % GRAD_ACCUM == 0:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                optimizer.step()
-                scheduler.step()
-                optimizer.zero_grad()
-                global_step += 1
-
-            pbar.set_postfix(loss=f"{epoch_loss/(step+1):.4f}")
-
-        avg_train = epoch_loss / len(train_loader)
-
-        # Validation
-        model.eval()
-        val_loss = 0.0
-        with torch.no_grad():
-            for batch in tqdm(val_loader, desc=f"Epoch {epoch+1}/{EPOCHS} [val]"):
-                pixel_values = batch["pixel_values"].to(DEVICE)
-                labels = batch["labels"].to(DEVICE)
-                outputs = model(pixel_values=pixel_values, labels=labels)
-                val_loss += outputs.loss.item()
-
-        avg_val = val_loss / len(val_loader)
-        history["train_loss"].append(avg_train)
-        history["val_loss"].append(avg_val)
-        print(f"Epoch {epoch+1}: train_loss={avg_train:.4f}  val_loss={avg_val:.4f}")
-
-        if avg_val < best_val_loss:
-            best_val_loss = avg_val
-            model.save_pretrained(OUTPUT_DIR / "best")
-            processor.save_pretrained(OUTPUT_DIR / "best")
-            print(f"  Best model saved (val_loss={best_val_loss:.4f})")
-
-    # Save final + history
-    model.save_pretrained(OUTPUT_DIR / "final")
-    processor.save_pretrained(OUTPUT_DIR / "final")
-    with open(OUTPUT_DIR / "training_history.json", "w") as f:
-        json.dump(history, f, indent=2)
-
-    print(f"\nDONUT training complete. Best val_loss={best_val_loss:.4f}")
+    print(f"\nDONUT training complete.")
 
     # FIX: GPU cleanup after training to free VRAM for subsequent stages.
-    del model, optimizer, scheduler
-    gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+    from constants import _gpu_cleanup
+    _gpu_cleanup(model, processor, trainer, train_ds, val_ds)
 
     return history
 
