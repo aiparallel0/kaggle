@@ -733,11 +733,12 @@ def stage_benchmark(args) -> StageResult:
         all_results.append(donut_result)
 
         # Free GPU before next pipeline
+        import gc
+
         import torch
         del donut_pipe
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-        import gc 
         gc.collect()
 
         # Run YOLOv8+TrOCR+Regex pipeline (if weights available)
