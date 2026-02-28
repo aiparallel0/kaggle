@@ -76,6 +76,7 @@ _DIAGNOSTIC_LOG_COUNT = 3
 # EvaluationResult dataclass
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class EvaluationResult:
     """Container for all evaluation metrics.
@@ -90,6 +91,7 @@ class EvaluationResult:
         parse_failures:   Number of samples where token2json failed.
         raw_predictions:  Optional list of raw prediction dicts.
     """
+
     global_precision: float = 0.0
     global_recall: float = 0.0
     global_f1: float = 0.0
@@ -117,6 +119,7 @@ class EvaluationResult:
 # Model loading helper — fixes the lm_head weight tying bug
 # ---------------------------------------------------------------------------
 
+
 def load_model_with_tied_weights(model_path: str, device: str = DEVICE):
     # Use output_loading_info=True to detect missing keys at load time.
     # This is how we distinguish "trained lm_head loaded correctly" from
@@ -132,7 +135,9 @@ def load_model_with_tied_weights(model_path: str, device: str = DEVICE):
     # missing after load, the checkpoint is corrupt — fail loudly instead of
     # silently recovering with random or embed_tokens weights (which produces
     # F1~0.42 and is indistinguishable from a healthy run without this check).
-    if "decoder.lm_head.weight" in missing_keys and not getattr(model.decoder.config, "tie_word_embeddings", True):
+    if "decoder.lm_head.weight" in missing_keys and not getattr(
+        model.decoder.config, "tie_word_embeddings", True
+    ):
         raise RuntimeError(
             "CRITICAL: decoder.lm_head.weight missing from checkpoint. "
             "The model cannot generate SROIE tokens. Fix checkpoint saving."
@@ -166,9 +171,7 @@ def _retie_decoder_head(model, missing_keys=None) -> None:
     decoder = model.decoder
 
     if not getattr(decoder.config, "tie_word_embeddings", True):
-        lm_head_missing = any(
-            "lm_head.weight" in k for k in missing_keys
-        )
+        lm_head_missing = any("lm_head.weight" in k for k in missing_keys)
         if lm_head_missing:
             # lm_head was not in the checkpoint — randomly re-initialized.
             # Recover by copying embed_tokens.weight as a starting point.
@@ -182,9 +185,7 @@ def _retie_decoder_head(model, missing_keys=None) -> None:
                 lm_shape = decoder.lm_head.weight.shape
                 embed_shape = embed_tokens.weight.shape
                 if lm_shape == embed_shape:
-                    decoder.lm_head.weight = torch.nn.Parameter(
-                        embed_tokens.weight.data.clone()
-                    )
+                    decoder.lm_head.weight = torch.nn.Parameter(embed_tokens.weight.data.clone())
                     logger.error(
                         "RECOVERY: decoder.lm_head.weight was MISSING from "
                         "checkpoint (randomly re-initialized). Copied "
@@ -197,7 +198,8 @@ def _retie_decoder_head(model, missing_keys=None) -> None:
                     logger.error(
                         "RECOVERY FAILED: lm_head shape %s != embed_tokens "
                         "shape %s — cannot copy. F1 will be degraded.",
-                        lm_shape, embed_shape,
+                        lm_shape,
+                        embed_shape,
                     )
             else:
                 logger.error(
@@ -225,24 +227,24 @@ def _retie_decoder_head(model, missing_keys=None) -> None:
             if lm_shape == embed_shape:
                 decoder.lm_head.weight = embed_tokens.weight
                 logger.info(
-                    "Re-tied decoder.lm_head.weight → embed_tokens.weight "
-                    "(shape %s)", lm_shape
+                    "Re-tied decoder.lm_head.weight → embed_tokens.weight (shape %s)", lm_shape
                 )
             else:
                 logger.warning(
                     "lm_head shape %s != embed_tokens shape %s — skipping re-tie",
-                    lm_shape, embed_shape,
+                    lm_shape,
+                    embed_shape,
                 )
 
     assert model.decoder.lm_head.weight is not None, (
-        "decoder.lm_head.weight is None after _retie_decoder_head() — "
-        "weight tying failed."
+        "decoder.lm_head.weight is None after _retie_decoder_head() — weight tying failed."
     )
 
 
 # ---------------------------------------------------------------------------
 # DonutEvaluator class
 # ---------------------------------------------------------------------------
+
 
 class DonutEvaluator:
     """OOP evaluator that wraps model loading, self-test, inference, and metrics.
@@ -317,8 +319,10 @@ class DonutEvaluator:
             global_f1=metrics_dict["global_f1"],
             overall_exact_match=metrics_dict["overall_exact_match"],
             per_field={
-                f: {"f1": metrics_dict.get(f"{f}_f1", 0.0),
-                    "ned": metrics_dict.get(f"{f}_ned", 1.0)}
+                f: {
+                    "f1": metrics_dict.get(f"{f}_f1", 0.0),
+                    "ned": metrics_dict.get(f"{f}_ned", 1.0),
+                }
                 for f in FIELDS
             },
             num_samples=n,
@@ -409,20 +413,13 @@ class DonutEvaluator:
             )
 
         has_nonempty = any(
-            str(v).strip() for v in parsed.values()
-            if isinstance(v, (str, int, float))
+            str(v).strip() for v in parsed.values() if isinstance(v, (str, int, float))
         )
         # For nested dicts (e.g. CORD output), any non-empty sub-dict counts
         if not has_nonempty:
-            has_nonempty = any(
-                v for v in parsed.values()
-                if isinstance(v, dict) and v
-            )
+            has_nonempty = any(v for v in parsed.values() if isinstance(v, dict) and v)
         if not has_nonempty:
-            has_nonempty = any(
-                v for v in parsed.values()
-                if isinstance(v, list) and v
-            )
+            has_nonempty = any(v for v in parsed.values() if isinstance(v, list) and v)
 
         if not has_nonempty:
             raise RuntimeError(
@@ -590,6 +587,7 @@ class DonutEvaluator:
 # Prediction unwrapping helper
 # ---------------------------------------------------------------------------
 
+
 def _unwrap_prediction(parsed: dict, task_prompt: str) -> dict:
     """Unwrap task-prompt wrappers from token2json output.
 
@@ -600,11 +598,19 @@ def _unwrap_prediction(parsed: dict, task_prompt: str) -> dict:
         return parsed
 
     # Unwrap {"sroie": {...}} for SROIE task prompts
-    if task_prompt.startswith("<s_sroie") and "sroie" in parsed and isinstance(parsed["sroie"], dict):
+    if (
+        task_prompt.startswith("<s_sroie")
+        and "sroie" in parsed
+        and isinstance(parsed["sroie"], dict)
+    ):
         return parsed["sroie"]
 
     # Unwrap {"cord-v2": {...}} for CORD task prompts
-    if task_prompt.startswith("<s_cord") and "cord-v2" in parsed and isinstance(parsed["cord-v2"], dict):
+    if (
+        task_prompt.startswith("<s_cord")
+        and "cord-v2" in parsed
+        and isinstance(parsed["cord-v2"], dict)
+    ):
         return parsed["cord-v2"]
 
     return parsed
@@ -618,8 +624,7 @@ def _unwrap_prediction(parsed: dict, task_prompt: str) -> dict:
 _module_inference_count = 0
 
 
-def run_inference(model, processor, image_path, task_prompt, max_length=512,
-                  preloaded_image=None):
+def run_inference(model, processor, image_path, task_prompt, max_length=512, preloaded_image=None):
     """Run inference on a single image. Accepts an optional pre-loaded PIL Image.
 
     This is the backward-compatible module-level function. For new code,
@@ -679,7 +684,8 @@ def run_inference(model, processor, image_path, task_prompt, max_length=512,
             # Pass the list through so remap_cord_to_sroie can merge pages.
             logger.info(
                 "token2json returned list for %s (%d pages) — passing to caller",
-                image_path, len(result),
+                image_path,
+                len(result),
             )
             return result
         logger.warning("token2json returned non-dict for %s: %s", image_path, type(result))
@@ -752,9 +758,7 @@ def remap_cord_to_sroie(cord_output):
     elif isinstance(total_info, list) and total_info:
         first = total_info[0] if isinstance(total_info[0], dict) else {}
         total_val = (
-            first.get("total_price", "")
-            or first.get("total_etc", "")
-            or first.get("cashprice", "")
+            first.get("total_price", "") or first.get("total_etc", "") or first.get("cashprice", "")
         )
         result["total"] = str(total_val).strip()
     elif isinstance(total_info, str):
@@ -819,9 +823,7 @@ def compute_metrics(predictions, ground_truths):
     exact_match_all = []
 
     # Check for total prediction failure: all predictions are empty dicts
-    all_empty = all(
-        not any(str(pred.get(f, "")).strip() for f in FIELDS) for pred in predictions
-    )
+    all_empty = all(not any(str(pred.get(f, "")).strip() for f in FIELDS) for pred in predictions)
     if all_empty and predictions:
         print(
             "CRITICAL WARNING: ALL predictions are empty (token2json total failure). "
@@ -876,23 +878,31 @@ def compute_metrics(predictions, ground_truths):
 
 def print_results(pretrained_m, finetuned_m):
     """Pretty-print side-by-side pretrained vs. fine-tuned metrics."""
-    print(f"\n{'='*72}")
+    print(f"\n{'=' * 72}")
     print(f"{'METRIC':<30} {'PRETRAINED':>18} {'FINE-TUNED':>18}")
-    print(f"{'='*72}")
+    print(f"{'=' * 72}")
     print(f"{'Global F1':<30} {pretrained_m['global_f1']:>18.4f} {finetuned_m['global_f1']:>18.4f}")
-    print(f"{'Global Precision':<30} {pretrained_m['global_precision']:>18.4f} {finetuned_m['global_precision']:>18.4f}")
-    print(f"{'Global Recall':<30} {pretrained_m['global_recall']:>18.4f} {finetuned_m['global_recall']:>18.4f}")
-    print(f"{'Overall Exact Match':<30} {pretrained_m['overall_exact_match']:>18.4f} {finetuned_m['overall_exact_match']:>18.4f}")
-    print(f"{'-'*72}")
+    print(
+        f"{'Global Precision':<30} {pretrained_m['global_precision']:>18.4f} {finetuned_m['global_precision']:>18.4f}"
+    )
+    print(
+        f"{'Global Recall':<30} {pretrained_m['global_recall']:>18.4f} {finetuned_m['global_recall']:>18.4f}"
+    )
+    print(
+        f"{'Overall Exact Match':<30} {pretrained_m['overall_exact_match']:>18.4f} {finetuned_m['overall_exact_match']:>18.4f}"
+    )
+    print(f"{'-' * 72}")
     for f in FIELDS:
-        print(f"{f + ' F1':<30} {pretrained_m[f+'_f1']:>18.4f} {finetuned_m[f+'_f1']:>18.4f}")
-        print(f"{f + ' NED':<30} {pretrained_m[f+'_ned']:>18.4f} {finetuned_m[f+'_ned']:>18.4f}")
-    print(f"{'='*72}")
+        print(f"{f + ' F1':<30} {pretrained_m[f + '_f1']:>18.4f} {finetuned_m[f + '_f1']:>18.4f}")
+        print(
+            f"{f + ' NED':<30} {pretrained_m[f + '_ned']:>18.4f} {finetuned_m[f + '_ned']:>18.4f}"
+        )
+    print(f"{'=' * 72}")
 
     print(f"\n{'SROIE TASK 3 LEADERBOARD COMPARISON':^72}")
-    print(f"{'-'*72}")
+    print(f"{'-' * 72}")
     print(f"{'Method':<35} {'F1':>10}")
-    print(f"{'-'*72}")
+    print(f"{'-' * 72}")
     leaderboard = [
         ("LayoutLMv3 (Huang et al. 2022)", 0.9633),
         ("PICK (Yu et al. 2021)", 0.9612),
@@ -905,12 +915,13 @@ def print_results(pretrained_m, finetuned_m):
     for name, score in sorted(leaderboard, key=lambda x: x[1], reverse=True):
         marker = " ◄" if "Our" in name else ""
         print(f"{name:<35} {score:>10.4f}{marker}")
-    print(f"{'='*72}\n")
+    print(f"{'=' * 72}\n")
 
 
 # ---------------------------------------------------------------------------
 # Legacy standalone entry point
 # ---------------------------------------------------------------------------
+
 
 def main():
     """Legacy standalone entry point for ad-hoc evaluation.
@@ -924,8 +935,7 @@ def main():
 
     test_samples = []
     for img_path in sorted(
-        p for p in img_dir.iterdir()
-        if p.is_file() and p.suffix.lower() in IMAGE_EXTS
+        p for p in img_dir.iterdir() if p.is_file() and p.suffix.lower() in IMAGE_EXTS
     ):
         gt = None
         key_json = key_dir / (img_path.stem + ".json")
@@ -941,9 +951,9 @@ def main():
                 if len(lines) >= 4:
                     gt = {
                         "company": lines[0].strip(),
-                        "date":    lines[1].strip(),
+                        "date": lines[1].strip(),
                         "address": lines[2].strip(),
-                        "total":   lines[3].strip(),
+                        "total": lines[3].strip(),
                     }
         if gt is not None:
             test_samples.append((img_path, gt))
@@ -995,9 +1005,7 @@ def main():
                 "pretrained_pred": pp,
                 "finetuned_pred": fp,
             }
-            for p, gt, pp, fp in zip(
-                image_paths, ground_truths, pretrained_preds, finetuned_preds
-            )
+            for p, gt, pp, fp in zip(image_paths, ground_truths, pretrained_preds, finetuned_preds)
         ],
     }
     output_file = os.path.join(workspace, "evaluation_results.json")

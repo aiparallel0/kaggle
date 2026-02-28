@@ -57,24 +57,19 @@ LEADERBOARD: list[tuple[str, float]] = [
     # LayoutLMv3: Huang et al. 2022, "LayoutLMv3: Pre-training for Document AI"
     # Table 6, SROIE entity-level F1. DOI: 10.1145/3503161.3548112
     ("LayoutLMv3 (Huang et al. 2022)", 0.9633),
-
     # PICK: Yu et al. 2021, "PICK: Processing Key Information Extraction"
     # Table 3, SROIE Task-3 F1. DOI: 10.1109/ICPR48806.2021.9956043
     ("PICK (Yu et al. 2021)", 0.9612),
-
     # BROS: Hong et al. 2022, "BROS: A Pre-trained Language Model"
     # Table 2, SROIE entity-level F1. arXiv:2108.04539
     ("BROS (Hong et al. 2022)", 0.9548),
-
     # LayoutLMv2: Xu et al. 2021, "LayoutLMv2: Multi-modal Pre-training"
     # Table 4, SROIE entity-level F1. DOI: 10.18653/v1/2021.acl-long.201
     ("LayoutLMv2 (Xu et al. 2021)", 0.9495),
-
     # ICDAR 2019 competition results from arXiv:2103.10213 Table 1
     ("H&H Lab — ICDAR'19 1st", 0.9567),
     ("CLOVA OCR — ICDAR'19 2nd", 0.9373),
     ("ICDAR'19 3rd place", 0.9198),
-
     # DONUT SROIE fine-tuned: Kim et al. 2022, "OCR-free Document Understanding Transformer"
     # Table 1, entity-level F1 on SROIE. arXiv:2111.15664
     # NOTE: This is the SROIE fine-tuned result (not zero-shot CORD transfer).
@@ -93,10 +88,10 @@ EXP_NAMES: dict[str, str] = {
     "1": "SROIE only",
     "2": "+WildReceipt",
     "3": "+Invoices-DONUT",
-    "4": "+CORD",
-    "5": "+WildReceipt+CORD",
+    "4": "+FUNSD",
+    "5": "+WildReceipt+FUNSD",
     "6": "+WildReceipt+Invoices",
-    "7": "+CORD+Invoices",
+    "7": "+FUNSD+Invoices",
     "8": "+All",
 }
 
@@ -104,6 +99,7 @@ EXP_NAMES: dict[str, str] = {
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _safe(metrics: dict, key: str, fmt: str = ".4f") -> str:
     """Return formatted metric value or 'N/A'."""
@@ -120,6 +116,7 @@ class UnresolvedVarError(Exception):
 # ---------------------------------------------------------------------------
 # PaperInjector
 # ---------------------------------------------------------------------------
+
 
 class PaperInjector:
     """Reads experiment JSON results and fills a LaTeX template."""
@@ -178,7 +175,8 @@ class PaperInjector:
         if best_f1 == 0.0:
             warnings.warn(
                 "Best fine-tuned F1 is 0.0 — injecting measured zero; "
-                "paper will show 0.0 for all experiment metrics.", stacklevel=2
+                "paper will show 0.0 for all experiment metrics.",
+                stacklevel=2,
             )
 
         var_map["best_f1"] = f"{best_f1:.4f}"
@@ -203,8 +201,7 @@ class PaperInjector:
         # Also check legacy workspace path
         if not pm:
             legacy_path = (
-                Path(os.environ.get("DONUT_WORKSPACE", "/workspace"))
-                / "evaluation_results.json"
+                Path(os.environ.get("DONUT_WORKSPACE", "/workspace")) / "evaluation_results.json"
             )
             if legacy_path.exists():
                 try:
@@ -322,6 +319,7 @@ class PaperInjector:
 # Legacy single-experiment output (kept for backward compatibility)
 # ---------------------------------------------------------------------------
 
+
 def legacy_output(results_path: str = "/workspace/evaluation_results.json") -> None:
     """Print LaTeX rows from a single evaluate.py output file."""
     with open(results_path) as f:
@@ -348,13 +346,14 @@ def legacy_output(results_path: str = "/workspace/evaluation_results.json") -> N
 
     print()
     print("% === PASTE INTO LATEX TABLE 3 (leaderboard) ===")
-    print(f"Our fine-tuned & -- & {fm['global_f1']*100:.2f} \\\\")
-    print(f"Our pretrained (zero-shot) & -- & {pm['global_f1']*100:.2f} \\\\")
+    print(f"Our fine-tuned & -- & {fm['global_f1'] * 100:.2f} \\\\")
+    print(f"Our pretrained (zero-shot) & -- & {pm['global_f1'] * 100:.2f} \\\\")
 
 
 # ---------------------------------------------------------------------------
 # Multi-experiment table printers
 # ---------------------------------------------------------------------------
+
 
 def print_table1_dataset_stats(actual_counts: dict = None) -> None:
     """Print Table 1: Dataset Statistics LaTeX rows.
@@ -369,12 +368,12 @@ def print_table1_dataset_stats(actual_counts: dict = None) -> None:
     print("% === TABLE 1: Dataset Statistics ===")
     _c = actual_counts or {}
     rows = [
-        ("SROIE (train)",    _c.get("sroie_train",    500),    4,    "EN",    "Receipts"),
-        ("SROIE (val)",      _c.get("sroie_val",       63),    4,    "EN",    "Receipts"),
-        ("SROIE (test)",     _c.get("sroie_test",      63),    4,    "EN",    "Receipts"),
-        ("WildReceipt",      _c.get("wildreceipt",   1740),   25,   "EN",    "Receipts"),
-        ("CORD v2",          _c.get("cord",            900),  "30+", "ID",    "Receipts"),
-        ("Invoices-DONUT",   _c.get("invoices_donut",  800),  "7+",  "EN",    "Invoices"),
+        ("SROIE (train)", _c.get("sroie_train", 500), 4, "EN", "Receipts"),
+        ("SROIE (val)", _c.get("sroie_val", 63), 4, "EN", "Receipts"),
+        ("SROIE (test)", _c.get("sroie_test", 63), 4, "EN", "Receipts"),
+        ("WildReceipt", _c.get("wildreceipt", 1740), 25, "EN", "Receipts"),
+        ("FUNSD", _c.get("funsd", 149), 4, "EN", "Forms"),
+        ("Invoices-DONUT", _c.get("invoices_donut", 800), "7+", "EN", "Invoices"),
     ]
     for name, n, nf, lang, domain in rows:
         n_str = f"{n:,}" if isinstance(n, int) else str(n)
@@ -416,7 +415,8 @@ def print_table3_perfield(all_exp: dict) -> None:
         name = EXP_NAMES.get(exp_id_str, res.get("name", ""))
         field_cols = " & ".join(
             # F1 columns are (↑) higher is better; NED columns are (↓) lower is better.
-            f"{_safe(m, f + '_f1')} & {_safe(m, f + '_ned')}" for f in FIELDS
+            f"{_safe(m, f + '_f1')} & {_safe(m, f + '_ned')}"
+            for f in FIELDS
         )
         print(f"{exp_id_str} & {name} & {field_cols} \\\\")
     print()
@@ -439,7 +439,7 @@ def print_table4_leaderboard(all_exp: dict) -> None:
 
     for name, score in sorted(entries, key=lambda x: x[1], reverse=True):
         marker = " % <-- ours" if "Ours" in name else ""
-        print(f"{name} & {score*100:.2f} \\\\{marker}")
+        print(f"{name} & {score * 100:.2f} \\\\{marker}")
     print()
 
 
@@ -479,15 +479,14 @@ def print_table6_cross_architecture(donut_exp: dict, trocr_exp: dict) -> None:
         d_f1 = donut_exp.get(exp_id_str, {}).get("metrics", {}).get("global_f1", 0.0)
         t_f1 = trocr_exp.get(exp_id_str, {}).get("metrics", {}).get("global_f1", 0.0)
         delta = d_f1 - t_f1
-        print(
-            f"{exp_id_str} & {name} & {d_f1:.4f} & {t_f1:.4f} & {delta:+.4f} \\\\"
-        )
+        print(f"{exp_id_str} & {name} & {d_f1:.4f} & {t_f1:.4f} & {delta:+.4f} \\\\")
     print()
 
 
 # ---------------------------------------------------------------------------
 # Module-level wrappers (backward compatibility)
 # ---------------------------------------------------------------------------
+
 
 def build_var_map(all_exp: dict) -> dict:
     """Build \\VAR{key} → replacement mapping (module-level wrapper).
@@ -500,13 +499,10 @@ def build_var_map(all_exp: dict) -> dict:
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
         # Write all_exp so PaperInjector can read it
-        (tmp / "all_experiments.json").write_text(
-            json.dumps(all_exp), encoding="utf-8"
-        )
+        (tmp / "all_experiments.json").write_text(json.dumps(all_exp), encoding="utf-8")
         # Copy evaluation_results.json from legacy workspace if available
         legacy_path = (
-            Path(os.environ.get("DONUT_WORKSPACE", "/workspace"))
-            / "evaluation_results.json"
+            Path(os.environ.get("DONUT_WORKSPACE", "/workspace")) / "evaluation_results.json"
         )
         if legacy_path.exists():
             (tmp / "evaluation_results.json").write_text(
@@ -547,19 +543,20 @@ def fill_paper(paper_path: str, output_path: str, var_map: dict) -> None:
 # ---------------------------------------------------------------------------
 
 _PLOT_STYLES = [
-    ("blue",           "o"),
-    ("red",            "square"),
+    ("blue", "o"),
+    ("red", "square"),
     ("green!60!black", "triangle"),
-    ("orange",         "diamond"),
-    ("purple",         "star"),
-    ("teal",           "pentagon"),
-    ("brown",          "x"),
-    ("magenta",        "+"),
+    ("orange", "diamond"),
+    ("purple", "star"),
+    ("teal", "pentagon"),
+    ("brown", "x"),
+    ("magenta", "+"),
 ]
 
 
-def generate_convergence_data(results_path: str = "results/all_experiments.json",
-                               output_dir: str = "results") -> None:
+def generate_convergence_data(
+    results_path: str = "results/all_experiments.json", output_dir: str = "results"
+) -> None:
     """Read all_experiments.json and write per-experiment convergence CSV files."""
     results_file = Path(results_path)
     if not results_file.exists():
@@ -599,8 +596,9 @@ def generate_convergence_data(results_path: str = "results/all_experiments.json"
                 fh.write(f"{ep},{train_loss},{eval_loss}\n")
 
 
-def generate_convergence_tex(results_path: str = "results/all_experiments.json",
-                              output_dir: str = "results") -> None:
+def generate_convergence_tex(
+    results_path: str = "results/all_experiments.json", output_dir: str = "results"
+) -> None:
     """Generate results/convergence_plots.tex — pgfplots figure included in paper.tex."""
     results_file = Path(results_path)
     out_dir = Path(output_dir)
@@ -633,7 +631,8 @@ def generate_convergence_tex(results_path: str = "results/all_experiments.json",
     train_plots = _plot_commands(1, "Training Loss")
     eval_plots = _plot_commands(2, "Validation Loss")
 
-    tex = r"""\begin{figure*}[t]
+    tex = (
+        r"""\begin{figure*}[t]
   \centering
   \begin{subfigure}[t]{0.48\linewidth}
     \begin{tikzpicture}
@@ -646,7 +645,9 @@ def generate_convergence_tex(results_path: str = "results/all_experiments.json",
         legend style={font=\tiny},
         grid=major,
       ]
-""" + train_plots + r"""
+"""
+        + train_plots
+        + r"""
       \end{axis}
     \end{tikzpicture}
     \caption{Training Loss}
@@ -663,7 +664,9 @@ def generate_convergence_tex(results_path: str = "results/all_experiments.json",
         legend style={font=\tiny},
         grid=major,
       ]
-""" + eval_plots + r"""
+"""
+        + eval_plots
+        + r"""
       \end{axis}
     \end{tikzpicture}
     \caption{Validation Loss}
@@ -678,12 +681,14 @@ def generate_convergence_tex(results_path: str = "results/all_experiments.json",
   \label{fig:convergence}
 \end{figure*}
 """
+    )
     tex_path = out_dir / "convergence_plots.tex"
     tex_path.write_text(tex, encoding="utf-8")
 
 
-def generate_f1_barchart_tex(results_path: str = "results/all_experiments.json",
-                              output_dir: str = "results") -> None:
+def generate_f1_barchart_tex(
+    results_path: str = "results/all_experiments.json", output_dir: str = "results"
+) -> None:
     """Generate results/f1_barchart.tex — horizontal bar chart of Global F1."""
     results_file = Path(results_path)
     out_dir = Path(output_dir)
@@ -708,14 +713,11 @@ def generate_f1_barchart_tex(results_path: str = "results/all_experiments.json",
         tex_path.write_text("% No F1 data available yet.\n", encoding="utf-8")
         return
 
-    coords = "\n        ".join(
-        f"({v:.4f},{i})" for i, v in enumerate(f1_values)
-    )
-    ylabels = "\n        ".join(
-        f"{i}/{{{lab}}}" for i, lab in enumerate(exp_labels)
-    )
+    coords = "\n        ".join(f"({v:.4f},{i})" for i, v in enumerate(f1_values))
+    ylabels = "\n        ".join(f"{i}/{{{lab}}}" for i, lab in enumerate(exp_labels))
 
-    tex = r"""\begin{figure}[h]
+    tex = (
+        r"""\begin{figure}[h]
   \centering
   \begin{tikzpicture}
     \begin{axis}[
@@ -723,7 +725,9 @@ def generate_f1_barchart_tex(results_path: str = "results/all_experiments.json",
       xlabel={Global F1},
       ytick=data,
       yticklabels={
-        """ + ylabels + r"""
+        """
+        + ylabels
+        + r"""
       },
       width=\linewidth,
       height=7cm,
@@ -734,7 +738,9 @@ def generate_f1_barchart_tex(results_path: str = "results/all_experiments.json",
       every node near coord/.style={font=\tiny},
     ]
       \addplot[fill=blue!60] coordinates {
-        """ + coords + r"""
+        """
+        + coords
+        + r"""
       };
     \end{axis}
   \end{tikzpicture}
@@ -744,6 +750,7 @@ def generate_f1_barchart_tex(results_path: str = "results/all_experiments.json",
   \label{fig:f1_barchart}
 \end{figure}
 """
+    )
     tex_path = out_dir / "f1_barchart.tex"
     tex_path.write_text(tex, encoding="utf-8")
 
@@ -752,22 +759,35 @@ def generate_f1_barchart_tex(results_path: str = "results/all_experiments.json",
 # CLI
 # ---------------------------------------------------------------------------
 
+
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Inject experimental results into LaTeX tables"
+    parser = argparse.ArgumentParser(description="Inject experimental results into LaTeX tables")
+    parser.add_argument(
+        "--all", action="store_true", help="Generate all tables from results/all_experiments.json"
     )
-    parser.add_argument("--all", action="store_true",
-                        help="Generate all tables from results/all_experiments.json")
-    parser.add_argument("--results", default="results/all_experiments.json",
-                        help="Path to all_experiments.json (default: results/all_experiments.json)")
-    parser.add_argument("--paper", default="paper.tex",
-                        help="Path to paper.tex template (default: paper.tex)")
-    parser.add_argument("--output", default="paper_filled.tex",
-                        help="Path to write the filled paper (default: paper_filled.tex)")
-    parser.add_argument("--presentation", default="presentation.tex",
-                        help="Path to presentation.tex template (default: presentation.tex)")
-    parser.add_argument("--presentation-output", default="presentation_filled.tex",
-                        help="Path to write the filled presentation (default: presentation_filled.tex)")
+    parser.add_argument(
+        "--results",
+        default="results/all_experiments.json",
+        help="Path to all_experiments.json (default: results/all_experiments.json)",
+    )
+    parser.add_argument(
+        "--paper", default="paper.tex", help="Path to paper.tex template (default: paper.tex)"
+    )
+    parser.add_argument(
+        "--output",
+        default="paper_filled.tex",
+        help="Path to write the filled paper (default: paper_filled.tex)",
+    )
+    parser.add_argument(
+        "--presentation",
+        default="presentation.tex",
+        help="Path to presentation.tex template (default: presentation.tex)",
+    )
+    parser.add_argument(
+        "--presentation-output",
+        default="presentation_filled.tex",
+        help="Path to write the filled presentation (default: presentation_filled.tex)",
+    )
     args = parser.parse_args()
 
     if args.all:
@@ -795,10 +815,7 @@ def main() -> None:
         if Path(args.paper).exists():
             fill_paper(args.paper, args.output, var_map)
         else:
-            print(
-                f"paper.tex not found at {args.paper}; "
-                "skipping filled paper generation."
-            )
+            print(f"paper.tex not found at {args.paper}; skipping filled paper generation.")
 
         if Path(args.presentation).exists():
             fill_paper(args.presentation, args.presentation_output, var_map)

@@ -19,6 +19,7 @@ from inject_results import (
 # _safe helper
 # ---------------------------------------------------------------------------
 
+
 class TestSafe:
     def test_present_value(self):
         assert _safe({"f1": 0.9123}, "f1") == "0.9123"
@@ -43,6 +44,7 @@ class TestSafe:
 # EXP_NAMES & LEADERBOARD
 # ---------------------------------------------------------------------------
 
+
 class TestStaticData:
     def test_exp_names_has_eight_entries(self):
         assert len(EXP_NAMES) == 8
@@ -63,6 +65,7 @@ class TestStaticData:
 # PaperInjector
 # ---------------------------------------------------------------------------
 
+
 class TestPaperInjector:
     def _make_injector(self, tmp_dir, all_exp=None, eval_res=None, template=""):
         """Create a PaperInjector with mock data."""
@@ -70,9 +73,7 @@ class TestPaperInjector:
         results_dir.mkdir()
 
         if all_exp is not None:
-            (results_dir / "all_experiments.json").write_text(
-                json.dumps(all_exp), encoding="utf-8"
-            )
+            (results_dir / "all_experiments.json").write_text(json.dumps(all_exp), encoding="utf-8")
         if eval_res is not None:
             (results_dir / "evaluation_results.json").write_text(
                 json.dumps(eval_res), encoding="utf-8"

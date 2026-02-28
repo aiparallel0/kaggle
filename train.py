@@ -92,15 +92,10 @@ from constants import (
 
 logger = logging.getLogger(__name__)
 
-# FIX: Previously FIELDS, MAX_LENGTH, IMAGE_EXTS, NEW_TOKENS, BASE_MODEL,
-# SEED were defined independently here and in 4 other files, risking silent
-# drift if any file was updated without updating the others.
-from constants import FIELDS, MAX_LENGTH, IMAGE_EXTS, NEW_TOKENS, BASE_MODEL, SEED, \
-    _get_sroie_dir, _optimal_num_workers
-
 # ---------------------------------------------------------------------------
 # LmHeadCloneCallback — prevent safetensors from deduplicating lm_head
 # ---------------------------------------------------------------------------
+
 
 class LmHeadCloneCallback(TrainerCallback):
     """Clone lm_head.weight before every checkpoint save.
@@ -135,6 +130,7 @@ class LmHeadCloneCallback(TrainerCallback):
             )
         return control
 
+
 # ---------------------------------------------------------------------------
 # Constants — imported from shared constants.py (eliminates 5x duplication)
 # ---------------------------------------------------------------------------
@@ -142,6 +138,7 @@ class LmHeadCloneCallback(TrainerCallback):
 # ---------------------------------------------------------------------------
 # TrainingResult dataclass
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class TrainingResult:
@@ -156,6 +153,7 @@ class TrainingResult:
 # ---------------------------------------------------------------------------
 # SROIEDataset
 # ---------------------------------------------------------------------------
+
 
 class SROIEDataset(Dataset):
     """PyTorch Dataset for SROIE receipt images with ground-truth key files.
@@ -172,7 +170,8 @@ class SROIEDataset(Dataset):
         Maximum token length for the decoder target sequence.
     """
 
-    def __init__(self,
+    def __init__(
+        self,
         processor: DonutProcessor,
         img_dir,
         key_dir,
@@ -186,8 +185,7 @@ class SROIEDataset(Dataset):
         key_dir = Path(key_dir)
 
         for img_path in sorted(
-            p for p in img_dir.iterdir()
-            if p.is_file() and p.suffix.lower() in IMAGE_EXTS
+            p for p in img_dir.iterdir() if p.is_file() and p.suffix.lower() in IMAGE_EXTS
         ):
             gt = self._load_ground_truth(key_dir, img_path.stem)
             if gt is not None:
@@ -237,9 +235,9 @@ class SROIEDataset(Dataset):
             return None
         return {
             "company": lines[0].strip(),
-            "date":    lines[1].strip(),
+            "date": lines[1].strip(),
             "address": lines[2].strip(),
-            "total":   lines[3].strip(),
+            "total": lines[3].strip(),
         }
 
     # ------------------------------------------------------------------
@@ -279,7 +277,8 @@ class SROIEDataset(Dataset):
         target += "</s_sroie>"
 
         pixel_values = self.processor(
-            image, return_tensors="pt",
+            image,
+            return_tensors="pt",
         ).pixel_values.squeeze()
         labels = self.processor.tokenizer(
             target,
@@ -295,6 +294,7 @@ class SROIEDataset(Dataset):
 # ---------------------------------------------------------------------------
 # DonutTrainer
 # ---------------------------------------------------------------------------
+
 
 class DonutTrainer:
     """OOP wrapper around HuggingFace Seq2SeqTrainer for DONUT fine-tuning.
@@ -402,11 +402,15 @@ class DonutTrainer:
         callbacks = [LmHeadCloneCallback()]
         if do_eval:
             patience = getattr(
-                self.config, "early_stopping_patience", 5,
+                self.config,
+                "early_stopping_patience",
+                5,
             )
-            callbacks.append(EarlyStoppingCallback(
-                early_stopping_patience=patience,
-            ))
+            callbacks.append(
+                EarlyStoppingCallback(
+                    early_stopping_patience=patience,
+                )
+            )
 
         trainer = Seq2SeqTrainer(
             model=self.model,
@@ -450,9 +454,7 @@ class DonutTrainer:
         # lm_head as a fully independent tensor with no shared pointer.
         decoder = self.model.decoder
         if hasattr(decoder, "lm_head"):
-            decoder.lm_head.weight = torch.nn.Parameter(
-                decoder.lm_head.weight.data.clone()
-            )
+            decoder.lm_head.weight = torch.nn.Parameter(decoder.lm_head.weight.data.clone())
         # ──────────────────────────────────────────────────────────────────
 
         self.model.save_pretrained(str(save_dir))
@@ -474,6 +476,7 @@ class DonutTrainer:
 # Lightweight config for standalone main()
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class _StandaloneConfig:
     """Minimal config matching TRAIN_CONFIG defaults for legacy main()."""
@@ -493,6 +496,7 @@ class _StandaloneConfig:
 # Legacy standalone entry point
 # ---------------------------------------------------------------------------
 
+
 def main():
     """Standalone training entry point (legacy).
 
@@ -500,6 +504,7 @@ def main():
     match ``TRAIN_CONFIG`` from ``run_experiments.py``.
     """
     from constants import set_seed
+
     set_seed(SEED)
 
     processor = DonutProcessor.from_pretrained(BASE_MODEL)
@@ -518,9 +523,9 @@ def main():
     model.decoder.config.tie_word_embeddings = False
 
     model.config.pad_token_id = processor.tokenizer.pad_token_id
-    model.config.decoder_start_token_id = (
-        processor.tokenizer.convert_tokens_to_ids(["<s_sroie>"])[0]
-    )
+    model.config.decoder_start_token_id = processor.tokenizer.convert_tokens_to_ids(["<s_sroie>"])[
+        0
+    ]
     model.gradient_checkpointing_enable()
 
     # Load SROIE data
@@ -554,8 +559,10 @@ def main():
     result = trainer.train()
     trainer.save()
 
-    print(f"TRAINING_COMPLETE  (duration={result.duration_seconds:.1f}s, "
-          f"train={result.train_samples}, val={result.val_samples})")
+    print(
+        f"TRAINING_COMPLETE  (duration={result.duration_seconds:.1f}s, "
+        f"train={result.train_samples}, val={result.val_samples})"
+    )
 
 
 if __name__ == "__main__":

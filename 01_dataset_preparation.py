@@ -35,15 +35,13 @@ TROCR_DIR = DATA_DIR / "trocr"
 
 # FIX: Use existing SROIE directories from run_all.py stage_install,
 # not a HuggingFace download that is broken upstream.
-SROIE_DATA_DIR = Path(os.environ.get(
-    "SROIE_DATA_DIR", "/workspace/ICDAR-2019-SROIE/data"
-))
+SROIE_DATA_DIR = Path(os.environ.get("SROIE_DATA_DIR", "/workspace/ICDAR-2019-SROIE/data"))
 
 # Map split names to (img_subdir, key_subdir) in the SROIE tree
 SPLIT_MAP = {
     "train": ("img", "key"),
-    "val":   ("val_img", "val_key"),
-    "test":  ("test_img", "test_key"),
+    "val": ("val_img", "val_key"),
+    "test": ("test_img", "test_key"),
 }
 
 # Candidate box/ subdirectory names per split (tried in order).
@@ -51,12 +49,13 @@ SPLIT_MAP = {
 # use split-specific names.  We probe all candidates.
 BOX_DIR_CANDIDATES: dict[str, list[str]] = {
     "train": ["box", "box_train", "train_box"],
-    "val":   ["box_val", "val_box", "box"],
-    "test":  ["box_test", "test_box", "box"],
+    "val": ["box_val", "val_box", "box"],
+    "test": ["box_test", "test_box", "box"],
 }
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
 
 def _find_box_dir(split: str) -> Path | None:
     """Return the first existing box annotation directory for a split, or None."""

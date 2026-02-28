@@ -32,9 +32,7 @@ from dataset_loaders import _load_key_file
 # ── Config ──────────────────────────────────────────────────────────────────
 RESULTS_DIR = Path("results")
 
-SROIE_DATA_DIR = Path(os.environ.get(
-    "SROIE_DATA_DIR", "/workspace/ICDAR-2019-SROIE/data"
-))
+SROIE_DATA_DIR = Path(os.environ.get("SROIE_DATA_DIR", "/workspace/ICDAR-2019-SROIE/data"))
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -190,9 +188,9 @@ def evaluate_trocr_yolo_on_test(
 # ── Print metrics ────────────────────────────────────────────────────────────
 def print_metrics(name: str, metrics: dict) -> None:
     """Pretty-print evaluation metrics in structured format."""
-    print(f"\n  {'='*55}")
+    print(f"\n  {'=' * 55}")
     print(f"  {name} Results")
-    print(f"  {'='*55}")
+    print(f"  {'=' * 55}")
     print(f"  Global F1:        {metrics.get('global_f1', 0):.4f}")
     print(f"  Global Precision: {metrics.get('global_precision', 0):.4f}")
     print(f"  Global Recall:    {metrics.get('global_recall', 0):.4f}")
@@ -200,12 +198,12 @@ def print_metrics(name: str, metrics: dict) -> None:
     print(f"  Num Samples:      {metrics.get('num_samples', 0)}")
     if "mean_latency_ms" in metrics:
         print(f"  Mean Latency:     {metrics['mean_latency_ms']:.1f} ms/image")
-    print(f"  {'-'*55}")
+    print(f"  {'-' * 55}")
     for f in FIELDS:
         f1 = metrics.get(f"{f}_f1", 0)
         ned = metrics.get(f"{f}_ned", 1)
         print(f"  {f:12s}  F1={f1:.4f}  NED={ned:.4f}")
-    print(f"  {'='*55}")
+    print(f"  {'=' * 55}")
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────

@@ -94,6 +94,7 @@ RESULTS_DIR = Path("results")
 # ExperimentConfig — THE single source of truth for all hyperparameters
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class ExperimentConfig:
     """Single source of truth for all training hyperparameters.
@@ -164,15 +165,15 @@ EXPERIMENTS: dict[int, ExperimentConfig] = {
         experiment_id=3,
     ),
     4: ExperimentConfig(
-        name="SROIE + CORD",
-        datasets=["sroie", "cord"],
-        description="Add ~900 CORD receipt images (model's original pretraining data).",
+        name="SROIE + FUNSD",
+        datasets=["sroie", "funsd"],
+        description="Add ~149 FUNSD scanned business forms for cross-domain KIE augmentation.",
         experiment_id=4,
     ),
     5: ExperimentConfig(
-        name="SROIE + WildReceipt + CORD",
-        datasets=["sroie", "wildreceipt", "cord"],
-        description="Combine SROIE, WildReceipt, and CORD.",
+        name="SROIE + WildReceipt + FUNSD",
+        datasets=["sroie", "wildreceipt", "funsd"],
+        description="Combine SROIE, WildReceipt, and FUNSD.",
         experiment_id=5,
     ),
     6: ExperimentConfig(
@@ -182,14 +183,14 @@ EXPERIMENTS: dict[int, ExperimentConfig] = {
         experiment_id=6,
     ),
     7: ExperimentConfig(
-        name="SROIE + CORD + Invoices",
-        datasets=["sroie", "cord", "invoices_donut"],
-        description="Combine SROIE, CORD, and Invoices-DONUT.",
+        name="SROIE + FUNSD + Invoices",
+        datasets=["sroie", "funsd", "invoices_donut"],
+        description="Combine SROIE, FUNSD, and Invoices-DONUT.",
         experiment_id=7,
     ),
     8: ExperimentConfig(
         name="SROIE + All",
-        datasets=["sroie", "wildreceipt", "cord", "invoices_donut"],
+        datasets=["sroie", "wildreceipt", "funsd", "invoices_donut"],
         description="Combine all four available datasets.",
         experiment_id=8,
     ),
@@ -227,6 +228,7 @@ TRAIN_CONFIG: dict[str, Any] = {
 # PyTorch Dataset that works from a list of (image_path, gt_dict) tuples
 # ---------------------------------------------------------------------------
 
+
 class MultiDataset(Dataset):
     """Wraps a list of (Path, dict) samples into a PyTorch Dataset.
 
@@ -251,14 +253,17 @@ class MultiDataset(Dataset):
             estimated_mb = len(samples) * 3
             try:
                 import psutil
+
                 available_mb = psutil.virtual_memory().available // (1024 * 1024)
             except ImportError:
                 available_mb = 0  # skip caching if psutil unavailable
 
             # Only cache if we'd use less than 50% of available RAM
             if available_mb > 0 and estimated_mb < available_mb * 0.5:
-                print(f"  [RAM Cache] Pre-loading {len(samples)} images into RAM "
-                      f"(~{estimated_mb}MB / {available_mb}MB available) ...")
+                print(
+                    f"  [RAM Cache] Pre-loading {len(samples)} images into RAM "
+                    f"(~{estimated_mb}MB / {available_mb}MB available) ..."
+                )
                 import concurrent.futures
 
                 def _load_one(idx_path):
@@ -269,16 +274,17 @@ class MultiDataset(Dataset):
                         return idx, None
 
                 with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
-                    for idx, img in pool.map(_load_one, enumerate(
-                            s[0] for s in samples)):
+                    for idx, img in pool.map(_load_one, enumerate(s[0] for s in samples)):
                         if img is not None:
                             self._image_cache[idx] = img
 
                 print(f"  [RAM Cache] {len(self._image_cache)}/{len(samples)} images cached")
             else:
                 if available_mb > 0:
-                    print(f"  [RAM Cache] Skipped (need ~{estimated_mb}MB, "
-                          f"available {available_mb}MB)")
+                    print(
+                        f"  [RAM Cache] Skipped (need ~{estimated_mb}MB, "
+                        f"available {available_mb}MB)"
+                    )
 
     def __len__(self) -> int:
         return len(self.samples)
@@ -300,8 +306,11 @@ class MultiDataset(Dataset):
 
         pixel_values = self.processor(image, return_tensors="pt").pixel_values.squeeze()
         labels = self.processor.tokenizer(
-            target, max_length=self.max_length,
-            padding="max_length", truncation=True, return_tensors="pt"
+            target,
+            max_length=self.max_length,
+            padding="max_length",
+            truncation=True,
+            return_tensors="pt",
         ).input_ids.squeeze()
         labels[labels == self.processor.tokenizer.pad_token_id] = -100
         return {"pixel_values": pixel_values, "labels": labels}
@@ -310,6 +319,7 @@ class MultiDataset(Dataset):
 # ---------------------------------------------------------------------------
 # Training — delegates to DonutTrainer from train.py
 # ---------------------------------------------------------------------------
+
 
 def train_experiment(
     exp_id: int,
@@ -339,9 +349,11 @@ def train_experiment(
 
     set_seed(config.seed)
     print(f"\n[Exp {exp_id}] Training on {len(samples)} samples → {output_dir}")
-    print(f"[Exp {exp_id}] Hyperparams: epochs={config.epochs}, "
-          f"lr={config.lr}, batch_size={config.batch_size}, "
-          f"warmup={config.warmup_steps}, wd={config.weight_decay}")
+    print(
+        f"[Exp {exp_id}] Hyperparams: epochs={config.epochs}, "
+        f"lr={config.lr}, batch_size={config.batch_size}, "
+        f"warmup={config.warmup_steps}, wd={config.weight_decay}"
+    )
     if val_samples:
         print(f"[Exp {exp_id}] Validation set: {len(val_samples)} samples")
 
@@ -365,14 +377,16 @@ def train_experiment(
     model.decoder.config.tie_word_embeddings = False
 
     model.config.pad_token_id = processor.tokenizer.pad_token_id
-    model.config.decoder_start_token_id = processor.tokenizer.convert_tokens_to_ids(
-        ["<s_sroie>"]
-    )[0]
+    model.config.decoder_start_token_id = processor.tokenizer.convert_tokens_to_ids(["<s_sroie>"])[
+        0
+    ]
     model.gradient_checkpointing_enable()
 
     # Build PyTorch datasets
     train_ds = MultiDataset(samples, processor, max_length=config.max_length)
-    val_ds = MultiDataset(val_samples, processor, max_length=config.max_length) if val_samples else None
+    val_ds = (
+        MultiDataset(val_samples, processor, max_length=config.max_length) if val_samples else None
+    )
 
     # Verify single source of truth: ExperimentConfig properties map correctly
     assert config.epochs == config.max_epochs, (
@@ -380,8 +394,7 @@ def train_experiment(
         f"!= max_epochs={config.max_epochs}"
     )
     assert config.lr == config.learning_rate, (
-        f"Single source of truth violation: lr={config.lr} "
-        f"!= learning_rate={config.learning_rate}"
+        f"Single source of truth violation: lr={config.lr} != learning_rate={config.learning_rate}"
     )
     assert config.batch_size == config.per_device_train_batch_size, (
         f"Single source of truth violation: batch_size={config.batch_size} "
@@ -403,9 +416,11 @@ def train_experiment(
     # Save model with tied weights
     trainer.save(output_dir)
 
-    print(f"[Exp {exp_id}] Training complete "
-          f"(duration={result.duration_seconds:.1f}s, "
-          f"train={result.train_samples}, val={result.val_samples})")
+    print(
+        f"[Exp {exp_id}] Training complete "
+        f"(duration={result.duration_seconds:.1f}s, "
+        f"train={result.train_samples}, val={result.val_samples})"
+    )
 
     # FIX: Explicit GPU cleanup between experiments to prevent OOM on GPUs
     # with limited VRAM.  The RTX 4090 has 24GB — sufficient for DONUT but
@@ -422,6 +437,7 @@ def train_experiment(
 # ---------------------------------------------------------------------------
 # Evaluation — delegates to DonutEvaluator from evaluate.py
 # ---------------------------------------------------------------------------
+
 
 def evaluate_experiment(exp_id: int, model_dir: Path) -> dict:
     """Evaluate a fine-tuned model (at *model_dir*) on the SROIE test set.
@@ -467,6 +483,7 @@ def evaluate_experiment(exp_id: int, model_dir: Path) -> dict:
 # Single experiment runner
 # ---------------------------------------------------------------------------
 
+
 def run_experiment(exp_id: int, base_processor=None, base_model=None) -> dict:
     """Run a single experiment: train, evaluate, save results.
 
@@ -483,11 +500,11 @@ def run_experiment(exp_id: int, base_processor=None, base_model=None) -> dict:
         raise ValueError(f"Unknown experiment ID {exp_id}. Valid: {list(EXPERIMENTS)}")
 
     config = EXPERIMENTS[exp_id]
-    print(f"\n{'='*72}")
+    print(f"\n{'=' * 72}")
     print(f"Experiment {exp_id}: {config.name}")
     print(f"Description: {config.description}")
     print(f"Datasets: {config.datasets}")
-    print(f"{'='*72}")
+    print(f"{'=' * 72}")
 
     result_file = RESULTS_DIR / f"experiment_{exp_id}.json"
 
@@ -528,8 +545,12 @@ def run_experiment(exp_id: int, base_processor=None, base_model=None) -> dict:
     model_dir = WORKSPACE / "models" / f"experiment_{exp_id}"
     model_dir.mkdir(parents=True, exist_ok=True)
     log_history = train_experiment(
-        exp_id, train_samples, model_dir, val_samples=val_samples,
-        base_processor=base_processor, base_model=base_model,
+        exp_id,
+        train_samples,
+        model_dir,
+        val_samples=val_samples,
+        base_processor=base_processor,
+        base_model=base_model,
     )
 
     # Evaluate
@@ -555,6 +576,7 @@ def run_experiment(exp_id: int, base_processor=None, base_model=None) -> dict:
 # Summary
 # ---------------------------------------------------------------------------
 
+
 def save_summary() -> None:
     """Collect all individual result files into results/all_experiments.json."""
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -570,31 +592,37 @@ def save_summary() -> None:
     print(f"\nSummary saved → {summary_file}")
 
     # Pretty-print leaderboard
-    print(f"\n{'='*72}")
+    print(f"\n{'=' * 72}")
     print(f"{'Exp':<5} {'Name':<35} {'Train Samples':>14} {'Global F1':>10}")
-    print(f"{'-'*72}")
+    print(f"{'-' * 72}")
     for exp_id_str, res in sorted(all_results.items(), key=lambda x: int(x[0])):
         name = res.get("name", "")[:34]
         n = res.get("num_train_samples", 0)
         f1 = res.get("metrics", {}).get("global_f1", float("nan"))
         f1_str = f"{f1:>10.4f}" if not math.isnan(f1) else "       N/A"
         print(f"{exp_id_str:<5} {name:<35} {n:>14} {f1_str}")
-    print(f"{'='*72}\n")
+    print(f"{'=' * 72}\n")
 
 
 # ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
 
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run DONUT SROIE experiments")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--all", action="store_true", help="Run all 8 experiments sequentially")
-    group.add_argument("--experiment", type=int, metavar="N",
-                       choices=range(1, len(EXPERIMENTS) + 1),
-                       help="Run a single experiment (1-8)")
-    parser.add_argument("--force", action="store_true",
-                        help="Delete all cached results and re-run from scratch")
+    group.add_argument(
+        "--experiment",
+        type=int,
+        metavar="N",
+        choices=range(1, len(EXPERIMENTS) + 1),
+        help="Run a single experiment (1-8)",
+    )
+    parser.add_argument(
+        "--force", action="store_true", help="Delete all cached results and re-run from scratch"
+    )
     args = parser.parse_args()
 
     if args.force:
