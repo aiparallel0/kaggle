@@ -9,17 +9,14 @@ import unittest.mock as mock
 from pathlib import Path
 
 import pytest
+from donut_evaluator import compute_metrics, normalized_edit_distance, _unwrap_prediction
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 torch = pytest.importorskip("torch", reason="torch required by donut_evaluator.py")
 pytest.importorskip("transformers", reason="transformers required by donut_evaluator.py")
 
-from donut_evaluator import (  # noqa: E402
-    _unwrap_prediction,
-    compute_metrics,
-    normalized_edit_distance,
-)
+
 
 # ---------------------------------------------------------------------------
 # normalized_edit_distance

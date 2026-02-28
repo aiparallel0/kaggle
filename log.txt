@@ -1,0 +1,152 @@
+Skip to content
+aiparallel0
+kaggle
+Repository navigation
+Code
+Issues
+Pull requests
+1
+ (1)
+Actions
+Projects
+Security
+Insights
+Settings
+Back to pull request #36
+Fix F1 score collapse from missing lm_head and list-format predictions #32
+All jobs
+Run details
+Annotations
+1 error
+lint
+failed 3 minutes ago in 9s
+Search logs
+1s
+1s
+0s
+3s
+0s
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+62 |
+63 | # Set before torch initializes to reduce GPU memory fragmentation.
+   |
+
+UP035 `typing.Tuple` is deprecated, use `tuple` instead
+  --> run_experiments.py:61:1
+   |
+59 | from dataclasses import dataclass, field
+60 | from pathlib import Path
+61 | from typing import Any, Dict, List, Tuple
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+62 |
+63 | # Set before torch initializes to reduce GPU memory fragmentation.
+   |
+
+I001 [*] Import block is un-sorted or un-formatted
+  --> run_experiments.py:66:1
+   |
+64 |   os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
+65 |
+66 | / import torch
+67 | | from PIL import Image
+68 | | from torch.utils.data import Dataset
+69 | | from transformers import DonutProcessor, VisionEncoderDecoderModel
+70 | |
+71 | | import dataset_loaders
+72 | | from donut_evaluator import compute_metrics, run_inference
+73 | |
+74 | | # FIX: Import shared constants from single source of truth (constants.py)
+75 | | # instead of duplicating FIELDS/IMAGE_EXTS/etc. independently in this file.
+76 | | from constants import FIELDS, MAX_LENGTH, IMAGE_EXTS, NEW_TOKENS, BASE_MODEL, SEED, \
+77 | |     DEVICE, WORKSPACE, set_seed, _gpu_cleanup
+   | |_____________________________________________^
+78 |
+79 |   # ---------------------------------------------------------------------------
+   |
+help: Organize imports
+
+F401 [*] `torch` imported but unused
+  --> run_experiments.py:66:8
+   |
+64 | os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
+65 |
+66 | import torch
+   |        ^^^^^
+67 | from PIL import Image
+68 | from torch.utils.data import Dataset
+   |
+help: Remove unused import: `torch`
+   --> train.py:258:40
+    |
+256 |         return len(self.samples)
+257 |
+258 |     def __getitem__(self, idx: int) -> Dict[str, Any]:
+    |                                        ^^^^
+259 |         img_path, gt = self.samples[idx]
+260 |         image = Image.open(img_path).convert("RGB")
+    |
+help: Replace with `dict`
+
+UP045 [*] Use `X | None` for type annotations
+   --> train.py:326:22
+    |
+324 |         model: VisionEncoderDecoderModel,
+325 |         train_dataset: Dataset,
+326 |         val_dataset: Optional[Dataset] = None,
+    |                      ^^^^^^^^^^^^^^^^^
+327 |     ):
+328 |         if len(train_dataset) == 0:
+    |
+help: Convert to `X | None`
+
+SIM210 Remove unnecessary `True if ... else False`
+   --> train.py:381:43
+    |
+379 |             dataloader_pin_memory=True,
+380 |             dataloader_prefetch_factor=4 if optimal_workers > 0 else None,
+381 |             dataloader_persistent_workers=True if optimal_workers > 0 else False,
+    |                                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+382 |             remove_unused_columns=False,
+383 |             seed=getattr(self.config, "seed", SEED),
+    |
+help: Remove unnecessary `True if ... else False`
+
+UP045 [*] Use `X | None` for type annotations
+   --> train.py:420:26
+    |
+418 |     # ------------------------------------------------------------------
+419 |
+420 |     def save(self, path: Optional[Path] = None) -> None:
+    |                          ^^^^^^^^^^^^^^
+421 |         """Save the fine-tuned model and processor to disk.
+    |
+help: Convert to `X | None`
+
+W292 [*] No newline at end of file
+   --> train.py:549:11
+    |
+548 | if __name__ == "__main__":
+549 |     main()
+    |           ^
+    |
+help: Add trailing newline
+
+Found 326 errors.
+[*] 266 fixable with the `--fix` option (15 hidden fixes can be enabled with the `--unsafe-fixes` option).
+Error: Process completed with exit code 1.
+0s
+0s
+0s
+0s
+Footer
+© 2026 GitHub, Inc.
+Footer navigation
+Terms
+Privacy
+Security
+Status
+Community
+Docs
+Contact
+Manage cookies
+Do not share my personal information

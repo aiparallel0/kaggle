@@ -92,6 +92,11 @@ from constants import (
 
 logger = logging.getLogger(__name__)
 
+# FIX: Previously FIELDS, MAX_LENGTH, IMAGE_EXTS, NEW_TOKENS, BASE_MODEL,
+# SEED were defined independently here and in 4 other files, risking silent
+# drift if any file was updated without updating the others.
+from constants import FIELDS, MAX_LENGTH, IMAGE_EXTS, NEW_TOKENS, BASE_MODEL, SEED, \
+    _get_sroie_dir, _optimal_num_workers
 
 # ---------------------------------------------------------------------------
 # LmHeadCloneCallback — prevent safetensors from deduplicating lm_head
@@ -129,6 +134,10 @@ class LmHeadCloneCallback(TrainerCallback):
                 state.epoch,
             )
         return control
+
+# ---------------------------------------------------------------------------
+# Constants — imported from shared constants.py (eliminates 5x duplication)
+# ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
 # TrainingResult dataclass
