@@ -305,11 +305,18 @@ def _setup_hf_auth() -> None:
     if token:
         os.environ["HF_TOKEN"] = token
         os.environ["HUGGING_FACE_HUB_TOKEN"] = token  # legacy env var
+
+        # Validate token format (HF tokens start with 'hf_' or are 39 chars legacy format)
+        token_masked = f"{token[:4]}****" if len(token) > 8 else "****"
+        if not (token.startswith("hf_") or len(token) == 39):
+            print(f"  [HF Auth] WARNING: Token format may be invalid (expected 'hf_...' or 39-char legacy)")
+            print(f"            Token preview: {token_masked}")
+
         try:
             from huggingface_hub import login
 
             login(token=token, add_to_git_credential=False)
-            print("  [HF Auth] Authenticated — faster downloads enabled")
+            print(f"  [HF Auth] Authenticated (token: {token_masked}) — faster downloads enabled")
         except Exception as e:
             print(f"  [HF Auth] Login failed: {e} — continuing unauthenticated")
     else:
@@ -1363,17 +1370,60 @@ def _quick_all_mode_handler(args, logger: logging.Logger) -> int:
                 f"batch_size={bs}, epochs={ep}, lr={lr:.0e}, scheduler={sched}"
             )
 
-            # TODO: In a full implementation, update TRAINING_PARAMS and re-run
-            # For now, just collect the configs
-            key = f"bs={bs}_ep={ep}_lr={lr:.0e}_{sched}"
-            sweep_results[key] = {
-                "batch_size": bs,
-                "epochs": ep,
-                "learning_rate": lr,
-                "scheduler": sched,
-                "donut_f1": 0.0,  # Placeholder
-                "training_time": 0.0,
-            }
+            # Create custom experiment config and run
+            try:
+                from run_experiments import ExperimentConfig, run_custom_experiment
+
+                sweep_id = i  # Use iteration number as sweep ID
+                custom_config = ExperimentConfig(
+                    id=sweep_id,
+                    name=f"Sweep: bs={bs}, ep={ep}, lr={lr:.0e}, sched={sched}",
+                    description="Hyperparameter sweep experiment",
+                    datasets=["sroie"],  # Quick mode: SROIE only
+                    batch_size=bs,
+                    gradient_accumulation_steps=2,
+                    epochs=ep,
+                    lr=lr,
+                    lr_scheduler_type=sched,
+                )
+
+                # Prepare result file
+                key = f"bs={bs}_ep={ep}_lr={lr:.0e}_{sched}"
+                result_file = Path("results") / f"sweep_{key}.json"
+
+                # Run experiment
+                import time
+                start_time = time.time()
+                result = run_custom_experiment(custom_config, result_file)
+                elapsed_time = time.time() - start_time
+
+                # Extract metrics
+                metrics = result.get("metrics", {})
+                sweep_results[key] = {
+                    "batch_size": bs,
+                    "epochs": ep,
+                    "learning_rate": lr,
+                    "scheduler": sched,
+                    "donut_f1": metrics.get("global_f1", 0.0),
+                    "training_time": elapsed_time,
+                }
+                logger.info(f"  F1 = {sweep_results[key]['donut_f1']:.4f}, "
+                           f"time = {elapsed_time:.1f}s")
+
+            except Exception as e:
+                logger.error(f"Sweep iteration {i} failed: {e}")
+                key = f"bs={bs}_ep={ep}_lr={lr:.0e}_{sched}"
+                sweep_results[key] = {
+                    "batch_size": bs,
+                    "epochs": ep,
+                    "learning_rate": lr,
+                    "scheduler": sched,
+                    "donut_f1": 0.0,
+                    "training_time": 0.0,
+                    "error": str(e),
+                }
+                import traceback
+                traceback.print_exc()
 
         # Generate comparison results.tex
         logger.info("Generating comprehensive results.tex with parameter comparisons...")

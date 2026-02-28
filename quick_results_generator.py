@@ -83,8 +83,8 @@ def generate_loss_plots_from_results(results_dir: Path = Path("results")) -> dic
                     exp_data = json.load(f)
                     exp_id = exp_data.get("experiment_id", 1)
                     # Extract loss history if available (format depends on trainer)
-                    if "loss_history" in exp_data:
-                        loss_data[exp_id] = exp_data["loss_history"]
+                    if "training_log" in exp_data:
+                        loss_data[exp_id] = exp_data["training_log"]
             except Exception:
                 pass
 
