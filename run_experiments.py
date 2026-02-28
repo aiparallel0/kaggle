@@ -56,6 +56,7 @@ import gc
 import json
 import math
 import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -63,6 +64,7 @@ from typing import Any
 # Set before torch initializes to reduce GPU memory fragmentation.
 os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
 
+import torch
 from PIL import Image
 from torch.utils.data import Dataset
 from transformers import DonutProcessor, VisionEncoderDecoderModel
@@ -410,8 +412,35 @@ def train_experiment(
         val_dataset=val_ds,
     )
 
-    # Train
-    result = trainer.train()
+    # Train with OOM recovery
+    try:
+        result = trainer.train()
+    except torch.cuda.OutOfMemoryError as e:
+        original_bs = config.batch_size
+        if config.batch_size > 2:
+            print(
+                f"[Exp {exp_id}] CUDA OOM during training. "
+                f"Retrying with batch_size={original_bs // 2}..."
+            )
+            config.batch_size = config.batch_size // 2
+            # Rebuild trainer with reduced batch size
+            trainer = DonutTrainer(
+                config=config,
+                processor=processor,
+                model=model,
+                train_dataset=train_ds,
+                val_dataset=val_ds,
+            )
+            result = trainer.train()
+            print(
+                f"[Exp {exp_id}] Training succeeded with reduced batch_size={config.batch_size} "
+                f"(originally {original_bs})"
+            )
+        else:
+            raise RuntimeError(
+                f"[Exp {exp_id}] CUDA OOM: batch_size already at minimum (2); "
+                "cannot recover without further hardware constraints"
+            ) from e
 
     # Save model with tied weights
     trainer.save(output_dir)
@@ -439,17 +468,23 @@ def train_experiment(
 # ---------------------------------------------------------------------------
 
 
-def evaluate_experiment(exp_id: int, model_dir: Path) -> dict:
+def evaluate_experiment(exp_id: int, model_dir: Path, config: "ExperimentConfig | None" = None) -> dict:
     """Evaluate a fine-tuned model (at *model_dir*) on the SROIE test set.
 
     Uses DonutEvaluator from evaluate.py which handles:
       - Weight re-tying via load_model_with_tied_weights (fixes lm_head bug)
       - Self-test before full evaluation
       - Parse failure threshold checking
+
+    Args:
+        exp_id: Experiment ID (for logging; only used if config is None)
+        model_dir: Path to fine-tuned model directory
+        config: Optional ExperimentConfig; if None, loads from EXPERIMENTS[exp_id]
     """
     from donut_evaluator import DonutEvaluator
 
-    config = EXPERIMENTS[exp_id]
+    if config is None:
+        config = EXPERIMENTS[exp_id]
     test_samples = dataset_loaders.load_sroie_test()
     print(f"[Exp {exp_id}] Evaluating on {len(test_samples)} SROIE test images")
 
@@ -569,6 +604,74 @@ def run_experiment(exp_id: int, base_processor=None, base_model=None) -> dict:
     result_file.write_text(json.dumps(result, indent=2))
     print(f"[Exp {exp_id}] Results saved → {result_file}")
     print(f"[Exp {exp_id}] Global F1 = {metrics.get('global_f1', 'N/A')}")
+    return result
+
+
+def run_custom_experiment(config: "ExperimentConfig", result_file: Path) -> dict:
+    """Run a single experiment with custom hyperparameters (for sweeps).
+
+    Similar to run_experiment but:
+    - Takes a custom ExperimentConfig instead of looking up EXPERIMENTS[exp_id]
+    - Saves result to custom result_file instead of results/experiment_N.json
+    - Does not use caching (always re-runs)
+    - Does not check EXPERIMENTS for validity
+
+    Args:
+        config: Custom ExperimentConfig with all hyperparameters
+        result_file: Path to save results JSON
+
+    Returns:
+        Result dict with metrics, training_log, etc.
+    """
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    exp_id = config.id
+
+    print(f"\n{'=' * 72}")
+    print(f"Sweep Experiment {exp_id}: {config.name}")
+    print(f"Datasets: {config.datasets}")
+    print(f"Batch size={config.batch_size}, epochs={config.epochs}, lr={config.lr:.0e}")
+    print(f"{'=' * 72}")
+
+    # Load data
+    train_samples, val_samples = dataset_loaders.get_combined_dataset(config.datasets)
+    if len(train_samples) == 0:
+        print(f"[Sweep Exp {exp_id}] WARNING: No samples loaded — saving empty result.")
+        result = {
+            "experiment_id": exp_id,
+            "name": config.name,
+            "datasets": config.datasets,
+            "num_train_samples": 0,
+            "metrics": {},
+            "error": "No training samples available",
+        }
+        result_file.write_text(json.dumps(result, indent=2))
+        return result
+
+    # Train
+    model_dir = WORKSPACE / "models" / f"sweep_experiment_{exp_id}_{int(time.time())}"
+    model_dir.mkdir(parents=True, exist_ok=True)
+    log_history = train_experiment(
+        exp_id,
+        train_samples,
+        model_dir,
+        val_samples=val_samples,
+    )
+
+    # Evaluate (pass custom config to avoid EXPERIMENTS lookup)
+    metrics = evaluate_experiment(exp_id, model_dir, config=config)
+
+    # Save result
+    result = {
+        "experiment_id": exp_id,
+        "name": config.name,
+        "datasets": config.datasets,
+        "num_train_samples": len(train_samples),
+        "metrics": metrics,
+        "training_log": log_history,
+    }
+    result_file.write_text(json.dumps(result, indent=2))
+    print(f"[Sweep Exp {exp_id}] Results saved → {result_file}")
+    print(f"[Sweep Exp {exp_id}] Global F1 = {metrics.get('global_f1', 'N/A')}")
     return result
 
 
