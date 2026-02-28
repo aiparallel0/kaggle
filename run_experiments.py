@@ -53,9 +53,13 @@ import copy
 import gc
 import json
 import math
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
+
+# Set before torch initializes to reduce GPU memory fragmentation.
+os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
 
 import torch
 from PIL import Image
@@ -94,7 +98,7 @@ class ExperimentConfig:
     datasets: List[str]
     epochs: int = 30
     lr: float = 5e-5
-    batch_size: int = 16
+    batch_size: int = 8
     seed: int = SEED
     early_stopping_patience: int = 3
     base_model: str = BASE_MODEL
