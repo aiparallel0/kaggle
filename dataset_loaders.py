@@ -770,10 +770,49 @@ class FUNSDLoader(BaseDatasetLoader):
             return []
         return samples
 
+    def validate_cache(self) -> bool:
+        """Check that hf_cache exists and first record has words + ner_tags."""
+        hf_cache = self._hf_cache()
+        if not hf_cache.exists():
+            return False
+        try:
+            from datasets import load_from_disk  # type: ignore
+            ds = load_from_disk(str(hf_cache))
+            splits = list(ds.keys()) if hasattr(ds, "keys") else ["train"]
+            first_split = ds[splits[0]] if hasattr(ds, "keys") else ds
+            if len(first_split) == 0:
+                return False
+            item = first_split[0]
+            return bool(item.get("words")) and "ner_tags" in item
+        except Exception:
+            return False
 
-# ======================================================================
-#  InvoicesDonutLoader
-# ======================================================================
+    def clear_cache(self) -> None:
+        """Remove the entire FUNSD cache directory."""
+        import shutil
+        dest = self._dest_dir()
+        if dest.exists():
+            shutil.rmtree(dest, ignore_errors=True)
+            self._log("Cache cleared.")
+
+    def sample_count(self, split: str = "train") -> int:
+        """Return approximate sample count from the HF cache (train splits only)."""
+        hf_cache = self._hf_cache()
+        if not hf_cache.exists():
+            return 0
+        try:
+            from datasets import load_from_disk  # type: ignore
+            ds = load_from_disk(str(hf_cache))
+            total = 0
+            splits = list(ds.keys()) if hasattr(ds, "keys") else ["train"]
+            for s in splits:
+                if s == "test":
+                    continue
+                split_ds = ds[s] if hasattr(ds, "keys") else ds
+                total += len(split_ds)
+            return total
+        except Exception:
+            return 0
 
 class InvoicesDonutLoader(BaseDatasetLoader):
     """Download Invoices-DONUT (katanaml-org/invoices-donut-data-v1) from
