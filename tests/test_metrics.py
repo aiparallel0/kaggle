@@ -55,6 +55,95 @@ class TestNED:
 
 
 # ---------------------------------------------------------------------------
+# _parse_prediction list-merge behaviour (exercised via DonutEvaluator)
+# ---------------------------------------------------------------------------
+
+class TestParsePredictionListMerge:
+    """Verify token2json list output is merged rather than discarded.
+
+    Root cause of F1=0.0078: _parse_prediction() returned {} when token2json()
+    returned a list (CORD <sep/> multi-page format), collapsing all predictions
+    to empty dicts.  Fix: merge list pages into a single flat dict.
+    """
+
+    def _make_evaluator_stub(self):
+        """Return a minimal DonutEvaluator-like object with just _parse_prediction."""
+        torch = pytest.importorskip("torch")
+        from donut_evaluator import DonutEvaluator
+
+        # Build the smallest possible evaluator without hitting from_pretrained
+        evaluator = object.__new__(DonutEvaluator)
+        evaluator.parse_failure_count = 0
+        evaluator._inference_call_count = 0
+
+        class _FakeProcessor:
+            def token2json(self, tokens):
+                # Simulate multi-page list output
+                return [
+                    {"company": "MYDIN MALL", "date": "25/12/2023"},
+                    {"address": "NO 1 JALAN", "total": "47.80"},
+                ]
+
+        evaluator.processor = _FakeProcessor()
+        return evaluator
+
+    def test_list_pages_merged_to_dict(self):
+        """Multi-page list from token2json is merged into a single flat dict."""
+        evaluator = self._make_evaluator_stub()
+        result = evaluator._parse_prediction("<irrelevant tokens>")
+        assert isinstance(result, dict), "Expected dict, got list (merge failed)"
+        assert result["company"] == "MYDIN MALL"
+        assert result["date"] == "25/12/2023"
+        assert result["address"] == "NO 1 JALAN"
+        assert result["total"] == "47.80"
+
+    def test_first_occurrence_wins_on_duplicate_keys(self):
+        """When multiple pages share a key, the first page's value wins."""
+        torch = pytest.importorskip("torch")
+        from donut_evaluator import DonutEvaluator
+
+        evaluator = object.__new__(DonutEvaluator)
+        evaluator.parse_failure_count = 0
+        evaluator._inference_call_count = 0
+
+        class _FakeProcessor:
+            def token2json(self, tokens):
+                return [
+                    {"company": "FIRST"},
+                    {"company": "SECOND", "total": "10.00"},
+                ]
+
+        evaluator.processor = _FakeProcessor()
+        result = evaluator._parse_prediction("<tokens>")
+        assert result["company"] == "FIRST", "First page's value should win"
+        assert result["total"] == "10.00"
+
+    def test_no_parse_failure_counted_for_list(self):
+        """List output is NOT a parse failure — it contains valid data."""
+        evaluator = self._make_evaluator_stub()
+        evaluator._parse_prediction("<tokens>")
+        assert evaluator.parse_failure_count == 0
+
+    def test_empty_list_counts_as_failure(self):
+        """Fully empty list (no dict pages) is a parse failure."""
+        torch = pytest.importorskip("torch")
+        from donut_evaluator import DonutEvaluator
+
+        evaluator = object.__new__(DonutEvaluator)
+        evaluator.parse_failure_count = 0
+        evaluator._inference_call_count = 0
+
+        class _FakeProcessor:
+            def token2json(self, tokens):
+                return []
+
+        evaluator.processor = _FakeProcessor()
+        result = evaluator._parse_prediction("<tokens>")
+        assert result == {}
+        assert evaluator.parse_failure_count == 1
+
+
+# ---------------------------------------------------------------------------
 # _unwrap_prediction
 # ---------------------------------------------------------------------------
 

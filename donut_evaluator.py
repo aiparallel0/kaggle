@@ -385,6 +385,17 @@ class DonutEvaluator:
                 f"  Model path: {self.model_path}"
             ) from exc
 
+        # token2json returns a list when <sep/> tokens are present (CORD multi-page).
+        # Merge pages before unwrapping so the dict check below works correctly.
+        if isinstance(parsed, list):
+            merged: Dict = {}
+            for page in parsed:
+                if isinstance(page, dict):
+                    for k, v in page.items():
+                        if k not in merged:
+                            merged[k] = v
+            parsed = merged
+
         # Unwrap task-prompt wrappers
         parsed = _unwrap_prediction(parsed, self.task_prompt)
 
@@ -490,9 +501,30 @@ class DonutEvaluator:
         """Guarded token2json: returns {} on failure with log.
 
         Increments ``parse_failure_count`` on every failure.
+
+        token2json returns a list when the generated sequence contains <sep/>
+        tokens (CORD multi-page format).  Even SROIE fine-tuned models can
+        emit <sep/> because the base checkpoint (donut-base-finetuned-cord-v2)
+        knows the token.  Merge pages into one dict (first occurrence of each
+        key wins) so callers always receive a flat dict.
         """
         try:
             result = self.processor.token2json(tokens)
+            if isinstance(result, list):
+                merged: Dict = {}
+                for page in result:
+                    if isinstance(page, dict):
+                        for k, v in page.items():
+                            if k not in merged:
+                                merged[k] = v
+                if merged:
+                    return merged
+                logger.warning(
+                    "token2json returned list but all pages are non-dicts: %s",
+                    result,
+                )
+                self.parse_failure_count += 1
+                return {}
             if not isinstance(result, dict):
                 logger.warning("token2json returned non-dict: %s", type(result))
                 self.parse_failure_count += 1
