@@ -22,7 +22,6 @@ Output directories:
 import json
 import os
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 from PIL import Image
 
@@ -50,7 +49,7 @@ SPLIT_MAP = {
 # Candidate box/ subdirectory names per split (tried in order).
 # The SROIE dataset ships one shared "box/" for train; some re-packagings
 # use split-specific names.  We probe all candidates.
-BOX_DIR_CANDIDATES: Dict[str, List[str]] = {
+BOX_DIR_CANDIDATES: dict[str, list[str]] = {
     "train": ["box", "box_train", "train_box"],
     "val":   ["box_val", "val_box", "box"],
     "test":  ["box_test", "test_box", "box"],
@@ -59,7 +58,7 @@ BOX_DIR_CANDIDATES: Dict[str, List[str]] = {
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _find_box_dir(split: str) -> Optional[Path]:
+def _find_box_dir(split: str) -> Path | None:
     """Return the first existing box annotation directory for a split, or None."""
     for candidate in BOX_DIR_CANDIDATES.get(split, []):
         p = SROIE_DATA_DIR / candidate
@@ -69,7 +68,7 @@ def _find_box_dir(split: str) -> Optional[Path]:
 
 
 # ── OCR bbox file reader ──────────────────────────────────────────────────────
-def _load_ocr_bboxes(box_dir: Path, stem: str) -> List[Tuple[List[int], str]]:
+def _load_ocr_bboxes(box_dir: Path, stem: str) -> list[tuple[list[int], str]]:
     """Load SROIE OCR bounding boxes from the box/ directory.
 
     Each line has format: x1,y1,x2,y2,x3,y3,x4,y4,text
@@ -104,8 +103,8 @@ def _load_ocr_bboxes(box_dir: Path, stem: str) -> List[Tuple[List[int], str]]:
 
 # ── Line grouping ─────────────────────────────────────────────────────────────
 def group_words_into_lines(
-    boxes: List[Tuple[List[int], str]], row_tol: int = 12
-) -> List[Tuple[List[int], str]]:
+    boxes: list[tuple[list[int], str]], row_tol: int = 12
+) -> list[tuple[list[int], str]]:
     """Group word-level bboxes into line-level bboxes by y-coordinate proximity.
 
     Returns list of ([x1,y1,x2,y2], concatenated_text) tuples.
@@ -114,7 +113,7 @@ def group_words_into_lines(
         return []
 
     sorted_boxes = sorted(boxes, key=lambda b: (b[0][1], b[0][0]))
-    lines: List[List[Tuple[List[int], str]]] = [[sorted_boxes[0]]]
+    lines: list[list[tuple[list[int], str]]] = [[sorted_boxes[0]]]
 
     for item in sorted_boxes[1:]:
         last_line = lines[-1]
@@ -206,7 +205,7 @@ def build_trocr_split(split: str) -> int:
     when box/ is missing) produced 0 crops.  Now all splits fall back to
     key-file full-image crops when no box annotations are found, guaranteeing
     non-zero TrOCR training data.
-    """    
+    """
     img_subdir, key_subdir = SPLIT_MAP[split]
     img_dir = SROIE_DATA_DIR / img_subdir
     key_dir = SROIE_DATA_DIR / key_subdir
@@ -230,7 +229,7 @@ def build_trocr_split(split: str) -> int:
         W, H = img.size
 
         # Get line-level bboxes from box annotations if available
-        lines: List[Tuple[List[int], str]] = []
+        lines: list[tuple[list[int], str]] = []
         if box_dir is not None:
             raw_boxes = _load_ocr_bboxes(box_dir, img_path.stem)
             lines = group_words_into_lines(raw_boxes)
@@ -292,7 +291,7 @@ names: ['text_region']
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
-def prepare_all() -> Dict[str, int]:
+def prepare_all() -> dict[str, int]:
     """Run full dataset preparation for YOLO + TrOCR. Returns counts dict."""
     print("\n=== Dataset Preparation for TrOCR+YOLO Pipeline ===")
     counts = {}
@@ -303,7 +302,7 @@ def prepare_all() -> Dict[str, int]:
 
     write_yolo_yaml()
 
-    print(f"\n  Dataset preparation complete.")
+    print("\n  Dataset preparation complete.")
     print(f"  YOLO  data -> {YOLO_DIR}")
     print(f"  TrOCR data -> {TROCR_DIR}")
     return counts

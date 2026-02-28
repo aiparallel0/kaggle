@@ -15,8 +15,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 torch = pytest.importorskip("torch", reason="torch required by donut_evaluator.py")
 pytest.importorskip("transformers", reason="transformers required by donut_evaluator.py")
 
-from donut_evaluator import compute_metrics, normalized_edit_distance, _unwrap_prediction
-
+from donut_evaluator import (  # noqa: E402
+    _unwrap_prediction,
+    compute_metrics,
+    normalized_edit_distance,
+)
 
 # ---------------------------------------------------------------------------
 # normalized_edit_distance
@@ -68,7 +71,7 @@ class TestParsePredictionListMerge:
 
     def _make_evaluator_stub(self):
         """Return a minimal DonutEvaluator-like object with just _parse_prediction."""
-        torch = pytest.importorskip("torch")
+        pytest.importorskip("torch")
         from donut_evaluator import DonutEvaluator
 
         # Build the smallest possible evaluator without hitting from_pretrained
@@ -99,7 +102,7 @@ class TestParsePredictionListMerge:
 
     def test_first_occurrence_wins_on_duplicate_keys(self):
         """When multiple pages share a key, the first page's value wins."""
-        torch = pytest.importorskip("torch")
+        pytest.importorskip("torch")
         from donut_evaluator import DonutEvaluator
 
         evaluator = object.__new__(DonutEvaluator)
@@ -126,7 +129,7 @@ class TestParsePredictionListMerge:
 
     def test_empty_list_counts_as_failure(self):
         """Fully empty list (no dict pages) is a parse failure."""
-        torch = pytest.importorskip("torch")
+        pytest.importorskip("torch")
         from donut_evaluator import DonutEvaluator
 
         evaluator = object.__new__(DonutEvaluator)

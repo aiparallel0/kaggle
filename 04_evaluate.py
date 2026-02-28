@@ -20,14 +20,13 @@ import json
 import os
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
 from PIL import Image
 from tqdm import tqdm
 
-from constants import FIELDS, IMAGE_EXTS, MAX_LENGTH, SEED, DEVICE, _gpu_cleanup
+from constants import DEVICE, FIELDS, IMAGE_EXTS, MAX_LENGTH, _gpu_cleanup
 from dataset_loaders import _load_key_file
 
 # ── Config ──────────────────────────────────────────────────────────────────
@@ -49,7 +48,7 @@ from donut_evaluator import compute_metrics as compute_sroie_metrics  # noqa: E4
 # ════════════════════════════════════════════════════════════════════════════
 # Load SROIE test set (shared by both architectures)
 # ════════════════════════════════════════════════════════════════════════════
-def load_test_samples() -> List[Tuple[Path, Dict[str, str]]]:
+def load_test_samples() -> list[tuple[Path, dict[str, str]]]:
     """Load the 63 SROIE test images + ground truth.
 
     Returns list of (image_path, gt_dict) tuples.  Both DONUT and TrOCR+YOLO
@@ -82,11 +81,12 @@ def load_test_samples() -> List[Tuple[Path, Dict[str, str]]]:
 # ════════════════════════════════════════════════════════════════════════════
 def evaluate_donut_on_test(
     model_path: str,
-    test_samples: List[Tuple[Path, Dict[str, str]]],
-) -> Dict:
+    test_samples: list[tuple[Path, dict[str, str]]],
+) -> dict:
     """Evaluate a DONUT model on the SROIE test set. Returns metrics dict."""
-    from transformers import DonutProcessor, VisionEncoderDecoderModel
-    from donut_evaluator import load_model_with_tied_weights, _unwrap_prediction
+    from transformers import DonutProcessor
+
+    from donut_evaluator import _unwrap_prediction, load_model_with_tied_weights
 
     processor = DonutProcessor.from_pretrained(model_path)
     model = load_model_with_tied_weights(model_path, device=DEVICE)
@@ -97,7 +97,7 @@ def evaluate_donut_on_test(
     parse_failures = 0
 
     with torch.no_grad():
-        for img_path, gt in tqdm(test_samples, desc="DONUT eval"):
+        for img_path, _gt in tqdm(test_samples, desc="DONUT eval"):
             image = Image.open(img_path).convert("RGB")
             pixel_values = processor(image, return_tensors="pt").pixel_values.to(DEVICE)
             decoder_input_ids = processor.tokenizer(
@@ -148,12 +148,13 @@ def evaluate_donut_on_test(
 def evaluate_trocr_yolo_on_test(
     yolo_weights: str,
     trocr_model_path: str,
-    test_samples: List[Tuple[Path, Dict[str, str]]],
-) -> Dict:
+    test_samples: list[tuple[Path, dict[str, str]]],
+) -> dict:
     """Evaluate TrOCR+YOLO pipeline on the SROIE test set. Returns metrics dict."""
-    from ultralytics import YOLO
-    from transformers import TrOCRProcessor, VisionEncoderDecoderModel
     from importlib import import_module
+
+    from transformers import TrOCRProcessor, VisionEncoderDecoderModel
+    from ultralytics import YOLO
 
     # Import the inference function from 03_train_trocr_yolo.py
     trocr_yolo_module = import_module("03_train_trocr_yolo")
@@ -169,7 +170,7 @@ def evaluate_trocr_yolo_on_test(
     latencies = []
 
     with torch.no_grad():
-        for img_path, gt in tqdm(test_samples, desc="TrOCR+YOLO eval"):
+        for img_path, _gt in tqdm(test_samples, desc="TrOCR+YOLO eval"):
             t0 = time.perf_counter()
             pred = run_pipeline(img_path, yolo_model, trocr_model, trocr_processor)
             lat = (time.perf_counter() - t0) * 1000
@@ -187,7 +188,7 @@ def evaluate_trocr_yolo_on_test(
 
 
 # ── Print metrics ────────────────────────────────────────────────────────────
-def print_metrics(name: str, metrics: Dict) -> None:
+def print_metrics(name: str, metrics: dict) -> None:
     """Pretty-print evaluation metrics in structured format."""
     print(f"\n  {'='*55}")
     print(f"  {name} Results")
@@ -231,7 +232,7 @@ if __name__ == "__main__":
         )
         print_metrics("TrOCR+YOLO", results["trocr_yolo"])
     else:
-        print(f"  TrOCR+YOLO models not found — skipping")
+        print("  TrOCR+YOLO models not found — skipping")
 
     # Save combined results
     RESULTS_DIR.mkdir(exist_ok=True)

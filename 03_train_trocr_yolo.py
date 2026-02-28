@@ -20,7 +20,6 @@ import json
 import re
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 import torch
 from PIL import Image
@@ -32,7 +31,7 @@ from transformers import (
     get_scheduler,
 )
 
-from constants import FIELDS, SEED, DEVICE, WORKSPACE, _optimal_num_workers, _gpu_cleanup
+from constants import DEVICE, FIELDS, SEED, WORKSPACE, _gpu_cleanup, _optimal_num_workers
 
 # ── Config ──────────────────────────────────────────────────────────────────
 TROCR_MODEL_ID = "microsoft/trocr-large-printed"
@@ -123,7 +122,7 @@ class TrOCRReceiptDataset(Dataset):
 # ════════════════════════════════════════════════════════════════════════════
 # STAGE 1: YOLO Training
 # ════════════════════════════════════════════════════════════════════════════
-def train_yolo(output_dir: Optional[Path] = None) -> Path:
+def train_yolo(output_dir: Path | None = None) -> Path:
     """Fine-tune YOLOv8 for text-region detection on receipts.
 
     Returns the path to the best weights file.
@@ -181,7 +180,7 @@ def train_yolo(output_dir: Optional[Path] = None) -> Path:
 # ════════════════════════════════════════════════════════════════════════════
 # STAGE 2: TrOCR Training
 # ════════════════════════════════════════════════════════════════════════════
-def train_trocr(output_dir: Optional[Path] = None) -> Dict:
+def train_trocr(output_dir: Path | None = None) -> dict:
     """Fine-tune TrOCR on line crops from receipts.
 
     Returns the training history dict.
@@ -308,7 +307,7 @@ def train_trocr(output_dir: Optional[Path] = None) -> Dict:
 # ════════════════════════════════════════════════════════════════════════════
 # STAGE 3: TrOCR+YOLO Inference Pipeline
 # ════════════════════════════════════════════════════════════════════════════
-def _assign_fields_heuristic(ocr_lines: List[Dict]) -> Dict[str, str]:
+def _assign_fields_heuristic(ocr_lines: list[dict]) -> dict[str, str]:
     """Assign OCR-extracted text lines to SROIE fields using heuristics.
 
     This is the key weakness of the pipeline approach: rule-based field
@@ -330,11 +329,8 @@ def _assign_fields_heuristic(ocr_lines: List[Dict]) -> Dict[str, str]:
     sorted_lines = sorted(ocr_lines, key=lambda x: x.get("y", 0))
 
     # Date pattern
-    date_pattern = _DATE_RE
     # Total pattern: currency symbols or "total" keyword followed by numbers
-    total_pattern = _TOTAL_RE
     # Generic money pattern
-    money_pattern = _MONEY_RE
 
     used = set()
 
@@ -406,7 +402,7 @@ def run_trocr_yolo_inference(
     yolo_model,
     trocr_model,
     trocr_processor: TrOCRProcessor,
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """Run the full TrOCR+YOLO pipeline on a single image.
 
     1. YOLO detects text regions

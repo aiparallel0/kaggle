@@ -47,20 +47,18 @@ import time
 import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
 # Defer heavy imports to avoid import-time crashes when deps are missing
 try:
+    import editdistance
+    import matplotlib
     import torch
     from PIL import Image
     from tqdm import tqdm
-    import editdistance
-    import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    import matplotlib.patches as mpatches
 except ImportError as e:
     sys.exit(f"FATAL: missing dependency — {e}\n"
              "Run: pip install torch torchvision transformers "
@@ -69,7 +67,8 @@ except ImportError as e:
 # ─────────────────────────────────────────────────────────────────────────────
 # Constants — imported from single source of truth (constants.py)
 # ─────────────────────────────────────────────────────────────────────────────
-from constants import FIELDS, IMAGE_EXTS, BASE_MODEL
+from constants import BASE_MODEL, FIELDS, IMAGE_EXTS
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Data structures
@@ -77,19 +76,19 @@ from constants import FIELDS, IMAGE_EXTS, BASE_MODEL
 @dataclass
 class SampleResult:
     image_name: str
-    ground_truth: Dict[str, str]
-    prediction: Dict[str, str]
+    ground_truth: dict[str, str]
+    prediction: dict[str, str]
     inference_time_ms: float
 
 
 @dataclass
 class BenchmarkResult:
     method: str                          # "DONUT" | "YOLOv8+TrOCR+Regex"
-    samples: List[SampleResult] = field(default_factory=list)
+    samples: list[SampleResult] = field(default_factory=list)
 
     # Aggregated metrics (filled by compute_metrics)
-    per_field_f1: Dict[str, float] = field(default_factory=dict)
-    per_field_accuracy: Dict[str, float] = field(default_factory=dict)
+    per_field_f1: dict[str, float] = field(default_factory=dict)
+    per_field_accuracy: dict[str, float] = field(default_factory=dict)
     global_f1: float = 0.0
     global_accuracy: float = 0.0
     global_ned: float = 0.0            # Normalised Edit Distance (lower = better)
@@ -164,7 +163,7 @@ def _exact(pred: str, gold: str) -> float:
 # ─────────────────────────────────────────────────────────────────────────────
 # Label loader — reads SROIE .txt key files
 # ─────────────────────────────────────────────────────────────────────────────
-def load_label_txt(path: Path) -> Dict[str, str]:
+def load_label_txt(path: Path) -> dict[str, str]:
     """
     Parse a SROIE-style .txt key file.
 
@@ -217,12 +216,12 @@ def load_label_txt(path: Path) -> Dict[str, str]:
 # Dataset discovery
 # ─────────────────────────────────────────────────────────────────────────────
 def find_pairs(images_dir: Path, labels_dir: Path,
-               max_samples: Optional[int] = None) -> List[Tuple[Path, Dict]]:
+               max_samples: int | None = None) -> list[tuple[Path, dict]]:
     """
     Find (image_path, ground_truth_dict) pairs.
     Matches image stem → label stem (case-insensitive).
     """
-    label_index: Dict[str, Path] = {}
+    label_index: dict[str, Path] = {}
     for ext in (".txt", ".json"):
         for lp in labels_dir.rglob(f"*{ext}"):
             label_index[lp.stem.lower()] = lp
@@ -285,7 +284,7 @@ class DonutPipeline:
         self.model.to(self.device).eval()
         self.task_prompt = "<s_sroie>"
 
-    def _parse_output(self, token_str: str) -> Dict[str, str]:
+    def _parse_output(self, token_str: str) -> dict[str, str]:
         """
         Parse DONUT XML output into a SROIE field dict.
 
@@ -301,7 +300,7 @@ class DonutPipeline:
                 result[fld] = m.group(1).strip()
         return result
 
-    def predict(self, image: Image.Image) -> Tuple[Dict[str, str], float]:
+    def predict(self, image: Image.Image) -> tuple[dict[str, str], float]:
         """
         Run inference on one PIL image.
         Returns (field_dict, inference_time_ms).
@@ -335,7 +334,7 @@ class DonutPipeline:
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
         return self._parse_output(token_str), elapsed_ms
 
-    def run_benchmark(self, pairs: List[Tuple[Path, Dict]],
+    def run_benchmark(self, pairs: list[tuple[Path, dict]],
                       desc: str = "DONUT") -> BenchmarkResult:
         result = BenchmarkResult(method="DONUT")
         for img_path, gt in tqdm(pairs, desc=desc, unit="img"):
@@ -416,8 +415,8 @@ class TrOCRYOLOPipeline:
         conf_threshold: float = 0.25,
         iou_threshold: float = 0.45,
     ):
-        from ultralytics import YOLO
         from transformers import TrOCRProcessor, VisionEncoderDecoderModel
+        from ultralytics import YOLO
 
         self.device = (
             "cuda" if torch.cuda.is_available() else "cpu"
@@ -434,7 +433,7 @@ class TrOCRYOLOPipeline:
         self.trocr_model.to(self.device).eval()
 
     # ── YOLO: detect text bounding boxes ───────────────────────────────────
-    def _detect_boxes(self, image: Image.Image) -> List[Tuple[int, int, int, int]]:
+    def _detect_boxes(self, image: Image.Image) -> list[tuple[int, int, int, int]]:
         """
         Run YOLOv8 on the image.
         Returns list of (x1, y1, x2, y2) boxes sorted top-to-bottom.
@@ -486,7 +485,7 @@ class TrOCRYOLOPipeline:
         return text.strip()
 
     # ── Regex: assign lines to fields ──────────────────────────────────────
-    def _assign_fields(self, lines: List[str]) -> Dict[str, str]:
+    def _assign_fields(self, lines: list[str]) -> dict[str, str]:
         """
         Rule-based field assignment.
 
@@ -596,7 +595,7 @@ class TrOCRYOLOPipeline:
         return result
 
     # ── Full pipeline for one image ─────────────────────────────────────────
-    def predict(self, image: Image.Image) -> Tuple[Dict[str, str], float]:
+    def predict(self, image: Image.Image) -> tuple[dict[str, str], float]:
         """
         Run the full YOLO→TrOCR→Regex pipeline on one image.
         Returns (field_dict, inference_time_ms).
@@ -626,7 +625,7 @@ class TrOCRYOLOPipeline:
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
         return pred, elapsed_ms
 
-    def run_benchmark(self, pairs: List[Tuple[Path, Dict]],
+    def run_benchmark(self, pairs: list[tuple[Path, dict]],
                       desc: str = "YOLO+TrOCR+Regex") -> BenchmarkResult:
         result = BenchmarkResult(method="YOLOv8+TrOCR+Regex")
         for img_path, gt in tqdm(pairs, desc=desc, unit="img"):
@@ -652,10 +651,10 @@ def compute_metrics(bench: BenchmarkResult) -> BenchmarkResult:
     if not bench.samples:
         return bench
 
-    field_f1s:  Dict[str, List[float]] = {f: [] for f in FIELDS}
-    field_exacts: Dict[str, List[float]] = {f: [] for f in FIELDS}
-    all_neds: List[float] = []
-    times: List[float] = []
+    field_f1s:  dict[str, list[float]] = {f: [] for f in FIELDS}
+    field_exacts: dict[str, list[float]] = {f: [] for f in FIELDS}
+    all_neds: list[float] = []
+    times: list[float] = []
 
     for s in bench.samples:
         for fld in FIELDS:
@@ -680,7 +679,7 @@ def compute_metrics(bench: BenchmarkResult) -> BenchmarkResult:
 # ─────────────────────────────────────────────────────────────────────────────
 # Terminal report
 # ─��───────────────────────────────────────────────────────────────────────────
-def print_report(results: List[BenchmarkResult], n_samples: int) -> None:
+def print_report(results: list[BenchmarkResult], n_samples: int) -> None:
     """Print a formatted comparison table to stdout."""
     SEP = "─" * 72
 
@@ -742,7 +741,7 @@ _METHOD_COLORS = {
 }
 
 
-def plot_results(results: List[BenchmarkResult], out_dir: Path) -> None:
+def plot_results(results: list[BenchmarkResult], out_dir: Path) -> None:
     """
     Generate 3 publication-quality plots:
       Fig 1 — Per-field F1 grouped bar chart
@@ -859,7 +858,7 @@ def _save(fig, stem: Path) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 # JSON serialiser
 # ─────────────────────────────────────────────────────────────────────────────
-def save_json(results: List[BenchmarkResult], out_path: Path) -> None:
+def save_json(results: list[BenchmarkResult], out_path: Path) -> None:
     """Save all benchmark results to a machine-readable JSON file."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
     payload = []
@@ -970,7 +969,7 @@ def main() -> None:
     pairs = find_pairs(args.images_dir, args.labels_dir, args.max_samples)
     print(f"Found {len(pairs)} image+label pairs.\n")
 
-    all_results: List[BenchmarkResult] = []
+    all_results: list[BenchmarkResult] = []
 
     # ── Run DONUT ───────────────────────���────────────────────────────────────
     if not args.skip_donut:
@@ -983,7 +982,8 @@ def main() -> None:
         del donut
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-        import gc; gc.collect()
+        import gc
+        gc.collect()
 
     # ── Run YOLOv8 + TrOCR + Regex ──────────────────────────────────────────
     if not args.skip_yolo:
@@ -1002,7 +1002,8 @@ def main() -> None:
         del yolo_trocr
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-        import gc; gc.collect()
+        import gc
+        gc.collect()
 
     if not all_results:
         sys.exit("FATAL: Both pipelines were skipped. Nothing to report.")

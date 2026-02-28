@@ -8,13 +8,12 @@
 import multiprocessing
 import os
 from pathlib import Path
-from typing import Callable, Dict, FrozenSet, List
 
 # SROIE Task-3 target fields — the four key-value pairs extracted from receipts.
-FIELDS: List[str] = ["company", "date", "address", "total"]
+FIELDS: list[str] = ["company", "date", "address", "total"]
 
 # Accepted image file extensions for dataset loading.
-IMAGE_EXTS: FrozenSet[str] = frozenset({
+IMAGE_EXTS: frozenset[str] = frozenset({
     ".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".webp",
 })
 
@@ -30,7 +29,7 @@ BASE_MODEL: str = "naver-clova-ix/donut-base-finetuned-cord-v2"
 SEED: int = 42
 
 # Special tokens added to the tokenizer for SROIE structured output.
-NEW_TOKENS: List[str] = [
+NEW_TOKENS: list[str] = [
     "<s_sroie>", "</s_sroie>",
     "<s_company>", "</s_company>",
     "<s_date>",    "</s_date>",
@@ -39,7 +38,7 @@ NEW_TOKENS: List[str] = [
 ]
 
 # Empty ground-truth template matching the SROIE schema.
-EMPTY_GT: Dict[str, str] = {"company": "", "date": "", "address": "", "total": ""}
+EMPTY_GT: dict[str, str] = {"company": "", "date": "", "address": "", "total": ""}
 
 # ---------------------------------------------------------------------------
 # Device — GPU if available, else CPU.
@@ -84,6 +83,7 @@ def _gpu_cleanup(*objects) -> None:
     with no arguments (just runs GC + empty_cache).
     """
     import gc
+
     import torch
     for obj in objects:
         del obj
@@ -101,6 +101,7 @@ def set_seed(seed: int = SEED) -> None:
     lighter transformers.set_seed() which only seeds the transformers RNG.
     """
     import random
+
     import numpy as np
     import torch
     random.seed(seed)

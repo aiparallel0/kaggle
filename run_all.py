@@ -69,13 +69,11 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List
 
 # Set before constants.py triggers torch import to reduce GPU memory fragmentation.
 os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
 
 from constants import BASE_MODEL, IMAGE_EXTS, SEED
-
 
 # ---------------------------------------------------------------------------
 # StageResult — structured output from each pipeline stage
@@ -88,7 +86,7 @@ class StageResult:
     name: str
     duration: float  # seconds
     exit_status: int  # 0=success, 1=partial, 2=fatal
-    warnings: List[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -150,7 +148,7 @@ def _setup_hf_auth() -> None:
 def stage_install(args) -> StageResult:
     """Clone SROIE from GitHub and set up train/val/test directories using 80/10/10 split."""
     _banner("STAGE 0 — SROIE data install")
-    warnings: List[str] = []
+    warnings: list[str] = []
 
     sroie_data_dir = Path(args.sroie_dir)
     sroie_img = sroie_data_dir / "img"
@@ -278,11 +276,12 @@ def stage_install(args) -> StageResult:
 
 def stage_download(args) -> StageResult:
     """Verify SROIE exists, fetch auxiliary datasets in parallel, then download model inline."""
-    import dataset_loaders  # local module
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
+    import dataset_loaders  # local module
+
     _banner("STAGE 1 — Dataset verification & download")
-    warnings: List[str] = []
+    warnings: list[str] = []
 
     # SROIE must already be present (img/ directory at minimum)
     sroie_img = Path(args.sroie_dir) / "img"
@@ -305,7 +304,7 @@ def stage_download(args) -> StageResult:
 
     # Download all auxiliary datasets in parallel (I/O-bound, threads are fine)
     aux_datasets = ["wildreceipt", "cord", "invoices_donut"]
-    failed_datasets: List[str] = []
+    failed_datasets: list[str] = []
 
     def _fetch_one(ds_name: str) -> tuple:
         """Download a single dataset. Returns (name, count, error, elapsed)."""
@@ -391,12 +390,13 @@ def stage_download(args) -> StageResult:
 def stage_pretrained_baseline(args) -> StageResult:
     """Evaluate the pretrained CORD model as a zero-shot baseline on SROIE test."""
     import torch
-    import dataset_loaders
-    import donut_evaluator as eval_mod
     from transformers import DonutProcessor, VisionEncoderDecoderModel
 
+    import dataset_loaders
+    import donut_evaluator as eval_mod
+
     _banner("STAGE 1.5 — Pretrained baseline evaluation (zero-shot CORD)")
-    warnings: List[str] = []
+    warnings: list[str] = []
 
     workspace = Path(args.workspace)
     output_path = workspace / "evaluation_results.json"
@@ -453,7 +453,7 @@ def stage_experiments(args) -> StageResult:
     import run_experiments as re_mod  # local module
 
     _banner("STAGE 2 — Experiments (train + evaluate)")
-    warnings: List[str] = []
+    warnings: list[str] = []
 
     results_dir = Path("results")
     results_dir.mkdir(exist_ok=True)
@@ -473,7 +473,7 @@ def stage_experiments(args) -> StageResult:
     had_empty = False
     completed = 0
     succeeded = 0
-    failed_experiments: List[int] = []
+    failed_experiments: list[int] = []
 
     for i, exp_id in enumerate(exp_ids, 1):
         _step(i, total, f"Experiment {exp_id}: {re_mod.EXPERIMENTS[exp_id].name}")
@@ -528,7 +528,7 @@ def stage_trocr_data_prep(args) -> StageResult:
     TrOCR+YOLO use the EXACT same train/val/test images.
     """
     _banner("STAGE 3 — TrOCR+YOLO dataset preparation")
-    warnings: List[str] = []
+    warnings: list[str] = []
 
     try:
         import importlib
@@ -560,10 +560,9 @@ def stage_trocr_experiments(args) -> StageResult:
     models but evaluate field assignment with different training-set context.
     Results are saved to results/trocr_yolo_results.json.
     """
-    import torch
 
     _banner("STAGE 4 — TrOCR+YOLO training & evaluation")
-    warnings: List[str] = []
+    warnings: list[str] = []
 
     try:
         import importlib
@@ -655,7 +654,7 @@ def stage_benchmark(args) -> StageResult:
     and the trained YOLO best.pt from Stage 4.
     """
     _banner("STAGE 5 — Head-to-head benchmark (DONUT vs YOLOv8+TrOCR+Regex)")
-    warnings: List[str] = []
+    warnings: list[str] = []
 
     sroie_dir = Path(args.sroie_dir)
     test_img_dir = sroie_dir / "test_img"
@@ -738,7 +737,8 @@ def stage_benchmark(args) -> StageResult:
         del donut_pipe
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-        import gc; gc.collect()
+        import gc
+        gc.collect()
 
         # Run YOLOv8+TrOCR+Regex pipeline (if weights available)
         if not skip_yolo:
@@ -790,7 +790,7 @@ def stage_comparison(args) -> StageResult:
     DONUT vs TrOCR+YOLO across all 8 experiments.
     """
     _banner("STAGE 6 — Cross-architecture comparison")
-    warnings: List[str] = []
+    warnings: list[str] = []
 
     try:
         import importlib
@@ -821,7 +821,7 @@ def stage_paper(args) -> StageResult:
     import inject_results as ir  # local module
 
     _banner("STAGE 7 — LaTeX paper generation")
-    warnings: List[str] = []
+    warnings: list[str] = []
 
     results_path = Path("results") / "all_experiments.json"
     if not results_path.exists():
@@ -886,7 +886,7 @@ class PipelineOrchestrator:
 
     def __init__(self, args):
         self.args = args
-        self.stages: List[StageResult] = []
+        self.stages: list[StageResult] = []
 
     def _run_stage(self, name: str, func) -> StageResult:
         """Time a stage, catch exceptions, and record the StageResult."""
@@ -1099,8 +1099,9 @@ def main() -> None:
     os.environ["SROIE_DATA_DIR"] = args.sroie_dir
 
     # ── Diagnostic: environment snapshot ──────────────────────────────────
-    import platform
     import importlib
+    import platform
+
     import torch
     _banner("ENVIRONMENT DIAGNOSTICS")
     print(f"  Python       : {platform.python_version()} ({sys.executable})")

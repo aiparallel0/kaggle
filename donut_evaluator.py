@@ -45,14 +45,14 @@ import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import editdistance
 import numpy as np
 import torch
 from PIL import Image
-from transformers import DonutProcessor, VisionEncoderDecoderModel
 from tqdm import tqdm
+from transformers import DonutProcessor, VisionEncoderDecoderModel
 
 # FIX: Import shared constants from single source of truth (constants.py)
 # instead of duplicating FIELDS/IMAGE_EXTS independently in this file.
@@ -94,12 +94,12 @@ class EvaluationResult:
     global_recall: float = 0.0
     global_f1: float = 0.0
     overall_exact_match: float = 0.0
-    per_field: Dict[str, Dict[str, float]] = field(default_factory=dict)
+    per_field: dict[str, dict[str, float]] = field(default_factory=dict)
     num_samples: int = 0
     parse_failures: int = 0
-    raw_predictions: Optional[List[Dict]] = None
+    raw_predictions: list[dict] | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to a flat dict compatible with legacy compute_metrics output."""
         d = {
             "global_precision": round(self.global_precision, 4),
@@ -132,12 +132,11 @@ def load_model_with_tied_weights(model_path: str, device: str = DEVICE):
     # missing after load, the checkpoint is corrupt — fail loudly instead of
     # silently recovering with random or embed_tokens weights (which produces
     # F1~0.42 and is indistinguishable from a healthy run without this check).
-    if "decoder.lm_head.weight" in missing_keys:
-        if not getattr(model.decoder.config, "tie_word_embeddings", True):
-            raise RuntimeError(
-                "CRITICAL: decoder.lm_head.weight missing from checkpoint. "
-                "The model cannot generate SROIE tokens. Fix checkpoint saving."
-            )
+    if "decoder.lm_head.weight" in missing_keys and not getattr(model.decoder.config, "tie_word_embeddings", True):
+        raise RuntimeError(
+            "CRITICAL: decoder.lm_head.weight missing from checkpoint. "
+            "The model cannot generate SROIE tokens. Fix checkpoint saving."
+        )
 
     _retie_decoder_head(model, missing_keys=missing_keys)
 
@@ -259,7 +258,7 @@ class DonutEvaluator:
         self,
         model_path: Path,
         processor: DonutProcessor,
-        test_dataset: List[Tuple[Path, Dict]],
+        test_dataset: list[tuple[Path, dict]],
         task_prompt: str = "<s_sroie>",
         max_length: int = MAX_LENGTH,
         device: str = DEVICE,
@@ -291,14 +290,14 @@ class DonutEvaluator:
         self._self_test()
 
         ground_truths = [s[1] for s in self.test_dataset]
-        image_paths = [s[0] for s in self.test_dataset]
+        [s[0] for s in self.test_dataset]
 
         predictions = []
         self.parse_failure_count = 0
         self._inference_call_count = 0
 
         with torch.no_grad():
-            for img_path, gt in tqdm(self.test_dataset, desc="Evaluating"):
+            for img_path, _gt in tqdm(self.test_dataset, desc="Evaluating"):
                 pred = self._run_inference(img_path, self.task_prompt)
                 predictions.append(pred)
 
@@ -388,7 +387,7 @@ class DonutEvaluator:
         # token2json returns a list when <sep/> tokens are present (CORD multi-page).
         # Merge pages before unwrapping so the dict check below works correctly.
         if isinstance(parsed, list):
-            merged: Dict = {}
+            merged: dict = {}
             for page in parsed:
                 if isinstance(page, dict):
                     for k, v in page.items():
@@ -444,8 +443,8 @@ class DonutEvaluator:
         self,
         image_path: Path,
         task_prompt: str,
-        preloaded_image: Optional[Image.Image] = None,
-    ) -> Dict:
+        preloaded_image: Image.Image | None = None,
+    ) -> dict:
         """Run inference on a single image and return parsed dict.
 
         Handles:
@@ -497,7 +496,7 @@ class DonutEvaluator:
     # Parsing
     # ------------------------------------------------------------------
 
-    def _parse_prediction(self, tokens: str) -> Dict:
+    def _parse_prediction(self, tokens: str) -> dict:
         """Guarded token2json: returns {} on failure with log.
 
         Increments ``parse_failure_count`` on every failure.
@@ -511,7 +510,7 @@ class DonutEvaluator:
         try:
             result = self.processor.token2json(tokens)
             if isinstance(result, list):
-                merged: Dict = {}
+                merged: dict = {}
                 for page in result:
                     if isinstance(page, dict):
                         for k, v in page.items():
@@ -539,7 +538,7 @@ class DonutEvaluator:
     # Metrics
     # ------------------------------------------------------------------
 
-    def _compute_f1(self, preds: List[Dict], labels: List[Dict]) -> float:
+    def _compute_f1(self, preds: list[dict], labels: list[dict]) -> float:
         """Compute global F1 over all (image, field) pairs.
 
         A pair is a true positive if the predicted string equals the ground
@@ -577,9 +576,9 @@ class DonutEvaluator:
 
     def compute_all_metrics(
         self,
-        predictions: List[Dict],
-        ground_truths: List[Dict],
-    ) -> Dict[str, float]:
+        predictions: list[dict],
+        ground_truths: list[dict],
+    ) -> dict[str, float]:
         """Compute all metrics: global F1, per-field F1, per-field NED, exact match.
 
         Returns a flat dict compatible with the legacy ``compute_metrics`` output.
@@ -591,7 +590,7 @@ class DonutEvaluator:
 # Prediction unwrapping helper
 # ---------------------------------------------------------------------------
 
-def _unwrap_prediction(parsed: Dict, task_prompt: str) -> Dict:
+def _unwrap_prediction(parsed: dict, task_prompt: str) -> dict:
     """Unwrap task-prompt wrappers from token2json output.
 
     token2json may wrap SROIE output as ``{"sroie": {...}}``.
@@ -601,14 +600,12 @@ def _unwrap_prediction(parsed: Dict, task_prompt: str) -> Dict:
         return parsed
 
     # Unwrap {"sroie": {...}} for SROIE task prompts
-    if task_prompt.startswith("<s_sroie"):
-        if "sroie" in parsed and isinstance(parsed["sroie"], dict):
-            return parsed["sroie"]
+    if task_prompt.startswith("<s_sroie") and "sroie" in parsed and isinstance(parsed["sroie"], dict):
+        return parsed["sroie"]
 
     # Unwrap {"cord-v2": {...}} for CORD task prompts
-    if task_prompt.startswith("<s_cord"):
-        if "cord-v2" in parsed and isinstance(parsed["cord-v2"], dict):
-            return parsed["cord-v2"]
+    if task_prompt.startswith("<s_cord") and "cord-v2" in parsed and isinstance(parsed["cord-v2"], dict):
+        return parsed["cord-v2"]
 
     return parsed
 

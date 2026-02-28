@@ -42,12 +42,10 @@ import re
 import sys
 import warnings
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 # ---------------------------------------------------------------------------
 # Constants — imported from shared module to avoid duplication
 # ---------------------------------------------------------------------------
-
 # FIX: FIELDS was duplicated independently here and in 4 other files.
 from constants import FIELDS
 
@@ -55,7 +53,7 @@ from constants import FIELDS
 # module load rather than on every fill() call.
 _VAR_RE = re.compile(r"\\VAR\{([^}]+)\}")
 
-LEADERBOARD: List[Tuple[str, float]] = [
+LEADERBOARD: list[tuple[str, float]] = [
     # LayoutLMv3: Huang et al. 2022, "LayoutLMv3: Pre-training for Document AI"
     # Table 6, SROIE entity-level F1. DOI: 10.1145/3503161.3548112
     ("LayoutLMv3 (Huang et al. 2022)", 0.9633),
@@ -91,7 +89,7 @@ LEADERBOARD: List[Tuple[str, float]] = [
 # so 84.11% is the correct reference value for this comparison.
 DONUT_PUBLISHED_F1 = 0.8411  # arXiv:2111.15664, Table 1, entity-level F1
 
-EXP_NAMES: Dict[str, str] = {
+EXP_NAMES: dict[str, str] = {
     "1": "SROIE only",
     "2": "+WildReceipt",
     "3": "+Invoices-DONUT",
@@ -148,11 +146,11 @@ class PaperInjector:
 
     # -- var map ------------------------------------------------------------
 
-    def build_var_map(self) -> Dict[str, str]:
+    def build_var_map(self) -> dict[str, str]:
         """Build \\VAR{key} → replacement mapping entirely from JSON files."""
         all_exp = self._load_all_experiments()
         eval_res = self._load_evaluation_results()
-        var_map: Dict[str, str] = {}
+        var_map: dict[str, str] = {}
 
         # Per-experiment scalars (from all_experiments.json)
         for exp_id_str, res in all_exp.items():
@@ -180,7 +178,7 @@ class PaperInjector:
         if best_f1 == 0.0:
             warnings.warn(
                 "Best fine-tuned F1 is 0.0 — injecting measured zero; "
-                "paper will show 0.0 for all experiment metrics."
+                "paper will show 0.0 for all experiment metrics.", stacklevel=2
             )
 
         var_map["best_f1"] = f"{best_f1:.4f}"
@@ -341,7 +339,7 @@ def legacy_output(results_path: str = "/workspace/evaluation_results.json") -> N
         print(f"{field.capitalize()} & F1 & {f1_p:.4f} & {f1_f:.4f} \\\\")
         print(f"{field.capitalize()} & NED & {ned_p:.4f} & {ned_f:.4f} \\\\")
 
-    print(f"\\midrule")
+    print("\\midrule")
     print(f"Global & F1 & {pm['global_f1']:.4f} & {fm['global_f1']:.4f} \\\\")
     print(
         f"Global & Exact Match & {pm['overall_exact_match']:.4f}"
