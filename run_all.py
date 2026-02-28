@@ -392,7 +392,7 @@ def stage_pretrained_baseline(args) -> StageResult:
     """Evaluate the pretrained CORD model as a zero-shot baseline on SROIE test."""
     import torch
     import dataset_loaders
-    import evaluate as eval_mod
+    import donut_evaluator as eval_mod
     from transformers import DonutProcessor, VisionEncoderDecoderModel
 
     _banner("STAGE 1.5 — Pretrained baseline evaluation (zero-shot CORD)")

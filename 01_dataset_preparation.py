@@ -235,14 +235,19 @@ def build_trocr_split(split: str) -> int:
             raw_boxes = _load_ocr_bboxes(box_dir, img_path.stem)
             lines = group_words_into_lines(raw_boxes)
 
-        # FIX: Always fall back to key-file full-image crop when no box data.
+        # FIX: Always fall back to key-file field crops when no box data.
         # This applies to: all val/test images, and any train image whose
         # per-image box file is missing.
+        # Generate one entry per field (not one entry with all fields joined)
+        # so each label is a short, single-value string — closer to what
+        # TrOCR was pretrained on.  The full image is used as the crop in all
+        # cases (we have no spatial segmentation without box annotations).
         if not lines:
             gt = _load_key_file(key_dir, img_path.stem)
-            full_text = " | ".join(gt.get(f, "") for f in FIELDS if gt.get(f))
-            if full_text:
-                lines = [([0, 0, W, H], full_text)]
+            for f in FIELDS:
+                val = gt.get(f, "").strip()
+                if val:
+                    lines.append(([0, 0, W, H], val))
 
         for line_idx, (bbox, text) in enumerate(lines):
             if not text.strip():

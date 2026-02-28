@@ -35,7 +35,9 @@ Force re-run (ignore cached results):
     python run_experiments.py --all --force
 
 Each experiment trains DONUT from the CORD checkpoint and evaluates on the
-SROIE test set (347 images in test_img / test_key).  Results are saved to
+SROIE test set (63 images in test_img / test_key — custom 80/10/10 split
+from 626 labeled training images; the official 347-image test set has no
+public ground truth).  Results are saved to
 results/experiment_N.json and a summary to results/all_experiments.json.
 
 Architecture
@@ -67,7 +69,7 @@ from torch.utils.data import Dataset
 from transformers import DonutProcessor, VisionEncoderDecoderModel
 
 import dataset_loaders
-from evaluate import compute_metrics, run_inference
+from donut_evaluator import compute_metrics, run_inference
 
 # FIX: Import shared constants from single source of truth (constants.py)
 # instead of duplicating FIELDS/IMAGE_EXTS/etc. independently in this file.
@@ -422,7 +424,7 @@ def evaluate_experiment(exp_id: int, model_dir: Path) -> Dict:
       - Self-test before full evaluation
       - Parse failure threshold checking
     """
-    from evaluate import DonutEvaluator, load_model_with_tied_weights
+    from donut_evaluator import DonutEvaluator, load_model_with_tied_weights
 
     config = EXPERIMENTS[exp_id]
     test_samples = dataset_loaders.load_sroie_test()
