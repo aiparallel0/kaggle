@@ -62,7 +62,7 @@ import random
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import torch
 from PIL import Image
@@ -74,6 +74,20 @@ from transformers import (
     Seq2SeqTrainingArguments,
     TrainerCallback,
     VisionEncoderDecoderModel,
+)
+
+# FIX: Previously FIELDS, MAX_LENGTH, IMAGE_EXTS, NEW_TOKENS, BASE_MODEL,
+# SEED were defined independently here and in 4 other files, risking silent
+# drift if any file was updated without updating the others.
+from constants import (
+    BASE_MODEL,
+    FIELDS,
+    IMAGE_EXTS,
+    MAX_LENGTH,
+    NEW_TOKENS,
+    SEED,
+    _get_sroie_dir,
+    _optimal_num_workers,
 )
 
 logger = logging.getLogger(__name__)
@@ -117,16 +131,6 @@ class LmHeadCloneCallback(TrainerCallback):
         return control
 
 # ---------------------------------------------------------------------------
-# Constants — imported from shared constants.py (eliminates 5x duplication)
-# ---------------------------------------------------------------------------
-
-# FIX: Previously FIELDS, MAX_LENGTH, IMAGE_EXTS, NEW_TOKENS, BASE_MODEL,
-# SEED were defined independently here and in 4 other files, risking silent
-# drift if any file was updated without updating the others.
-from constants import FIELDS, MAX_LENGTH, IMAGE_EXTS, NEW_TOKENS, BASE_MODEL, SEED, \
-    _get_sroie_dir, _optimal_num_workers
-
-# ---------------------------------------------------------------------------
 # TrainingResult dataclass
 # ---------------------------------------------------------------------------
 
@@ -134,7 +138,7 @@ from constants import FIELDS, MAX_LENGTH, IMAGE_EXTS, NEW_TOKENS, BASE_MODEL, SE
 class TrainingResult:
     """Holds outputs from a single training run."""
 
-    log_history: List[Dict[str, Any]] = field(default_factory=list)
+    log_history: list[dict[str, Any]] = field(default_factory=list)
     train_samples: int = 0
     val_samples: int = 0
     duration_seconds: float = 0.0
@@ -167,7 +171,7 @@ class SROIEDataset(Dataset):
     ):
         self.processor = processor
         self.max_length = max_length
-        self.samples: List[Tuple[Path, Dict[str, str]]] = []
+        self.samples: list[tuple[Path, dict[str, str]]] = []
 
         img_dir = Path(img_dir)
         key_dir = Path(key_dir)
@@ -190,7 +194,7 @@ class SROIEDataset(Dataset):
     def _load_ground_truth(
         key_dir: Path,
         stem: str,
-    ) -> Optional[Dict[str, str]]:
+    ) -> dict[str, str] | None:
         """Load ground-truth dict from a key directory.
 
         BUG A/E FIX: Try .txt first (canonical 4-line SROIE format), then
@@ -214,7 +218,7 @@ class SROIEDataset(Dataset):
         return None
 
     @staticmethod
-    def _parse_txt_key(path: Path) -> Optional[Dict[str, str]]:
+    def _parse_txt_key(path: Path) -> dict[str, str] | None:
         """Parse a 4-line SROIE key file into a dict."""
         try:
             lines = path.read_text(encoding="utf-8").strip().splitlines()
@@ -237,7 +241,7 @@ class SROIEDataset(Dataset):
     def from_samples(
         cls,
         processor: DonutProcessor,
-        samples: List[Tuple[Path, Dict[str, str]]],
+        samples: list[tuple[Path, dict[str, str]]],
         max_length: int = MAX_LENGTH,
     ) -> "SROIEDataset":
         """Create a SROIEDataset from a pre-built list of (path, gt) tuples."""
@@ -255,7 +259,7 @@ class SROIEDataset(Dataset):
     def __len__(self) -> int:
         return len(self.samples)
 
-    def __getitem__(self, idx: int) -> Dict[str, Any]:
+    def __getitem__(self, idx: int) -> dict[str, Any]:
         img_path, gt = self.samples[idx]
         image = Image.open(img_path).convert("RGB")
 
@@ -323,7 +327,7 @@ class DonutTrainer:
         processor: DonutProcessor,
         model: VisionEncoderDecoderModel,
         train_dataset: Dataset,
-        val_dataset: Optional[Dataset] = None,
+        val_dataset: Dataset | None = None,
     ):
         if len(train_dataset) == 0:
             raise ValueError(
@@ -378,7 +382,7 @@ class DonutTrainer:
             dataloader_num_workers=optimal_workers,
             dataloader_pin_memory=True,
             dataloader_prefetch_factor=4 if optimal_workers > 0 else None,
-            dataloader_persistent_workers=True if optimal_workers > 0 else False,
+            dataloader_persistent_workers=optimal_workers > 0,
             remove_unused_columns=False,
             seed=getattr(self.config, "seed", SEED),
         )
@@ -417,7 +421,7 @@ class DonutTrainer:
     # Saving
     # ------------------------------------------------------------------
 
-    def save(self, path: Optional[Path] = None) -> None:
+    def save(self, path: Path | None = None) -> None:
         """Save the fine-tuned model and processor to disk.
 
         INDENTATION FIX: this method was previously indented with 1 space
