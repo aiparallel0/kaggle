@@ -21,17 +21,15 @@ FIX: Imports constants from shared module.
 
 import json
 from pathlib import Path
-from typing import Dict, List, Optional
 
+# Use Agg backend for non-interactive rendering (CI/headless)
+import matplotlib
 import numpy as np
 
 from constants import FIELDS
 
-# Use Agg backend for non-interactive rendering (CI/headless)
-import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
 
 RESULTS_DIR = Path("results")
 
@@ -52,7 +50,7 @@ EXP_NAMES = {
 
 
 # ── Load experiment results ─────────────────────────────────────────────────
-def load_donut_results() -> Dict:
+def load_donut_results() -> dict:
     """Load all DONUT experiment results from individual JSON files."""
     results = {}
     for i in range(1, 9):
@@ -63,7 +61,7 @@ def load_donut_results() -> Dict:
     return results
 
 
-def load_trocr_results() -> Dict:
+def load_trocr_results() -> dict:
     """Load TrOCR+YOLO experiment results from the combined JSON."""
     path = RESULTS_DIR / "trocr_yolo_results.json"
     if path.exists():
@@ -73,7 +71,7 @@ def load_trocr_results() -> Dict:
 
 
 # ── Plot 1: F1 comparison bar chart ─────────────────────────────────────────
-def plot_f1_comparison(donut: Dict, trocr: Dict) -> Path:
+def plot_f1_comparison(donut: dict, trocr: dict) -> Path:
     """Bar chart: DONUT F1 vs TrOCR+YOLO F1 for each experiment."""
     exp_ids = sorted(set(donut) | set(trocr), key=int)
     x = np.arange(len(exp_ids))
@@ -110,7 +108,7 @@ def plot_f1_comparison(donut: Dict, trocr: Dict) -> Path:
 
 
 # ── Plot 2: Per-field F1 comparison ──────────────────────────────────────────
-def plot_field_f1_comparison(donut: Dict, trocr: Dict) -> Path:
+def plot_field_f1_comparison(donut: dict, trocr: dict) -> Path:
     """Per-field F1 for best experiment from each architecture."""
     # Find best experiment for each
     best_donut = max(donut.items(), key=lambda x: x[1].get("metrics", {}).get("global_f1", 0))[1] if donut else {}
@@ -145,7 +143,7 @@ def plot_field_f1_comparison(donut: Dict, trocr: Dict) -> Path:
 
 
 # ── Plot 3: Training convergence curves ──────────────────────────────────────
-def plot_convergence(donut: Dict) -> Path:
+def plot_convergence(donut: dict) -> Path:
     """Training/validation loss curves for DONUT experiments."""
     fig, ax = plt.subplots(figsize=(10, 5))
 
@@ -221,10 +219,10 @@ same 63 SROIE test images.}
 
 
 # ── Print comparison summary table ───────────────────────────────────────────
-def print_comparison_table(donut: Dict, trocr: Dict) -> None:
+def print_comparison_table(donut: dict, trocr: dict) -> None:
     """Print cross-architecture comparison table to stdout."""
     print(f"\n{'='*72}")
-    print(f"  CROSS-ARCHITECTURE COMPARISON: DONUT vs TrOCR+YOLO")
+    print("  CROSS-ARCHITECTURE COMPARISON: DONUT vs TrOCR+YOLO")
     print(f"{'='*72}")
     print(f"{'Exp':>4} {'Training Data':<22} {'DONUT F1':>10} {'TrOCR F1':>10} {'Delta':>8}")
     print(f"{'-'*72}")
@@ -246,7 +244,7 @@ def print_comparison_table(donut: Dict, trocr: Dict) -> None:
     print(f"{'='*72}")
 
     # Per-field breakdown for best experiments
-    print(f"\n  Per-Field F1 (best experiments):")
+    print("\n  Per-Field F1 (best experiments):")
     print(f"  {'Field':<12} {'DONUT':>10} {'TrOCR+YOLO':>12}")
     print(f"  {'-'*36}")
     for f in FIELDS:

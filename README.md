@@ -10,6 +10,61 @@ the SROIE benchmark combined with three auxiliary datasets (WildReceipt,
 CORD, Invoices-DONUT) across 8 experiment configurations, evaluates each model
 on the SROIE test set, and generates a complete LaTeX paper with real results.
 
+## Pipeline Architecture
+
+```
+Raw sources                 Normalization              Unified schema
+────────────               ─────────────              ──────────────
+SROIE (626 imgs)     ──►  SROIELoader                {"company": "...",
+WildReceipt (tar)    ──►  WildReceiptLoader     ──►   "date":    "...",
+CORD (HuggingFace)   ──►  CORDLoader                  "address": "...",
+Invoices (HF)        ──►  InvoicesDonutLoader          "total":   "..."}
+                                                             │
+              80/10/10 split                                 │ SROIEDataset
+          ┌─────┴──────┬──────┐                             │ __getitem__
+       img/         val_img/ test_img/                       ▼
+     (500 train)   (63 val) (63 test)          <s_sroie><s_company>…</s_company>
+          │                    │               <s_date>…</s_date>
+          │                    │               <s_address>…</s_address>
+          ▼                    │               <s_total>…</s_total></s_sroie>
+   DonutTrainer                │                             │
+   (Seq2SeqTrainer)            │                             │ labels tensor
+   early-stop on val_img/      │                             │
+   LmHeadCloneCallback ────────┼──────────── checkpoint ─────┘
+   (prevents lm_head loss)     │                │
+          │                    │      load_model_with_tied_weights()
+          │                    │      RuntimeError if lm_head missing
+          ▼                    ▼                │
+   best checkpoint      test_img/ (63)          ▼
+          │                    │        DonutEvaluator._parse_prediction()
+          └────────────────────┘        token2json() → list? → merge pages
+                                        _unwrap_prediction() → {"company":…}
+                                                 │
+                                        compute_metrics()
+                                        global F1, NED per field
+                                                 │
+                                        results/experiment_N.json
+                                                 │
+                                        PaperInjector → paper_filled.tex
+```
+
+**Key invariant:** `val_img/` and `test_img/` are populated once by
+`stage_install()` and are never mixed. Training early stopping reads only
+`val_img/`; final scoring reads only `test_img/`. Auxiliary datasets
+(WildReceipt, CORD, Invoices) contribute to training only — their held-out
+15% test portion is discarded to prevent contamination.
+
+## Known Bugs Fixed
+
+Three silent bugs were causing catastrophically wrong F1 scores. All are fixed
+and guarded with tests in `tests/`.
+
+| Symptom | Root Cause | Fix |
+|---------|-----------|-----|
+| **F1 ≈ 0.42** (plausible-looking) | `safetensors` omits `lm_head.weight` from checkpoint shards because it shares a data pointer with `embed_tokens.weight` after `resize_token_embeddings()`. On reload, `lm_head` is randomly re-initialized. | `LmHeadCloneCallback` deep-clones the weight before every save. `load_model_with_tied_weights()` raises `RuntimeError` immediately if `lm_head.weight` is still missing. |
+| **F1 ≈ 0.008** (near-zero, not zero) | `token2json()` returns a **list** of page-dicts when the generated sequence contains `<sep/>` tokens (inherited from CORD pretraining). `_parse_prediction()` was treating any non-dict as a parse failure and returning `{}`. | `_parse_prediction()` and `_self_test()` now merge the list of pages into a single flat dict (first occurrence of each key wins). |
+| **F1 unreliable / overfitted** | `val_img/` directory not created; `load_sroie_val()` returned `[]`; `do_eval=False`; no early stopping; model could be evaluated on test data indirectly. | `stage_install()` explicitly moves 63 images into `val_img/` and 63 into `test_img/` — physically distinct directories checked by tests. |
+
 ## Repository Structure (7-file pipeline)
 
 ```

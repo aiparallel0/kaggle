@@ -56,25 +56,32 @@ import gc
 import json
 import math
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 # Set before torch initializes to reduce GPU memory fragmentation.
 os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
 
-import torch
 from PIL import Image
 from torch.utils.data import Dataset
 from transformers import DonutProcessor, VisionEncoderDecoderModel
 
 import dataset_loaders
-from donut_evaluator import compute_metrics, run_inference
 
 # FIX: Import shared constants from single source of truth (constants.py)
 # instead of duplicating FIELDS/IMAGE_EXTS/etc. independently in this file.
-from constants import FIELDS, MAX_LENGTH, IMAGE_EXTS, NEW_TOKENS, BASE_MODEL, SEED, \
-    DEVICE, WORKSPACE, set_seed, _gpu_cleanup
+from constants import (
+    BASE_MODEL,
+    DEVICE,
+    FIELDS,
+    MAX_LENGTH,
+    NEW_TOKENS,
+    SEED,
+    WORKSPACE,
+    _gpu_cleanup,
+    set_seed,
+)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -97,7 +104,7 @@ class ExperimentConfig:
     """
 
     name: str
-    datasets: List[str]
+    datasets: list[str]
     epochs: int = 30
     lr: float = 5e-5
     batch_size: int = 8
@@ -137,7 +144,7 @@ class ExperimentConfig:
 # Experiment definitions
 # ---------------------------------------------------------------------------
 
-EXPERIMENTS: Dict[int, ExperimentConfig] = {
+EXPERIMENTS: dict[int, ExperimentConfig] = {
     1: ExperimentConfig(
         name="SROIE only (baseline)",
         datasets=["sroie"],
@@ -200,7 +207,7 @@ EXPERIMENTS: Dict[int, ExperimentConfig] = {
 
 _default_config = ExperimentConfig(name="", datasets=[])
 
-TRAIN_CONFIG: Dict[str, Any] = {
+TRAIN_CONFIG: dict[str, Any] = {
     "max_epochs": _default_config.epochs,
     "learning_rate": _default_config.lr,
     "per_device_train_batch_size": _default_config.batch_size,
@@ -229,7 +236,7 @@ class MultiDataset(Dataset):
 
     def __init__(
         self,
-        samples: List[Tuple[Path, Dict]],
+        samples: list[tuple[Path, dict]],
         processor: DonutProcessor,
         max_length: int = MAX_LENGTH,
         cache_in_ram: bool = True,
@@ -237,7 +244,7 @@ class MultiDataset(Dataset):
         self.samples = samples
         self.processor = processor
         self.max_length = max_length
-        self._image_cache: Dict[int, Image.Image] = {}
+        self._image_cache: dict[int, Image.Image] = {}
 
         if cache_in_ram and len(samples) > 0:
             # Estimate memory: ~3MB per receipt image × num_samples
@@ -263,7 +270,7 @@ class MultiDataset(Dataset):
 
                 with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
                     for idx, img in pool.map(_load_one, enumerate(
-                            (s[0] for s in samples))):
+                            s[0] for s in samples)):
                         if img is not None:
                             self._image_cache[idx] = img
 
@@ -276,7 +283,7 @@ class MultiDataset(Dataset):
     def __len__(self) -> int:
         return len(self.samples)
 
-    def __getitem__(self, idx: int) -> Dict:
+    def __getitem__(self, idx: int) -> dict:
         img_path, gt = self.samples[idx]
 
         # Use cached image if available, otherwise load from disk
@@ -306,12 +313,12 @@ class MultiDataset(Dataset):
 
 def train_experiment(
     exp_id: int,
-    samples: List[Tuple[Path, Dict]],
+    samples: list[tuple[Path, dict]],
     output_dir: Path,
-    val_samples: List[Tuple[Path, Dict]] = None,
+    val_samples: list[tuple[Path, dict]] = None,
     base_processor=None,
     base_model=None,
-) -> List[Dict]:
+) -> list[dict]:
     """Fine-tune DONUT on *samples* and save the model to *output_dir*.
 
     All hyperparameters come from ``EXPERIMENTS[exp_id]`` (an ExperimentConfig).
@@ -416,7 +423,7 @@ def train_experiment(
 # Evaluation — delegates to DonutEvaluator from evaluate.py
 # ---------------------------------------------------------------------------
 
-def evaluate_experiment(exp_id: int, model_dir: Path) -> Dict:
+def evaluate_experiment(exp_id: int, model_dir: Path) -> dict:
     """Evaluate a fine-tuned model (at *model_dir*) on the SROIE test set.
 
     Uses DonutEvaluator from evaluate.py which handles:
@@ -424,7 +431,7 @@ def evaluate_experiment(exp_id: int, model_dir: Path) -> Dict:
       - Self-test before full evaluation
       - Parse failure threshold checking
     """
-    from donut_evaluator import DonutEvaluator, load_model_with_tied_weights
+    from donut_evaluator import DonutEvaluator
 
     config = EXPERIMENTS[exp_id]
     test_samples = dataset_loaders.load_sroie_test()
@@ -460,7 +467,7 @@ def evaluate_experiment(exp_id: int, model_dir: Path) -> Dict:
 # Single experiment runner
 # ---------------------------------------------------------------------------
 
-def run_experiment(exp_id: int, base_processor=None, base_model=None) -> Dict:
+def run_experiment(exp_id: int, base_processor=None, base_model=None) -> dict:
     """Run a single experiment: train, evaluate, save results.
 
     Checks cache validity (datasets AND hyperparams must match) before

@@ -32,12 +32,12 @@ All public names are re-exported from donut_evaluator so that existing
 
 from donut_evaluator import *  # noqa: F401, F403
 from donut_evaluator import (  # noqa: F401  (explicit for static analysers)
+    _DIAGNOSTIC_LOG_COUNT,
     DEVICE,
     DonutEvaluator,
     EvaluationResult,
-    _DIAGNOSTIC_LOG_COUNT,
-    _unwrap_prediction,
     _retie_decoder_head,
+    _unwrap_prediction,
     compute_metrics,
     load_model_with_tied_weights,
     normalized_edit_distance,

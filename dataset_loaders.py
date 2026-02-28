@@ -52,7 +52,7 @@ import time
 import urllib.request
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 # ── Transformers compat shim ──────────────────────────────────────────
 # In transformers ≥4.47 PreTrainedTokenizerBase moved to
@@ -70,10 +70,11 @@ except Exception:
 
 # FIX: Import shared constants from single source of truth (constants.py)
 # instead of defining EMPTY_GT and IMAGE_EXTS independently here.
-from constants import EMPTY_GT, IMAGE_EXTS as _IMAGE_EXTS_SET, FIELDS, SEED, _get_sroie_dir
+from constants import EMPTY_GT, SEED, _get_sroie_dir
+from constants import IMAGE_EXTS as _IMAGE_EXTS_SET
 
 # ── Type alias ────────────────────────────────────────────────────────
-Sample = Tuple[Path, Dict[str, str]]
+Sample = tuple[Path, dict[str, str]]
 
 # ── Shared constants (derived from constants.py) ─────────────────────
 _SROIE_FIELDS = frozenset(EMPTY_GT.keys())
@@ -185,14 +186,12 @@ def _validate_sample_schema(sample: Sample, dataset_name: str) -> bool:
         return False
     if not isinstance(gt, dict):
         return False
-    if not _SROIE_FIELDS.issubset(gt.keys()):
-        return False
-    return True
+    return _SROIE_FIELDS.issubset(gt.keys())
 
 
 def _validate_samples_nonempty(
-    samples: List[Sample], dataset_name: str
-) -> List[Sample]:
+    samples: list[Sample], dataset_name: str
+) -> list[Sample]:
     """Return *samples* unchanged if non-empty; raise DatasetLoadError otherwise."""
     if not samples:
         raise DatasetLoadError(
@@ -206,7 +205,7 @@ def _validate_samples_nonempty(
 #  SROIE key-file reader (BUG A FIX)
 # ======================================================================
 
-def _load_key_file(key_dir: Path, stem: str) -> Dict[str, str]:
+def _load_key_file(key_dir: Path, stem: str) -> dict[str, str]:
     """Load a SROIE key file for the given image stem.
 
     BUG A FIX: The SROIE repo stores annotations as plain .txt files with
@@ -266,7 +265,7 @@ class BaseDatasetLoader(ABC):
     # ── abstract interface ────────────────────────────────────────────
 
     @abstractmethod
-    def load(self, split: str = "train") -> List[Sample]:
+    def load(self, split: str = "train") -> list[Sample]:
         """Load samples for *split*.
 
         Must raise :class:`DatasetLoadError` on failure.
@@ -335,7 +334,7 @@ class SROIELoader(BaseDatasetLoader):
 
     # ── public interface ──────────────────────────────────────────────
 
-    def load(self, split: str = "train") -> List[Sample]:
+    def load(self, split: str = "train") -> list[Sample]:
         """Load SROIE samples for *split*.
 
         Raises DatasetLoadError for the ``train`` split if the directory
@@ -359,7 +358,7 @@ class SROIELoader(BaseDatasetLoader):
             )
             return []
 
-        samples: List[Sample] = []
+        samples: list[Sample] = []
         for img_path in sorted(
             p for p in img_dir.iterdir()
             if p.is_file() and p.suffix.lower() in _IMAGE_EXTS
@@ -403,7 +402,7 @@ class SROIELoader(BaseDatasetLoader):
 
     # ── private helpers ───────────────────────────────────────────────
 
-    def _split_dirs(self, split: str) -> Tuple[str, str]:
+    def _split_dirs(self, split: str) -> tuple[str, str]:
         """Return (img_subdir, key_subdir) for *split*, raising on bad name."""
         if split not in self._SPLIT_DIRS:
             raise ValueError(
@@ -434,7 +433,7 @@ class WildReceiptLoader(BaseDatasetLoader):
     #   3 = Date_value       → date
     #   7 = Total_value      → total
     #  10 = Addr_value       → address
-    _IDX_TO_FIELD: Dict[int, str] = {
+    _IDX_TO_FIELD: dict[int, str] = {
         1: "company",
         3: "date",
         7: "total",
@@ -491,12 +490,12 @@ class WildReceiptLoader(BaseDatasetLoader):
 
     # ── public interface ──────────────────────────────────────────────
 
-    def load(self, split: str = "train") -> List[Sample]:
+    def load(self, split: str = "train") -> list[Sample]:
         """Load WildReceipt (OpenMMLab format) and normalize to SROIE schema.
 
         Only the ``train`` split is used to prevent test-set contamination.
         """
-        dest = self._download()
+        self._download()
         inner = self._inner_dir()
 
         # Map split to file name
@@ -508,7 +507,7 @@ class WildReceiptLoader(BaseDatasetLoader):
                 "Download may be incomplete."
             )
 
-        samples: List[Sample] = []
+        samples: list[Sample] = []
         for line in txt_path.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if not line:
@@ -518,7 +517,7 @@ class WildReceiptLoader(BaseDatasetLoader):
             except json.JSONDecodeError:
                 continue
 
-            gt: Dict[str, str] = {k: "" for k in EMPTY_GT}
+            gt: dict[str, str] = {k: "" for k in EMPTY_GT}
             for ann in obj.get("annotations", []):
                 label_idx = int(ann.get("label", -1))
                 field = self._IDX_TO_FIELD.get(label_idx)
@@ -547,9 +546,7 @@ class WildReceiptLoader(BaseDatasetLoader):
                     continue
                 obj = json.loads(line)
                 # Must have annotations list and file_name
-                if "annotations" not in obj or "file_name" not in obj:
-                    return False
-                return True
+                return not ("annotations" not in obj or "file_name" not in obj)
         except Exception:
             return False
 
@@ -627,14 +624,14 @@ class CORDLoader(BaseDatasetLoader):
     # ── CORD → SROIE remapping ────────────────────────────────────────
 
     @staticmethod
-    def _cord_remap(ground_truth_str: Any) -> Dict[str, str]:
+    def _cord_remap(ground_truth_str: Any) -> dict[str, str]:
         """Parse CORD ground_truth JSON and remap to SROIE schema.
 
         BUG 7 FIX: CORD v2 DOES contain date annotations in gt_parse.
         Previously the date field was hardcoded to "" with an incorrect
         comment "CORD has no standard date field".
         """
-        gt: Dict[str, str] = {k: "" for k in EMPTY_GT}
+        gt: dict[str, str] = {k: "" for k in EMPTY_GT}
         try:
             obj = (
                 json.loads(ground_truth_str)
@@ -676,7 +673,7 @@ class CORDLoader(BaseDatasetLoader):
 
     # ── public interface ──────────────────────────────────────────────
 
-    def load(self, split: str = "train") -> List[Sample]:
+    def load(self, split: str = "train") -> list[Sample]:
         """Load CORD and normalize to SROIE schema.
 
         Uses content hash (md5 of image bytes) for on-disk filenames to
@@ -694,7 +691,7 @@ class CORDLoader(BaseDatasetLoader):
         except Exception as exc:
             raise self._fatal(f"Failed to load cache: {exc}") from exc
 
-        samples: List[Sample] = []
+        samples: list[Sample] = []
         splits = list(ds.keys()) if hasattr(ds, "keys") else ["train"]
 
         for ds_split in splits:
@@ -824,7 +821,7 @@ class InvoicesDonutLoader(BaseDatasetLoader):
     # ── Invoices-DONUT → SROIE remapping ─────────────────────────────
 
     @staticmethod
-    def _invoices_donut_remap(ground_truth_str: Any) -> Dict[str, str]:
+    def _invoices_donut_remap(ground_truth_str: Any) -> dict[str, str]:
         """Parse Invoices-DONUT ground_truth JSON and remap to SROIE schema.
 
         Field mapping rationale:
@@ -833,7 +830,7 @@ class InvoicesDonutLoader(BaseDatasetLoader):
         - address: empty — invoices lack a reliable store-address field
         - total:   total_gross_worth with currency symbol stripped
         """
-        gt: Dict[str, str] = {k: "" for k in EMPTY_GT}
+        gt: dict[str, str] = {k: "" for k in EMPTY_GT}
         try:
             obj = (
                 json.loads(ground_truth_str)
@@ -864,7 +861,7 @@ class InvoicesDonutLoader(BaseDatasetLoader):
 
     # ── public interface ──────────────────────────────────────────────
 
-    def load(self, split: str = "train") -> List[Sample]:
+    def load(self, split: str = "train") -> list[Sample]:
         """Load Invoices-DONUT and normalize to SROIE schema."""
         dest = self._download()
         hf_cache = self._hf_cache()
@@ -877,7 +874,7 @@ class InvoicesDonutLoader(BaseDatasetLoader):
         except Exception as exc:
             raise self._fatal(f"Failed to load cache: {exc}") from exc
 
-        samples: List[Sample] = []
+        samples: list[Sample] = []
         splits = list(ds.keys()) if hasattr(ds, "keys") else ["train"]
 
         for ds_split in splits:
@@ -955,10 +952,10 @@ class InvoicesDonutLoader(BaseDatasetLoader):
 #  Singleton loader instances (lazy)
 # ======================================================================
 
-_sroie_loader: Optional[SROIELoader] = None
-_wildreceipt_loader: Optional[WildReceiptLoader] = None
-_cord_loader: Optional[CORDLoader] = None
-_invoices_donut_loader: Optional[InvoicesDonutLoader] = None
+_sroie_loader: SROIELoader | None = None
+_wildreceipt_loader: WildReceiptLoader | None = None
+_cord_loader: CORDLoader | None = None
+_invoices_donut_loader: InvoicesDonutLoader | None = None
 
 
 def _get_sroie_loader() -> SROIELoader:
@@ -995,12 +992,12 @@ def _get_invoices_donut_loader() -> InvoicesDonutLoader:
 # These wrap the OOP loaders so that existing call-sites (run_all.py,
 # run_experiments.py, etc.) continue to work without modification.
 
-def load_sroie_train() -> List[Sample]:
+def load_sroie_train() -> list[Sample]:
     """Load SROIE training split — compatibility wrapper for SROIELoader."""
     return _get_sroie_loader().load("train")
 
 
-def load_sroie_test() -> List[Sample]:
+def load_sroie_test() -> list[Sample]:
     """Load SROIE test split — compatibility wrapper for SROIELoader.
 
     Returns an empty list with a warning if test_img/ is absent (matching
@@ -1009,7 +1006,7 @@ def load_sroie_test() -> List[Sample]:
     return _get_sroie_loader().load("test")
 
 
-def load_sroie_val() -> List[Sample]:
+def load_sroie_val() -> list[Sample]:
     """Load SROIE validation split — compatibility wrapper for SROIELoader.
 
     Returns an empty list with a warning if val_img/ is absent.
@@ -1017,17 +1014,17 @@ def load_sroie_val() -> List[Sample]:
     return _get_sroie_loader().load("val")
 
 
-def load_wildreceipt() -> List[Sample]:
+def load_wildreceipt() -> list[Sample]:
     """Load WildReceipt — compatibility wrapper for WildReceiptLoader."""
     return _get_wildreceipt_loader().load("train")
 
 
-def load_cord() -> List[Sample]:
+def load_cord() -> list[Sample]:
     """Load CORD — compatibility wrapper for CORDLoader."""
     return _get_cord_loader().load("train")
 
 
-def load_invoices_donut() -> List[Sample]:
+def load_invoices_donut() -> list[Sample]:
     """Load Invoices-DONUT — compatibility wrapper for InvoicesDonutLoader."""
     return _get_invoices_donut_loader().load("train")
 
@@ -1045,12 +1042,12 @@ _LOADERS = {
 
 
 def split_dataset(
-    samples: List[Sample],
+    samples: list[Sample],
     train_ratio: float = 0.70,
     val_ratio: float = 0.15,
     test_ratio: float = 0.15,
     seed: int = SEED,
-) -> Tuple[List[Sample], List[Sample], List[Sample]]:
+) -> tuple[list[Sample], list[Sample], list[Sample]]:
     """Split a dataset into train/val/test with a fixed seed.
 
     Parameters
@@ -1081,8 +1078,8 @@ def split_dataset(
 
 
 def get_combined_dataset(
-    dataset_names: List[str],
-) -> Tuple[List[Sample], List[Sample]]:
+    dataset_names: list[str],
+) -> tuple[list[Sample], list[Sample]]:
     """Merge multiple datasets into train and validation lists.
 
     SROIE training samples are added to train as-is (train split from img/).
@@ -1104,9 +1101,9 @@ def get_combined_dataset(
     -------
     (train_samples, val_samples) : Tuple[List[Sample], List[Sample]]
     """
-    combined_train: List[Sample] = []
-    combined_val: List[Sample] = []
-    per_loader_counts: Dict[str, int] = {}
+    combined_train: list[Sample] = []
+    combined_val: list[Sample] = []
+    per_loader_counts: dict[str, int] = {}
 
     for name in dataset_names:
         loader = _LOADERS.get(name)

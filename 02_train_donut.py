@@ -20,14 +20,12 @@ FIX: Added GPU memory cleanup after training.
 """
 
 import json
-import os
 from dataclasses import dataclass
 from pathlib import Path
 
-import torch
 from transformers import DonutProcessor, VisionEncoderDecoderModel
 
-from constants import FIELDS, MAX_LENGTH, SEED, BASE_MODEL, NEW_TOKENS, _gpu_cleanup
+from constants import BASE_MODEL, MAX_LENGTH, NEW_TOKENS, SEED, _gpu_cleanup
 
 # ── Config ──────────────────────────────────────────────────────────────────
 MODEL_ID = BASE_MODEL
@@ -139,7 +137,7 @@ def train():
     with open(OUTPUT_DIR / "training_history.json", "w") as fh:
         json.dump(history, fh, indent=2)
 
-    print(f"\nDONUT training complete.")
+    print("\nDONUT training complete.")
 
     # FIX: GPU cleanup after training to free VRAM for subsequent stages.
     _gpu_cleanup(model, processor, trainer, train_ds, val_ds)

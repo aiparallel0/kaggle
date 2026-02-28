@@ -13,7 +13,6 @@ from dataset_loaders import (
     _validate_samples_nonempty,
 )
 
-
 # ---------------------------------------------------------------------------
 # DatasetLoadError
 # ---------------------------------------------------------------------------
@@ -154,3 +153,52 @@ class TestPathHelpers:
                 os.environ["SROIE_DATA_DIR"] = old
             else:
                 del os.environ["SROIE_DATA_DIR"]
+
+
+# ---------------------------------------------------------------------------
+# Dataset split separation (no data access required)
+# ---------------------------------------------------------------------------
+
+class TestSROIESplitDirectories:
+    """Verify val and test splits use distinct directories (no data leakage)."""
+
+    def test_val_and_test_use_different_dirs(self):
+        """val_img/ != test_img/ — ensures early stopping does not use test data."""
+        from dataset_loaders import SROIELoader
+        loader = SROIELoader()
+        val_dirs = loader._SPLIT_DIRS["val"]
+        test_dirs = loader._SPLIT_DIRS["test"]
+        assert val_dirs != test_dirs, (
+            "val and test splits share the same directories — "
+            "early stopping would optimize for test performance (data leakage)"
+        )
+
+    def test_train_val_test_all_different(self):
+        """All three splits use different source directories."""
+        from dataset_loaders import SROIELoader
+        loader = SROIELoader()
+        dirs = [loader._SPLIT_DIRS[s] for s in ("train", "val", "test")]
+        assert len(set(dirs)) == 3, (
+            f"Expected 3 unique split directory pairs, got {len(set(dirs))}: {dirs}"
+        )
+
+    def test_val_uses_val_img(self):
+        from dataset_loaders import SROIELoader
+        loader = SROIELoader()
+        img_subdir, key_subdir = loader._SPLIT_DIRS["val"]
+        assert img_subdir == "val_img"
+        assert key_subdir == "val_key"
+
+    def test_test_uses_test_img(self):
+        from dataset_loaders import SROIELoader
+        loader = SROIELoader()
+        img_subdir, key_subdir = loader._SPLIT_DIRS["test"]
+        assert img_subdir == "test_img"
+        assert key_subdir == "test_key"
+
+    def test_train_uses_img(self):
+        from dataset_loaders import SROIELoader
+        loader = SROIELoader()
+        img_subdir, key_subdir = loader._SPLIT_DIRS["train"]
+        assert img_subdir == "img"
+        assert key_subdir == "key"

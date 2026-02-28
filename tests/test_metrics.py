@@ -5,6 +5,7 @@ Requires: torch, transformers (evaluate.py imports them at module level).
 """
 
 import sys
+import unittest.mock as mock
 from pathlib import Path
 
 import pytest
@@ -51,6 +52,95 @@ class TestNED:
     def test_ned_bounded(self):
         ned = normalized_edit_distance("abcdef", "xyz")
         assert 0.0 <= ned <= 1.0
+
+
+# ---------------------------------------------------------------------------
+# _parse_prediction list-merge behaviour (exercised via DonutEvaluator)
+# ---------------------------------------------------------------------------
+
+class TestParsePredictionListMerge:
+    """Verify token2json list output is merged rather than discarded.
+
+    Root cause of F1=0.0078: _parse_prediction() returned {} when token2json()
+    returned a list (CORD <sep/> multi-page format), collapsing all predictions
+    to empty dicts.  Fix: merge list pages into a single flat dict.
+    """
+
+    def _make_evaluator_stub(self):
+        """Return a minimal DonutEvaluator-like object with just _parse_prediction."""
+        pytest.importorskip("torch")
+        from donut_evaluator import DonutEvaluator
+
+        # Build the smallest possible evaluator without hitting from_pretrained
+        evaluator = object.__new__(DonutEvaluator)
+        evaluator.parse_failure_count = 0
+        evaluator._inference_call_count = 0
+
+        class _FakeProcessor:
+            def token2json(self, tokens):
+                # Simulate multi-page list output
+                return [
+                    {"company": "MYDIN MALL", "date": "25/12/2023"},
+                    {"address": "NO 1 JALAN", "total": "47.80"},
+                ]
+
+        evaluator.processor = _FakeProcessor()
+        return evaluator
+
+    def test_list_pages_merged_to_dict(self):
+        """Multi-page list from token2json is merged into a single flat dict."""
+        evaluator = self._make_evaluator_stub()
+        result = evaluator._parse_prediction("<irrelevant tokens>")
+        assert isinstance(result, dict), "Expected dict, got list (merge failed)"
+        assert result["company"] == "MYDIN MALL"
+        assert result["date"] == "25/12/2023"
+        assert result["address"] == "NO 1 JALAN"
+        assert result["total"] == "47.80"
+
+    def test_first_occurrence_wins_on_duplicate_keys(self):
+        """When multiple pages share a key, the first page's value wins."""
+        pytest.importorskip("torch")
+        from donut_evaluator import DonutEvaluator
+
+        evaluator = object.__new__(DonutEvaluator)
+        evaluator.parse_failure_count = 0
+        evaluator._inference_call_count = 0
+
+        class _FakeProcessor:
+            def token2json(self, tokens):
+                return [
+                    {"company": "FIRST"},
+                    {"company": "SECOND", "total": "10.00"},
+                ]
+
+        evaluator.processor = _FakeProcessor()
+        result = evaluator._parse_prediction("<tokens>")
+        assert result["company"] == "FIRST", "First page's value should win"
+        assert result["total"] == "10.00"
+
+    def test_no_parse_failure_counted_for_list(self):
+        """List output is NOT a parse failure — it contains valid data."""
+        evaluator = self._make_evaluator_stub()
+        evaluator._parse_prediction("<tokens>")
+        assert evaluator.parse_failure_count == 0
+
+    def test_empty_list_counts_as_failure(self):
+        """Fully empty list (no dict pages) is a parse failure."""
+        pytest.importorskip("torch")
+        from donut_evaluator import DonutEvaluator
+
+        evaluator = object.__new__(DonutEvaluator)
+        evaluator.parse_failure_count = 0
+        evaluator._inference_call_count = 0
+
+        class _FakeProcessor:
+            def token2json(self, tokens):
+                return []
+
+        evaluator.processor = _FakeProcessor()
+        result = evaluator._parse_prediction("<tokens>")
+        assert result == {}
+        assert evaluator.parse_failure_count == 1
 
 
 # ---------------------------------------------------------------------------
@@ -170,3 +260,78 @@ class TestComputeMetrics:
             "address_f1", "address_ned", "total_f1", "total_ned",
         }
         assert expected_keys.issubset(set(m.keys()))
+
+
+# ---------------------------------------------------------------------------
+# load_model_with_tied_weights — checkpoint sanity check
+# ---------------------------------------------------------------------------
+
+class TestLoadModelWithTiedWeights:
+    """Verify load_model_with_tied_weights raises loudly when lm_head is missing.
+
+    Root cause of F1~0.42: safetensors deduplicates lm_head.weight when it
+    shares a data pointer with embed_tokens.weight, so per-epoch checkpoints
+    omit lm_head.  When load_best_model_at_end reloads the best epoch,
+    lm_head is randomly re-initialized.  The fix (LmHeadCloneCallback) forces
+    a deep clone before every save.  This sanity check ensures the pipeline
+    fails loudly if lm_head is still missing despite the callback.
+    """
+
+    def _make_mock_model(self, tie_word_embeddings: bool):
+        """Return a minimal mock VisionEncoderDecoderModel."""
+        decoder_config = mock.MagicMock()
+        decoder_config.tie_word_embeddings = tie_word_embeddings
+        decoder = mock.MagicMock()
+        decoder.config = decoder_config
+        model = mock.MagicMock()
+        model.decoder = decoder
+        model.to = mock.MagicMock(return_value=model)
+        model.eval = mock.MagicMock(return_value=None)
+        return model
+
+    def test_raises_when_lm_head_missing_and_tie_false(self):
+        """RuntimeError raised when lm_head.weight absent and tie_word_embeddings=False."""
+        from donut_evaluator import load_model_with_tied_weights
+
+        mock_model = self._make_mock_model(tie_word_embeddings=False)
+        loading_info = {"missing_keys": ["decoder.lm_head.weight"], "unexpected_keys": []}
+
+        with mock.patch(
+            "donut_evaluator.VisionEncoderDecoderModel.from_pretrained",
+            return_value=(mock_model, loading_info),
+        ):
+            with pytest.raises(RuntimeError, match="CRITICAL"):
+                load_model_with_tied_weights("/fake/checkpoint")
+
+    def test_no_raise_when_lm_head_present(self):
+        """No RuntimeError when lm_head.weight is present in the checkpoint."""
+        from donut_evaluator import load_model_with_tied_weights
+
+        mock_model = self._make_mock_model(tie_word_embeddings=False)
+        loading_info = {"missing_keys": [], "unexpected_keys": []}
+
+        with mock.patch(
+            "donut_evaluator.VisionEncoderDecoderModel.from_pretrained",
+            return_value=(mock_model, loading_info),
+        ):
+            # Should not raise — lm_head is present
+            result = load_model_with_tied_weights("/fake/checkpoint")
+            assert result is mock_model
+
+    def test_no_raise_for_legacy_tied_checkpoint(self):
+        """No RuntimeError for old-style checkpoints with tie_word_embeddings=True.
+
+        Legacy checkpoints tie lm_head to embed_tokens, so lm_head.weight is
+        legitimately absent from the shard — _retie_decoder_head re-ties it.
+        """
+        from donut_evaluator import load_model_with_tied_weights
+
+        mock_model = self._make_mock_model(tie_word_embeddings=True)
+        loading_info = {"missing_keys": ["decoder.lm_head.weight"], "unexpected_keys": []}
+
+        with mock.patch(
+            "donut_evaluator.VisionEncoderDecoderModel.from_pretrained",
+            return_value=(mock_model, loading_info),
+        ):
+            # Should not raise — legacy tied checkpoint, _retie_decoder_head handles it
+            load_model_with_tied_weights("/fake/checkpoint")
