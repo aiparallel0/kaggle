@@ -191,8 +191,6 @@ class SROIEDataset(Dataset):
             if gt is not None:
                 self.samples.append((img_path, gt))
 
-        print(f"Loaded {len(self.samples)} samples")
-
     # ------------------------------------------------------------------
     # Ground-truth loading helpers
     # ------------------------------------------------------------------
