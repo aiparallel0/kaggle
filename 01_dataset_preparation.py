@@ -187,7 +187,7 @@ def build_yolo_split(split: str) -> int:
                 cy = max(0.0, min(1.0, ((y1 + y2) / 2) / H))
                 bw = max(0.0, min(1.0, (x2 - x1) / W))
                 bh = max(0.0, min(1.0, (y2 - y1) / H))
-                f.write(f"0 {{cx:.6f}} {{cy:.6f}} {{bw:.6f}} {{bh:.6f}}\n")
+                f.write(f"0 {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}\n")
 
         count += 1
 
