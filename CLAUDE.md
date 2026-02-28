@@ -23,6 +23,7 @@
 15. [Environment & Paths](#15-environment--paths)
 16. [Known Issues & Historical Fixes](#16-known-issues--historical-fixes)
 17. [Performance Tips](#17-performance-tips)
+18. [Full End-to-End Pipeline Flow](#18-full-end-to-end-pipeline-flow)
 
 ---
 
@@ -253,6 +254,10 @@ Both must exit with code `0`. If either fails, fix the core import chain **befor
 | `JSONDecodeError` in `inject_results.py` | Trailing comma or missing field in results JSON | Validate JSON against results format spec below |
 | `CUDA out of memory` | Batch size too large for VRAM | Halve `batch_size`; double `gradient_accumulation_steps` |
 | `KeyError: 'sroie'` in evaluator | `{"sroie": {...}}` wrapper not unwrapped | Unwrap in `evaluate.py`: `result = result.get("sroie", result)` |
+| **`F1 ≈ 0.008`** (not zero, not 0.42) | `token2json` returned list (CORD `<sep/>` drift) | `_parse_prediction()` merges page-list → dict (Pattern 5 below) |
+| **`F1 ≈ 0.42`** (not zero, plausible-looking) | `lm_head.weight` dropped by safetensors dedup | `LmHeadCloneCallback` + `RuntimeError` check on load (Pattern 6 below) |
+| **`RuntimeError: CRITICAL: decoder.lm_head.weight missing`** | `LmHeadCloneCallback` failed or was removed | Re-register callback in `DonutTrainer.train()`; do NOT remove the check |
+| **`Self-test FAILED: model produced empty dict`** | `token2json` returned list; self-test treated list as empty | `_self_test()` merges list before `_unwrap_prediction()` (Pattern 5 below) |
 
 ### Pattern 1: Bracket & Comma Errors
 
@@ -550,10 +555,113 @@ Two-stage pipeline in `03_train_trocr_yolo.py` (called by `run_all.py`):
 | `protobuf` missing → 100% pipeline crash | Added `protobuf>=3.20.0` to `requirements.txt` | `requirements.txt` |
 | `lm_head` weight tying → F1=0 on reload | `config.tie_word_embeddings=False` after `resize_token_embeddings()` | `train.py` |
 | Key file loading failure | Try `.txt` first, then `.json` (BUG A/E fix) | `train.py` |
-| Data leakage in eval | Fixed split logic | `run_experiments.py` |
+| Data leakage in eval | Separate `val_img/` and `test_img/` directories in `stage_install()` | `run_all.py` |
 | `{"sroie": {...}}` wrapper in token2json | Unwrapped in evaluator | `evaluate.py` |
 | FIELDS/IMAGE_EXTS duplicated in 5+ files | Consolidated in `constants.py` | `constants.py` |
 | `transformers ≥4.47` `PreTrainedTokenizerBase` move | Compat shim added | `dataset_loaders.py` |
+| **safetensors deduplication drops `lm_head.weight` → F1~0.42** | `LmHeadCloneCallback` deep-clones weight before every save; sanity `RuntimeError` on load | `train.py`, `donut_evaluator.py` |
+| **`token2json` returns list (`<sep/>` tokens) → F1=0.0078** | `_parse_prediction()` and `_self_test()` merge page-list into flat dict | `donut_evaluator.py` |
+| **val split missing → no early stopping guard** | `stage_install()` creates `val_img/`+`val_key/` distinct from `test_img/`+`test_key/` | `run_all.py` |
+
+### The F1 Collapse Chain (root-cause map for the three worst bugs)
+
+Understanding how these bugs interact prevents re-introducing them:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  BUG A — Dataset split: val == test                                          │
+│  Symptom: eval_loss curves look healthy; F1 on held-out data is wrong        │
+│                                                                               │
+│  Root cause: val_img/ not created; load_sroie_val() returned [] so           │
+│  do_eval=False → no early stopping → model trained arbitrary epochs           │
+│                                                                               │
+│  Fix: stage_install() now physically moves files into val_img/ (63 images)   │
+│  and test_img/ (63 images) from the full 626-image pool.  Training uses      │
+│  load_sroie_val(); final scoring uses load_sroie_test(). Never overlap.       │
+└────────────────────────────┬────────────────────────────────────────────────┘
+                             │ cascades into
+                             ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  BUG B — safetensors deduplication drops lm_head.weight → F1~0.42           │
+│  Symptom: F1 is ~0.42 instead of ~0.82+; model outputs garbled tokens        │
+│                                                                               │
+│  Root cause: after resize_token_embeddings(), lm_head.weight and              │
+│  embed_tokens.weight share the same data pointer. safetensors omits the       │
+│  duplicate tensor from per-epoch checkpoint shards. load_best_model_at_end   │
+│  reloads the best epoch; lm_head.weight is listed in missing_keys and is     │
+│  randomly re-initialized → decoder has no learned pathway to SROIE tokens.   │
+│                                                                               │
+│  Fix A: LmHeadCloneCallback.on_save() calls .data.clone() before every save  │
+│         so lm_head.weight gets its own storage and is written to the shard.  │
+│  Fix B: load_model_with_tied_weights() checks missing_keys after load and     │
+│         raises RuntimeError immediately if lm_head still absent              │
+│         (tie_word_embeddings=False checkpoints only).                         │
+└────────────────────────────┬────────────────────────────────────────────────┘
+                             │ independently causes
+                             ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  BUG C — token2json returns list → F1=0.0078                                 │
+│  Symptom: F1 is ~0.008; logs show "token2json returned non-dict: list"        │
+│                                                                               │
+│  Root cause: base checkpoint (donut-base-finetuned-cord-v2) knows <sep/>     │
+│  (CORD multi-page separator). SROIE fine-tuned models can still emit it.     │
+│  token2json() returns a list of page-dicts when <sep/> is present.           │
+│  _parse_prediction() treated any non-dict as parse failure → returned {}     │
+│  → N empty dicts × 4 fields = all predictions missing → F1 ≈ 0/total = 0.   │
+│  _self_test() passed the list to _unwrap_prediction() which returned it      │
+│  unchanged → isinstance(list, dict) is False → self-test aborted evaluation. │
+│                                                                               │
+│  Fix: _parse_prediction() and _self_test() merge list pages into a flat dict  │
+│  (first occurrence of each key wins). Only count as parse failure when all   │
+│  pages are non-dicts or list is empty.                                        │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Pattern 5: `token2json` List Output
+
+Occurs when model output contains `<sep/>` tokens (inherited from CORD pretraining).
+
+```python
+# ❌ BROKEN — treats list as parse failure, returns {}
+result = processor.token2json(tokens)
+if not isinstance(result, dict):
+    return {}   # ← silent collapse; every field scores as empty prediction
+
+# ✅ CORRECT — merge pages, first occurrence of each key wins
+result = processor.token2json(tokens)
+if isinstance(result, list):
+    merged = {}
+    for page in result:
+        if isinstance(page, dict):
+            for k, v in page.items():
+                if k not in merged:
+                    merged[k] = v
+    return merged if merged else {}
+```
+
+### Pattern 6: safetensors lm_head Deduplication
+
+Occurs any time `resize_token_embeddings()` is called and the two tensors share storage.
+
+```python
+# ❌ BROKEN — lm_head shares data pointer with embed_tokens after resize
+model.decoder.resize_token_embeddings(len(tokenizer))
+# safetensors sees identical pointers → writes only embed_tokens to shard
+# → lm_head missing on reload → random weights → F1~0.42
+
+# ✅ CORRECT — LmHeadCloneCallback breaks the aliasing before every save
+class LmHeadCloneCallback(TrainerCallback):
+    def on_save(self, args, state, control, model=None, **kwargs):
+        lm_head = model.decoder.lm_head
+        if lm_head is not None and hasattr(lm_head, "weight"):
+            lm_head.weight = torch.nn.Parameter(lm_head.weight.data.clone())
+
+# ✅ ALSO CORRECT — fail loudly at load time so the bug is never silent
+missing_keys = loading_info.get("missing_keys", [])
+if "decoder.lm_head.weight" in missing_keys:
+    if not getattr(model.decoder.config, "tie_word_embeddings", True):
+        raise RuntimeError("CRITICAL: lm_head.weight missing from checkpoint.")
+```
 
 ---
 
@@ -566,6 +674,186 @@ Two-stage pipeline in `03_train_trocr_yolo.py` (called by `run_all.py`):
 - **GPU:** CUDA auto-detected; CPU fallback supported but 10–20× slower
 - **Single experiment test:** Run `--experiment 1` first to validate the full pipeline before launching all 8
 - **Paper-only mode:** Use `--paper-only` after all results exist to regenerate the paper without re-training
+
+---
+
+---
+
+## 18. Full End-to-End Pipeline Flow
+
+The complete flow from raw source data to the filled LaTeX paper. Every arrow is a function call or file write; every box is a persistent artifact. Use this map to locate where a bug lives.
+
+```
+═══════════════════════════════════════════════════════════════════════════════
+  STAGE 0 — SROIE Install          run_all.py :: stage_install()
+═══════════════════════════════════════════════════════════════════════════════
+
+  GitHub repo (626 images)
+       │  git clone --depth 1
+       ▼
+  img/ + key/ + box/   ──── random.Random(SEED=42).shuffle ────►  80 / 10 / 10
+                                                                        │
+                                        ┌───────────────────────────────┘
+                                        │  shutil.move  (never copy)
+                                        ▼
+              img/ (500 train)   val_img/ (63 val)   test_img/ (63 test)
+              key/ (500 train)   val_key/ (63 val)   test_key/ (63 test)
+
+  INVARIANT: these three sets NEVER overlap. val and test are in different
+  directories so load_sroie_val() and load_sroie_test() cannot return the
+  same images even if called from the same experiment.
+
+═══════════════════════════════════════════════════════════════════════════════
+  STAGE 1 — Dataset Download        run_all.py :: stage_download()
+═══════════════════════════════════════════════════════════════════════════════
+
+  WildReceipt tar  ──► WildReceiptLoader._download() ──► data/wildreceipt/
+  CORD (HF)        ──► CORDLoader._download()        ──► data/cord/
+  Invoices (HF)    ──► InvoicesDonutLoader._download()──► data/invoices_donut/
+  donut-base-finetuned-cord-v2 ──► HF cache (blocking, single-threaded)
+
+  All three dataset downloads run in parallel (ThreadPoolExecutor).
+  Model download is blocking to prevent GPU contention during training.
+
+═══════════════════════════════════════════════════════════════════════════════
+  STAGE 1.5 — Pretrained Baseline   run_all.py :: stage_pretrained_baseline()
+═══════════════════════════════════════════════════════════════════════════════
+
+  donut-base-finetuned-cord-v2  (tie_word_embeddings unchanged — NOT our path)
+       │  model.generate() on 63 test images with "<s_cord-v2>" task prompt
+       │  token2json() → CORD-schema dict  ──► remap_cord_to_sroie()
+       ▼
+  results/pretrained_metrics (saved to workspace/evaluation_results.json)
+
+═══════════════════════════════════════════════════════════════════════════════
+  STAGE 2 — DONUT Experiments       run_experiments.py :: run_experiment(N)
+═══════════════════════════════════════════════════════════════════════════════
+
+  For each experiment 1–8:
+
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │  A. DATA ASSEMBLY          dataset_loaders.get_combined_dataset()       │
+  │                                                                         │
+  │  load_sroie_train()  ──────────────────────────────►  combined_train[]  │
+  │  load_sroie_val()    ──────────────────────────────►  combined_val[]    │
+  │                                                                         │
+  │  For each auxiliary dataset in config.datasets:                         │
+  │    loader.load("train") ──► split_dataset(70/15/15) ──► train + val     │
+  │                             └─ test 15% discarded (no leakage)          │
+  │                                                                         │
+  │  random.Random(SEED).shuffle(combined_train)                            │
+  │  random.Random(SEED).shuffle(combined_val)                              │
+  └────────────────────────────────┬────────────────────────────────────────┘
+                                   │
+                                   ▼
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │  B. NORMALIZATION          (already done inside each loader)            │
+  │                                                                         │
+  │  Every sample, regardless of source dataset, is:                        │
+  │    {"company": "...", "date": "...", "address": "...", "total": "..."}  │
+  │                                                                         │
+  │  Raw CORD tags (store_info, total_price…) → _cord_remap()              │
+  │  Raw WildReceipt label indices (1,3,7,10) → _IDX_TO_FIELD map          │
+  │  Raw Invoices fields → _normalize()                                     │
+  │                                                                         │
+  │  Result: all 4 source datasets speak SROIE schema by this point.        │
+  └────────────────────────────────┬────────────────────────────────────────┘
+                                   │
+                                   ▼
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │  C. TRAINING               DonutTrainer.train()                         │
+  │                                                                         │
+  │  SROIEDataset.__getitem__:                                              │
+  │    {"company":"X","date":"Y",...}                                       │
+  │    → "<s_sroie><s_company>X</s_company>...<s_total>Z</s_total></s_sroie>"│
+  │    → tokenized label tensor (pad=-100)                                  │
+  │                                                                         │
+  │  resize_token_embeddings(len(tokenizer))   ← adds NEW_TOKENS (10 toks) │
+  │  model.config.tie_word_embeddings = False  ← CRITICAL: must follow     │
+  │                                                resize_token_embeddings   │
+  │                                                                         │
+  │  Seq2SeqTrainer with:                                                   │
+  │    eval_dataset  = combined_val  (from val_img/; NOT test_img/)         │
+  │    callbacks     = [LmHeadCloneCallback(), EarlyStoppingCallback(p=3)]  │
+  │    load_best_model_at_end = True                                        │
+  │                                                                         │
+  │  LmHeadCloneCallback.on_save():                                         │
+  │    lm_head.weight = Parameter(lm_head.weight.data.clone())              │
+  │    ← breaks data-pointer alias with embed_tokens so safetensors         │
+  │      writes lm_head as a separate tensor in the checkpoint shard        │
+  └────────────────────────────────┬────────────────────────────────────────┘
+                                   │  best checkpoint saved to model_dir/
+                                   ▼
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │  D. MODEL LOAD             load_model_with_tied_weights(model_dir)      │
+  │                                                                         │
+  │  from_pretrained(output_loading_info=True)                              │
+  │  missing_keys = loading_info["missing_keys"]                            │
+  │                                                                         │
+  │  if "decoder.lm_head.weight" in missing_keys                           │
+  │     and NOT tie_word_embeddings:                                        │
+  │       raise RuntimeError("CRITICAL…")   ← fail loudly; never silent    │
+  │                                                                         │
+  │  _retie_decoder_head(model, missing_keys)  ← legacy compat only        │
+  └────────────────────────────────┬────────────────────────────────────────┘
+                                   │
+                                   ▼
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │  E. EVALUATION             DonutEvaluator.evaluate()                    │
+  │                                                                         │
+  │  _self_test() on test_dataset[0]:                                       │
+  │    model.generate() → raw_tokens → token2json()                        │
+  │    if isinstance(result, list): merge pages → dict   ← Bug C fix       │
+  │    _unwrap_prediction() → check non-empty                               │
+  │                                                                         │
+  │  For each of 63 test images (from test_img/; NOT val_img/):            │
+  │    model.generate() → sequence                                          │
+  │    _parse_prediction(sequence):                                         │
+  │      token2json() → result                                              │
+  │      if isinstance(result, list):                                       │
+  │        merge page dicts (first-key-wins)    ← Bug C fix               │
+  │      _unwrap_prediction() → remove {"sroie":{…}} wrapper               │
+  │    → prediction dict                                                    │
+  │                                                                         │
+  │  compute_metrics(predictions, ground_truths):                           │
+  │    TP = pred_str.lower().strip() == gt_str.lower().strip()              │
+  │    global_f1 = 2·TP / (total_pred_non_empty + total_gt_non_empty)      │
+  │    NED per field via editdistance                                       │
+  └────────────────────────────────┬────────────────────────────────────────┘
+                                   │
+                                   ▼
+                    results/experiment_N.json
+
+═══════════════════════════════════════════════════════════════════════════════
+  STAGE 3–4 — TrOCR + YOLO        03_train_trocr_yolo.py
+═══════════════════════════════════════════════════════════════════════════════
+
+  Uses the SAME img/ val_img/ test_img/ split created in Stage 0.
+  YOLOv8x trains on img/ (train split, YOLO bbox labels from box/).
+  TrOCR trains on trocr/train/ crops.  Evaluated on test_img/ (63 images).
+  Results saved to results/trocr_yolo_results.json.
+
+═══════════════════════════════════════════════════════════════════════════════
+  STAGE 6 — Paper Generation       inject_results.py :: PaperInjector
+═══════════════════════════════════════════════════════════════════════════════
+
+  results/experiment_*.json  ──► PaperInjector.build_var_map()
+  paper.tex (\VAR{} placeholders) ──► PaperInjector.fill() ──► paper_filled.tex
+
+  Placeholders: \VAR{exp1_f1}, \VAR{best_exp}, \VAR{pretrained_f1}, etc.
+  Never edit paper_filled.tex directly — it is fully regenerated each run.
+```
+
+### Quick sanity check (run before every experiment)
+
+```bash
+python -c "from constants import FIELDS, BASE_MODEL, SEED"
+python -c "from dataset_loaders import SROIELoader; \
+           l=SROIELoader(); \
+           assert l._SPLIT_DIRS['val'] != l._SPLIT_DIRS['test'], 'val==test BUG'"
+```
+
+Both must exit with code `0`. If either fails, fix the import chain before running experiments.
 
 ---
 
