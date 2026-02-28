@@ -639,6 +639,37 @@ if isinstance(result, list):
     return merged if merged else {}
 ```
 
+### Pattern 7: pytest `importorskip` Must Precede the Guarded Import
+
+**Symptom:** `ruff check .` reports `E402` and `I001` on a test file import; or `pytest` raises `ModuleNotFoundError` at collection time even though the test has a `pytest.importorskip` guard.
+
+**Root cause:** `pytest.importorskip()` only skips the *test* if it is called *before* Python evaluates the `import` statement that pulls in the missing package. If the `import` comes first, the `ModuleNotFoundError` fires at collection time and no tests in that file run at all.
+
+```python
+# ❌ BROKEN — import fires before skip guard; collection fails if torch absent
+import pytest
+from donut_evaluator import compute_metrics   # triggers `import torch` inside
+torch = pytest.importorskip("torch")          # never reached
+
+# ✅ CORRECT — skip guard fires first; the import is never reached without torch
+import pytest
+torch = pytest.importorskip("torch", reason="torch required by donut_evaluator.py")
+pytest.importorskip("transformers", reason="transformers required")
+from donut_evaluator import compute_metrics   # noqa: E402, I001
+```
+
+**The `# noqa: E402, I001` comment is mandatory** on any import that intentionally appears after non-import statements:
+- `E402` — "module-level import not at top of file" (ruff pycodestyle)
+- `I001` — "import block is un-sorted or un-formatted" (ruff isort)
+
+Both errors are reported on the same line, so a single `# noqa: E402, I001` inline comment suppresses both. Do **not** run `ruff check --fix` on this file without checking that the fix does not move the import above the `importorskip` calls.
+
+**Every session checklist for test files that guard optional deps:**
+1. `pytest.importorskip(...)` call appears **before** any `import` of the guarded package.
+2. The guarded `import` line ends with `# noqa: E402, I001`.
+3. `ruff check .` exits with code 0.
+4. `pytest tests/ --collect-only` exits with 0 errors (1 skipped per guarded file is fine).
+
 ### Pattern 6: safetensors lm_head Deduplication
 
 Occurs any time `resize_token_embeddings()` is called and the two tensors share storage.

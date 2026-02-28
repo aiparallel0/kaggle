@@ -15,7 +15,7 @@ import pytest
 torch = pytest.importorskip("torch", reason="torch required by donut_evaluator.py")
 pytest.importorskip("transformers", reason="transformers required by donut_evaluator.py")
 
-from donut_evaluator import _unwrap_prediction, compute_metrics, normalized_edit_distance
+from donut_evaluator import _unwrap_prediction, compute_metrics, normalized_edit_distance  # noqa: E402, I001
 
 
 # ---------------------------------------------------------------------------
