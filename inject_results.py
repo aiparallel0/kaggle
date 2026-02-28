@@ -93,10 +93,10 @@ EXP_NAMES: dict[str, str] = {
     "1": "SROIE only",
     "2": "+WildReceipt",
     "3": "+Invoices-DONUT",
-    "4": "+CORD",
-    "5": "+WildReceipt+CORD",
+    "4": "+FUNSD",
+    "5": "+WildReceipt+FUNSD",
     "6": "+WildReceipt+Invoices",
-    "7": "+CORD+Invoices",
+    "7": "+FUNSD+Invoices",
     "8": "+All",
 }
 
@@ -373,7 +373,7 @@ def print_table1_dataset_stats(actual_counts: dict = None) -> None:
         ("SROIE (val)",      _c.get("sroie_val",       63),    4,    "EN",    "Receipts"),
         ("SROIE (test)",     _c.get("sroie_test",      63),    4,    "EN",    "Receipts"),
         ("WildReceipt",      _c.get("wildreceipt",   1740),   25,   "EN",    "Receipts"),
-        ("CORD v2",          _c.get("cord",            900),  "30+", "ID",    "Receipts"),
+        ("FUNSD",            _c.get("funsd",            149),    4,   "EN",    "Forms"),
         ("Invoices-DONUT",   _c.get("invoices_donut",  800),  "7+",  "EN",    "Invoices"),
     ]
     for name, n, nf, lang, domain in rows:

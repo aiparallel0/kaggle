@@ -303,7 +303,7 @@ def stage_download(args) -> StageResult:
         warnings.append(w)
 
     # Download all auxiliary datasets in parallel (I/O-bound, threads are fine)
-    aux_datasets = ["wildreceipt", "cord", "invoices_donut"]
+    aux_datasets = ["wildreceipt", "funsd", "invoices_donut"]
     failed_datasets: list[str] = []
 
     def _fetch_one(ds_name: str) -> tuple:
@@ -321,7 +321,7 @@ def stage_download(args) -> StageResult:
     counts = {
         "sroie": len(train_samples),
         "wildreceipt": 0,
-        "cord": 0,
+        "funsd": 0,
         "invoices_donut": 0,
     }
     with ThreadPoolExecutor(max_workers=len(aux_datasets)) as pool:
@@ -340,7 +340,7 @@ def stage_download(args) -> StageResult:
     print(f"\n  ┌{'─' * 50}┐")
     print(f"  │ {'Dataset':<25} {'Samples':>10} {'Status':>12} │")
     print(f"  ├{'─' * 50}┤")
-    for ds_name in ["sroie", "wildreceipt", "cord", "invoices_donut"]:
+    for ds_name in ["sroie", "wildreceipt", "funsd", "invoices_donut"]:
         count = counts.get(ds_name, 0)
         status = "✓ OK" if count > 0 else "✗ EMPTY"
         print(f"  │ {ds_name:<25} {count:>10} {status:>12} │")

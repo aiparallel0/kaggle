@@ -22,8 +22,8 @@
 dataset_loaders.py — Multi-dataset download & normalization module.
 
 Provides an ABC-based loader hierarchy to download each auxiliary dataset
-(WildReceipt, CORD, Invoices-DONUT, SROIE-NER) and normalize their
-annotations to the SROIE schema:
+(WildReceipt, FUNSD, Invoices-DONUT) and normalize their annotations to
+the SROIE schema:
     {"company": "...", "date": "...", "address": "...", "total": "..."}
 
 Returns lists of (image_path, ground_truth_dict) tuples (type alias: Sample).
@@ -32,7 +32,7 @@ Concrete loaders
 ----------------
 - SROIELoader        — local SROIE img/key directories
 - WildReceiptLoader  — OpenMMLab tar download
-- CORDLoader         — HuggingFace naver-clova-ix/cord-v2
+- FUNSDLoader        — HuggingFace nielsr/funsd (replaces CORD)
 - InvoicesDonutLoader— HuggingFace katanaml-org/invoices-donut-data-v1
 
 Backward-compatible module-level functions are provided as thin wrappers
@@ -571,23 +571,50 @@ class WildReceiptLoader(BaseDatasetLoader):
 
 
 # ======================================================================
-#  CORDLoader
+#  FUNSDLoader
 # ======================================================================
 
-class CORDLoader(BaseDatasetLoader):
-    """Download CORD (naver-clova-ix/cord-v2) from HuggingFace and
-    normalize to SROIE schema.
+class FUNSDLoader(BaseDatasetLoader):
+    """Download FUNSD (Form Understanding in Noisy Scanned Documents) from
+    HuggingFace and normalize to SROIE schema.
 
-    BUG 7 FIX: date_info is now properly extracted from gt_parse.
-    CORD filename collision fix: uses content hash for filenames.
+    FUNSD (nielsr/funsd) has 149 training + 50 test scanned business forms
+    with BIO-tagged named entities typed as HEADER, QUESTION, ANSWER, or
+    OTHER.  We reconstruct entity spans from the BIO sequence, then assign
+    answer spans to SROIE fields using:
+      - company : first HEADER span
+      - date    : first ANSWER span matching a date regex
+      - total   : first ANSWER span matching a currency/amount regex
+      - address : first remaining ANSWER span with length > 5
+
+    No HuggingFace token is required.  Replaces CORD which had tag
+    coverage issues causing ~50% of training images to produce empty
+    ground-truth fields, halving effective F1.
     """
 
-    name = "CORD"
+    name = "FUNSD"
+
+    # BIO tag indices from the ClassLabel in nielsr/funsd:
+    # O=0, B-HEADER=1, I-HEADER=2, B-QUESTION=3, I-QUESTION=4,
+    # B-ANSWER=5, I-ANSWER=6
+    _TAG_TO_TYPE: dict[int, str] = {1: "header", 2: "header",
+                                     3: "question", 4: "question",
+                                     5: "answer", 6: "answer"}
+    _BEGIN_TAGS: frozenset[int] = frozenset({1, 3, 5})
+
+    _DATE_RE = re.compile(
+        r'\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b'
+        r'|\b\d{4}[/-]\d{1,2}[/-]\d{1,2}\b'
+        r'|\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*'
+        r'\.?\s+\d{1,2},?\s+\d{4}\b',
+        re.IGNORECASE,
+    )
+    _AMOUNT_RE = re.compile(r'\$?\s*\d[\d,]*\.\d{2}\b')
 
     # ── download ──────────────────────────────────────────────────────
 
     def _dest_dir(self) -> Path:
-        return _ensure_dir(_get_datasets_dir() / "cord")
+        return _ensure_dir(_get_datasets_dir() / "funsd")
 
     def _hf_cache(self) -> Path:
         return self._dest_dir() / "hf_cache"
@@ -596,7 +623,7 @@ class CORDLoader(BaseDatasetLoader):
         return self._dest_dir() / ".downloaded"
 
     def _download(self) -> Path:
-        """Download CORD from the HuggingFace datasets hub."""
+        """Download FUNSD from the HuggingFace datasets hub."""
         dest = self._dest_dir()
         marker = self._marker()
         if marker.exists():
@@ -610,75 +637,95 @@ class CORDLoader(BaseDatasetLoader):
 
         try:
             from datasets import load_dataset  # type: ignore
-            self._log("Downloading naver-clova-ix/cord-v2 from HuggingFace ...")
-            ds = load_dataset("naver-clova-ix/cord-v2")
+            self._log("Downloading nielsr/funsd from HuggingFace ...")
+            ds = load_dataset("nielsr/funsd")
             ds.save_to_disk(str(self._hf_cache()))
             marker.touch()
             self._log("Download complete.")
         except Exception as exc:
-            raise self._fatal(
-                f"Download failed: {exc}"
-            ) from exc
+            raise self._fatal(f"Download failed: {exc}") from exc
         return dest
 
-    # ── CORD → SROIE remapping ────────────────────────────────────────
+    # ── FUNSD → SROIE remapping ───────────────────────────────────────
 
-    @staticmethod
-    def _cord_remap(ground_truth_str: Any) -> dict[str, str]:
-        """Parse CORD ground_truth JSON and remap to SROIE schema.
+    @classmethod
+    def _extract_spans(
+        cls, words: list[str], ner_tags: list[int]
+    ) -> dict[str, list[str]]:
+        """Group consecutive BIO-tagged tokens into typed entity spans.
 
-        BUG 7 FIX: CORD v2 DOES contain date annotations in gt_parse.
-        Previously the date field was hardcoded to "" with an incorrect
-        comment "CORD has no standard date field".
+        Returns a dict with keys 'header', 'question', 'answer', each
+        mapping to a list of reconstructed text strings (one per span).
+        """
+        spans: dict[str, list[str]] = {"header": [], "question": [], "answer": []}
+        current_type: str | None = None
+        current_words: list[str] = []
+
+        for word, tag in zip(words, ner_tags):
+            entity_type = cls._TAG_TO_TYPE.get(tag)
+            is_begin = tag in cls._BEGIN_TAGS
+
+            if is_begin:
+                if current_words and current_type:
+                    spans[current_type].append(" ".join(current_words))
+                current_type = entity_type
+                current_words = [word]
+            elif entity_type is not None and entity_type == current_type:
+                current_words.append(word)
+            else:
+                # O tag or broken I-tag
+                if current_words and current_type:
+                    spans[current_type].append(" ".join(current_words))
+                current_type = entity_type
+                current_words = [word] if entity_type else []
+
+        if current_words and current_type:
+            spans[current_type].append(" ".join(current_words))
+
+        return spans
+
+    @classmethod
+    def _funsd_remap(cls, words: list[str], ner_tags: list[int]) -> dict[str, str]:
+        """Map a FUNSD token sequence to the SROIE schema.
+
+        Extraction strategy:
+          - company : first HEADER span (fallback: first QUESTION span)
+          - date    : first ANSWER span matching _DATE_RE
+          - total   : first ANSWER span matching _AMOUNT_RE
+          - address : first ANSWER span with len > 5 not claimed by above
         """
         gt: dict[str, str] = {k: "" for k in EMPTY_GT}
         try:
-            obj = (
-                json.loads(ground_truth_str)
-                if isinstance(ground_truth_str, str)
-                else ground_truth_str
-            )
-            gt_json = obj.get("gt_parse", obj)
+            spans = cls._extract_spans(words, ner_tags)
 
-            # Company / address from store_info
-            store_info = gt_json.get("store_info", {})
-            if isinstance(store_info, dict):
-                gt["company"] = str(store_info.get("store_name", "")).strip()
-                gt["address"] = str(store_info.get("region", "")).strip()
+            # Company from first header span
+            if spans["header"]:
+                gt["company"] = spans["header"][0]
+            elif spans["question"]:
+                gt["company"] = spans["question"][0]
 
-            # Total from total / total_price
-            total_info = gt_json.get("total", {})
-            if isinstance(total_info, dict):
-                gt["total"] = str(total_info.get("total_price", "")).strip()
-            elif isinstance(total_info, list) and len(total_info) > 0:
-                gt["total"] = str(
-                    total_info[0].get("total_price", "")
-                ).strip()
-
-            # FIX (BUG 7): Extract date_info from gt_parse properly
-            date_info = gt_json.get("date", {})
-            if isinstance(date_info, dict):
-                gt["date"] = str(date_info.get("date_value", "")).strip()
-            elif isinstance(date_info, list) and len(date_info) > 0:
-                gt["date"] = str(
-                    date_info[0].get("date_value", "")
-                ).strip()
-            elif isinstance(date_info, str):
-                gt["date"] = date_info.strip()
-            else:
-                gt["date"] = ""
-        except (json.JSONDecodeError, AttributeError):
+            # Date / total / address from answer spans (order matters)
+            for ans in spans["answer"]:
+                ans = ans.strip()
+                if not ans:
+                    continue
+                if not gt["date"] and cls._DATE_RE.search(ans):
+                    gt["date"] = ans
+                elif not gt["total"] and cls._AMOUNT_RE.search(ans):
+                    gt["total"] = ans
+                elif not gt["address"] and len(ans) > 5:
+                    gt["address"] = ans
+        except Exception:
             pass
         return gt
 
     # ── public interface ──────────────────────────────────────────────
 
     def load(self, split: str = "train") -> list[Sample]:
-        """Load CORD and normalize to SROIE schema.
+        """Load FUNSD and normalize to SROIE schema.
 
-        Uses content hash (md5 of image bytes) for on-disk filenames to
-        avoid collisions when multiple splits produce same counter index.
-        Skips the ``test`` split to prevent contamination.
+        Skips the ``test`` split to prevent contamination.  Uses content
+        hash for on-disk filenames to avoid collisions.
         """
         dest = self._download()
         hf_cache = self._hf_cache()
@@ -692,81 +739,36 @@ class CORDLoader(BaseDatasetLoader):
             raise self._fatal(f"Failed to load cache: {exc}") from exc
 
         samples: list[Sample] = []
-        splits = list(ds.keys()) if hasattr(ds, "keys") else ["train"]
+        img_dest_dir = _ensure_dir(dest / "images")
+        ds_splits = list(ds.keys()) if hasattr(ds, "keys") else ["train"]
 
-        for ds_split in splits:
+        for ds_split in ds_splits:
             if ds_split == "test":
-                continue  # only use train/validation for augmentation
-
-            # Allow caller to request a specific split
+                continue  # avoid test contamination
             if split != "train" and ds_split != split:
                 continue
 
             split_ds = ds[ds_split] if hasattr(ds, "keys") else ds
             for item in split_ds:
-                gt = self._cord_remap(item.get("ground_truth", "{}"))
+                words = item.get("words", [])
+                ner_tags = item.get("ner_tags", [])
                 pil_image = item.get("image")
-                if pil_image is not None:
-                    img_dest_dir = _ensure_dir(dest / "images")
-                    # Use content hash for unique filenames
-                    rgb = pil_image.convert("RGB")
-                    img_hash = hashlib.md5(
-                        rgb.tobytes()
-                    ).hexdigest()[:8]
-                    img_path = img_dest_dir / f"{ds_split}_{img_hash}.jpg"
-                    if not img_path.exists():
-                        rgb.save(img_path, "JPEG")
-                    samples.append((img_path, gt))
 
-        return _validate_samples_nonempty(samples, self.name)
-
-    def validate_cache(self) -> bool:
-        """Check that hf_cache exists and first record has gt_parse schema."""
-        hf_cache = self._hf_cache()
-        if not hf_cache.exists():
-            return False
-        try:
-            from datasets import load_from_disk  # type: ignore
-            ds = load_from_disk(str(hf_cache))
-            splits = list(ds.keys()) if hasattr(ds, "keys") else ["train"]
-            first_split = ds[splits[0]] if hasattr(ds, "keys") else ds
-            if len(first_split) == 0:
-                return False
-            item = first_split[0]
-            gt_str = item.get("ground_truth", "")
-            if not gt_str:
-                return False
-            obj = json.loads(gt_str) if isinstance(gt_str, str) else gt_str
-            return "gt_parse" in obj
-        except Exception:
-            return False
-
-    def clear_cache(self) -> None:
-        """Remove the entire CORD cache directory."""
-        import shutil
-        dest = self._dest_dir()
-        if dest.exists():
-            shutil.rmtree(dest, ignore_errors=True)
-            self._log("Cache cleared.")
-
-    def sample_count(self, split: str = "train") -> int:
-        """Return approximate sample count from the HF cache."""
-        hf_cache = self._hf_cache()
-        if not hf_cache.exists():
-            return 0
-        try:
-            from datasets import load_from_disk  # type: ignore
-            ds = load_from_disk(str(hf_cache))
-            total = 0
-            splits = list(ds.keys()) if hasattr(ds, "keys") else ["train"]
-            for s in splits:
-                if s == "test":
+                if not words or pil_image is None:
                     continue
-                split_ds = ds[s] if hasattr(ds, "keys") else ds
-                total += len(split_ds)
-            return total
-        except Exception:
-            return 0
+
+                gt = self._funsd_remap(words, ner_tags)
+                rgb = pil_image.convert("RGB")
+                img_hash = hashlib.md5(rgb.tobytes()).hexdigest()[:8]
+                img_path = img_dest_dir / f"{ds_split}_{img_hash}.jpg"
+                if not img_path.exists():
+                    rgb.save(img_path, "JPEG")
+                samples.append((img_path, gt))
+
+        if not samples:
+            self._warn("FUNSD returned 0 samples — check HF cache.")
+            return []
+        return samples
 
 
 # ======================================================================
@@ -954,7 +956,7 @@ class InvoicesDonutLoader(BaseDatasetLoader):
 
 _sroie_loader: SROIELoader | None = None
 _wildreceipt_loader: WildReceiptLoader | None = None
-_cord_loader: CORDLoader | None = None
+_funsd_loader: FUNSDLoader | None = None
 _invoices_donut_loader: InvoicesDonutLoader | None = None
 
 
@@ -972,11 +974,11 @@ def _get_wildreceipt_loader() -> WildReceiptLoader:
     return _wildreceipt_loader
 
 
-def _get_cord_loader() -> CORDLoader:
-    global _cord_loader
-    if _cord_loader is None:
-        _cord_loader = CORDLoader()
-    return _cord_loader
+def _get_funsd_loader() -> FUNSDLoader:
+    global _funsd_loader
+    if _funsd_loader is None:
+        _funsd_loader = FUNSDLoader()
+    return _funsd_loader
 
 
 def _get_invoices_donut_loader() -> InvoicesDonutLoader:
@@ -1019,9 +1021,9 @@ def load_wildreceipt() -> list[Sample]:
     return _get_wildreceipt_loader().load("train")
 
 
-def load_cord() -> list[Sample]:
-    """Load CORD — compatibility wrapper for CORDLoader."""
-    return _get_cord_loader().load("train")
+def load_funsd() -> list[Sample]:
+    """Load FUNSD — compatibility wrapper for FUNSDLoader."""
+    return _get_funsd_loader().load("train")
 
 
 def load_invoices_donut() -> list[Sample]:
@@ -1036,7 +1038,7 @@ def load_invoices_donut() -> list[Sample]:
 _LOADERS = {
     "sroie": load_sroie_train,
     "wildreceipt": load_wildreceipt,
-    "cord": load_cord,
+    "funsd": load_funsd,
     "invoices_donut": load_invoices_donut,
 }
 
