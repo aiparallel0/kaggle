@@ -417,9 +417,12 @@ def stage_pretrained_baseline(args) -> StageResult:
     pretrained_model_id = BASE_MODEL
     print(f"  Loading pretrained model: {pretrained_model_id}")
     pre_processor = DonutProcessor.from_pretrained(pretrained_model_id)
-    pre_model = VisionEncoderDecoderModel.from_pretrained(pretrained_model_id).to(
-        eval_mod.DEVICE
-    )
+    pre_model = VisionEncoderDecoderModel.from_pretrained(pretrained_model_id)
+    # Silence "tied weights" warning: checkpoint already has separate embed_tokens
+    # and lm_head tensors, so tying is not needed and the warning is spurious.
+    pre_model.config.tie_word_embeddings = False
+    pre_model.decoder.config.tie_word_embeddings = False
+    pre_model = pre_model.to(eval_mod.DEVICE)
     pre_model.eval()
 
     pretrained_preds = []

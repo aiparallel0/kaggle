@@ -602,6 +602,15 @@ def run_inference(model, processor, image_path, task_prompt, max_length=512,
         return {}
 
     if not isinstance(result, dict):
+        if isinstance(result, list):
+            # CORD multi-page format: token2json returns a list when the
+            # generated sequence contains <sep/> tokens (multiple line items).
+            # Pass the list through so remap_cord_to_sroie can merge pages.
+            logger.info(
+                "token2json returned list for %s (%d pages) — passing to caller",
+                image_path, len(result),
+            )
+            return result
         logger.warning("token2json returned non-dict for %s: %s", image_path, type(result))
         return {}
 
@@ -624,6 +633,19 @@ def remap_cord_to_sroie(cord_output):
       - Plain string values for any key
     """
     result = {"company": "", "date": "", "address": "", "total": ""}
+
+    # Handle list output from token2json (multi-page CORD with <sep/> tokens).
+    # Merge all pages: first occurrence of each top-level key wins so that
+    # store_info and total (usually on page 0) are always captured.
+    if isinstance(cord_output, list):
+        merged: dict = {}
+        for page in cord_output:
+            if isinstance(page, dict):
+                for k, v in page.items():
+                    if k not in merged:
+                        merged[k] = v
+        cord_output = merged
+
     if not isinstance(cord_output, dict):
         return result
 
