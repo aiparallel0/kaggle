@@ -12,16 +12,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pytest
 
-from donut_evaluator import _unwrap_prediction, compute_metrics, normalized_edit_distance
-
 torch = pytest.importorskip("torch", reason="torch required by donut_evaluator.py")
 pytest.importorskip("transformers", reason="transformers required by donut_evaluator.py")
 
+from donut_evaluator import _unwrap_prediction, compute_metrics, normalized_edit_distance
 
 
 # ---------------------------------------------------------------------------
 # normalized_edit_distance
 # ---------------------------------------------------------------------------
+
 
 class TestNED:
     def test_identical_strings(self):
@@ -58,6 +58,7 @@ class TestNED:
 # ---------------------------------------------------------------------------
 # _parse_prediction list-merge behaviour (exercised via DonutEvaluator)
 # ---------------------------------------------------------------------------
+
 
 class TestParsePredictionListMerge:
     """Verify token2json list output is merged rather than discarded.
@@ -148,6 +149,7 @@ class TestParsePredictionListMerge:
 # _unwrap_prediction
 # ---------------------------------------------------------------------------
 
+
 class TestUnwrapPrediction:
     def test_sroie_unwrap(self):
         parsed = {"sroie": {"company": "ACME", "total": "10.00"}}
@@ -178,10 +180,13 @@ class TestUnwrapPrediction:
 # compute_metrics
 # ---------------------------------------------------------------------------
 
+
 class TestComputeMetrics:
     def test_perfect_predictions(self):
         gt = [{"company": "ACME", "date": "01/01/2024", "address": "123 Main St", "total": "10.00"}]
-        preds = [{"company": "ACME", "date": "01/01/2024", "address": "123 Main St", "total": "10.00"}]
+        preds = [
+            {"company": "ACME", "date": "01/01/2024", "address": "123 Main St", "total": "10.00"}
+        ]
         m = compute_metrics(preds, gt)
         assert m["global_f1"] == 1.0
         assert m["global_precision"] == 1.0
@@ -256,9 +261,18 @@ class TestComputeMetrics:
         preds = [{"company": "A", "date": "B", "address": "C", "total": "D"}]
         m = compute_metrics(preds, gt)
         expected_keys = {
-            "global_precision", "global_recall", "global_f1", "overall_exact_match",
-            "company_f1", "company_ned", "date_f1", "date_ned",
-            "address_f1", "address_ned", "total_f1", "total_ned",
+            "global_precision",
+            "global_recall",
+            "global_f1",
+            "overall_exact_match",
+            "company_f1",
+            "company_ned",
+            "date_f1",
+            "date_ned",
+            "address_f1",
+            "address_ned",
+            "total_f1",
+            "total_ned",
         }
         assert expected_keys.issubset(set(m.keys()))
 
@@ -266,6 +280,7 @@ class TestComputeMetrics:
 # ---------------------------------------------------------------------------
 # load_model_with_tied_weights — checkpoint sanity check
 # ---------------------------------------------------------------------------
+
 
 class TestLoadModelWithTiedWeights:
     """Verify load_model_with_tied_weights raises loudly when lm_head is missing.

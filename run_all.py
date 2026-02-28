@@ -79,6 +79,7 @@ from constants import BASE_MODEL, IMAGE_EXTS, SEED
 # StageResult — structured output from each pipeline stage
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class StageResult:
     """Result of a single pipeline stage execution."""
@@ -92,6 +93,7 @@ class StageResult:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _banner(text: str) -> None:
     width = 72
@@ -108,6 +110,7 @@ def _step(n: int, total: int, desc: str) -> None:
 # ---------------------------------------------------------------------------
 # HuggingFace authentication
 # ---------------------------------------------------------------------------
+
 
 def _setup_hf_auth() -> None:
     """Load HuggingFace token from hf_token.txt or environment for faster downloads.
@@ -129,6 +132,7 @@ def _setup_hf_auth() -> None:
         os.environ["HUGGING_FACE_HUB_TOKEN"] = token  # legacy env var
         try:
             from huggingface_hub import login
+
             login(token=token, add_to_git_credential=False)
             print("  [HF Auth] Authenticated — faster downloads enabled")
         except Exception as e:
@@ -145,6 +149,7 @@ def _setup_hf_auth() -> None:
 # Stage 0 — SROIE auto-install
 # ---------------------------------------------------------------------------
 
+
 def stage_install(args) -> StageResult:
     """Clone SROIE from GitHub and set up train/val/test directories using 80/10/10 split."""
     _banner("STAGE 0 — SROIE data install")
@@ -157,8 +162,7 @@ def stage_install(args) -> StageResult:
 
     if sroie_img.exists() and sroie_test_img.exists() and sroie_val_img.exists():
         print(f"  SROIE data already present at {sroie_data_dir} — skipping install.")
-        return StageResult(name="SROIE Install", duration=0.0, exit_status=0,
-                           warnings=warnings)
+        return StageResult(name="SROIE Install", duration=0.0, exit_status=0, warnings=warnings)
 
     # Clone from GitHub into the parent directory of sroie_data_dir
     parent_dir = sroie_data_dir.parent
@@ -206,12 +210,12 @@ def stage_install(args) -> StageResult:
 
     # Collect all images with matching key files
     all_images = sorted(
-        p for p in img_dir.iterdir()
-        if p.is_file() and p.suffix.lower() in IMAGE_EXTS
+        p for p in img_dir.iterdir() if p.is_file() and p.suffix.lower() in IMAGE_EXTS
     )
     # Keep only images that have a corresponding key file
     valid_images = [
-        p for p in all_images
+        p
+        for p in all_images
         if (key_dir / (p.stem + ".txt")).exists() or (key_dir / (p.stem + ".json")).exists()
     ]
 
@@ -224,8 +228,8 @@ def stage_install(args) -> StageResult:
     n_train = int(n * 0.8)
     n_val = (n - n_train) // 2
     train_imgs = shuffled[:n_train]
-    val_imgs = shuffled[n_train:n_train + n_val]
-    test_imgs = shuffled[n_train + n_val:]
+    val_imgs = shuffled[n_train : n_train + n_val]
+    test_imgs = shuffled[n_train + n_val :]
 
     val_img_dir = sroie_data_dir / "val_img"
     val_key_dir = sroie_data_dir / "val_key"
@@ -251,28 +255,24 @@ def stage_install(args) -> StageResult:
     _move_split(test_imgs, test_img_dir, test_key_dir)
 
     # Verify: img/ should now contain exactly the train images
-    remaining = sum(
-        1 for p in img_dir.iterdir()
-        if p.is_file() and p.suffix.lower() in IMAGE_EXTS
-    )
+    remaining = sum(1 for p in img_dir.iterdir() if p.is_file() and p.suffix.lower() in IMAGE_EXTS)
     print(f"  Train images : {remaining} (in img/, after moving val+test out)")
     print(f"  Val images   : {len(val_imgs)} (in val_img/)")
     print(f"  Test images  : {len(test_imgs)} (in test_img/)")
     if remaining != len(train_imgs):
         print(
-            f"  WARNING: Expected {len(train_imgs)} train images in img/ "
-            f"but found {remaining}",
+            f"  WARNING: Expected {len(train_imgs)} train images in img/ but found {remaining}",
             file=sys.stderr,
         )
     print(f"  SROIE data ready at {sroie_data_dir}")
 
-    return StageResult(name="SROIE Install", duration=0.0, exit_status=0,
-                       warnings=warnings)
+    return StageResult(name="SROIE Install", duration=0.0, exit_status=0, warnings=warnings)
 
 
 # ---------------------------------------------------------------------------
 # Stage 1 — Dataset verification / download + inline model pre-download
 # ---------------------------------------------------------------------------
+
 
 def stage_download(args) -> StageResult:
     """Verify SROIE exists, fetch auxiliary datasets in parallel, then download model inline."""
@@ -349,8 +349,10 @@ def stage_download(args) -> StageResult:
     if failed_datasets:
         # Report which experiment IDs are affected by the failed downloads
         import run_experiments as re_mod
+
         affected_exp_ids = [
-            exp_id for exp_id, exp in re_mod.EXPERIMENTS.items()
+            exp_id
+            for exp_id, exp in re_mod.EXPERIMENTS.items()
             if any(ds in exp.datasets for ds in failed_datasets)
         ]
         print(
@@ -369,6 +371,7 @@ def stage_download(args) -> StageResult:
     print("\n  Pre-downloading base model (blocking) ...")
     try:
         from transformers import DonutProcessor, VisionEncoderDecoderModel
+
         model_id = BASE_MODEL
         DonutProcessor.from_pretrained(model_id)
         VisionEncoderDecoderModel.from_pretrained(model_id)
@@ -379,13 +382,15 @@ def stage_download(args) -> StageResult:
         warnings.append(w)
 
     exit_status = 1 if failed_datasets else 0
-    return StageResult(name="Dataset Download", duration=0.0, exit_status=exit_status,
-                       warnings=warnings)
+    return StageResult(
+        name="Dataset Download", duration=0.0, exit_status=exit_status, warnings=warnings
+    )
 
 
 # ---------------------------------------------------------------------------
 # Stage 1.5 — Pretrained baseline evaluation
 # ---------------------------------------------------------------------------
+
 
 def stage_pretrained_baseline(args) -> StageResult:
     """Evaluate the pretrained CORD model as a zero-shot baseline on SROIE test."""
@@ -406,8 +411,7 @@ def stage_pretrained_baseline(args) -> StageResult:
         w = "SROIE test split is empty — skipping pretrained baseline evaluation."
         print(f"  WARNING: {w}", file=sys.stderr)
         warnings.append(w)
-        return StageResult(name="Pretrained Eval", duration=0.0, exit_status=1,
-                           warnings=warnings)
+        return StageResult(name="Pretrained Eval", duration=0.0, exit_status=1, warnings=warnings)
 
     print(f"  Evaluating on {len(test_samples)} test images ...")
 
@@ -440,13 +444,13 @@ def stage_pretrained_baseline(args) -> StageResult:
         json.dump(output, fh, indent=2, default=str)
     print(f"  Saved → {output_path}")
 
-    return StageResult(name="Pretrained Eval", duration=0.0, exit_status=0,
-                       warnings=warnings)
+    return StageResult(name="Pretrained Eval", duration=0.0, exit_status=0, warnings=warnings)
 
 
 # ---------------------------------------------------------------------------
 # Stage 2 — Experiments (train + eval)
 # ---------------------------------------------------------------------------
+
 
 def stage_experiments(args) -> StageResult:
     """Run all (or a single) experiment(s) SEQUENTIALLY. Returns StageResult."""
@@ -485,6 +489,7 @@ def stage_experiments(args) -> StageResult:
             result = re_mod.run_experiment(exp_id)
         except Exception as exc:
             import traceback
+
             elapsed = time.monotonic() - t0
             ts_end = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
             w = f"Experiment {exp_id} crashed: {type(exc).__name__}: {exc}"
@@ -499,8 +504,10 @@ def stage_experiments(args) -> StageResult:
         ts_end = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         f1 = result.get("metrics", {}).get("global_f1", "N/A")
         print(f"  ◀ Experiment {exp_id} finished at {ts_end} ({elapsed:.1f}s)")
-        print(f"    done in {elapsed / 60:.1f}min | F1={f1} "
-              f"| Samples={result.get('num_train_samples', '?')}")
+        print(
+            f"    done in {elapsed / 60:.1f}min | F1={f1} "
+            f"| Samples={result.get('num_train_samples', '?')}"
+        )
         completed += 1
         if result.get("num_train_samples", 0) == 0:
             had_empty = True
@@ -512,13 +519,15 @@ def stage_experiments(args) -> StageResult:
     re_mod.save_summary()
 
     exit_status = 1 if had_empty else 0
-    return StageResult(name="DONUT Experiments", duration=0.0, exit_status=exit_status,
-                       warnings=warnings)
+    return StageResult(
+        name="DONUT Experiments", duration=0.0, exit_status=exit_status, warnings=warnings
+    )
 
 
 # ---------------------------------------------------------------------------
 # Stage 3 — TrOCR+YOLO dataset preparation
 # ---------------------------------------------------------------------------
+
 
 def stage_trocr_data_prep(args) -> StageResult:
     """Prepare YOLO bbox labels and TrOCR line crops from existing SROIE split.
@@ -532,6 +541,7 @@ def stage_trocr_data_prep(args) -> StageResult:
 
     try:
         import importlib
+
         ds_prep = importlib.import_module("01_dataset_preparation")
         counts = ds_prep.prepare_all()
         for key, count in counts.items():
@@ -540,16 +550,15 @@ def stage_trocr_data_prep(args) -> StageResult:
         w = f"TrOCR data prep failed: {exc}"
         print(f"  WARNING: {w}", file=sys.stderr)
         warnings.append(w)
-        return StageResult(name="TrOCR Data Prep", duration=0.0, exit_status=1,
-                           warnings=warnings)
+        return StageResult(name="TrOCR Data Prep", duration=0.0, exit_status=1, warnings=warnings)
 
-    return StageResult(name="TrOCR Data Prep", duration=0.0, exit_status=0,
-                       warnings=warnings)
+    return StageResult(name="TrOCR Data Prep", duration=0.0, exit_status=0, warnings=warnings)
 
 
 # ---------------------------------------------------------------------------
 # Stage 4 — TrOCR+YOLO training and evaluation
 # ---------------------------------------------------------------------------
+
 
 def stage_trocr_experiments(args) -> StageResult:
     """Train YOLOv8 + TrOCR and evaluate on the SAME 63 SROIE test images.
@@ -566,6 +575,7 @@ def stage_trocr_experiments(args) -> StageResult:
 
     try:
         import importlib
+
         trocr_yolo = importlib.import_module("03_train_trocr_yolo")
         eval_mod = importlib.import_module("04_evaluate")
 
@@ -626,24 +636,25 @@ def stage_trocr_experiments(args) -> StageResult:
 
         # FIX: GPU cleanup after TrOCR+YOLO stage
         from constants import _gpu_cleanup
+
         _gpu_cleanup()
 
     except Exception as exc:
         import traceback
+
         traceback.print_exc()
         w = f"TrOCR+YOLO stage failed: {type(exc).__name__}: {exc}"
         print(f"  WARNING: {w}", file=sys.stderr)
         warnings.append(w)
-        return StageResult(name="TrOCR+YOLO", duration=0.0, exit_status=1,
-                           warnings=warnings)
+        return StageResult(name="TrOCR+YOLO", duration=0.0, exit_status=1, warnings=warnings)
 
-    return StageResult(name="TrOCR+YOLO", duration=0.0, exit_status=0,
-                       warnings=warnings)
+    return StageResult(name="TrOCR+YOLO", duration=0.0, exit_status=0, warnings=warnings)
 
 
 # ---------------------------------------------------------------------------
 # Stage 5 — Head-to-head benchmark (DONUT vs YOLOv8+TrOCR+Regex)
 # ---------------------------------------------------------------------------
+
 
 def stage_benchmark(args) -> StageResult:
     """Run benchmark_compare.py: load both trained models, run inference on
@@ -666,8 +677,7 @@ def stage_benchmark(args) -> StageResult:
         w = "SROIE test_img/ or test_key/ not found — skipping benchmark."
         print(f"  WARNING: {w}", file=sys.stderr)
         warnings.append(w)
-        return StageResult(name="Benchmark", duration=0.0, exit_status=1,
-                           warnings=warnings)
+        return StageResult(name="Benchmark", duration=0.0, exit_status=1, warnings=warnings)
 
     # --- Find best DONUT experiment model (highest global F1) ---
     results_dir = Path("results")
@@ -692,8 +702,10 @@ def stage_benchmark(args) -> StageResult:
         if donut_model_dir_alt.exists():
             donut_model_dir = donut_model_dir_alt
         else:
-            w = (f"No fine-tuned DONUT model found at {donut_model_dir} "
-                 f"— falling back to pretrained base model.")
+            w = (
+                f"No fine-tuned DONUT model found at {donut_model_dir} "
+                f"— falling back to pretrained base model."
+            )
             print(f"  WARNING: {w}")
             warnings.append(w)
             donut_model_dir = Path(BASE_MODEL)  # HuggingFace hub ID
@@ -716,6 +728,7 @@ def stage_benchmark(args) -> StageResult:
     # --- Run benchmark_compare programmatically ---
     try:
         import importlib
+
         bench_mod = importlib.import_module("benchmark_compare")
 
         pairs = bench_mod.find_pairs(test_img_dir, test_key_dir)
@@ -725,9 +738,7 @@ def stage_benchmark(args) -> StageResult:
 
         # Run DONUT pipeline
         print("\n  Running DONUT inference ...")
-        donut_pipe = bench_mod.DonutPipeline(
-            model_id_or_path=str(donut_model_dir)
-        )
+        donut_pipe = bench_mod.DonutPipeline(model_id_or_path=str(donut_model_dir))
         donut_result = donut_pipe.run_benchmark(pairs, desc="DONUT benchmark")
         donut_result = bench_mod.compute_metrics(donut_result)
         all_results.append(donut_result)
@@ -736,6 +747,7 @@ def stage_benchmark(args) -> StageResult:
         import gc
 
         import torch
+
         del donut_pipe
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -769,20 +781,20 @@ def stage_benchmark(args) -> StageResult:
 
     except Exception as exc:
         import traceback
+
         traceback.print_exc()
         w = f"Benchmark stage failed: {type(exc).__name__}: {exc}"
         print(f"  WARNING: {w}", file=sys.stderr)
         warnings.append(w)
-        return StageResult(name="Benchmark", duration=0.0, exit_status=1,
-                           warnings=warnings)
+        return StageResult(name="Benchmark", duration=0.0, exit_status=1, warnings=warnings)
 
-    return StageResult(name="Benchmark", duration=0.0, exit_status=0,
-                       warnings=warnings)
+    return StageResult(name="Benchmark", duration=0.0, exit_status=0, warnings=warnings)
 
 
 # ---------------------------------------------------------------------------
 # Stage 6 — Cross-architecture comparison
 # ---------------------------------------------------------------------------
+
 
 def stage_comparison(args) -> StageResult:
     """Generate cross-architecture comparison plots and tables.
@@ -795,22 +807,22 @@ def stage_comparison(args) -> StageResult:
 
     try:
         import importlib
+
         compare_mod = importlib.import_module("05_compare_results")
         compare_mod.compare_all()
     except Exception as exc:
         w = f"Comparison stage failed: {exc}"
         print(f"  WARNING: {w}", file=sys.stderr)
         warnings.append(w)
-        return StageResult(name="Comparison", duration=0.0, exit_status=1,
-                           warnings=warnings)
+        return StageResult(name="Comparison", duration=0.0, exit_status=1, warnings=warnings)
 
-    return StageResult(name="Comparison", duration=0.0, exit_status=0,
-                       warnings=warnings)
+    return StageResult(name="Comparison", duration=0.0, exit_status=0, warnings=warnings)
 
 
 # ---------------------------------------------------------------------------
 # Stage 7 — LaTeX paper generation
 # ---------------------------------------------------------------------------
+
 
 def stage_paper(args) -> StageResult:
     """Generate LaTeX tables and fill paper_filled.tex.
@@ -869,18 +881,17 @@ def stage_paper(args) -> StageResult:
         ir.fill_paper(str(paper_template), str(output_paper), var_map)
         print(f"\n  Complete paper written -> {output_paper}")
     else:
-        w = (f"paper template not found at {paper_template}; "
-             f"skipping paper_filled.tex generation.")
+        w = f"paper template not found at {paper_template}; skipping paper_filled.tex generation."
         print(f"  WARNING: {w}")
         warnings.append(w)
 
-    return StageResult(name="Paper Generation", duration=0.0, exit_status=0,
-                       warnings=warnings)
+    return StageResult(name="Paper Generation", duration=0.0, exit_status=0, warnings=warnings)
 
 
 # ---------------------------------------------------------------------------
 # PipelineOrchestrator — sequential execution with structured results
 # ---------------------------------------------------------------------------
+
 
 class PipelineOrchestrator:
     """Orchestrates all pipeline stages SEQUENTIALLY with timing and status tracking."""
@@ -901,10 +912,13 @@ class PipelineOrchestrator:
             raise
         except Exception as exc:
             import traceback
+
             elapsed = time.monotonic() - t0
             traceback.print_exc()
             result = StageResult(
-                name=name, duration=elapsed, exit_status=2,
+                name=name,
+                duration=elapsed,
+                exit_status=2,
                 warnings=[f"Uncaught exception: {type(exc).__name__}: {exc}"],
             )
         ts_end = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -975,8 +989,7 @@ class PipelineOrchestrator:
         lines.append(f"╠{'═' * W}╣")
 
         # Header
-        hdr = (f"  {'Stage':<24}│ {'Duration':>8} │ {'Status':<7} "
-               f"│ {'Warnings':<20}")
+        hdr = f"  {'Stage':<24}│ {'Duration':>8} │ {'Status':<7} │ {'Warnings':<20}"
         lines.append(f"║{hdr:<{W}}║")
 
         sep = f"{'═' * 25}╪{'═' * 10}╪{'═' * 9}╪{'═' * (W - 46)}"
@@ -1004,9 +1017,12 @@ class PipelineOrchestrator:
                 status = "⚠ PART"
             else:
                 status = "✗ FAIL"
-            warn_text = f"{len(sr.warnings)} warning{'s' if len(sr.warnings) != 1 else ''}" if sr.warnings else ""
-            row = (f"  {label:<24}│ {dur:>8} │ {status:<7} "
-                   f"│ {warn_text:<20}")
+            warn_text = (
+                f"{len(sr.warnings)} warning{'s' if len(sr.warnings) != 1 else ''}"
+                if sr.warnings
+                else ""
+            )
+            row = f"  {label:<24}│ {dur:>8} │ {status:<7} │ {warn_text:<20}"
             lines.append(f"║{row:<{W}}║")
 
         lines.append(f"╚{'═' * W}╝")
@@ -1017,6 +1033,7 @@ class PipelineOrchestrator:
 # CLI
 # ---------------------------------------------------------------------------
 
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="run_all.py",
@@ -1025,54 +1042,67 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=__doc__,
     )
     p.add_argument(
-        "--experiment", type=int, metavar="N",
+        "--experiment",
+        type=int,
+        metavar="N",
         help="Run only experiment N (1–8) instead of all 8",
     )
     p.add_argument(
-        "--force", action="store_true",
+        "--force",
+        action="store_true",
         help="Delete all cached experiment results and re-run from scratch",
     )
     p.add_argument(
-        "--paper-only", action="store_true",
+        "--paper-only",
+        action="store_true",
         help="Skip download & training; only generate the paper from existing results",
     )
     p.add_argument(
-        "--skip-install", action="store_true",
+        "--skip-install",
+        action="store_true",
         help="Skip Stage 0 SROIE auto-install (data already present)",
     )
     p.add_argument(
-        "--skip-download", action="store_true",
+        "--skip-download",
+        action="store_true",
         help="Skip the dataset download/verification stage",
     )
     p.add_argument(
-        "--skip-pretrained", action="store_true",
+        "--skip-pretrained",
+        action="store_true",
         help="Skip pretrained baseline evaluation step",
     )
     p.add_argument(
-        "--skip-trocr", action="store_true",
+        "--skip-trocr",
+        action="store_true",
         help="Skip TrOCR+YOLO stages (data prep, training, evaluation)",
     )
     p.add_argument(
-        "--skip-benchmark", action="store_true",
+        "--skip-benchmark",
+        action="store_true",
         help="Skip head-to-head benchmark (DONUT vs YOLOv8+TrOCR+Regex)",
     )
     p.add_argument(
-        "--sroie-dir", default="/workspace/ICDAR-2019-SROIE/data",
+        "--sroie-dir",
+        default="/workspace/ICDAR-2019-SROIE/data",
         metavar="PATH",
         help="Path to SROIE data directory (default: /workspace/ICDAR-2019-SROIE/data)",
     )
     p.add_argument(
-        "--workspace", default="/workspace",
+        "--workspace",
+        default="/workspace",
         metavar="PATH",
         help="Workspace root for model checkpoints (default: /workspace)",
     )
     p.add_argument(
-        "--paper-template", default="paper.tex",
+        "--paper-template",
+        default="paper.tex",
         metavar="FILE",
         help="LaTeX template to fill (default: paper.tex)",
     )
     p.add_argument(
-        "--output", default="paper_filled.tex",
+        "--output",
+        default="paper_filled.tex",
         metavar="FILE",
         help="Output filled LaTeX file (default: paper_filled.tex)",
     )
@@ -1104,6 +1134,7 @@ def main() -> None:
     import platform
 
     import torch
+
     _banner("ENVIRONMENT DIAGNOSTICS")
     print(f"  Python       : {platform.python_version()} ({sys.executable})")
     print(f"  Platform     : {platform.platform()}")
@@ -1111,10 +1142,20 @@ def main() -> None:
     if torch.cuda.is_available():
         print(f"  CUDA device  : {torch.cuda.get_device_name(0)}")
         print(f"  CUDA version : {torch.version.cuda}")
-        gpu_mem = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
+        gpu_mem = torch.cuda.get_device_properties(0).total_memory / (1024**3)
         print(f"  GPU memory   : {gpu_mem:.1f} GB")
-    for pkg in ["torch", "transformers", "datasets", "accelerate", "huggingface_hub",
-                "sentencepiece", "editdistance", "pandas", "numpy", "Pillow"]:
+    for pkg in [
+        "torch",
+        "transformers",
+        "datasets",
+        "accelerate",
+        "huggingface_hub",
+        "sentencepiece",
+        "editdistance",
+        "pandas",
+        "numpy",
+        "Pillow",
+    ]:
         try:
             mod = importlib.import_module(
                 pkg.replace("-", "_").lower() if pkg != "Pillow" else "PIL"
@@ -1128,9 +1169,12 @@ def main() -> None:
     print(f"  CWD          : {Path.cwd()}")
     try:
         import psutil
+
         mem = psutil.virtual_memory()
-        print(f"  RAM          : {mem.total / (1024 ** 3):.1f} GB total, "
-              f"{mem.available / (1024 ** 3):.1f} GB available")
+        print(
+            f"  RAM          : {mem.total / (1024**3):.1f} GB total, "
+            f"{mem.available / (1024**3):.1f} GB available"
+        )
     except ImportError:
         pass
     print(f"  CPU cores    : {os.cpu_count()}")

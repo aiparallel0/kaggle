@@ -57,12 +57,15 @@ try:
     import torch
     from PIL import Image
     from tqdm import tqdm
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 except ImportError as e:
-    sys.exit(f"FATAL: missing dependency — {e}\n"
-             "Run: pip install torch torchvision transformers "
-             "ultralytics pillow editdistance matplotlib tqdm numpy")
+    sys.exit(
+        f"FATAL: missing dependency — {e}\n"
+        "Run: pip install torch torchvision transformers "
+        "ultralytics pillow editdistance matplotlib tqdm numpy"
+    )
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Constants — imported from single source of truth (constants.py)
@@ -83,7 +86,7 @@ class SampleResult:
 
 @dataclass
 class BenchmarkResult:
-    method: str                          # "DONUT" | "YOLOv8+TrOCR+Regex"
+    method: str  # "DONUT" | "YOLOv8+TrOCR+Regex"
     samples: list[SampleResult] = field(default_factory=list)
 
     # Aggregated metrics (filled by compute_metrics)
@@ -91,7 +94,7 @@ class BenchmarkResult:
     per_field_accuracy: dict[str, float] = field(default_factory=dict)
     global_f1: float = 0.0
     global_accuracy: float = 0.0
-    global_ned: float = 0.0            # Normalised Edit Distance (lower = better)
+    global_ned: float = 0.0  # Normalised Edit Distance (lower = better)
     mean_inference_ms: float = 0.0
     median_inference_ms: float = 0.0
     p95_inference_ms: float = 0.0
@@ -133,7 +136,7 @@ def _token_f1(pred: str, gold: str) -> float:
         return 0.0
     common = set(pred_tokens) & set(gold_tokens)
     precision = sum(pred_tokens.count(t) for t in common) / len(pred_tokens)
-    recall    = sum(gold_tokens.count(t) for t in common) / len(gold_tokens)
+    recall = sum(gold_tokens.count(t) for t in common) / len(gold_tokens)
     if precision + recall == 0:
         return 0.0
     return 2 * precision * recall / (precision + recall)
@@ -203,7 +206,7 @@ def load_label_txt(path: Path) -> dict[str, str]:
     for line in lines:
         for fld in FIELDS:
             if line.lower().startswith(fld + ":"):
-                kv[fld] = line[len(fld) + 1:].strip()
+                kv[fld] = line[len(fld) + 1 :].strip()
     if len(kv) >= 3:
         return {f: kv.get(f, "") for f in FIELDS}
 
@@ -215,8 +218,9 @@ def load_label_txt(path: Path) -> dict[str, str]:
 # ─────────────────────────────────────────────────────────────────────────────
 # Dataset discovery
 # ─────────────────────────────────────────────────────────────────────────────
-def find_pairs(images_dir: Path, labels_dir: Path,
-               max_samples: int | None = None) -> list[tuple[Path, dict]]:
+def find_pairs(
+    images_dir: Path, labels_dir: Path, max_samples: int | None = None
+) -> list[tuple[Path, dict]]:
     """
     Find (image_path, ground_truth_dict) pairs.
     Matches image stem → label stem (case-insensitive).
@@ -266,8 +270,8 @@ class DonutPipeline:
         from transformers import DonutProcessor, VisionEncoderDecoderModel
 
         self.device = (
-            "cuda" if torch.cuda.is_available() else "cpu"
-        ) if device == "auto" else device
+            ("cuda" if torch.cuda.is_available() else "cpu") if device == "auto" else device
+        )
 
         print(f"[DONUT] Loading model: {model_id_or_path}  →  {self.device}")
         self.processor = DonutProcessor.from_pretrained(model_id_or_path)
@@ -277,9 +281,7 @@ class DonutPipeline:
         lm_head_w = getattr(self.model.decoder, "lm_head", None)
         if lm_head_w is None or lm_head_w.weight is None:
             print("[DONUT] WARNING: lm_head weight missing — attempting weight tie fix")
-            self.model.decoder.lm_head.weight = (
-                self.model.decoder.model.decoder.embed_tokens.weight
-            )
+            self.model.decoder.lm_head.weight = self.model.decoder.model.decoder.embed_tokens.weight
 
         self.model.to(self.device).eval()
         self.task_prompt = "<s_sroie>"
@@ -306,9 +308,9 @@ class DonutPipeline:
         Returns (field_dict, inference_time_ms).
         """
         t0 = time.perf_counter()
-        pixel_values = self.processor(
-            image.convert("RGB"), return_tensors="pt"
-        ).pixel_values.to(self.device)
+        pixel_values = self.processor(image.convert("RGB"), return_tensors="pt").pixel_values.to(
+            self.device
+        )
 
         decoder_input_ids = self.processor.tokenizer(
             self.task_prompt,
@@ -334,18 +336,19 @@ class DonutPipeline:
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
         return self._parse_output(token_str), elapsed_ms
 
-    def run_benchmark(self, pairs: list[tuple[Path, dict]],
-                      desc: str = "DONUT") -> BenchmarkResult:
+    def run_benchmark(self, pairs: list[tuple[Path, dict]], desc: str = "DONUT") -> BenchmarkResult:
         result = BenchmarkResult(method="DONUT")
         for img_path, gt in tqdm(pairs, desc=desc, unit="img"):
             img = Image.open(img_path).convert("RGB")
             pred, ms = self.predict(img)
-            result.samples.append(SampleResult(
-                image_name=img_path.name,
-                ground_truth=gt,
-                prediction=pred,
-                inference_time_ms=ms,
-            ))
+            result.samples.append(
+                SampleResult(
+                    image_name=img_path.name,
+                    ground_truth=gt,
+                    prediction=pred,
+                    inference_time_ms=ms,
+                )
+            )
         return result
 
 
@@ -357,42 +360,42 @@ class DonutPipeline:
 
 # Date patterns — covers DD/MM/YYYY, YYYY-MM-DD, D MMM YYYY, etc.
 _DATE_PATTERNS = [
-    re.compile(r'\b\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}\b'),
-    re.compile(r'\b\d{4}[\/\-\.]\d{1,2}[\/\-\.]\d{1,2}\b'),
+    re.compile(r"\b\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}\b"),
+    re.compile(r"\b\d{4}[\/\-\.]\d{1,2}[\/\-\.]\d{1,2}\b"),
     re.compile(
-        r'\b\d{1,2}\s*(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|'
-        r'May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|'
-        r'Nov(?:ember)?|Dec(?:ember)?)\s*\d{2,4}\b',
+        r"\b\d{1,2}\s*(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|"
+        r"May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|"
+        r"Nov(?:ember)?|Dec(?:ember)?)\s*\d{2,4}\b",
         re.IGNORECASE,
     ),
     # SROIE date header keywords
-    re.compile(r'(?:date|tarikh|tanggal)\s*[:\-]?\s*(\S+)', re.IGNORECASE),
+    re.compile(r"(?:date|tarikh|tanggal)\s*[:\-]?\s*(\S+)", re.IGNORECASE),
 ]
 
 # Total patterns — most specific first
 _TOTAL_PATTERNS = [
     re.compile(
-        r'(?:total|jumlah|amount\s+due|grand\s+total|total\s+amount)'
-        r'\s*[:\-]?\s*(?:rm|myr|usd|\$|£|€)?\s*(\d[\d,]*\.\d{2})',
+        r"(?:total|jumlah|amount\s+due|grand\s+total|total\s+amount)"
+        r"\s*[:\-]?\s*(?:rm|myr|usd|\$|£|€)?\s*(\d[\d,]*\.\d{2})",
         re.IGNORECASE,
     ),
     re.compile(
-        r'(?:total|jumlah)\s*[:\-]?\s*(\d[\d,]*\.\d{2})',
+        r"(?:total|jumlah)\s*[:\-]?\s*(\d[\d,]*\.\d{2})",
         re.IGNORECASE,
     ),
     # Fallback: largest monetary value on the page
-    re.compile(r'(?:rm|myr|\$|£|€)\s*(\d[\d,]*\.\d{2})'),
-    re.compile(r'(\d[\d,]*\.\d{2})\s*(?:rm|myr)?'),
+    re.compile(r"(?:rm|myr|\$|£|€)\s*(\d[\d,]*\.\d{2})"),
+    re.compile(r"(\d[\d,]*\.\d{2})\s*(?:rm|myr)?"),
 ]
 
 # Address heuristics — detect lines that look like addresses
 _STREET_WORDS = re.compile(
-    r'\b(?:jalan|jln|lorong|lot|no\.?|blok|block|level|floor|tingkat|'
-    r'road|street|avenue|lane|drive|boulevard|plaza|mall|park|'
-    r'batu|km|kilometer|mile)\b',
+    r"\b(?:jalan|jln|lorong|lot|no\.?|blok|block|level|floor|tingkat|"
+    r"road|street|avenue|lane|drive|boulevard|plaza|mall|park|"
+    r"batu|km|kilometer|mile)\b",
     re.IGNORECASE,
 )
-_POSTCODE_RE = re.compile(r'\b\d{5}\b')
+_POSTCODE_RE = re.compile(r"\b\d{5}\b")
 
 
 class TrOCRYOLOPipeline:
@@ -419,8 +422,8 @@ class TrOCRYOLOPipeline:
         from ultralytics import YOLO
 
         self.device = (
-            "cuda" if torch.cuda.is_available() else "cpu"
-        ) if device == "auto" else device
+            ("cuda" if torch.cuda.is_available() else "cpu") if device == "auto" else device
+        )
         self.conf_threshold = conf_threshold
         self.iou_threshold = iou_threshold
 
@@ -479,9 +482,7 @@ class TrOCRYOLOPipeline:
                 max_new_tokens=128,
             )
 
-        text = self.trocr_processor.batch_decode(
-            generated, skip_special_tokens=True
-        )[0]
+        text = self.trocr_processor.batch_decode(generated, skip_special_tokens=True)[0]
         return text.strip()
 
     # ── Regex: assign lines to fields ──────────────────────────────────────
@@ -525,7 +526,7 @@ class TrOCRYOLOPipeline:
             for i, line in enumerate(lines):
                 if i in used:
                     continue
-                for m in re.finditer(r'\d[\d,]*\.\d{2}', line):
+                for m in re.finditer(r"\d[\d,]*\.\d{2}", line):
                     try:
                         val = float(m.group(0).replace(",", ""))
                         candidates.append((val, m.group(0), i))
@@ -560,11 +561,8 @@ class TrOCRYOLOPipeline:
             has_street = bool(_STREET_WORDS.search(line))
             has_postcode = bool(_POSTCODE_RE.search(line))
             # Address heuristic: 2+ words, contains digit or street word
-            has_digit = bool(re.search(r'\d', line))
-            looks_like_addr = (
-                (has_street or has_postcode) or
-                (has_digit and len(line.split()) >= 3)
-            )
+            has_digit = bool(re.search(r"\d", line))
+            looks_like_addr = (has_street or has_postcode) or (has_digit and len(line.split()) >= 3)
             if looks_like_addr:
                 address_lines.append((i, line))
 
@@ -585,7 +583,7 @@ class TrOCRYOLOPipeline:
             if not line.strip():
                 continue
             # Prefer lines from the top (header area) that are not purely numeric
-            if re.match(r'^[\d\s\.,:]+$', line):
+            if re.match(r"^[\d\s\.,:]+$", line):
                 continue
             result["company"] = line.strip()
             used.add(i)
@@ -608,7 +606,7 @@ class TrOCRYOLOPipeline:
         # Stage 2: read text from each crop
         lines = []
         img_arr = image.convert("RGB")
-        for (x1, y1, x2, y2) in boxes:
+        for x1, y1, x2, y2 in boxes:
             # Add a small padding to each crop
             pad = 4
             x1p = max(0, x1 - pad)
@@ -625,18 +623,21 @@ class TrOCRYOLOPipeline:
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
         return pred, elapsed_ms
 
-    def run_benchmark(self, pairs: list[tuple[Path, dict]],
-                      desc: str = "YOLO+TrOCR+Regex") -> BenchmarkResult:
+    def run_benchmark(
+        self, pairs: list[tuple[Path, dict]], desc: str = "YOLO+TrOCR+Regex"
+    ) -> BenchmarkResult:
         result = BenchmarkResult(method="YOLOv8+TrOCR+Regex")
         for img_path, gt in tqdm(pairs, desc=desc, unit="img"):
             img = Image.open(img_path).convert("RGB")
             pred, ms = self.predict(img)
-            result.samples.append(SampleResult(
-                image_name=img_path.name,
-                ground_truth=gt,
-                prediction=pred,
-                inference_time_ms=ms,
-            ))
+            result.samples.append(
+                SampleResult(
+                    image_name=img_path.name,
+                    ground_truth=gt,
+                    prediction=pred,
+                    inference_time_ms=ms,
+                )
+            )
         return result
 
 
@@ -651,7 +652,7 @@ def compute_metrics(bench: BenchmarkResult) -> BenchmarkResult:
     if not bench.samples:
         return bench
 
-    field_f1s:  dict[str, list[float]] = {f: [] for f in FIELDS}
+    field_f1s: dict[str, list[float]] = {f: [] for f in FIELDS}
     field_exacts: dict[str, list[float]] = {f: [] for f in FIELDS}
     all_neds: list[float] = []
     times: list[float] = []
@@ -659,20 +660,20 @@ def compute_metrics(bench: BenchmarkResult) -> BenchmarkResult:
     for s in bench.samples:
         for fld in FIELDS:
             pred_val = s.prediction.get(fld, "")
-            gt_val   = s.ground_truth.get(fld, "")
+            gt_val = s.ground_truth.get(fld, "")
             field_f1s[fld].append(_token_f1(pred_val, gt_val))
             field_exacts[fld].append(_exact(pred_val, gt_val))
             all_neds.append(_ned(pred_val, gt_val))
         times.append(s.inference_time_ms)
 
-    bench.per_field_f1       = {f: float(np.mean(field_f1s[f]))     for f in FIELDS}
-    bench.per_field_accuracy = {f: float(np.mean(field_exacts[f]))  for f in FIELDS}
-    bench.global_f1          = float(np.mean([v for vals in field_f1s.values() for v in vals]))
-    bench.global_accuracy    = float(np.mean([v for vals in field_exacts.values() for v in vals]))
-    bench.global_ned         = float(np.mean(all_neds))
-    bench.mean_inference_ms  = float(np.mean(times))
-    bench.median_inference_ms= float(np.median(times))
-    bench.p95_inference_ms   = float(np.percentile(times, 95))
+    bench.per_field_f1 = {f: float(np.mean(field_f1s[f])) for f in FIELDS}
+    bench.per_field_accuracy = {f: float(np.mean(field_exacts[f])) for f in FIELDS}
+    bench.global_f1 = float(np.mean([v for vals in field_f1s.values() for v in vals]))
+    bench.global_accuracy = float(np.mean([v for vals in field_exacts.values() for v in vals]))
+    bench.global_ned = float(np.mean(all_neds))
+    bench.mean_inference_ms = float(np.mean(times))
+    bench.median_inference_ms = float(np.median(times))
+    bench.p95_inference_ms = float(np.percentile(times, 95))
     return bench
 
 
@@ -683,9 +684,9 @@ def print_report(results: list[BenchmarkResult], n_samples: int) -> None:
     """Print a formatted comparison table to stdout."""
     SEP = "─" * 72
 
-    print(f"\n{'═'*72}")
+    print(f"\n{'═' * 72}")
     print(f"  BENCHMARK REPORT — {n_samples} samples")
-    print(f"{'═'*72}")
+    print(f"{'═' * 72}")
 
     # ── Summary table ────────────────────────────────────────────────────────
     header = f"{'Metric':<28}" + "".join(f"{r.method:>20}" for r in results)
@@ -695,48 +696,50 @@ def print_report(results: list[BenchmarkResult], n_samples: int) -> None:
     def row(name, vals, fmt=".4f"):
         return f"{name:<28}" + "".join(f"{v:>20{fmt}}" for v in vals)
 
-    print(row("Global F1  (↑)",          [r.global_f1          for r in results]))
-    print(row("Global Accuracy  (↑)",    [r.global_accuracy    for r in results]))
-    print(row("NED  (↓ = better)",       [r.global_ned         for r in results]))
-    print(row("Mean inference (ms)  (↓)",[r.mean_inference_ms  for r in results], ".1f"))
-    print(row("Median inference (ms)",   [r.median_inference_ms for r in results], ".1f"))
-    print(row("P95 inference (ms)",      [r.p95_inference_ms   for r in results], ".1f"))
+    print(row("Global F1  (↑)", [r.global_f1 for r in results]))
+    print(row("Global Accuracy  (↑)", [r.global_accuracy for r in results]))
+    print(row("NED  (↓ = better)", [r.global_ned for r in results]))
+    print(row("Mean inference (ms)  (↓)", [r.mean_inference_ms for r in results], ".1f"))
+    print(row("Median inference (ms)", [r.median_inference_ms for r in results], ".1f"))
+    print(row("P95 inference (ms)", [r.p95_inference_ms for r in results], ".1f"))
 
     # ── Per-field breakdown ──────────────────────────────────────────────────
-    print(f"\n{'─'*72}")
+    print(f"\n{'─' * 72}")
     print("  Per-Field F1")
     print(SEP)
     for fld in FIELDS:
         vals = [r.per_field_f1.get(fld, 0.0) for r in results]
         print(row(f"  {fld:<26}", vals))
 
-    print(f"\n{'─'*72}")
+    print(f"\n{'─' * 72}")
     print("  Per-Field Exact-Match Accuracy")
     print(SEP)
     for fld in FIELDS:
         vals = [r.per_field_accuracy.get(fld, 0.0) for r in results]
         print(row(f"  {fld:<26}", vals))
 
-    print(f"\n{'═'*72}\n")
+    print(f"\n{'═' * 72}\n")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Visualisation — journal-ready 2D plots
 # ─────────────────────────────────────────────────────────────────────────────
-plt.rcParams.update({
-    "font.family": "serif",
-    "font.size": 8,
-    "axes.labelsize": 8,
-    "axes.titlesize": 9,
-    "legend.fontsize": 7,
-    "xtick.labelsize": 7,
-    "ytick.labelsize": 7,
-    "lines.linewidth": 1.4,
-    "figure.dpi": 300,
-})
+plt.rcParams.update(
+    {
+        "font.family": "serif",
+        "font.size": 8,
+        "axes.labelsize": 8,
+        "axes.titlesize": 9,
+        "legend.fontsize": 7,
+        "xtick.labelsize": 7,
+        "ytick.labelsize": 7,
+        "lines.linewidth": 1.4,
+        "figure.dpi": 300,
+    }
+)
 
 _METHOD_COLORS = {
-    "DONUT":            "#4C72B0",
+    "DONUT": "#4C72B0",
     "YOLOv8+TrOCR+Regex": "#DD8452",
 }
 
@@ -760,15 +763,24 @@ def plot_results(results: list[BenchmarkResult], out_dir: Path) -> None:
     for i, res in enumerate(results):
         vals = [res.per_field_f1.get(f, 0.0) for f in FIELDS]
         color = _METHOD_COLORS.get(res.method, f"C{i}")
-        bars = ax1.bar(x + offsets[i], vals, width * 0.92,
-                       label=res.method, color=color, alpha=0.88,
-                       edgecolor="white", linewidth=0.6)
+        bars = ax1.bar(
+            x + offsets[i],
+            vals,
+            width * 0.92,
+            label=res.method,
+            color=color,
+            alpha=0.88,
+            edgecolor="white",
+            linewidth=0.6,
+        )
         for bar, val in zip(bars, vals):
             ax1.text(
                 bar.get_x() + bar.get_width() / 2,
                 bar.get_height() + 0.012,
                 f"{val:.2f}",
-                ha="center", va="bottom", fontsize=5.5
+                ha="center",
+                va="bottom",
+                fontsize=5.5,
             )
 
     ax1.set_xticks(x)
@@ -785,12 +797,13 @@ def plot_results(results: list[BenchmarkResult], out_dir: Path) -> None:
 
     # ── Fig 2: Speed distribution — violin plot ───────────────────────────────
     fig2, ax2 = plt.subplots(figsize=(4.0, 3.0))
-    times_data  = [[s.inference_time_ms for s in r.samples] for r in results]
+    times_data = [[s.inference_time_ms for s in r.samples] for r in results]
     labels_list = [r.method for r in results]
     colors_list = [_METHOD_COLORS.get(r.method, f"C{i}") for i, r in enumerate(results)]
 
-    parts = ax2.violinplot(times_data, positions=range(1, len(results) + 1),
-                           showmedians=True, showextrema=True)
+    parts = ax2.violinplot(
+        times_data, positions=range(1, len(results) + 1), showmedians=True, showextrema=True
+    )
     for pc, color in zip(parts["bodies"], colors_list):
         pc.set_facecolor(color)
         pc.set_alpha(0.72)
@@ -815,8 +828,7 @@ def plot_results(results: list[BenchmarkResult], out_dir: Path) -> None:
     angles = np.linspace(0, 2 * np.pi, len(radar_labels), endpoint=False).tolist()
     angles += angles[:1]  # close the polygon
 
-    fig3, ax3 = plt.subplots(figsize=(3.8, 3.8),
-                              subplot_kw={"projection": "polar"})
+    fig3, ax3 = plt.subplots(figsize=(3.8, 3.8), subplot_kw={"projection": "polar"})
     ax3.set_theta_offset(np.pi / 2)
     ax3.set_theta_direction(-1)
     ax3.set_xticks(angles[:-1])
@@ -840,8 +852,7 @@ def plot_results(results: list[BenchmarkResult], out_dir: Path) -> None:
         ax3.plot(angles, values, color=color, linewidth=1.6, label=res.method)
         ax3.fill(angles, values, color=color, alpha=0.18)
 
-    ax3.legend(loc="upper right", bbox_to_anchor=(1.35, 1.15),
-               frameon=False, fontsize=7)
+    ax3.legend(loc="upper right", bbox_to_anchor=(1.35, 1.15), frameon=False, fontsize=7)
 
     _save(fig3, out_dir / "fig3_radar")
 
@@ -863,27 +874,29 @@ def save_json(results: list[BenchmarkResult], out_path: Path) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     payload = []
     for r in results:
-        payload.append({
-            "method": r.method,
-            "global_f1": r.global_f1,
-            "global_accuracy": r.global_accuracy,
-            "global_ned": r.global_ned,
-            "mean_inference_ms": r.mean_inference_ms,
-            "median_inference_ms": r.median_inference_ms,
-            "p95_inference_ms": r.p95_inference_ms,
-            "per_field_f1": r.per_field_f1,
-            "per_field_accuracy": r.per_field_accuracy,
-            "n_samples": len(r.samples),
-            "samples": [
-                {
-                    "image": s.image_name,
-                    "gt": s.ground_truth,
-                    "pred": s.prediction,
-                    "inference_ms": round(s.inference_time_ms, 2),
-                }
-                for s in r.samples
-            ],
-        })
+        payload.append(
+            {
+                "method": r.method,
+                "global_f1": r.global_f1,
+                "global_accuracy": r.global_accuracy,
+                "global_ned": r.global_ned,
+                "mean_inference_ms": r.mean_inference_ms,
+                "median_inference_ms": r.median_inference_ms,
+                "p95_inference_ms": r.p95_inference_ms,
+                "per_field_f1": r.per_field_f1,
+                "per_field_accuracy": r.per_field_accuracy,
+                "n_samples": len(r.samples),
+                "samples": [
+                    {
+                        "image": s.image_name,
+                        "gt": s.ground_truth,
+                        "pred": s.prediction,
+                        "inference_ms": round(s.inference_time_ms, 2),
+                    }
+                    for s in r.samples
+                ],
+            }
+        )
     out_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False))
     print(f"[JSON]  Saved: {out_path}")
 
@@ -897,49 +910,67 @@ def parse_args() -> argparse.Namespace:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument(
-        "--images_dir", type=Path, required=True,
+        "--images_dir",
+        type=Path,
+        required=True,
         help="Directory containing receipt JPG/PNG images",
     )
     p.add_argument(
-        "--labels_dir", type=Path, required=True,
+        "--labels_dir",
+        type=Path,
+        required=True,
         help="Directory containing .txt label files (4-line SROIE format)",
     )
     p.add_argument(
-        "--yolo_model", type=str, default="yolov8n.pt",
+        "--yolo_model",
+        type=str,
+        default="yolov8n.pt",
         help="Path to YOLO .pt weights (e.g. best.pt from your training)",
     )
     p.add_argument(
-        "--donut_model", type=str,
+        "--donut_model",
+        type=str,
         default=BASE_MODEL,
         help="DONUT model ID (HuggingFace) or local path",
     )
     p.add_argument(
-        "--trocr_model", type=str,
+        "--trocr_model",
+        type=str,
         default="microsoft/trocr-base-printed",
         help="TrOCR model ID (HuggingFace) or local path",
     )
     p.add_argument(
-        "--max_samples", type=int, default=None,
+        "--max_samples",
+        type=int,
+        default=None,
         help="Limit evaluation to first N samples (useful for quick tests)",
     )
     p.add_argument(
-        "--output_dir", type=Path, default=Path("results"),
+        "--output_dir",
+        type=Path,
+        default=Path("results"),
         help="Directory for JSON output and figures",
     )
     p.add_argument(
-        "--skip_donut", action="store_true",
+        "--skip_donut",
+        action="store_true",
         help="Skip DONUT pipeline (run only YOLO+TrOCR)",
     )
     p.add_argument(
-        "--skip_yolo", action="store_true",
+        "--skip_yolo",
+        action="store_true",
         help="Skip YOLO+TrOCR pipeline (run only DONUT)",
     )
     p.add_argument(
-        "--yolo_conf", type=float, default=0.25,
+        "--yolo_conf",
+        type=float,
+        default=0.25,
         help="YOLO confidence threshold",
     )
     p.add_argument(
-        "--yolo_iou", type=float, default=0.45,
+        "--yolo_iou",
+        type=float,
+        default=0.45,
         help="YOLO NMS IoU threshold",
     )
     return p.parse_args()
@@ -954,7 +985,7 @@ def main() -> None:
     if not args.labels_dir.exists():
         sys.exit(f"FATAL: labels_dir not found: {args.labels_dir}")
 
-    print(f"\n{'═'*60}")
+    print(f"\n{'═' * 60}")
     print("  RECEIPT KIE BENCHMARK")
     print(f"  DONUT model  : {args.donut_model}")
     print(f"  YOLO model   : {args.yolo_model}")
@@ -963,7 +994,7 @@ def main() -> None:
     print(f"  labels_dir   : {args.labels_dir}")
     if args.max_samples:
         print(f"  max_samples  : {args.max_samples}")
-    print(f"{'═'*60}\n")
+    print(f"{'═' * 60}\n")
 
     # ── Discover paired data ─────────────────────────────────────────────────
     pairs = find_pairs(args.images_dir, args.labels_dir, args.max_samples)
@@ -983,6 +1014,7 @@ def main() -> None:
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         import gc
+
         gc.collect()
 
     # ── Run YOLOv8 + TrOCR + Regex ──────────────────────────────────────────
@@ -994,15 +1026,14 @@ def main() -> None:
             conf_threshold=args.yolo_conf,
             iou_threshold=args.yolo_iou,
         )
-        yolo_result = yolo_trocr.run_benchmark(
-            pairs, desc="YOLO+TrOCR+Regex inference"
-        )
+        yolo_result = yolo_trocr.run_benchmark(pairs, desc="YOLO+TrOCR+Regex inference")
         yolo_result = compute_metrics(yolo_result)
         all_results.append(yolo_result)
         del yolo_trocr
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         import gc
+
         gc.collect()
 
     if not all_results:

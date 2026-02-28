@@ -54,24 +54,24 @@ TROCR_DATA_DIR = Path("data/trocr")
 
 # Date: numeric (DD/MM/YYYY, YYYY-MM-DD, etc.) OR written month names
 _DATE_RE = re.compile(
-    r'\d{1,2}[/\-\.]\d{1,2}[/\-\.]\d{2,4}'          # 25/12/2023, 25-12-23
-    r'|\d{4}[/\-\.]\d{1,2}[/\-\.]\d{1,2}'            # 2023/12/25
-    r'|\d{1,2}\s+(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\s+\d{2,4}'  # 25 DEC 2023
-    r'|(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)[A-Z]*\.?\s+\d{1,2},?\s+\d{4}'  # DEC 25, 2023
-    r'|\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{2,4}',   # 25 Dec 2023
+    r"\d{1,2}[/\-\.]\d{1,2}[/\-\.]\d{2,4}"  # 25/12/2023, 25-12-23
+    r"|\d{4}[/\-\.]\d{1,2}[/\-\.]\d{1,2}"  # 2023/12/25
+    r"|\d{1,2}\s+(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\s+\d{2,4}"  # 25 DEC 2023
+    r"|(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)[A-Z]*\.?\s+\d{1,2},?\s+\d{4}"  # DEC 25, 2023
+    r"|\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{2,4}",  # 25 Dec 2023
     re.IGNORECASE,
 )
 _TOTAL_RE = re.compile(
-    r'(?:total|subtotal|amount|sum|due|grand\s*total|nett\s*total|net\s*total)\s*[:\-]?\s*[\$\£\€RM]?\s*\d+[.,]\d{2}',
+    r"(?:total|subtotal|amount|sum|due|grand\s*total|nett\s*total|net\s*total)\s*[:\-]?\s*[\$\£\€RM]?\s*\d+[.,]\d{2}",
     re.IGNORECASE,
 )
 # Matches a standalone monetary amount at end of line (last-resort total finder)
-_MONEY_RE = re.compile(r'[\$\£\€RM]?\s*\d+[.,]\d{2}\s*$')
-_NUMBER_RE = re.compile(r'[\d]+[.,][\d]{2}')
+_MONEY_RE = re.compile(r"[\$\£\€RM]?\s*\d+[.,]\d{2}\s*$")
+_NUMBER_RE = re.compile(r"[\d]+[.,][\d]{2}")
 # Road/address keywords common in Malaysian/SE Asian receipts
 _ADDRESS_RE = re.compile(
-    r'\b(?:JALAN|JLN|LORONG|LRG|ROAD|STREET|ST|AVENUE|AVE|BOULEVARD|BLVD'
-    r'|TAMAN|TMN|BANDAR|PUSAT|KOMPLEKS|NO\.?\s*\d|LOT\s*\d|\d{5}\s+[A-Z])',
+    r"\b(?:JALAN|JLN|LORONG|LRG|ROAD|STREET|ST|AVENUE|AVE|BOULEVARD|BLVD"
+    r"|TAMAN|TMN|BANDAR|PUSAT|KOMPLEKS|NO\.?\s*\d|LOT\s*\d|\d{5}\s+[A-Z])",
     re.IGNORECASE,
 )
 
@@ -103,9 +103,7 @@ class TrOCRReceiptDataset(Dataset):
         sample = self.samples[idx]
         img = Image.open(self.data_dir / sample["file_name"]).convert("RGB")
 
-        pixel_values = self.processor(
-            img, return_tensors="pt"
-        ).pixel_values.squeeze(0)
+        pixel_values = self.processor(img, return_tensors="pt").pixel_values.squeeze(0)
 
         labels = self.processor.tokenizer(
             sample["text"],
@@ -224,15 +222,20 @@ def train_trocr(output_dir: Path | None = None) -> dict:
     train_loader = DataLoader(
         train_ds, batch_size=TROCR_BATCH, shuffle=True, num_workers=_optimal_num_workers()
     )
-    val_loader = DataLoader(
-        val_ds, batch_size=TROCR_BATCH, shuffle=False, num_workers=_optimal_num_workers()
-    ) if len(val_ds) > 0 else None
+    val_loader = (
+        DataLoader(
+            val_ds, batch_size=TROCR_BATCH, shuffle=False, num_workers=_optimal_num_workers()
+        )
+        if len(val_ds) > 0
+        else None
+    )
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=TROCR_LR)
     total_steps = (len(train_loader) // GRAD_ACCUM) * TROCR_EPOCHS
     warmup_steps = int(total_steps * 0.1)
     scheduler = get_scheduler(
-        "linear", optimizer,
+        "linear",
+        optimizer,
         num_warmup_steps=warmup_steps,
         num_training_steps=total_steps,
     )
@@ -246,7 +249,7 @@ def train_trocr(output_dir: Path | None = None) -> dict:
         epoch_loss = 0.0
         optimizer.zero_grad()
 
-        pbar = tqdm(train_loader, desc=f"TrOCR Epoch {epoch+1}/{TROCR_EPOCHS}")
+        pbar = tqdm(train_loader, desc=f"TrOCR Epoch {epoch + 1}/{TROCR_EPOCHS}")
         for step, batch in enumerate(pbar):
             pixel_values = batch["pixel_values"].to(DEVICE)
             labels = batch["labels"].to(DEVICE)
@@ -262,7 +265,7 @@ def train_trocr(output_dir: Path | None = None) -> dict:
                 scheduler.step()
                 optimizer.zero_grad()
 
-            pbar.set_postfix(loss=f"{epoch_loss/(step+1):.4f}")
+            pbar.set_postfix(loss=f"{epoch_loss / (step + 1):.4f}")
 
         avg_train = epoch_loss / len(train_loader)
 
@@ -282,7 +285,7 @@ def train_trocr(output_dir: Path | None = None) -> dict:
 
         history["train_loss"].append(avg_train)
         history["val_loss"].append(avg_val)
-        print(f"Epoch {epoch+1}: train={avg_train:.4f}  val={avg_val:.4f}")
+        print(f"Epoch {epoch + 1}: train={avg_train:.4f}  val={avg_val:.4f}")
 
         if avg_val < best_val_loss:
             best_val_loss = avg_val
@@ -434,25 +437,23 @@ def run_trocr_yolo_inference(
 
             # Stage 2: TrOCR OCR on crop
             crop = img.crop((x1, y1, x2, y2))
-            pixel_values = trocr_processor(
-                crop, return_tensors="pt"
-            ).pixel_values.to(DEVICE)
+            pixel_values = trocr_processor(crop, return_tensors="pt").pixel_values.to(DEVICE)
 
             with torch.no_grad():
                 generated_ids = trocr_model.generate(pixel_values)
-            text = trocr_processor.batch_decode(
-                generated_ids, skip_special_tokens=True
-            )[0].strip()
+            text = trocr_processor.batch_decode(generated_ids, skip_special_tokens=True)[0].strip()
 
             if text:
-                ocr_lines.append({
-                    "text": text,
-                    "x": x1,
-                    "y": y1,
-                    "x2": x2,
-                    "y2": y2,
-                    "conf": float(box.conf[0]) if hasattr(box, "conf") else 1.0,
-                })
+                ocr_lines.append(
+                    {
+                        "text": text,
+                        "x": x1,
+                        "y": y1,
+                        "x2": x2,
+                        "y2": y2,
+                        "conf": float(box.conf[0]) if hasattr(box, "conf") else 1.0,
+                    }
+                )
 
     # Stage 3: Heuristic field assignment
     return _assign_fields_heuristic(ocr_lines)
@@ -463,9 +464,7 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--stage", choices=["yolo", "trocr", "both"], default="both"
-    )
+    parser.add_argument("--stage", choices=["yolo", "trocr", "both"], default="both")
     args = parser.parse_args()
 
     if args.stage in ("yolo", "both"):

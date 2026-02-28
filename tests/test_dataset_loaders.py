@@ -17,6 +17,7 @@ from dataset_loaders import (
 # DatasetLoadError
 # ---------------------------------------------------------------------------
 
+
 class TestDatasetLoadError:
     def test_attributes(self):
         exc = DatasetLoadError("test_ds", "file not found")
@@ -36,6 +37,7 @@ class TestDatasetLoadError:
 # ---------------------------------------------------------------------------
 # _validate_sample_schema
 # ---------------------------------------------------------------------------
+
 
 class TestValidateSampleSchema:
     def test_valid_sample(self):
@@ -63,13 +65,17 @@ class TestValidateSampleSchema:
 
     def test_extra_fields_ok(self):
         """Extra fields beyond SROIE schema should still validate."""
-        sample = (Path("/img.jpg"), {"company": "A", "date": "B", "address": "C", "total": "D", "extra": "E"})
+        sample = (
+            Path("/img.jpg"),
+            {"company": "A", "date": "B", "address": "C", "total": "D", "extra": "E"},
+        )
         assert _validate_sample_schema(sample, "test") is True
 
 
 # ---------------------------------------------------------------------------
 # _validate_samples_nonempty
 # ---------------------------------------------------------------------------
+
 
 class TestValidateSamplesNonempty:
     def test_nonempty_passes(self):
@@ -90,6 +96,7 @@ class TestValidateSamplesNonempty:
 # _ensure_dir
 # ---------------------------------------------------------------------------
 
+
 class TestEnsureDir:
     def test_creates_dir(self, tmp_path):
         new_dir = tmp_path / "a" / "b" / "c"
@@ -107,9 +114,11 @@ class TestEnsureDir:
 # Path helpers (env var behavior)
 # ---------------------------------------------------------------------------
 
+
 class TestPathHelpers:
     def test_get_datasets_dir_default(self):
         from dataset_loaders import _get_datasets_dir
+
         old = os.environ.pop("DONUT_WORKSPACE", None)
         try:
             d = _get_datasets_dir()
@@ -120,6 +129,7 @@ class TestPathHelpers:
 
     def test_get_datasets_dir_custom(self):
         from dataset_loaders import _get_datasets_dir
+
         old = os.environ.get("DONUT_WORKSPACE")
         os.environ["DONUT_WORKSPACE"] = "/tmp/custom"
         try:
@@ -133,6 +143,7 @@ class TestPathHelpers:
 
     def test_get_sroie_dir_default(self):
         from dataset_loaders import _get_sroie_dir
+
         old = os.environ.pop("SROIE_DATA_DIR", None)
         try:
             d = _get_sroie_dir()
@@ -143,6 +154,7 @@ class TestPathHelpers:
 
     def test_get_sroie_dir_custom(self):
         from dataset_loaders import _get_sroie_dir
+
         old = os.environ.get("SROIE_DATA_DIR")
         os.environ["SROIE_DATA_DIR"] = "/data/sroie"
         try:
@@ -159,12 +171,14 @@ class TestPathHelpers:
 # Dataset split separation (no data access required)
 # ---------------------------------------------------------------------------
 
+
 class TestSROIESplitDirectories:
     """Verify val and test splits use distinct directories (no data leakage)."""
 
     def test_val_and_test_use_different_dirs(self):
         """val_img/ != test_img/ — ensures early stopping does not use test data."""
         from dataset_loaders import SROIELoader
+
         loader = SROIELoader()
         val_dirs = loader._SPLIT_DIRS["val"]
         test_dirs = loader._SPLIT_DIRS["test"]
@@ -176,6 +190,7 @@ class TestSROIESplitDirectories:
     def test_train_val_test_all_different(self):
         """All three splits use different source directories."""
         from dataset_loaders import SROIELoader
+
         loader = SROIELoader()
         dirs = [loader._SPLIT_DIRS[s] for s in ("train", "val", "test")]
         assert len(set(dirs)) == 3, (
@@ -184,6 +199,7 @@ class TestSROIESplitDirectories:
 
     def test_val_uses_val_img(self):
         from dataset_loaders import SROIELoader
+
         loader = SROIELoader()
         img_subdir, key_subdir = loader._SPLIT_DIRS["val"]
         assert img_subdir == "val_img"
@@ -191,6 +207,7 @@ class TestSROIESplitDirectories:
 
     def test_test_uses_test_img(self):
         from dataset_loaders import SROIELoader
+
         loader = SROIELoader()
         img_subdir, key_subdir = loader._SPLIT_DIRS["test"]
         assert img_subdir == "test_img"
@@ -198,6 +215,7 @@ class TestSROIESplitDirectories:
 
     def test_train_uses_img(self):
         from dataset_loaders import SROIELoader
+
         loader = SROIELoader()
         img_subdir, key_subdir = loader._SPLIT_DIRS["train"]
         assert img_subdir == "img"

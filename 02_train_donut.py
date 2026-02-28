@@ -33,7 +33,7 @@ DATA_DIR = Path("data/donut")
 OUTPUT_DIR = Path("models/donut_finetuned")
 IMAGE_SIZE = (1280, 960)  # (height, width) — DONUT default
 BATCH_SIZE = 8
-GRAD_ACCUM = 2            # effective batch = 16
+GRAD_ACCUM = 2  # effective batch = 16
 EPOCHS = 10
 LR = 5e-5
 WARMUP_RATIO = 0.1
@@ -45,6 +45,7 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 @dataclass
 class _TrainConfig:
     """Training configuration for standalone 02_train_donut.py."""
+
     max_epochs: int = EPOCHS
     learning_rate: float = LR
     per_device_train_batch_size: int = BATCH_SIZE
@@ -65,9 +66,7 @@ def train():
     model = VisionEncoderDecoderModel.from_pretrained(MODEL_ID)
 
     # Add task-specific tokens
-    processor.tokenizer.add_special_tokens(
-        {"additional_special_tokens": NEW_TOKENS}
-    )
+    processor.tokenizer.add_special_tokens({"additional_special_tokens": NEW_TOKENS})
     model.decoder.resize_token_embeddings(len(processor.tokenizer))
 
     # FIX: After resize_token_embeddings(), lm_head and embed_tokens are
@@ -76,9 +75,7 @@ def train():
     # checkpoint produces garbage output (F1=0).
     model.decoder.config.tie_word_embeddings = False
 
-    model.config.decoder_start_token_id = processor.tokenizer.convert_tokens_to_ids(
-        TASK_TOKEN
-    )
+    model.config.decoder_start_token_id = processor.tokenizer.convert_tokens_to_ids(TASK_TOKEN)
     model.config.pad_token_id = processor.tokenizer.pad_token_id
     model.config.eos_token_id = processor.tokenizer.eos_token_id
     model.config.max_length = MAX_LENGTH
@@ -94,8 +91,7 @@ def train():
         meta_path = data_dir / "metadata.jsonl"
         if not meta_path.exists():
             raise FileNotFoundError(
-                f"metadata.jsonl not found at {meta_path}. "
-                "Run 01_dataset_preparation.py first."
+                f"metadata.jsonl not found at {meta_path}. Run 01_dataset_preparation.py first."
             )
         samples = []
         with open(meta_path) as fh:

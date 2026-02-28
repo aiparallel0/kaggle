@@ -13,9 +13,17 @@ from pathlib import Path
 FIELDS: list[str] = ["company", "date", "address", "total"]
 
 # Accepted image file extensions for dataset loading.
-IMAGE_EXTS: frozenset[str] = frozenset({
-    ".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".webp",
-})
+IMAGE_EXTS: frozenset[str] = frozenset(
+    {
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".tiff",
+        ".tif",
+        ".bmp",
+        ".webp",
+    }
+)
 
 # Maximum decoder token length for DONUT fine-tuning and inference.
 # Increased from 512 to 768 to reduce truncation of long address fields,
@@ -30,11 +38,16 @@ SEED: int = 42
 
 # Special tokens added to the tokenizer for SROIE structured output.
 NEW_TOKENS: list[str] = [
-    "<s_sroie>", "</s_sroie>",
-    "<s_company>", "</s_company>",
-    "<s_date>",    "</s_date>",
-    "<s_address>", "</s_address>",
-    "<s_total>",   "</s_total>",
+    "<s_sroie>",
+    "</s_sroie>",
+    "<s_company>",
+    "</s_company>",
+    "<s_date>",
+    "</s_date>",
+    "<s_address>",
+    "</s_address>",
+    "<s_total>",
+    "</s_total>",
 ]
 
 # Empty ground-truth template matching the SROIE schema.
@@ -47,6 +60,7 @@ EMPTY_GT: dict[str, str] = {"company": "", "date": "", "address": "", "total": "
 
 try:
     import torch as _torch
+
     DEVICE: str = "cuda" if _torch.cuda.is_available() else "cpu"
 except ImportError:
     DEVICE: str = "cpu"
@@ -85,6 +99,7 @@ def _gpu_cleanup(*objects) -> None:
     import gc
 
     import torch
+
     for obj in objects:
         del obj
     gc.collect()
@@ -104,6 +119,7 @@ def set_seed(seed: int = SEED) -> None:
 
     import numpy as np
     import torch
+
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
