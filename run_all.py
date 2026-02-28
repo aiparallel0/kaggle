@@ -71,6 +71,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List
 
+# Set before constants.py triggers torch import to reduce GPU memory fragmentation.
+os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
+
 from constants import BASE_MODEL, IMAGE_EXTS, SEED
 
 
