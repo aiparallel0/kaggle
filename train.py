@@ -72,10 +72,49 @@ from transformers import (
     EarlyStoppingCallback,
     Seq2SeqTrainer,
     Seq2SeqTrainingArguments,
+    TrainerCallback,
     VisionEncoderDecoderModel,
 )
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# LmHeadCloneCallback — prevent safetensors from deduplicating lm_head
+# ---------------------------------------------------------------------------
+
+class LmHeadCloneCallback(TrainerCallback):
+    """Clone lm_head.weight before every checkpoint save.
+
+    ROOT CAUSE OF F1~0.42:
+    After ``resize_token_embeddings()``, ``lm_head.weight`` and
+    ``embed_tokens.weight`` share a data pointer for the base-vocab rows.
+    ``safetensors`` deduplicates tensors that share a data pointer, so the
+    per-epoch checkpoint shard omits ``lm_head.weight`` entirely.  When
+    ``Seq2SeqTrainer`` with ``load_best_model_at_end=True`` reloads the best
+    epoch checkpoint, ``lm_head.weight`` is randomly re-initialized (missing
+    key = random init), collapsing F1 to ~0.42.
+
+    Fix: Force a deep clone of ``lm_head.weight.data`` before every save so
+    safetensors sees it as a fully independent tensor and writes it to the
+    shard.  This ensures the reloaded checkpoint always has the trained
+    lm_head weights.
+    """
+
+    def on_save(self, args, state, control, model=None, **kwargs):
+        if model is None:
+            return control
+        decoder = getattr(model, "decoder", None)
+        if decoder is None:
+            return control
+        lm_head = getattr(decoder, "lm_head", None)
+        if lm_head is not None and hasattr(lm_head, "weight"):
+            lm_head.weight = torch.nn.Parameter(lm_head.weight.data.clone())
+            logger.debug(
+                "LmHeadCloneCallback.on_save: cloned lm_head.weight (epoch %s)",
+                state.epoch,
+            )
+        return control
 
 # ---------------------------------------------------------------------------
 # Constants — imported from shared constants.py (eliminates 5x duplication)
@@ -344,7 +383,10 @@ class DonutTrainer:
             seed=getattr(self.config, "seed", SEED),
         )
 
-        callbacks = []
+        # LmHeadCloneCallback MUST be registered before EarlyStoppingCallback
+        # so the clone happens before every checkpoint write (including the
+        # best-model checkpoint that load_best_model_at_end reloads).
+        callbacks = [LmHeadCloneCallback()]
         if do_eval:
             patience = getattr(
                 self.config, "early_stopping_patience", 5,

@@ -52,16 +52,29 @@ TROCR_DATA_DIR = Path("data/trocr")
 
 # Pre-compiled regex patterns for field assignment heuristics — compiled once
 # at module load instead of on every call to assign_fields_heuristic().
+
+# Date: numeric (DD/MM/YYYY, YYYY-MM-DD, etc.) OR written month names
 _DATE_RE = re.compile(
-    r'\d{1,2}[/\-\.]\d{1,2}[/\-\.]\d{2,4}'
-    r'|\d{4}[/\-\.]\d{1,2}[/\-\.]\d{1,2}'
-)
-_TOTAL_RE = re.compile(
-    r'(?:total|amount|sum|due|grand)\s*[:\-]?\s*[\$\£\€]?\s*\d+[.,]\d{2}',
+    r'\d{1,2}[/\-\.]\d{1,2}[/\-\.]\d{2,4}'          # 25/12/2023, 25-12-23
+    r'|\d{4}[/\-\.]\d{1,2}[/\-\.]\d{1,2}'            # 2023/12/25
+    r'|\d{1,2}\s+(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\s+\d{2,4}'  # 25 DEC 2023
+    r'|(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)[A-Z]*\.?\s+\d{1,2},?\s+\d{4}'  # DEC 25, 2023
+    r'|\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{2,4}',   # 25 Dec 2023
     re.IGNORECASE,
 )
-_MONEY_RE = re.compile(r'[\$\£\€]?\s*\d+[.,]\d{2}\s*$')
+_TOTAL_RE = re.compile(
+    r'(?:total|subtotal|amount|sum|due|grand\s*total|nett\s*total|net\s*total)\s*[:\-]?\s*[\$\£\€RM]?\s*\d+[.,]\d{2}',
+    re.IGNORECASE,
+)
+# Matches a standalone monetary amount at end of line (last-resort total finder)
+_MONEY_RE = re.compile(r'[\$\£\€RM]?\s*\d+[.,]\d{2}\s*$')
 _NUMBER_RE = re.compile(r'[\d]+[.,][\d]{2}')
+# Road/address keywords common in Malaysian/SE Asian receipts
+_ADDRESS_RE = re.compile(
+    r'\b(?:JALAN|JLN|LORONG|LRG|ROAD|STREET|ST|AVENUE|AVE|BOULEVARD|BLVD'
+    r'|TAMAN|TMN|BANDAR|PUSAT|KOMPLEKS|NO\.?\s*\d|LOT\s*\d|\d{5}\s+[A-Z])',
+    re.IGNORECASE,
+)
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -325,42 +338,64 @@ def _assign_fields_heuristic(ocr_lines: List[Dict]) -> Dict[str, str]:
 
     used = set()
 
-    # Find date
+    # Find date — scan all lines (date can appear anywhere on receipt)
     for i, line in enumerate(sorted_lines):
         text = line.get("text", "")
-        if date_pattern.search(text):
+        if _DATE_RE.search(text):
             result["date"] = text.strip()
             used.add(i)
             break
 
-    # Find total (search from bottom up)
+    # Find total — prefer explicit keyword match, fall back to last monetary
+    # value in the bottom half of the receipt (common receipt layout).
     for i in range(len(sorted_lines) - 1, -1, -1):
         if i in used:
             continue
         text = sorted_lines[i].get("text", "")
-        if total_pattern.search(text) or (
-            i >= len(sorted_lines) - 3 and money_pattern.search(text)
-        ):
-            # Extract just the number
+        if _TOTAL_RE.search(text):
             numbers = _NUMBER_RE.findall(text)
             result["total"] = numbers[-1] if numbers else text.strip()
             used.add(i)
             break
+    if not result["total"]:
+        # Fallback: last line in bottom 40% of receipt that contains a money amount
+        cutoff = max(0, len(sorted_lines) - max(1, len(sorted_lines) // 5 * 2))
+        for i in range(len(sorted_lines) - 1, cutoff - 1, -1):
+            if i in used:
+                continue
+            text = sorted_lines[i].get("text", "")
+            if _MONEY_RE.search(text):
+                numbers = _NUMBER_RE.findall(text)
+                result["total"] = numbers[-1] if numbers else text.strip()
+                used.add(i)
+                break
 
-    # Company: first unused line
+    # Company: first 1-2 unused lines before any address/date/total line
+    company_parts = []
     for i, line in enumerate(sorted_lines):
-        if i not in used:
-            result["company"] = line.get("text", "").strip()
-            used.add(i)
-            break
+        if i not in used and len(company_parts) < 2:
+            text = line.get("text", "").strip()
+            if text and not _MONEY_RE.search(text) and not _DATE_RE.search(text):
+                company_parts.append(text)
+                used.add(i)
+                # Stop after first line unless second line also looks like a name
+                if len(company_parts) == 1 and not _ADDRESS_RE.search(text):
+                    break
+    result["company"] = " ".join(company_parts)
 
-    # Address: remaining unused lines (concatenated)
-    addr_parts = []
+    # Address: prefer lines with road/postcode keywords; fall back to remaining
+    addr_keyword_parts = []
+    addr_other_parts = []
     for i, line in enumerate(sorted_lines):
         if i not in used:
             text = line.get("text", "").strip()
-            if text and not money_pattern.match(text):
-                addr_parts.append(text)
+            if not text or _MONEY_RE.match(text):
+                continue
+            if _ADDRESS_RE.search(text):
+                addr_keyword_parts.append(text)
+            else:
+                addr_other_parts.append(text)
+    addr_parts = addr_keyword_parts if addr_keyword_parts else addr_other_parts
     result["address"] = " ".join(addr_parts)
 
     return result

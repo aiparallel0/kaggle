@@ -43,7 +43,7 @@ SROIE_DATA_DIR = Path(os.environ.get(
 # ════════════════════════════════════════════════════════════════════════════
 # Import compute_metrics from evaluate.py — single source of truth for SROIE
 # Task-3 F1/NED/exact-match computation shared across DONUT and TrOCR+YOLO.
-from evaluate import compute_metrics as compute_sroie_metrics  # noqa: E402
+from donut_evaluator import compute_metrics as compute_sroie_metrics  # noqa: E402
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -86,7 +86,7 @@ def evaluate_donut_on_test(
 ) -> Dict:
     """Evaluate a DONUT model on the SROIE test set. Returns metrics dict."""
     from transformers import DonutProcessor, VisionEncoderDecoderModel
-    from evaluate import load_model_with_tied_weights, _unwrap_prediction
+    from donut_evaluator import load_model_with_tied_weights, _unwrap_prediction
 
     processor = DonutProcessor.from_pretrained(model_path)
     model = load_model_with_tied_weights(model_path, device=DEVICE)

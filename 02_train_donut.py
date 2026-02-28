@@ -108,7 +108,7 @@ def train():
         return samples
 
     train_samples = _load_samples(DATA_DIR / "train")
-    val_samples = _load_samples(DATA_DIR / "test")
+    val_samples = _load_samples(DATA_DIR / "val")
 
     if not train_samples:
         raise ValueError("Training dataset is empty — check data paths.")
