@@ -60,7 +60,6 @@ try:
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    import matplotlib.patches as mpatches
 except ImportError as e:
     sys.exit(f"FATAL: missing dependency — {e}\n"
              "Run: pip install torch torchvision transformers "
