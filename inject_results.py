@@ -484,6 +484,30 @@ def print_table6_cross_architecture(donut_exp: dict, trocr_exp: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Plot Generation for Paper
+# ---------------------------------------------------------------------------
+
+
+def generate_training_plots(results_dir: Path = Path("results")) -> None:
+    """Generate 2D training loss plots from experiment results.
+
+    Creates publication-ready loss plots in results/figures/ for inclusion
+    in paper.tex. Uses quick_results_generator if available.
+
+    Args:
+        results_dir: Path to results directory
+    """
+    try:
+        from quick_results_generator import generate_loss_plots_from_results
+
+        plots = generate_loss_plots_from_results(results_dir)
+        if plots:
+            print(f"✓ Generated {len(plots)} loss plots for paper")
+    except Exception as e:
+        pass  # Gracefully skip if plotting unavailable
+
+
+# ---------------------------------------------------------------------------
 # Module-level wrappers (backward compatibility)
 # ---------------------------------------------------------------------------
 

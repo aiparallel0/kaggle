@@ -89,6 +89,11 @@ def _install_dependencies() -> None:
 
     This runs before any heavy imports (torch, transformers) to avoid failures
     in fresh environments. Uses -q flag to minimize console spam.
+
+    Strategy:
+    1. Check if torch is importable (fast check without heavy imports)
+    2. If not, run pip install -r requirements.txt
+    3. Gracefully continue even if pip fails (may already have packages)
     """
     try:
         req_file = Path(__file__).parent / "requirements.txt"
@@ -96,20 +101,30 @@ def _install_dependencies() -> None:
             return
 
         # Quick check: are main packages already installed?
+        # Use a lightweight import check instead of sys.modules
         try:
-            import torch  # noqa: F401
+            __import__("torch")
             return  # Assume other deps also present if torch is there
         except ImportError:
             pass
 
         # Install requirements.txt
         print("[setup] Installing dependencies from requirements.txt...")
-        subprocess.run(
+        result = subprocess.run(
             [sys.executable, "-m", "pip", "install", "-q", "-r", str(req_file)],
             check=False,  # Graceful degradation: continue even if pip fails
+            capture_output=True,
+            text=True,
         )
-    except Exception:
-        pass  # Silently ignore all errors
+        if result.returncode == 0:
+            print("[setup] Dependencies installed successfully")
+        else:
+            # Log warning but continue
+            if result.stderr:
+                print(f"[setup] pip warning: {result.stderr[:200]}")
+    except Exception as e:
+        # Silently ignore all errors - pipeline may still work if packages are present
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -985,10 +1000,11 @@ def stage_comparison(args) -> StageResult:
 
 
 def stage_paper(args) -> StageResult:
-    """Generate LaTeX tables and fill paper_filled.tex.
+    """Generate LaTeX tables, plots, and fill paper_filled.tex.
 
     FIX: Now also generates TrOCR+YOLO tables and cross-architecture
-    comparison table, and injects TrOCR+YOLO VAR{} values into the paper.
+    comparison table, injects TrOCR+YOLO VAR{} values, and generates
+    2D loss plots for inclusion in the paper.
     """
     import dataset_loaders
     import inject_results as ir  # local module
@@ -1003,6 +1019,9 @@ def stage_paper(args) -> StageResult:
 
     with open(results_path) as fh:
         all_exp = json.load(fh)
+
+    # Generate training loss plots for the paper
+    ir.generate_training_plots(Path("results"))
 
     # Compute actual dataset counts for Table 1
     try:
