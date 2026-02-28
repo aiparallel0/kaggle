@@ -982,7 +982,8 @@ def main() -> None:
         del donut
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-        import gc; gc.collect()
+        import gc 
+      gc.collect()
 
     # ── Run YOLOv8 + TrOCR + Regex ──────────────────────────────────────────
     if not args.skip_yolo:
