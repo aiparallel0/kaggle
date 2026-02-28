@@ -126,6 +126,19 @@ def load_model_with_tied_weights(model_path: str, device: str = DEVICE):
     )
     missing_keys = loading_info.get("missing_keys", [])
 
+    # Sanity check: when tie_word_embeddings=False (set in train.py after
+    # resize_token_embeddings()), LmHeadCloneCallback ensures lm_head.weight is
+    # saved as an independent tensor in every checkpoint shard.  If it is still
+    # missing after load, the checkpoint is corrupt — fail loudly instead of
+    # silently recovering with random or embed_tokens weights (which produces
+    # F1~0.42 and is indistinguishable from a healthy run without this check).
+    if "decoder.lm_head.weight" in missing_keys:
+        if not getattr(model.decoder.config, "tie_word_embeddings", True):
+            raise RuntimeError(
+                "CRITICAL: decoder.lm_head.weight missing from checkpoint. "
+                "The model cannot generate SROIE tokens. Fix checkpoint saving."
+            )
+
     _retie_decoder_head(model, missing_keys=missing_keys)
 
     model = model.to(device)

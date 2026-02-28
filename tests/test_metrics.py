@@ -5,6 +5,7 @@ Requires: torch, transformers (evaluate.py imports them at module level).
 """
 
 import sys
+import unittest.mock as mock
 from pathlib import Path
 
 import pytest
@@ -170,3 +171,78 @@ class TestComputeMetrics:
             "address_f1", "address_ned", "total_f1", "total_ned",
         }
         assert expected_keys.issubset(set(m.keys()))
+
+
+# ---------------------------------------------------------------------------
+# load_model_with_tied_weights — checkpoint sanity check
+# ---------------------------------------------------------------------------
+
+class TestLoadModelWithTiedWeights:
+    """Verify load_model_with_tied_weights raises loudly when lm_head is missing.
+
+    Root cause of F1~0.42: safetensors deduplicates lm_head.weight when it
+    shares a data pointer with embed_tokens.weight, so per-epoch checkpoints
+    omit lm_head.  When load_best_model_at_end reloads the best epoch,
+    lm_head is randomly re-initialized.  The fix (LmHeadCloneCallback) forces
+    a deep clone before every save.  This sanity check ensures the pipeline
+    fails loudly if lm_head is still missing despite the callback.
+    """
+
+    def _make_mock_model(self, tie_word_embeddings: bool):
+        """Return a minimal mock VisionEncoderDecoderModel."""
+        decoder_config = mock.MagicMock()
+        decoder_config.tie_word_embeddings = tie_word_embeddings
+        decoder = mock.MagicMock()
+        decoder.config = decoder_config
+        model = mock.MagicMock()
+        model.decoder = decoder
+        model.to = mock.MagicMock(return_value=model)
+        model.eval = mock.MagicMock(return_value=None)
+        return model
+
+    def test_raises_when_lm_head_missing_and_tie_false(self):
+        """RuntimeError raised when lm_head.weight absent and tie_word_embeddings=False."""
+        from donut_evaluator import load_model_with_tied_weights
+
+        mock_model = self._make_mock_model(tie_word_embeddings=False)
+        loading_info = {"missing_keys": ["decoder.lm_head.weight"], "unexpected_keys": []}
+
+        with mock.patch(
+            "donut_evaluator.VisionEncoderDecoderModel.from_pretrained",
+            return_value=(mock_model, loading_info),
+        ):
+            with pytest.raises(RuntimeError, match="CRITICAL"):
+                load_model_with_tied_weights("/fake/checkpoint")
+
+    def test_no_raise_when_lm_head_present(self):
+        """No RuntimeError when lm_head.weight is present in the checkpoint."""
+        from donut_evaluator import load_model_with_tied_weights
+
+        mock_model = self._make_mock_model(tie_word_embeddings=False)
+        loading_info = {"missing_keys": [], "unexpected_keys": []}
+
+        with mock.patch(
+            "donut_evaluator.VisionEncoderDecoderModel.from_pretrained",
+            return_value=(mock_model, loading_info),
+        ):
+            # Should not raise — lm_head is present
+            result = load_model_with_tied_weights("/fake/checkpoint")
+            assert result is mock_model
+
+    def test_no_raise_for_legacy_tied_checkpoint(self):
+        """No RuntimeError for old-style checkpoints with tie_word_embeddings=True.
+
+        Legacy checkpoints tie lm_head to embed_tokens, so lm_head.weight is
+        legitimately absent from the shard — _retie_decoder_head re-ties it.
+        """
+        from donut_evaluator import load_model_with_tied_weights
+
+        mock_model = self._make_mock_model(tie_word_embeddings=True)
+        loading_info = {"missing_keys": ["decoder.lm_head.weight"], "unexpected_keys": []}
+
+        with mock.patch(
+            "donut_evaluator.VisionEncoderDecoderModel.from_pretrained",
+            return_value=(mock_model, loading_info),
+        ):
+            # Should not raise — legacy tied checkpoint, _retie_decoder_head handles it
+            load_model_with_tied_weights("/fake/checkpoint")
