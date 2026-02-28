@@ -600,8 +600,8 @@ def _unwrap_prediction(parsed: dict, task_prompt: str) -> dict:
         return parsed
 
     # Unwrap {"sroie": {...}} for SROIE task prompts
-if task_prompt.startswith("<s_sroie") and "sroie" in parsed and isinstance(parsed["sroie"], dict):
-    return parsed["sroie"]
+    if task_prompt.startswith("<s_sroie") and "sroie" in parsed and isinstance(parsed["sroie"], dict):
+        return parsed["sroie"]
 
     # Unwrap {"cord-v2": {...}} for CORD task prompts
     if task_prompt.startswith("<s_cord") and "cord-v2" in parsed and isinstance(parsed["cord-v2"], dict):
