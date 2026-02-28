@@ -262,10 +262,6 @@ class MultiDataset(Dataset):
 
             # Only cache if we'd use less than 50% of available RAM
             if available_mb > 0 and estimated_mb < available_mb * 0.5:
-                print(
-                    f"  [RAM Cache] Pre-loading {len(samples)} images into RAM "
-                    f"(~{estimated_mb}MB / {available_mb}MB available) ..."
-                )
                 import concurrent.futures
 
                 def _load_one(idx_path):
@@ -418,10 +414,6 @@ def train_experiment(
     except torch.cuda.OutOfMemoryError as e:
         original_bs = config.batch_size
         if config.batch_size > 2:
-            print(
-                f"[Exp {exp_id}] CUDA OOM during training. "
-                f"Retrying with batch_size={original_bs // 2}..."
-            )
             config.batch_size = config.batch_size // 2
             # Rebuild trainer with reduced batch size
             trainer = DonutTrainer(
@@ -432,10 +424,6 @@ def train_experiment(
                 val_dataset=val_ds,
             )
             result = trainer.train()
-            print(
-                f"[Exp {exp_id}] Training succeeded with reduced batch_size={config.batch_size} "
-                f"(originally {original_bs})"
-            )
         else:
             raise RuntimeError(
                 f"[Exp {exp_id}] CUDA OOM: batch_size already at minimum (2); "

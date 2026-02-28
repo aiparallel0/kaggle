@@ -1142,22 +1142,18 @@ def get_combined_dataset(
         loader = _LOADERS.get(name)
         if loader is None:
             raise ValueError(f"Unknown dataset '{name}'. Valid: {list(_LOADERS)}")
-        print(f"[dataset_loaders] Loading '{name}' ...")
         try:
             data = loader()
         except DatasetLoadError:
             # Re-raise — the error has already been printed to stderr
             raise
         per_loader_counts[name] = len(data)
-        print(f"[dataset_loaders] '{name}' → {len(data)} samples")
 
         if name == "sroie":
             # SROIE: train split → combined_train; val split → combined_val
             combined_train.extend(data)
             sroie_val = load_sroie_val()
             combined_val.extend(sroie_val)
-            if sroie_val:
-                print(f"[dataset_loaders] 'sroie_val' → {len(sroie_val)} val samples")
         else:
             # Auxiliary datasets: 70/15/15 split
             train_split, val_split, _ = split_dataset(data, seed=SEED)
@@ -1169,7 +1165,4 @@ def get_combined_dataset(
     rng.shuffle(combined_train)
     rng.shuffle(combined_val)
 
-    counts_summary = ", ".join(f"{n}={c}" for n, c in per_loader_counts.items())
-    print(f"[dataset_loaders] Per-loader counts: {counts_summary}")
-    print(f"[dataset_loaders] Combined train: {len(combined_train)}  val: {len(combined_val)}")
     return combined_train, combined_val
