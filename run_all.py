@@ -738,7 +738,8 @@ def stage_benchmark(args) -> StageResult:
         del donut_pipe
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-        import gc; gc.collect()
+        import gc 
+      gc.collect()
 
         # Run YOLOv8+TrOCR+Regex pipeline (if weights available)
         if not skip_yolo:
