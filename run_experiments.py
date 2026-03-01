@@ -132,7 +132,7 @@ class ExperimentConfig:
     seed: int = SEED
     early_stopping_patience: int = 3  # Per CLAUDE.md: patience=3 is optimal. Prevents overfitting.
     base_model: str = BASE_MODEL
-    warmup_steps: int = 500  # Phase 6: Per CLAUDE.md LR schedule (was 100, inadequate for cosine annealing)
+    warmup_steps: int = 40  # Fix: 500 exceeded total steps for small datasets (~312 for Exp 1); 40 is safe across all 8 experiments
     weight_decay: float = 0.01
     max_length: int = MAX_LENGTH
     gradient_accumulation_steps: int = 2
