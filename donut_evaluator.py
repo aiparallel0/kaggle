@@ -1012,7 +1012,7 @@ def main():
     output_file = os.path.join(workspace, "evaluation_results.json")
     with open(output_file, "w") as f:
         json.dump(output, f, indent=2, default=str)
-    print(f"Saved → {output_file}")
+    print(f"Saved -> {output_file}")
 
 
 if __name__ == "__main__":

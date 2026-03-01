@@ -502,7 +502,7 @@ def generate_training_plots(results_dir: Path = Path("results")) -> None:
 
         plots = generate_loss_plots_from_results(results_dir)
         if plots:
-            print(f"✓ Generated {len(plots)} loss plots for paper")
+            print(f"[OK] Generated {len(plots)} loss plots for paper")
     except Exception:
         pass  # Gracefully skip if plotting unavailable
 
@@ -553,7 +553,7 @@ def fill_paper(paper_path: str, output_path: str, var_map: dict) -> None:
 
     filled = re.sub(r"\\VAR\{([^}]+)\}", _replace, text)
     Path(output_path).write_text(filled, encoding="utf-8")
-    print(f"Filled paper written → {output_path}")
+    print(f"Filled paper written -> {output_path}")
 
     remaining = re.findall(r"\\VAR\{([^}]+)\}", filled)
     if remaining:
