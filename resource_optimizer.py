@@ -238,8 +238,8 @@ def optimize_hyperparams(
     epochs = 10
     explanation_parts.append("epochs=10 (fixed per CLAUDE.md § 3 convergence analysis)")
 
-    warmup_steps = 500
-    explanation_parts.append("warmup_steps=500 (fixed per CLAUDE.md cosine schedule)")
+    warmup_steps = 40
+    explanation_parts.append("warmup_steps=40 (fixed: 500 overflowed total steps on small datasets)")
 
     # ───────────────────────────────────────────────────────────────────
     # Early Stopping Patience
