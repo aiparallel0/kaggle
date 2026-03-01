@@ -109,13 +109,13 @@ class ExperimentConfig:
 
     name: str
     datasets: list[str]
-    epochs: int = 30
+    epochs: int = 10  # Phase 6: Per CLAUDE.md convergence analysis (was 30, overfit on small datasets)
     lr: float = 5e-5
     batch_size: int = 8
     seed: int = SEED
     early_stopping_patience: int = 3
     base_model: str = BASE_MODEL
-    warmup_steps: int = 100
+    warmup_steps: int = 500  # Phase 6: Per CLAUDE.md LR schedule (was 100, inadequate for cosine annealing)
     weight_decay: float = 0.01
     max_length: int = MAX_LENGTH
     gradient_accumulation_steps: int = 2
