@@ -84,6 +84,22 @@ from constants import BASE_MODEL, IMAGE_EXTS, SEED  # noqa: E402, I001
 # ---------------------------------------------------------------------------
 
 
+def _is_package_missing(package_name: str) -> bool:
+    """Check if a package can be imported.
+
+    Args:
+        package_name: Name of the package to check (e.g., 'torch', 'transformers')
+
+    Returns:
+        True if package is NOT installed (ImportError), False if it is installed
+    """
+    try:
+        __import__(package_name)
+        return False
+    except ImportError:
+        return True
+
+
 def _install_dependencies() -> None:
     """Auto-install packages from requirements.txt if not already installed.
 
@@ -91,22 +107,32 @@ def _install_dependencies() -> None:
     in fresh environments. Uses -q flag to minimize console spam.
 
     Strategy:
-    1. Check if torch is importable (fast check without heavy imports)
-    2. If not, run pip install -r requirements.txt
+    1. Check if critical packages (torch, transformers, datasets, accelerate) are
+       all importable
+    2. If any are missing, run pip install -r requirements.txt
     3. Gracefully continue even if pip fails (may already have packages)
+
+    FIX: Changed from checking only torch (which caused false-negatives when torch
+    was pre-installed but other packages missing) to checking a subset of critical
+    packages. This prevents silent failures in mixed conda/pip environments.
     """
     try:
         req_file = Path(__file__).parent / "requirements.txt"
         if not req_file.exists():
             return
 
-        # Quick check: are main packages already installed?
-        # Use a lightweight import check instead of sys.modules
-        try:
-            __import__("torch")
-            return  # Assume other deps also present if torch is there
-        except ImportError:
-            pass
+        # Quick check: are all critical packages already installed?
+        # Check a representative subset to avoid false negatives
+        critical_packages = ["torch", "transformers", "datasets", "accelerate"]
+        missing_packages = [pkg for pkg in critical_packages if _is_package_missing(pkg)]
+
+        if not missing_packages:
+            # All critical packages present, assume full installation is complete
+            return
+
+        # At least one critical package is missing — install all requirements
+        if missing_packages:
+            print(f"[setup] Missing packages: {', '.join(missing_packages)}")
 
         # Install requirements.txt
         print("[setup] Installing dependencies from requirements.txt...")
