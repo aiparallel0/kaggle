@@ -503,7 +503,7 @@ def generate_training_plots(results_dir: Path = Path("results")) -> None:
         plots = generate_loss_plots_from_results(results_dir)
         if plots:
             print(f"✓ Generated {len(plots)} loss plots for paper")
-    except Exception as e:
+    except Exception:
         pass  # Gracefully skip if plotting unavailable
 
 

@@ -415,7 +415,6 @@ def train_experiment(
     try:
         result = trainer.train()
     except torch.cuda.OutOfMemoryError as e:
-        original_bs = config.batch_size
         if config.batch_size > 2:
             config.batch_size = config.batch_size // 2
             # Rebuild trainer with reduced batch size

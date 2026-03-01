@@ -76,7 +76,7 @@ from pathlib import Path
 # Set before constants.py triggers torch import to reduce GPU memory fragmentation.
 os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
 
-from constants import BASE_MODEL, IMAGE_EXTS, SEED
+from constants import BASE_MODEL, IMAGE_EXTS, SEED  # noqa: E402, I001
 
 
 # ---------------------------------------------------------------------------
@@ -122,7 +122,7 @@ def _install_dependencies() -> None:
             # Log warning but continue
             if result.stderr:
                 print(f"[setup] pip warning: {result.stderr[:200]}")
-    except Exception as e:
+    except Exception:
         # Silently ignore all errors - pipeline may still work if packages are present
         pass
 
@@ -146,7 +146,7 @@ class _DualStreamHandler(logging.Handler):
     def __init__(self, file_path: Path):
         super().__init__()
         self.file_path = file_path
-        self.file_handle = open(str(file_path), 'a', encoding='utf-8')
+        self.file_handle = open(str(file_path), 'a', encoding='utf-8')  # noqa: SIM115
         self._last_line = None
         self._repeat_count = 0
 
@@ -309,7 +309,7 @@ def _setup_hf_auth() -> None:
         # Validate token format (HF tokens start with 'hf_' or are 39 chars legacy format)
         token_masked = f"{token[:4]}****" if len(token) > 8 else "****"
         if not (token.startswith("hf_") or len(token) == 39):
-            print(f"  [HF Auth] WARNING: Token format may be invalid (expected 'hf_...' or 39-char legacy)")
+            print("  [HF Auth] WARNING: Token format may be invalid (expected 'hf_...' or 39-char legacy)")
             print(f"            Token preview: {token_masked}")
 
         try:
@@ -1233,8 +1233,6 @@ def _quick_mode_handler(args, logger: logging.Logger) -> int:
         Exit code (0=success, 2=fatal)
     """
     try:
-        from run_experiments import run_experiment, EXPERIMENTS
-
         logger.info("=" * 72)
         logger.info("QUICK MODE: Single DONUT Experiment + TrOCR+YOLO")
         logger.info("=" * 72)
@@ -1257,7 +1255,6 @@ def _quick_mode_handler(args, logger: logging.Logger) -> int:
 
         # Stage 2: Train Exp 1 only
         logger.info("[Stage 2] Training DONUT Experiment 1 (SROIE baseline)...")
-        exp_config = EXPERIMENTS[1]
         # Note: In a full implementation, we'd update hyperparams here
         # For now, use the existing config
         result = stage_experiments(args)
@@ -1275,8 +1272,8 @@ def _quick_mode_handler(args, logger: logging.Logger) -> int:
         # Generate results.tex
         logger.info("[Finale] Generating results.tex...")
         try:
-            from quick_results_generator import ResultsGenerator, QuickResults
-            from pathlib import Path
+            from pathlib import Path  # noqa: E402, I001
+            from quick_results_generator import ResultsGenerator, QuickResults  # noqa: E402
 
             # Load metrics from results/experiment_1.json
             results_file = Path("results") / "experiment_1.json"

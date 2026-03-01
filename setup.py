@@ -14,8 +14,10 @@ After installation, run:
     python -m run_all -quick -all
 """
 
-from setuptools import setup, find_packages
 from pathlib import Path
+
+from setuptools import setup
+
 
 # Read requirements
 def read_requirements():

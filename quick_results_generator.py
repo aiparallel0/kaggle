@@ -31,10 +31,9 @@ Classes:
 """
 
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Optional
-import json
 from datetime import datetime
+from pathlib import Path
+from typing import Any
 
 try:
     import matplotlib
@@ -118,7 +117,7 @@ def generate_loss_plots_from_results(results_dir: Path = Path("results")) -> dic
             plt.close(fig)
             plots_generated["donut_loss_overlay"] = plot_path
 
-    except Exception as e:
+    except Exception:
         pass  # Gracefully skip if loss data unavailable
 
     return plots_generated
@@ -140,7 +139,7 @@ class QuickResults:
 class ResultsGenerator:
     """Generate results.tex with 2D plots, tables, and terminal output snippets."""
 
-    def __init__(self, quick_results: Optional[QuickResults] = None):
+    def __init__(self, quick_results: QuickResults | None = None):
         """Initialize generator.
 
         Args:
@@ -289,7 +288,7 @@ class ResultsGenerator:
                 lines.extend([
                     r"\subsubsection{DONUT Loss}",
                     r"\begin{center}",
-                    rf"\includegraphics[width=0.75\textwidth]{{results_plots/donut_loss.png}}",
+                    r"\includegraphics[width=0.75\textwidth]{results_plots/donut_loss.png}",
                     r"\end{center}",
                     r"",
                 ])
@@ -317,7 +316,7 @@ class ResultsGenerator:
                 lines.extend([
                     r"\subsubsection{TrOCR + YOLO Loss}",
                     r"\begin{center}",
-                    rf"\includegraphics[width=0.75\textwidth]{{results_plots/trocr_yolo_loss.png}}",
+                    r"\includegraphics[width=0.75\textwidth]{results_plots/trocr_yolo_loss.png}",
                     r"\end{center}",
                     r"",
                 ])
@@ -434,7 +433,7 @@ class ResultsGenerator:
             r"\hline",
         ])
 
-        for key, result in sorted(self.sweep_results.items()):
+        for _key, result in sorted(self.sweep_results.items()):
             bs = result.get('batch_size', '-')
             ep = result.get('epochs', '-')
             lr = result.get('learning_rate', '-')
@@ -508,7 +507,7 @@ class ResultsGenerator:
             lines.extend([
                 r"\subsubsection{F1 vs Batch Size}",
                 r"\begin{center}",
-                rf"\includegraphics[width=0.75\textwidth]{{results_plots/sweep_f1_vs_batchsize.png}}",
+                r"\includegraphics[width=0.75\textwidth]{results_plots/sweep_f1_vs_batchsize.png}",
                 r"\end{center}",
                 r"",
             ])
