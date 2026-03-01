@@ -536,10 +536,15 @@ def main():
     model.decoder.config.tie_word_embeddings = False
 
     model.config.pad_token_id = processor.tokenizer.pad_token_id
+    model.decoder.config.pad_token_id = processor.tokenizer.pad_token_id
     model.config.decoder_start_token_id = processor.tokenizer.convert_tokens_to_ids(["<s_sroie>"])[
         0
     ]
+    model.decoder.config.decoder_start_token_id = processor.tokenizer.convert_tokens_to_ids(["<s_sroie>"])[
+        0
+    ]
     model.config.use_cache = False  # Required with gradient_checkpointing
+    model.decoder.config.use_cache = False
     model.gradient_checkpointing_enable()
 
     # Load SROIE data
