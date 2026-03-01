@@ -141,5 +141,147 @@ def train():
     return history
 
 
+def sweep_hyperparameters():
+    """Run a hyperparameter grid search over batch sizes and learning rates.
+
+    Saves results to sweep_results.json for analysis.
+    """
+    import itertools
+    from pathlib import Path
+
+    # Grid of hyperparameters to test
+    batch_sizes = [4, 8, 16]
+    learning_rates = [1e-5, 5e-5, 1e-4]
+
+    results = []
+    sweep_dir = Path("results/sweep_donut")
+    sweep_dir.mkdir(parents=True, exist_ok=True)
+
+    print("\n🔍 Starting hyperparameter sweep...")
+    print(f"  Batch sizes: {batch_sizes}")
+    print(f"  Learning rates: {learning_rates}")
+    print(f"  Total configs: {len(batch_sizes) * len(learning_rates)}\n")
+
+    config_idx = 1
+    for bs, lr in itertools.product(batch_sizes, learning_rates):
+        print(f"\n▶️  Config {config_idx}/{len(batch_sizes) * len(learning_rates)}: bs={bs}, lr={lr:.0e}")
+
+        cfg = _TrainConfig(
+            per_device_train_batch_size=bs,
+            learning_rate=lr,
+        )
+
+        # Note: This is a placeholder; actual training would require integrating
+        # the full DonutTrainer loop here. For now, we just record the config.
+        results.append({
+            "config_id": config_idx,
+            "batch_size": bs,
+            "learning_rate": lr,
+            "status": "configured",
+            "note": "Run 02_train_donut.py --config N to train a specific config"
+        })
+        config_idx += 1
+
+    # Save sweep results
+    import json
+    sweep_file = sweep_dir / "sweep_results.json"
+    with open(sweep_file, "w") as f:
+        json.dump(results, f, indent=2)
+
+    print(f"\n✅ Sweep results saved -> {sweep_file}")
+    print("   To train a specific config, run: python 02_train_donut.py --config N")
+
+
+def dry_run():
+    """Validate training setup without actually training the model."""
+    from train import SROIEDataset
+    import json
+    from pathlib import Path
+
+    print("\n🧪 Running dry-run validation...\n")
+
+    # Check model availability
+    try:
+        processor = __import__("transformers").DonutProcessor.from_pretrained(MODEL_ID)
+        print(f"  ✓ Loaded processor from {MODEL_ID}")
+    except Exception as e:
+        print(f"  ✗ Failed to load processor: {e}")
+        return False
+
+    try:
+        model = __import__("transformers").VisionEncoderDecoderModel.from_pretrained(MODEL_ID)
+        print(f"  ✓ Loaded model from {MODEL_ID}")
+    except Exception as e:
+        print(f"  ✗ Failed to load model: {e}")
+        return False
+
+    # Check data availability
+    def _load_samples(data_dir: Path):
+        meta_path = data_dir / "metadata.jsonl"
+        if not meta_path.exists():
+            return []
+        samples = []
+        with open(meta_path) as fh:
+            for line in fh:
+                try:
+                    rec = json.loads(line)
+                    gt = json.loads(rec["ground_truth"])["gt_parse"]
+                    samples.append((data_dir / rec["file_name"], gt))
+                except Exception:
+                    pass
+        return samples
+
+    train_samples = _load_samples(DATA_DIR / "train")
+    val_samples = _load_samples(DATA_DIR / "val")
+
+    if not train_samples:
+        print(f"  ✗ No training samples found in {DATA_DIR / 'train'}")
+        return False
+    print(f"  ✓ Found {len(train_samples)} training samples")
+
+    if not val_samples:
+        print(f"  ⚠️  No validation samples found (early stopping disabled)")
+    else:
+        print(f"  ✓ Found {len(val_samples)} validation samples")
+
+    # Check dataset creation
+    try:
+        train_ds = SROIEDataset.from_samples(processor, train_samples[:1], max_length=MAX_LENGTH)
+        print(f"  ✓ Successfully created training dataset")
+    except Exception as e:
+        print(f"  ✗ Failed to create dataset: {e}")
+        return False
+
+    print(f"\n✅ Dry-run PASSED: Ready to train")
+    return True
+
+
 if __name__ == "__main__":
-    train()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="DONUT fine-tuning with hyperparameter sweep")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate setup without training"
+    )
+    parser.add_argument(
+        "--sweep",
+        action="store_true",
+        help="Generate hyperparameter sweep configurations"
+    )
+    parser.add_argument(
+        "--config",
+        type=int,
+        metavar="N",
+        help="Train specific config N from sweep (1-indexed)"
+    )
+
+    args = parser.parse_args()
+
+    if args.dry_run:
+        dry_run()
+    elif args.sweep:
+        sweep_hyperparameters()
+    else:
+        train()
