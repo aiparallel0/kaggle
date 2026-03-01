@@ -206,35 +206,144 @@ def print_metrics(name: str, metrics: dict) -> None:
     print(f"  {'=' * 55}")
 
 
+def generate_comparison_report(results: dict) -> None:
+    """Generate a detailed HTML comparison report of all evaluated models."""
+    html_lines = [
+        "<!DOCTYPE html>",
+        "<html><head><meta charset='utf-8'>",
+        "<title>Model Evaluation Report</title>",
+        "<style>",
+        "  body { font-family: monospace; margin: 20px; }",
+        "  table { border-collapse: collapse; margin: 20px 0; }",
+        "  th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }",
+        "  th { background-color: #4CAF50; color: white; }",
+        "  tr:nth-child(even) { background-color: #f2f2f2; }",
+        "  .metric-high { color: green; font-weight: bold; }",
+        "  .metric-low { color: red; }",
+        "  h1, h2 { color: #333; }",
+        "</style></head><body>",
+        "<h1>Model Evaluation Report</h1>",
+    ]
+
+    if not results:
+        html_lines.append("<p>No results to display.</p>")
+    else:
+        # Extract architectures and create comparison table
+        html_lines.append("<h2>Global Performance Comparison</h2>")
+        html_lines.append("<table><tr><th>Architecture</th><th>Global F1</th><th>Precision</th><th>Recall</th><th>Exact Match</th><th>Latency (ms)</th></tr>")
+
+        for arch, metrics in results.items():
+            f1 = metrics.get("global_f1", 0)
+            prec = metrics.get("global_precision", 0)
+            rec = metrics.get("global_recall", 0)
+            em = metrics.get("overall_exact_match", 0)
+            lat = metrics.get("mean_latency_ms", 0)
+
+            f1_class = "metric-high" if f1 > 0.85 else "metric-low" if f1 < 0.7 else ""
+
+            html_lines.append(
+                f"<tr><td><strong>{arch}</strong></td><td class='{f1_class}'>{f1:.4f}</td>"
+                f"<td>{prec:.4f}</td><td>{rec:.4f}</td><td>{em:.4f}</td><td>{lat:.1f}</td></tr>"
+            )
+
+        html_lines.append("</table>")
+
+        # Per-field comparison
+        html_lines.append("<h2>Per-Field Metrics</h2>")
+        for arch, metrics in results.items():
+            html_lines.append(f"<h3>{arch.upper()}</h3>")
+            html_lines.append("<table><tr><th>Field</th><th>F1</th><th>NED</th></tr>")
+
+            for field in FIELDS:
+                f1 = metrics.get(f"{field}_f1", 0)
+                ned = metrics.get(f"{field}_ned", 1)
+                html_lines.append(f"<tr><td>{field}</td><td>{f1:.4f}</td><td>{ned:.4f}</td></tr>")
+
+            html_lines.append("</table>")
+
+    html_lines.extend(["</body></html>"])
+
+    report_path = RESULTS_DIR / "evaluation_report.html"
+    with open(report_path, "w") as f:
+        f.write("\n".join(html_lines))
+
+    print(f"\n📊 Detailed report saved -> {report_path}")
+
+
+def generate_json_summary(results: dict) -> None:
+    """Export evaluation results in structured JSON format."""
+    summary = {
+        "evaluation_timestamp": __import__("datetime").datetime.now().isoformat(),
+        "num_test_samples": results.get("donut", {}).get("num_samples", 0),
+        "architectures_evaluated": list(results.keys()),
+        "results": results,
+    }
+
+    summary_path = RESULTS_DIR / "evaluation_summary.json"
+    with open(summary_path, "w") as f:
+        json.dump(summary, f, indent=2)
+
+    print(f"📋 Summary saved -> {summary_path}")
+
+
 # ── Main ─────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Evaluate DONUT and TrOCR+YOLO models")
+    parser.add_argument(
+        "--donut-only",
+        action="store_true",
+        help="Only evaluate DONUT (skip TrOCR+YOLO)"
+    )
+    parser.add_argument(
+        "--trocr-only",
+        action="store_true",
+        help="Only evaluate TrOCR+YOLO (skip DONUT)"
+    )
+    parser.add_argument(
+        "--report",
+        action="store_true",
+        help="Generate HTML comparison report"
+    )
+
+    args = parser.parse_args()
+
     test_samples = load_test_samples()
     print(f"Loaded {len(test_samples)} test samples")
 
     results = {}
 
-    # Evaluate DONUT (if model exists)
-    donut_model = Path("models/donut_finetuned/best")
-    if donut_model.exists():
-        results["donut"] = evaluate_donut_on_test(str(donut_model), test_samples)
-        print_metrics("DONUT", results["donut"])
-    else:
-        print(f"  DONUT model not found at {donut_model} — skipping")
+    # Evaluate DONUT (if model exists and not skipped)
+    if not args.trocr_only:
+        donut_model = Path("models/donut_finetuned/best")
+        if donut_model.exists():
+            results["donut"] = evaluate_donut_on_test(str(donut_model), test_samples)
+            print_metrics("DONUT", results["donut"])
+        else:
+            print(f"  DONUT model not found at {donut_model} — skipping")
 
-    # Evaluate TrOCR+YOLO (if models exist)
-    yolo_weights = Path("models/yolo_finetuned/run/weights/best.pt")
-    trocr_model = Path("models/trocr_finetuned/best")
-    if yolo_weights.exists() and trocr_model.exists():
-        results["trocr_yolo"] = evaluate_trocr_yolo_on_test(
-            str(yolo_weights), str(trocr_model), test_samples
-        )
-        print_metrics("TrOCR+YOLO", results["trocr_yolo"])
-    else:
-        print("  TrOCR+YOLO models not found — skipping")
+    # Evaluate TrOCR+YOLO (if models exist and not skipped)
+    if not args.donut_only:
+        yolo_weights = Path("models/yolo_finetuned/run/weights/best.pt")
+        trocr_model = Path("models/trocr_finetuned/best")
+        if yolo_weights.exists() and trocr_model.exists():
+            results["trocr_yolo"] = evaluate_trocr_yolo_on_test(
+                str(yolo_weights), str(trocr_model), test_samples
+            )
+            print_metrics("TrOCR+YOLO", results["trocr_yolo"])
+        else:
+            print("  TrOCR+YOLO models not found — skipping")
 
     # Save combined results
     RESULTS_DIR.mkdir(exist_ok=True)
     out_path = RESULTS_DIR / "metrics.json"
     with open(out_path, "w") as f:
         json.dump(results, f, indent=2)
-    print(f"\nMetrics saved -> {out_path}")
+    print(f"\n📄 Metrics saved -> {out_path}")
+
+    # Optional: generate report
+    if args.report or True:  # Always generate summary now
+        generate_json_summary(results)
+        if results:
+            generate_comparison_report(results)

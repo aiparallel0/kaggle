@@ -307,5 +307,89 @@ def prepare_all() -> dict[str, int]:
     return counts
 
 
+def validate_preparation() -> bool:
+    """Validate that all dataset preparation outputs exist and are non-empty.
+
+    Returns True if all splits have valid YOLO and TrOCR data, False otherwise.
+    """
+    issues = []
+
+    # Check YOLO data
+    for split in ["train", "val", "test"]:
+        img_dir = YOLO_DIR / "images" / split
+        lbl_dir = YOLO_DIR / "labels" / split
+
+        if not img_dir.exists() or not lbl_dir.exists():
+            issues.append(f"❌ YOLO {split}: missing directory")
+        else:
+            img_count = len(list(img_dir.glob("*")))
+            lbl_count = len(list(lbl_dir.glob("*.txt")))
+            if img_count == 0:
+                issues.append(f"❌ YOLO {split}: no images found")
+            if img_count != lbl_count:
+                issues.append(f"⚠️  YOLO {split}: {img_count} images but {lbl_count} labels")
+
+    # Check TrOCR data
+    for split in ["train", "val", "test"]:
+        trocr_split_dir = TROCR_DIR / split
+        meta_path = trocr_split_dir / "metadata.jsonl"
+
+        if not trocr_split_dir.exists():
+            issues.append(f"❌ TrOCR {split}: missing directory")
+        elif not meta_path.exists():
+            issues.append(f"❌ TrOCR {split}: no metadata.jsonl")
+        else:
+            crop_count = len(list(trocr_split_dir.glob("*.png")))
+            meta_count = len(meta_path.read_text().splitlines())
+            if crop_count == 0:
+                issues.append(f"❌ TrOCR {split}: no crop images")
+            if crop_count != meta_count:
+                issues.append(f"⚠️  TrOCR {split}: {crop_count} crops but {meta_count} metadata entries")
+
+    if issues:
+        print("\n❌ Validation FAILED:")
+        for issue in issues:
+            print(f"   {issue}")
+        return False
+    else:
+        print("\n✅ Validation PASSED: All datasets prepared correctly")
+        return True
+
+
 if __name__ == "__main__":
-    prepare_all()
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Prepare YOLO bbox labels + TrOCR line crops for SROIE dataset"
+    )
+    parser.add_argument(
+        "--validate",
+        action="store_true",
+        help="Only validate existing preparation (do not re-prepare)"
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-prepare all data even if directories already exist"
+    )
+
+    args = parser.parse_args()
+
+    if args.validate:
+        validate_preparation()
+    else:
+        if args.force:
+            import shutil
+            if YOLO_DIR.exists():
+                shutil.rmtree(YOLO_DIR)
+            if TROCR_DIR.exists():
+                shutil.rmtree(TROCR_DIR)
+            print("Cleared existing data directories due to --force flag")
+
+        counts = prepare_all()
+        print(f"\nPreparation summary:")
+        for key, val in sorted(counts.items()):
+            print(f"  {key:15s} {val:4d}")
+
+        # Auto-validate after preparation
+        validate_preparation()

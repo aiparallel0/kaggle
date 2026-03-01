@@ -331,5 +331,167 @@ def compare_all() -> None:
     print("\n  All comparison outputs saved to results/")
 
 
+def export_to_csv() -> None:
+    """Export comparison results to CSV format for external analysis."""
+    import csv
+
+    donut = load_donut_results()
+    trocr = load_trocr_results()
+
+    # Export per-experiment F1 scores
+    csv_path = RESULTS_DIR / "comparison_results.csv"
+    with open(csv_path, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow([
+            "Experiment", "Name", "DONUT_Global_F1", "DONUT_Company_F1",
+            "DONUT_Date_F1", "DONUT_Address_F1", "DONUT_Total_F1",
+            "TrOCR_Global_F1", "TrOCR_Company_F1", "TrOCR_Date_F1",
+            "TrOCR_Address_F1", "TrOCR_Total_F1", "F1_Difference"
+        ])
+
+        exp_ids = sorted(set(donut) | set(trocr), key=int)
+        for exp_id in exp_ids:
+            d_data = donut.get(str(exp_id), {}).get("metrics", {})
+            t_data = trocr.get(str(exp_id), {}).get("metrics", {})
+
+            d_f1 = d_data.get("global_f1", 0.0)
+            t_f1 = t_data.get("global_f1", 0.0)
+
+            writer.writerow([
+                exp_id,
+                EXP_NAMES.get(str(exp_id), f"Exp {exp_id}"),
+                f"{d_f1:.4f}",
+                f"{d_data.get('company_f1', 0):.4f}",
+                f"{d_data.get('date_f1', 0):.4f}",
+                f"{d_data.get('address_f1', 0):.4f}",
+                f"{d_data.get('total_f1', 0):.4f}",
+                f"{t_f1:.4f}",
+                f"{t_data.get('company_f1', 0):.4f}",
+                f"{t_data.get('date_f1', 0):.4f}",
+                f"{t_data.get('address_f1', 0):.4f}",
+                f"{t_data.get('total_f1', 0):.4f}",
+                f"{d_f1 - t_f1:+.4f}",
+            ])
+
+    print(f"  📊 Exported to CSV -> {csv_path}")
+
+
+def filter_by_threshold(min_f1: float = 0.8) -> None:
+    """Print experiments meeting a minimum F1 score threshold."""
+    donut = load_donut_results()
+
+    print(f"\n  Experiments with Global F1 >= {min_f1:.2f}:")
+    print(f"  {'-' * 50}")
+
+    count = 0
+    for exp_id in sorted(donut.keys(), key=int):
+        f1 = donut[exp_id].get("metrics", {}).get("global_f1", 0)
+        if f1 >= min_f1:
+            name = EXP_NAMES.get(exp_id, f"Exp {exp_id}")
+            print(f"  Exp {exp_id:1s} ({name:<20s}) — F1 = {f1:.4f}")
+            count += 1
+
+    if count == 0:
+        print(f"  No experiments found above threshold")
+
+
+def plot_ned_comparison(donut: dict, trocr: dict) -> None:
+    """Generate a plot comparing Normalized Edit Distance across fields."""
+    fig, ax = plt.subplots(figsize=(10, 5))
+
+    # Get best experiments
+    best_d_idx = (
+        max(donut.keys(), key=lambda k: donut[k].get("metrics", {}).get("global_f1", 0))
+        if donut
+        else None
+    )
+    best_t_idx = (
+        max(trocr.keys(), key=lambda k: trocr[k].get("metrics", {}).get("global_f1", 0))
+        if trocr
+        else None
+    )
+
+    x = np.arange(len(FIELDS))
+    width = 0.35
+
+    donut_neds = []
+    trocr_neds = []
+
+    if best_d_idx:
+        best_d = donut[best_d_idx].get("metrics", {})
+        donut_neds = [best_d.get(f"{f}_ned", 1.0) for f in FIELDS]
+
+    if best_t_idx:
+        best_t = trocr[best_t_idx].get("metrics", {})
+        trocr_neds = [best_t.get(f"{f}_ned", 1.0) for f in FIELDS]
+
+    if donut_neds:
+        ax.bar(
+            x - width / 2,
+            donut_neds,
+            width,
+            label="DONUT (best)",
+            color=COLORS["donut"],
+            alpha=0.85,
+        )
+
+    if trocr_neds:
+        ax.bar(
+            x + width / 2,
+            trocr_neds,
+            width,
+            label="TrOCR+YOLO (best)",
+            color=COLORS["trocr_yolo"],
+            alpha=0.85,
+        )
+
+    ax.set_xticks(x)
+    ax.set_xticklabels([f.capitalize() for f in FIELDS])
+    ax.set_ylabel("Normalized Edit Distance (lower is better)")
+    ax.set_title("Per-Field NED: Best DONUT vs Best TrOCR+YOLO")
+    ax.set_ylim(0, 1.0)
+    ax.legend()
+    ax.grid(axis="y", alpha=0.3)
+
+    path = RESULTS_DIR / "plot_ned_comparison.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  🎯 NED plot saved -> {path}")
+
+
 if __name__ == "__main__":
-    compare_all()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Compare DONUT and TrOCR+YOLO results")
+    parser.add_argument(
+        "--export-csv",
+        action="store_true",
+        help="Export results to CSV format"
+    )
+    parser.add_argument(
+        "--filter",
+        type=float,
+        metavar="THRESHOLD",
+        help="Show only experiments with F1 >= THRESHOLD"
+    )
+    parser.add_argument(
+        "--ned-plot",
+        action="store_true",
+        help="Generate NED comparison plot"
+    )
+
+    args = parser.parse_args()
+
+    if args.filter:
+        donut = load_donut_results()
+        filter_by_threshold(args.filter)
+    elif args.export_csv:
+        RESULTS_DIR.mkdir(exist_ok=True)
+        export_to_csv()
+    elif args.ned_plot:
+        RESULTS_DIR.mkdir(exist_ok=True)
+        donut = load_donut_results()
+        trocr = load_trocr_results()
+        plot_ned_comparison(donut, trocr)
+    else:
+        compare_all()
