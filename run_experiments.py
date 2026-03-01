@@ -54,6 +54,7 @@ import argparse
 import copy
 import gc
 import json
+import logging
 import math
 import os
 import time
@@ -276,12 +277,15 @@ class MultiDataset(Dataset):
                         if img is not None:
                             self._image_cache[idx] = img
 
-                print(f"  [RAM Cache] {len(self._image_cache)}/{len(samples)} images cached")
+                logging.getLogger(__name__).info(
+                    "[RAM Cache] %d/%d images cached", len(self._image_cache), len(samples)
+                )
             else:
                 if available_mb > 0:
-                    print(
-                        f"  [RAM Cache] Skipped (need ~{estimated_mb}MB, "
-                        f"available {available_mb}MB)"
+                    logging.getLogger(__name__).info(
+                        "[RAM Cache] Skipped (need ~%dMB, available %dMB)",
+                        estimated_mb,
+                        available_mb,
                     )
 
     def __len__(self) -> int:
@@ -381,6 +385,7 @@ def train_experiment(
     model.config.decoder_start_token_id = processor.tokenizer.convert_tokens_to_ids(["<s_sroie>"])[
         0
     ]
+    model.config.use_cache = False  # Required with gradient_checkpointing
     model.gradient_checkpointing_enable()
 
     # Build PyTorch datasets

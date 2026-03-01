@@ -347,10 +347,9 @@ def _setup_hf_auth() -> None:
         except Exception as e:
             print(f"  [HF Auth] Login failed: {e} — continuing unauthenticated")
     else:
-        print(
-            "  [HF Auth] No token found. Downloads may be slow/rate-limited.\n"
-            "            To fix: create hf_token.txt with your HF token,\n"
-            "            or set HF_TOKEN environment variable."
+        raise EnvironmentError(
+            "[HF Auth] No HuggingFace token found. Authenticated downloads are required.\n"
+            "Fix: export HF_TOKEN=hf_... or create hf_token.txt in the project root."
         )
 
 
@@ -577,17 +576,17 @@ def stage_download(args) -> StageResult:
     # Inline (blocking) model pre-download — NO background thread.
     # This ensures the model is fully cached before any training starts,
     # preventing GPU memory contention from concurrent downloads.
-    print("\n  Pre-downloading base model (blocking) ...")
+    logging.getLogger(__name__).info("Pre-downloading base model (blocking) ...")
     try:
         from transformers import DonutProcessor, VisionEncoderDecoderModel
 
         model_id = BASE_MODEL
         DonutProcessor.from_pretrained(model_id)
         VisionEncoderDecoderModel.from_pretrained(model_id)
-        print("  Base model cached ✓")
+        logging.getLogger(__name__).info("Base model cached")
     except Exception as e:
         w = f"Model pre-download failed: {e}"
-        print(f"  WARNING: {w}")
+        logging.getLogger(__name__).warning(w)
         warnings.append(w)
 
     exit_status = 1 if failed_datasets else 0
