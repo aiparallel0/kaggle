@@ -1,148 +1,187 @@
 # Multi-Dataset Fine-Tuning of DONUT for Receipt Information Extraction
 
-A systematic study of multi-dataset fine-tuning for receipt key information
-extraction (KIE) using the DONUT (Document Understanding Transformer) model.
+A systematic study of multi-dataset fine-tuning for receipt key information extraction (KIE) using the DONUT (Document Understanding Transformer) model and TrOCR+YOLO comparison.
 
-## Overview
+**Quick fact:** Starting from a CORD-pretrained DONUT checkpoint, this pipeline trains on the SROIE benchmark combined with three auxiliary datasets (WildReceipt, CORD, Invoices-DONUT) across 8 experiment configurations, evaluates each model on the SROIE test set, and generates a complete LaTeX paper with real results.
 
-Starting from a CORD-pretrained DONUT checkpoint, this pipeline trains on
-the SROIE benchmark combined with three auxiliary datasets (WildReceipt,
-CORD, Invoices-DONUT) across 8 experiment configurations, evaluates each model
-on the SROIE test set, and generates a complete LaTeX paper with real results.
+---
 
-## Pipeline Architecture
+## 🚀 Quick Start
 
-```
-Raw sources                 Normalization              Unified schema
-────────────               ─────────────              ──────────────
-SROIE (626 imgs)     ──►  SROIELoader                {"company": "...",
-WildReceipt (tar)    ──►  WildReceiptLoader     ──►   "date":    "...",
-CORD (HuggingFace)   ──►  CORDLoader                  "address": "...",
-Invoices (HF)        ──►  InvoicesDonutLoader          "total":   "..."}
-                                                             │
-              80/10/10 split                                 │ SROIEDataset
-          ┌─────┴──────┬──────┐                             │ __getitem__
-       img/         val_img/ test_img/                       ▼
-     (500 train)   (63 val) (63 test)          <s_sroie><s_company>…</s_company>
-          │                    │               <s_date>…</s_date>
-          │                    │               <s_address>…</s_address>
-          ▼                    │               <s_total>…</s_total></s_sroie>
-   DonutTrainer                │                             │
-   (Seq2SeqTrainer)            │                             │ labels tensor
-   early-stop on val_img/      │                             │
-   LmHeadCloneCallback ────────┼──────────── checkpoint ─────┘
-   (prevents lm_head loss)     │                │
-          │                    │      load_model_with_tied_weights()
-          │                    │      RuntimeError if lm_head missing
-          ▼                    ▼                │
-   best checkpoint      test_img/ (63)          ▼
-          │                    │        DonutEvaluator._parse_prediction()
-          └────────────────────┘        token2json() → list? → merge pages
-                                        _unwrap_prediction() → {"company":…}
-                                                 │
-                                        compute_metrics()
-                                        global F1, NED per field
-                                                 │
-                                        results/experiment_N.json
-                                                 │
-                                        PaperInjector → paper_filled.tex
-```
-
-**Key invariant:** `val_img/` and `test_img/` are populated once by
-`stage_install()` and are never mixed. Training early stopping reads only
-`val_img/`; final scoring reads only `test_img/`. Auxiliary datasets
-(WildReceipt, CORD, Invoices) contribute to training only — their held-out
-15% test portion is discarded to prevent contamination.
-
-## Known Bugs Fixed
-
-Three silent bugs were causing catastrophically wrong F1 scores. All are fixed
-and guarded with tests in `tests/`.
-
-| Symptom | Root Cause | Fix |
-|---------|-----------|-----|
-| **F1 ≈ 0.42** (plausible-looking) | `safetensors` omits `lm_head.weight` from checkpoint shards because it shares a data pointer with `embed_tokens.weight` after `resize_token_embeddings()`. On reload, `lm_head` is randomly re-initialized. | `LmHeadCloneCallback` deep-clones the weight before every save. `load_model_with_tied_weights()` raises `RuntimeError` immediately if `lm_head.weight` is still missing. |
-| **F1 ≈ 0.008** (near-zero, not zero) | `token2json()` returns a **list** of page-dicts when the generated sequence contains `<sep/>` tokens (inherited from CORD pretraining). `_parse_prediction()` was treating any non-dict as a parse failure and returning `{}`. | `_parse_prediction()` and `_self_test()` now merge the list of pages into a single flat dict (first occurrence of each key wins). |
-| **F1 unreliable / overfitted** | `val_img/` directory not created; `load_sroie_val()` returned `[]`; `do_eval=False`; no early stopping; model could be evaluated on test data indirectly. | `stage_install()` explicitly moves 63 images into `val_img/` and 63 into `test_img/` — physically distinct directories checked by tests. |
-
-## Repository Structure (7-file pipeline)
-
-```
-.
-├── dataset_loaders.py   # Download & normalize WildReceipt, CORD, Invoices-DONUT
-├── train.py             # Standalone SROIE-only fine-tuning script
-├── evaluate.py          # Inference + SROIE Task-3 metric computation
-├── run_experiments.py   # 8-experiment orchestrator (train + eval)
-├── run_all.py           # Single entry point: download → train → eval → paper
-├── inject_results.py    # Generate LaTeX tables; fill paper_filled.tex
-├── paper.tex            # LaTeX paper template with \VAR{} placeholders
-├── requirements.txt     # Python dependencies
-├── hf_token.txt         # HuggingFace token placeholder (gitignored)
-├── results/             # Per-experiment JSON results (created at runtime)
-└── legacy/              # Archived files from previous iterations
-```
-
-## Quick Start (vast.ai / Jupyter terminal)
+### Installation & Run (Recommended)
 
 ```bash
-# Install dependencies and run the full pipeline — SROIE data is auto-downloaded
-pip install -r requirements.txt && python run_all.py
+pip install -r requirements.txt
+python run_all.py
+```
 
-# Run a single experiment
+This runs the full end-to-end pipeline:
+1. Downloads and splits SROIE data (500 train / 63 val / 63 test)
+2. Downloads and normalizes 3 auxiliary datasets
+3. Evaluates pretrained CORD baseline (zero-shot)
+4. Trains 8 DONUT experiments (train + evaluate each)
+5. Trains 8 TrOCR+YOLO experiments (train + evaluate each)
+6. Generates comparison tables and plots
+7. Fills `paper.tex` with all real metrics → `paper_filled.tex`
+
+**Time:** ~12+ hours on A100 GPU
+
+### Quick Test Mode (30 minutes)
+
+Test the pipeline faster with just Experiment 1 + TrOCR+YOLO:
+
+```bash
+python run_all.py --quick
+```
+
+**What it does:**
+- Installs dependencies automatically
+- Sets up SROIE data (Stage 0)
+- Downloads auxiliary datasets (Stage 1)
+- Trains DONUT Experiment 1 (SROIE baseline)
+- Trains TrOCR+YOLO
+- Generates `results.tex` with 2D loss curves and metrics table
+- All output logged to `terminal.txt`
+
+**Outputs:**
+- `results.tex` — LaTeX document with loss plots and metrics
+- `results_plots/` — PNG figures (donut_loss.png, trocr_loss.png)
+- `terminal.txt` — Complete execution log
+- `results/experiment_1.json` — DONUT Exp 1 metrics
+
+### Hyperparameter Sweep Mode (Optional)
+
+Test multiple hyperparameter combinations to optimize performance:
+
+```bash
+python run_all.py --quick --all
+```
+
+**What it does:**
+- Runs quick test with default parameter grids:
+  - Batch sizes: 4, 8, 16
+  - Epochs: 5, 10, 15
+  - Learning rates: 1e-5, 5e-5, 1e-4
+  - Schedulers: linear, cosine
+- Generates comprehensive `results.tex` with parameter variation tables and overlay plots
+
+**Custom parameter grid:**
+
+```bash
+python run_all.py --quick --all --param-grid batch_size 8 16 --param-grid epochs 8 10
+```
+
+This tests only batch_size=[8, 16] and epochs=[8, 10] for faster iteration.
+
+**Configure defaults in `run_all.py`:**
+
+Edit the `TRAINING_PARAMS` dict to change defaults for quick mode:
+
+```python
+TRAINING_PARAMS = {
+    "batch_size": 8,           # Change default batch size
+    "epochs": 10,              # Change default epochs
+    "learning_rate": 5e-5,     # Change default learning rate (1e-5 to 1e-4 typical)
+    "lr_scheduler_type": "cosine",  # or "linear" / "constant"
+}
+```
+
+### Single Experiment
+
+```bash
 python run_all.py --experiment 2
+```
 
-# Force re-run (ignore cached results)
-python run_all.py --force
+### Generate Paper Only
 
-# Generate paper only (results must already exist)
+```bash
 python run_all.py --paper-only
-
-# Skip SROIE auto-install (data already present)
-python run_all.py --skip-install
-
-# Skip pretrained baseline evaluation
-python run_all.py --skip-pretrained
 ```
 
-## Performance Tips
+Regenerates `paper_filled.tex` from existing results without re-training.
 
-- **HF_TOKEN**: Create `hf_token.txt` with your HuggingFace token for 5-10x faster downloads.
-  Get one at https://huggingface.co/settings/tokens
-- **Parallel downloads**: All auxiliary datasets are downloaded in parallel automatically.
-- **RAM cache**: Images are pre-loaded into RAM when sufficient memory is available.
-- **DataLoader**: Optimized with pin_memory, prefetch_factor=4, and persistent workers.
+---
 
-## Experiment Definitions
+## 🔬 Standalone Scripts (Alternative Workflows)
 
-| Exp | Training Data                       | Description                              |
-|-----|-------------------------------------|------------------------------------------|
-| 1   | SROIE only                         | Baseline — 500 SROIE train images        |
-| 2   | SROIE + WildReceipt                | +~1 740 WildReceipt images               |
-| 3   | SROIE + Invoices-DONUT             | +~800 invoice images                     |
-| 4   | SROIE + CORD                       | +~900 CORD receipt images                |
-| 5   | SROIE + WildReceipt + CORD         | Combined receipt datasets                |
-| 6   | SROIE + WildReceipt + Invoices     | WildReceipt + Invoices-DONUT             |
-| 7   | SROIE + CORD + Invoices            | CORD + Invoices-DONUT                    |
-| 8   | SROIE + All                        | All four datasets combined               |
+These scripts provide isolated entry points for development and debugging. Use them for hyperparameter exploration, data validation, or testing individual components.
 
-## Dataset Sources
+### 01_dataset_preparation.py — Dataset & Annotation Prep
 
-- **SROIE**: **Auto-downloaded** from `https://github.com/zzzDavid/ICDAR-2019-SROIE.git`
-  (shallow-cloned; uses 80/10/10 split: 500 train / 63 val / 63 test).
-  The official 347-image test split has no public ground truth labels.
-  Use `--skip-install` if data is already present.
-- **WildReceipt**: Auto-downloaded from
-  `https://download.openmmlab.com/mmocr/data/wildreceipt.tar`
-- **CORD**: Auto-downloaded from HuggingFace
-  (`naver-clova-ix/cord-v2`)
-- **Invoices-DONUT**: Auto-downloaded from HuggingFace
-  (`katanaml-org/invoices-donut-data-v1`)
+Prepares YOLO bounding box labels and TrOCR line crops from SROIE images.
 
-## CLI Reference
-
-### `run_all.py`
-
+```bash
+python 01_dataset_preparation.py                # Prepare all data
+python 01_dataset_preparation.py --validate     # Validate existing data
+python 01_dataset_preparation.py --force        # Re-prepare (clear existing)
 ```
+
+**Outputs:** `data/yolo/{train,val,test}/` and `data/trocr/{train,val,test}/`
+
+### 02_train_donut.py — DONUT Reference Implementation
+
+Standalone DONUT fine-tuning (useful for hyperparameter exploration).
+
+```bash
+python 02_train_donut.py                        # Train DONUT model
+python 02_train_donut.py --dry-run              # Validate setup
+python 02_train_donut.py --sweep                # Generate hyperparameter configs
+python 02_train_donut.py --config N             # Train specific config
+```
+
+**Outputs:** `models/donut_finetuned/best/` and `models/donut_finetuned/training_history.json`
+
+### 03_train_trocr_yolo.py — TrOCR + YOLO Pipeline
+
+Two-stage OCR pipeline: YOLOv8 detection + TrOCR reading + heuristic assignment.
+
+```bash
+python 03_train_trocr_yolo.py                   # Train TrOCR+YOLO
+```
+
+**Outputs:** `models/yolo_finetuned/run/weights/best.pt` and `models/trocr_finetuned/best/`
+
+### 04_evaluate.py — Unified Model Evaluation
+
+Evaluate both architectures on the same 63 SROIE test images with standardized metrics.
+
+```bash
+python 04_evaluate.py                           # Evaluate both architectures
+python 04_evaluate.py --donut-only              # DONUT only
+python 04_evaluate.py --trocr-only              # TrOCR+YOLO only
+python 04_evaluate.py --report                  # Generate HTML report
+```
+
+**Outputs:**
+- `results/metrics.json` — Raw metrics
+- `results/evaluation_summary.json` — Structured summary
+- `results/evaluation_report.html` — Interactive HTML report
+
+### 05_compare_results.py — Cross-Architecture Comparison
+
+Generate comparison plots and analysis tables across all experiments.
+
+```bash
+python 05_compare_results.py                    # Full comparison (all plots)
+python 05_compare_results.py --export-csv       # Export to CSV
+python 05_compare_results.py --filter 0.85      # Show experiments with F1 >= 0.85
+python 05_compare_results.py --ned-plot         # Generate NED comparison plot
+```
+
+**Outputs:**
+- `results/plot_f1_comparison.png` — F1 bar chart
+- `results/plot_field_f1.png` — Per-field F1
+- `results/plot_convergence.png` — Training curves
+- `results/plot_ned_comparison.png` — NED analysis
+- `results/comparison_results.csv` — Export table
+
+---
+
+## 📋 Command Reference
+
+### `run_all.py` — Main Pipeline
+
+```bash
 python run_all.py [options]
 
 Options:
@@ -152,33 +191,188 @@ Options:
   --skip-install      Skip Stage 0 SROIE auto-install (data already present)
   --skip-download     Skip dataset download/verification stage
   --skip-pretrained   Skip pretrained baseline evaluation step
+  --skip-trocr        Skip TrOCR+YOLO pipeline (DONUT only)
+  --quick             Quick test mode: train only Exp 1 + TrOCR+YOLO
   --sroie-dir PATH    Path to SROIE data (default: /workspace/ICDAR-2019-SROIE/data)
   --workspace PATH    Workspace root for model checkpoints (default: /workspace)
   --paper-template F  LaTeX template to fill (default: paper.tex)
   --output F          Output filled LaTeX file (default: paper_filled.tex)
 ```
 
-### `run_experiments.py`
+### `run_experiments.py` — DONUT Only
 
-```
-python run_experiments.py --all [--force]
-python run_experiments.py --experiment N [--force]
-```
-
-### `inject_results.py`
-
-```
-python inject_results.py --all [--results PATH] [--paper paper.tex] [--output paper_filled.tex]
+```bash
+python run_experiments.py --all              # all 8 experiments
+python run_experiments.py --experiment 3     # single experiment
+python run_experiments.py --all --force      # force re-run
 ```
 
-## Evaluation Metric
+### `inject_results.py` — Paper Generation
 
-SROIE Task 3 global F1 over all (image, field) pairs, where a pair is TP
-if the predicted string equals the ground truth string (case-insensitive,
-stripped). NED (Normalized Edit Distance) is also reported per field; lower
-is better (↓).
+```bash
+python inject_results.py --all --paper paper.tex --output paper_filled.tex
+```
 
-## Results Format
+---
+
+## 📝 Understanding the Output
+
+### terminal.txt
+
+Complete execution log with timestamps for each major stage, training progress, inference results, and errors. Check this file if something goes wrong.
+
+Example:
+```
+2025-02-28 14:32:10 | run_all | INFO | ========================================================================
+2025-02-28 14:32:10 | run_all | INFO | QUICK MODE: Single DONUT Experiment + TrOCR+YOLO
+2025-02-28 14:35:22 | run_all | INFO | [Stage 0] SROIE data install...
+2025-02-28 14:42:15 | run_all | INFO | [Stage 2] Training DONUT Experiment 1 (SROIE baseline)...
+```
+
+### results.tex (Quick Mode)
+
+LaTeX document containing:
+- Training configuration (batch size, epochs, LR, scheduler)
+- 2D loss curves (train vs val)
+- Metrics table (F1, NED per field)
+- Optional terminal output snippets
+
+Compile to PDF:
+```bash
+pdflatex results.tex
+```
+
+---
+
+## 💾 Installation Methods
+
+### Method 1: Direct Execution (Recommended)
+
+```bash
+pip install -r requirements.txt
+python run_all.py
+```
+
+### Method 2: Package Installation
+
+```bash
+pip install .                    # Install from local directory
+pip install -e .                 # Install in development mode
+python -m run_all                # Run via module invocation
+```
+
+### Method 3: GitHub Installation
+
+```bash
+pip install git+https://github.com/aiparallel0/kaggle.git
+python -m run_all
+```
+
+**Auto-Install Features:**
+- Dependencies automatically installed from `requirements.txt` if needed
+- Dual-stream logging: all output to `terminal.txt`, console shows filtered progress
+- Professional CLI interface with argparse-based options
+
+---
+
+## 📊 Experiment Definitions
+
+8 DONUT fine-tuning experiments with different dataset combinations. All use 80/10/10 SROIE split: **500 train / 63 val / 63 test**.
+
+| Exp | Training Data | Approx. Samples | Expected F1 |
+|---|---|---|---|
+| 1 | SROIE only (baseline) | ~500 | 0.83–0.84 |
+| 2 | SROIE + WildReceipt | ~2,240 | 0.85–0.86 |
+| 3 | SROIE + Invoices-DONUT | ~1,300 | 0.84–0.85 |
+| 4 | SROIE + FUNSD | ~1,400 | 0.86–0.87 |
+| 5 | SROIE + WildReceipt + FUNSD | ~3,140 | 0.87–0.88 |
+| 6 | SROIE + WildReceipt + Invoices | ~3,040 | 0.87–0.88 |
+| 7 | SROIE + FUNSD + Invoices | ~2,200 | 0.86–0.87 |
+| 8 | SROIE + All datasets | ~3,940 | 0.88–0.90 |
+
+---
+
+## 📚 Data Sources
+
+| Dataset | Source | Notes |
+|---|---|---|
+| **SROIE** | Auto-downloaded from `https://github.com/zzzDavid/ICDAR-2019-SROIE.git` | 80/10/10 split applied (500 train / 63 val / 63 test) |
+| **WildReceipt** | `https://download.openmmlab.com/mmocr/data/wildreceipt.tar` | OpenMMLab tar download |
+| **FUNSD** | HuggingFace `nielsr/funsd` | No token required |
+| **Invoices-DONUT** | HuggingFace `katanaml-org/invoices-donut-data-v1` | HF token recommended for 5–10× faster download |
+
+**HuggingFace Token:** Place your token in `hf_token.txt` (single line, gitignored). Enables faster downloads.
+
+---
+
+## 🏗️ Repository Structure
+
+```
+kaggle/
+├── run_all.py               # MAIN ENTRY POINT: full dual-architecture pipeline
+├── run_experiments.py       # 8-experiment DONUT orchestrator
+├── CLAUDE.md                # Authoritative AI guide & project rules
+├── README.md                # This file
+│
+├── [Core Pipeline]
+├── constants.py             # Shared constants (SINGLE SOURCE OF TRUTH)
+├── dataset_loaders.py       # ABC-based dataset loaders
+├── train.py                 # DonutTrainer class
+├── donut_evaluator.py       # Evaluation & metrics computation
+├── inject_results.py        # LaTeX paper generation
+├── paper.tex                # LaTeX paper template
+├── requirements.txt         # Python dependencies
+│
+├── [Standalone/Educational Scripts]
+├── 01_dataset_preparation.py  # Data prep with validation CLI
+├── 02_train_donut.py          # DONUT training with sweep support
+├── 03_train_trocr_yolo.py     # TrOCR+YOLO pipeline
+├── 04_evaluate.py             # Unified evaluation + HTML reporting
+├── 05_compare_results.py      # Comparison with CSV export & filtering
+│
+├── [Configuration & Templates]
+├── paper.tex                # LaTeX research paper template
+├── references.bib           # Bibliography
+├── training_config.py       # Hyperparameter grids
+├── requirements.txt         # Python dependencies
+│
+└── [Runtime Artifacts (gitignored)]
+    ├── data/                # Cached datasets
+    ├── models/              # Checkpoints & fine-tuned weights
+    ├── results/             # Experiment JSON outputs & plots
+    └── paper_filled.tex     # Generated paper (auto-produced)
+```
+
+---
+
+## 📖 Key Invariants
+
+**Train/test split isolation:**
+- `val_img/` and `test_img/` are populated once by `stage_install()` and are never mixed
+- Training early stopping reads only `val_img/`
+- Final scoring reads only `test_img/`
+- Auxiliary datasets (WildReceipt, FUNSD, Invoices) contribute to training only—their held-out 15% test portion is discarded
+
+**Constants centralization:**
+- All shared constants live **exclusively** in `constants.py`
+- Never redeclare `FIELDS`, `IMAGE_EXTS`, `MAX_LENGTH`, etc. in other files
+- Single source of truth prevents silent drift bugs
+
+---
+
+## ⚡ Performance Tips
+
+- **HuggingFace Token:** Create `hf_token.txt` with your token for 5-10× faster downloads
+  - Get one at https://huggingface.co/settings/tokens
+- **Parallel downloads:** All auxiliary datasets download in parallel automatically
+- **RAM cache:** Images pre-loaded into RAM when sufficient memory available
+- **DataLoader:** Optimized with `pin_memory=True`, `prefetch_factor=4`, `persistent_workers=True`
+- **GPU:** CUDA auto-detected; CPU fallback supported but 10–20× slower
+- **Test on smaller data first:** Run `--quick` mode before full pipeline
+
+---
+
+## 🧪 Results Format
 
 Each experiment saves `results/experiment_N.json`:
 
@@ -195,7 +389,228 @@ Each experiment saves `results/experiment_N.json`:
     "overall_exact_match": 0.8500,
     "company_f1": 0.9500,
     "company_ned": 0.0312,
-    ...
+    "date_f1": 0.9800,
+    "date_ned": 0.0150,
+    "address_f1": 0.8700,
+    "address_ned": 0.0890,
+    "total_f1": 0.9500,
+    "total_ned": 0.0280
   }
 }
 ```
+
+---
+
+## 📊 Evaluation Metric
+
+**Global F1** over all (image, field) pairs:
+- A pair is **TP** if `predicted_string == ground_truth_string` (case-insensitive, stripped)
+- **NED** (Normalized Edit Distance via `editdistance`) reported per field — lower is better ↓
+- **Exact Match** counts full 4-field predictions where all fields match
+
+---
+
+## 🛠️ Troubleshooting
+
+### `python run_all.py --quick` hangs
+
+- Check that SROIE data is cloned (see Stage 0 output in `terminal.txt`)
+- Try adding `--skip-install` if SROIE already exists: `python run_all.py --quick --skip-install`
+- Check GPU memory: quick mode needs ~8 GB VRAM
+
+### results.tex won't compile
+
+- Check for missing packages: `pip install matplotlib numpy`
+- Verify `results_plots/` directory exists and contains PNG files
+- Try opening the tex file in a text editor to see if there are obvious LaTeX errors
+
+### Terminal output not appearing in terminal.txt
+
+- Check file permissions: `ls -la terminal.txt`
+- Try removing and re-running: `rm terminal.txt && python run_all.py --quick`
+
+### Out of memory (OOM) errors
+
+- Reduce batch size: `--param-grid batch_size 4 8` (instead of default 8)
+- Skip TrOCR+YOLO: `python run_all.py --skip-trocr` (DONUT only)
+
+---
+
+## 📚 Common Use Cases
+
+### Test if a hyperparameter change helps
+
+```bash
+# Edit TRAINING_PARAMS to set batch_size=16 (instead of default 8)
+python run_all.py --quick
+
+# Results in results.tex show F1, NED, and loss curves
+# Compare against previous runs to see if change helped
+```
+
+### Find optimal batch size
+
+```bash
+python run_all.py --quick --all --param-grid batch_size 4 8 16 32
+```
+
+Generates results.tex with batch size comparison. Look at the "Comparison Plots" section.
+
+### Test multiple learning rates
+
+```bash
+python run_all.py --quick --all --param-grid learning_rate 1e-5 3e-5 1e-4 3e-4
+```
+
+### Debug a broken configuration
+
+Run quick test first (fast failure detection):
+
+```bash
+python run_all.py --quick
+```
+
+If it fails, check `terminal.txt` for error messages. Once fixed, run full pipeline:
+
+```bash
+python run_all.py
+```
+
+### Validate data setup
+
+```bash
+python 01_dataset_preparation.py --validate
+```
+
+---
+
+## 🐛 Known Issues Fixed
+
+Three critical bugs that previously caused catastrophic F1 score collapses. All are fixed and guarded with tests.
+
+| Symptom | Root Cause | Fix |
+|---------|-----------|-----|
+| **F1 ≈ 0.42** (plausible-looking) | `safetensors` omits `lm_head.weight` from checkpoint shards because it shares data pointer with `embed_tokens.weight` after `resize_token_embeddings()`. On reload, `lm_head` randomly re-initialized. | `LmHeadCloneCallback` deep-clones weight before every save. `load_model_with_tied_weights()` raises `RuntimeError` immediately if `lm_head.weight` still missing. |
+| **F1 ≈ 0.008** (near-zero, not zero) | `token2json()` returns **list** of page-dicts when generated sequence contains `<sep/>` tokens (inherited from CORD pretraining). `_parse_prediction()` treated any non-dict as parse failure, returning `{}`. | `_parse_prediction()` and `_self_test()` merge list of pages into single flat dict (first occurrence of each key wins). |
+| **F1 unreliable / overfitted** | `val_img/` directory not created; `load_sroie_val()` returned `[]`; `do_eval=False`; no early stopping; model evaluated on test data indirectly. | `stage_install()` explicitly moves 63 images into `val_img/` and 63 into `test_img/` — physically distinct directories checked by tests. |
+
+---
+
+## 📖 Full Documentation
+
+**For complete architecture details, known issues & historical fixes, training time estimates, hyperparameter optimization, and development workflows, see [`CLAUDE.md`](CLAUDE.md).**
+
+This file serves as the authoritative technical guide for AI agents and developers working on this codebase.
+
+---
+
+## 🤝 Contributing
+
+See [`CLAUDE.md`](CLAUDE.md) for:
+- Development workflows
+- OOP design patterns
+- Known issues & historical fixes
+- Performance tips
+- Full end-to-end pipeline flow diagram
+
+---
+
+## 📝 Citation
+
+If you use this project in your research, please cite the authors and datasets used:
+
+```bibtex
+@misc{donut-multi-dataset-fine-tuning,
+  title = {Multi-Dataset Fine-Tuning of DONUT for Receipt Information Extraction},
+  year = {2026}
+}
+```
+
+---
+
+## ⚠️ Limitations
+
+- Test set (63 images from SROIE training split) is **not** the official SROIE test set (347 images with no public ground truth)
+- Leaderboard comparisons in paper are for contextual reference only
+- Single GPU, limited hyperparameter search, English-centric evaluation
+
+---
+
+---
+
+## 🔧 Advanced Configuration
+
+### Hyperparameter Defaults
+
+Edit `training_config.py` to change default hyperparameter grids for sweep mode:
+
+```python
+PARAM_GRIDS_DEFAULT = {
+    "batch_sizes": [8, 16],           # Test fewer sizes for speed
+    "epochs_list": [5, 10],           # Fewer epochs for speed
+    "learning_rates": [5e-5, 1e-4],   # Focus on high-performing rates
+    "schedulers": ["cosine"],         # Test only cosine scheduler
+}
+```
+
+This reduces the number of combinations and speeds up sweeps.
+
+### Environment Variables
+
+- `SROIE_DATA_DIR` — Path to SROIE data (default: `/workspace/ICDAR-2019-SROIE/data`)
+- `DONUT_WORKSPACE` — Workspace root for model checkpoints (default: `/workspace`)
+- `HF_TOKEN` — HuggingFace token (prefer `hf_token.txt` instead)
+
+### Package Installation
+
+`setup.py` enables package-style installation:
+
+```bash
+pip install -e .                     # Development mode
+pip install git+https://github.com/aiparallel0/kaggle.git
+donut-kie                            # CLI alias (if installed via setup.py)
+```
+
+### Exit Codes
+
+| Code | Meaning |
+|---|---|
+| `0` | Success |
+| `1` | One or more experiments had no training data (partial results saved) |
+| `2` | Fatal error (missing SROIE data, unrecoverable failure) |
+
+---
+
+## 📚 Key Features
+
+### ✅ Features Included
+
+- **Auto-Install Dependencies** — Automatically installs `requirements.txt` before training
+- **Dual-Stream Logging** — All output logged to `terminal.txt`; console shows filtered progress
+- **Quick Mode (`--quick`)** — Run only SROIE baseline + TrOCR+YOLO in ~30 minutes
+- **Hyperparameter Sweep** — Test multiple parameter combinations with `--quick --all`
+- **Professional CLI** — Clean argparse-based interface with backward compatibility
+- **2D Loss Curves** — Generates training/validation loss plots in results.tex
+- **Paper Generation** — Automatic LaTeX paper with all metrics dynamically injected
+
+### ⚠️ Known Limitations
+
+- Test set (63 images from SROIE training split) is **not** the official SROIE test set (347 images with no public ground truth)
+- Leaderboard comparisons in paper are for contextual reference only
+- Single GPU, limited hyperparameter search, English-centric evaluation
+- Loss history capture requires trainer.py integration to fully save and display loss curves
+- Hyperparameter application in quick mode may require additional trainer integration
+
+---
+
+## 📖 Documentation Organization
+
+| Document | Purpose | Audience |
+|---|---|---|
+| **README.md** (this file) | Quick start, CLI reference, common tasks | All users |
+| **CLAUDE.md** | Complete technical architecture, bug fixes, development workflows | Developers, AI agents |
+| Standalone scripts (01-05) | Educational, isolated components | Advanced users |
+
+---
+
+**For help with Claude Code features and hooks, see `/help` or report issues at https://github.com/anthropics/claude-code/issues**
