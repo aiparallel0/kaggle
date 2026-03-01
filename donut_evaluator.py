@@ -58,6 +58,10 @@ from transformers import DonutProcessor, VisionEncoderDecoderModel
 # instead of duplicating FIELDS/IMAGE_EXTS independently in this file.
 from constants import BASE_MODEL, DEVICE, EMPTY_GT, FIELDS, IMAGE_EXTS, MAX_LENGTH, _get_sroie_dir
 
+# Phase 7 FIX: Use canonical key file loading from dataset_loaders to ensure
+# consistent .txt-first loading order across all modules (not .json-first).
+from dataset_loaders import _load_key_file
+
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
@@ -947,25 +951,10 @@ def main():
     for img_path in sorted(
         p for p in img_dir.iterdir() if p.is_file() and p.suffix.lower() in IMAGE_EXTS
     ):
-        gt = None
-        key_json = key_dir / (img_path.stem + ".json")
-        if key_json.exists():
-            try:
-                gt = json.loads(key_json.read_text(encoding="utf-8"))
-            except json.JSONDecodeError:
-                pass
-        if gt is None:
-            key_txt = key_dir / (img_path.stem + ".txt")
-            if key_txt.exists():
-                lines = key_txt.read_text(encoding="utf-8").strip().splitlines()
-                if len(lines) >= 4:
-                    gt = {
-                        "company": lines[0].strip(),
-                        "date": lines[1].strip(),
-                        "address": lines[2].strip(),
-                        "total": lines[3].strip(),
-                    }
-        if gt is not None:
+        # Phase 7 FIX: Use canonical _load_key_file() for consistent .txt-first loading
+        # (not .json-first). Canonical function: dataset_loaders._load_key_file()
+        gt = _load_key_file(key_dir, img_path.stem)
+        if gt:
             test_samples.append((img_path, gt))
 
     print(f"Evaluating on {len(test_samples)} test images")

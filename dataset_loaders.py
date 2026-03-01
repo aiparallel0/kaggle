@@ -311,6 +311,81 @@ class BaseDatasetLoader(ABC):
         """Build and return a :class:`DatasetLoadError` (also prints FATAL:)."""
         return DatasetLoadError(self.name, reason)
 
+    # ── Phase 1 Consolidation: Shared utilities for all loaders ────────
+
+    def _get_dest_dir(self, subdir: str) -> Path:
+        """Get and create the destination directory for this dataset.
+
+        Args:
+            subdir: Subdirectory name under data/ (e.g., "wildreceipt", "funsd")
+
+        Returns:
+            Path to the destination directory (created if not present)
+
+        Example: self._dest_dir() = self._get_dest_dir("wildreceipt")
+        """
+        return _ensure_dir(_get_datasets_dir() / subdir)
+
+    def _get_marker_path(self, dest_dir: Path) -> Path:
+        """Get the marker file path for a cached dataset.
+
+        Args:
+            dest_dir: Destination directory (from _get_dest_dir)
+
+        Returns:
+            Path to .downloaded marker file
+
+        Example: self._marker() = self._get_marker_path(self._dest_dir())
+        """
+        return dest_dir / ".downloaded"
+
+    def _get_hf_cache_dir(self, dest_dir: Path) -> Path:
+        """Get the HuggingFace cache subdirectory for a dataset.
+
+        Args:
+            dest_dir: Destination directory (from _get_dest_dir)
+
+        Returns:
+            Path to hf_cache/ subdirectory
+
+        Example: self._hf_cache() = self._get_hf_cache_dir(self._dest_dir())
+        """
+        return dest_dir / "hf_cache"
+
+    @staticmethod
+    def _empty_gt_dict() -> dict[str, str]:
+        """Return a new empty ground-truth dict with all SROIE fields.
+
+        Consolidation: Replaces `{k: "" for k in EMPTY_GT}` pattern throughout.
+
+        Returns:
+            {"company": "", "date": "", "address": "", "total": ""}
+        """
+        return {k: "" for k in EMPTY_GT}
+
+    def _check_and_update_cache(
+        self, marker: Path, cache_path: Path, message_if_invalid: str = None
+    ) -> bool:
+        """Check if cache is valid; warn and delete marker if not.
+
+        Args:
+            marker: Path to .downloaded marker file
+            cache_path: Path to validate (e.g., hf_cache/ or extract dir)
+            message_if_invalid: Optional warning message to log if cache invalid
+
+        Returns:
+            True if cache is valid (marker present AND cache_path exists)
+            False if cache is invalid (marker will be deleted for re-download)
+        """
+        if marker.exists():
+            if not cache_path.exists():
+                if message_if_invalid:
+                    self._warn(message_if_invalid)
+                marker.unlink(missing_ok=True)
+                return False
+            return True
+        return False
+
 
 # ======================================================================
 #  SROIELoader
@@ -442,14 +517,16 @@ class WildReceiptLoader(BaseDatasetLoader):
     # ── download & extraction ─────────────────────────────────────────
 
     def _dest_dir(self) -> Path:
-        return _ensure_dir(_get_datasets_dir() / "wildreceipt")
+        """Phase 1: Use shared consolidation utility."""
+        return self._get_dest_dir("wildreceipt")
 
     def _inner_dir(self) -> Path:
         """The extracted ``wildreceipt/`` subdirectory inside _dest_dir()."""
         return self._dest_dir() / "wildreceipt"
 
     def _marker(self) -> Path:
-        return self._dest_dir() / ".downloaded"
+        """Phase 1: Use shared consolidation utility."""
+        return self._get_marker_path(self._dest_dir())
 
     def _download(self) -> Path:
         """Download and extract the tar if not already cached."""
@@ -510,7 +587,8 @@ class WildReceiptLoader(BaseDatasetLoader):
             except json.JSONDecodeError:
                 continue
 
-            gt: dict[str, str] = {k: "" for k in EMPTY_GT}
+            # Phase 1: Use shared consolidation utility
+            gt = self._empty_gt_dict()
             for ann in obj.get("annotations", []):
                 label_idx = int(ann.get("label", -1))
                 field = self._IDX_TO_FIELD.get(label_idx)
@@ -611,13 +689,16 @@ class FUNSDLoader(BaseDatasetLoader):
     # ── download ──────────────────────────────────────────────────────
 
     def _dest_dir(self) -> Path:
-        return _ensure_dir(_get_datasets_dir() / "funsd")
+        """Phase 1: Use shared consolidation utility."""
+        return self._get_dest_dir("funsd")
 
     def _hf_cache(self) -> Path:
-        return self._dest_dir() / "hf_cache"
+        """Phase 1: Use shared consolidation utility."""
+        return self._get_hf_cache_dir(self._dest_dir())
 
     def _marker(self) -> Path:
-        return self._dest_dir() / ".downloaded"
+        """Phase 1: Use shared consolidation utility."""
+        return self._get_marker_path(self._dest_dir())
 
     def _download(self) -> Path:
         """Download FUNSD from the HuggingFace datasets hub."""
@@ -688,7 +769,8 @@ class FUNSDLoader(BaseDatasetLoader):
           - total   : first ANSWER span matching _AMOUNT_RE
           - address : first ANSWER span with len > 5 not claimed by above
         """
-        gt: dict[str, str] = {k: "" for k in EMPTY_GT}
+        # Phase 1: Use shared consolidation utility
+        gt = BaseDatasetLoader._empty_gt_dict()
         try:
             spans = cls._extract_spans(words, ner_tags)
 
@@ -822,13 +904,16 @@ class InvoicesDonutLoader(BaseDatasetLoader):
     # ── download ──────────────────────────────────────────────────────
 
     def _dest_dir(self) -> Path:
-        return _ensure_dir(_get_datasets_dir() / "invoices_donut")
+        """Phase 1: Use shared consolidation utility."""
+        return self._get_dest_dir("invoices_donut")
 
     def _hf_cache(self) -> Path:
-        return self._dest_dir() / "hf_cache"
+        """Phase 1: Use shared consolidation utility."""
+        return self._get_hf_cache_dir(self._dest_dir())
 
     def _marker(self) -> Path:
-        return self._dest_dir() / ".downloaded"
+        """Phase 1: Use shared consolidation utility."""
+        return self._get_marker_path(self._dest_dir())
 
     def _download(self) -> Path:
         """Download Invoices-DONUT from the HuggingFace datasets hub."""
@@ -865,7 +950,8 @@ class InvoicesDonutLoader(BaseDatasetLoader):
         - address: empty — invoices lack a reliable store-address field
         - total:   total_gross_worth with currency symbol stripped
         """
-        gt: dict[str, str] = {k: "" for k in EMPTY_GT}
+        # Phase 1: Use shared consolidation utility
+        gt = BaseDatasetLoader._empty_gt_dict()
         try:
             obj = (
                 json.loads(ground_truth_str)

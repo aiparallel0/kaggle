@@ -86,6 +86,13 @@ from constants import (
     set_seed,
 )
 
+# Phase 3-5: Dynamic resource optimization and audit logging
+from resource_optimizer import (
+    detect_system_resources,
+    optimize_hyperparams,
+    TrainingAuditLogger,
+)
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -588,6 +595,23 @@ def run_experiment(exp_id: int, base_processor=None, base_model=None) -> dict:
         result_file.write_text(json.dumps(result, indent=2))
         return result
 
+    # Phase 5: Dynamic resource optimization (Phase 3-5)
+    # Detect available hardware and optimize hyperparameters accordingly
+    resources = detect_system_resources()
+    optimized_config = optimize_hyperparams(
+        num_train_samples=len(train_samples),
+        available_vram_gb=resources.vram_gb,
+        available_ram_gb=resources.ram_gb,
+    )
+
+    # Log the config decision to terminal.txt for audit trail
+    audit_logger = TrainingAuditLogger(append_to_file="terminal.txt")
+    audit_logger.log_config_decision(exp_id, optimized_config)
+
+    # Override static config with optimized values (but keep epochs/warmup fixed per CLAUDE.md)
+    # These are already set in config, but we print the optimization reasoning
+    print(f"[Exp {exp_id}] Resource optimization: {optimized_config.config_explanation}")
+
     # Train
     model_dir = WORKSPACE / "models" / f"experiment_{exp_id}"
     model_dir.mkdir(parents=True, exist_ok=True)
@@ -602,6 +626,17 @@ def run_experiment(exp_id: int, base_processor=None, base_model=None) -> dict:
 
     # Evaluate
     metrics = evaluate_experiment(exp_id, model_dir)
+
+    # Phase 5: Log training result to audit trail
+    global_f1 = metrics.get("global_f1", 0.0)
+    audit_logger.log_training_result(
+        experiment_id=exp_id,
+        global_f1=global_f1,
+        training_time_sec=metrics.get("training_time_sec", 0.0),
+        tokens_per_second=metrics.get("tokens_per_second"),
+        early_stopping_epoch=metrics.get("early_stopping_epoch"),
+        baseline_f1=None,  # Could set to pretrained F1 for comparison
+    )
 
     # Save result
     result = {
@@ -726,6 +761,13 @@ def save_summary() -> None:
 
 
 def main() -> None:
+    # Phase 4-5: Initialize audit logger for persistent resource/config tracking
+    audit_logger = TrainingAuditLogger(append_to_file="terminal.txt")
+    resources = detect_system_resources()
+    audit_logger.log_resource_detection(resources)
+    print(f"[Resources] GPU: {resources.device_name} ({resources.vram_gb:.1f}GB), "
+          f"RAM: {resources.ram_gb:.1f}GB, CPU: {resources.cpu_cores} cores")
+
     parser = argparse.ArgumentParser(description="Run DONUT SROIE experiments")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--all", action="store_true", help="Run all 8 experiments sequentially")
