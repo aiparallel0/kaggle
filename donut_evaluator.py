@@ -42,6 +42,7 @@ Critical bug fixes in this version:
 import json
 import logging
 import os
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -502,8 +503,6 @@ class DonutEvaluator:
             max_length=self.max_length,
             use_cache=True,
             num_beams=1,
-            repetition_penalty=1.5,
-            no_repeat_ngram_size=3,
             bad_words_ids=[[self.processor.tokenizer.unk_token_id]],
             return_dict_in_generate=True,
         )
@@ -511,6 +510,9 @@ class DonutEvaluator:
         sequence = self.processor.batch_decode(outputs.sequences)[0]
         sequence = sequence.replace(self.processor.tokenizer.eos_token, "")
         sequence = sequence.replace(self.processor.tokenizer.pad_token, "").strip()
+        # outputs.sequences includes the decoder_input_ids prefix (e.g. "<s_sroie>").
+        # Strip the first tag so token2json receives a clean single-wrapped sequence.
+        sequence = re.sub(r"<[^>]+>", "", sequence, count=1).strip()
 
         # Diagnostic logging for the first few calls (file only — too verbose for console)
         if self._inference_call_count <= _DIAGNOSTIC_LOG_COUNT:

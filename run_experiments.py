@@ -126,11 +126,11 @@ class ExperimentConfig:
 
     name: str
     datasets: list[str]
-    epochs: int = 10  # Phase 6: Per CLAUDE.md convergence analysis (was 30, overfit on small datasets)
+    epochs: int = 30  # Reverted: 10 epochs → underfitting (train_loss=2.8, val_loss=1.52, F1=0.18)
     lr: float = 5e-5
     batch_size: int = 8
     seed: int = SEED
-    early_stopping_patience: int = 3
+    early_stopping_patience: int = 10  # Increased: patience=3 stopped too early while still underfitting
     base_model: str = BASE_MODEL
     warmup_steps: int = 500  # Phase 6: Per CLAUDE.md LR schedule (was 100, inadequate for cosine annealing)
     weight_decay: float = 0.01
