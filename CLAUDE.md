@@ -34,7 +34,7 @@ This repository implements a systematic study of **multi-dataset fine-tuning for
 1. **DONUT** (Document Understanding Transformer) — end-to-end vision-language model, `naver-clova-ix/donut-base-finetuned-cord-v2` as base checkpoint
 2. **TrOCR + YOLOv8** — two-stage OCR pipeline: YOLOv8x detects text regions, TrOCR reads crops, heuristics assign fields
 
-The goal: evaluate how adding auxiliary training datasets (WildReceipt, CORD, Invoices-DONUT) to SROIE fine-tuning affects performance on the SROIE Task-3 benchmark, across **8 dataset-combination experiments**. Results are automatically compiled into a LaTeX research paper.
+The goal: evaluate how adding auxiliary training datasets (WildReceipt, FUNSD, Invoices-DONUT) to SROIE fine-tuning affects performance on the SROIE Task-3 benchmark, across **8 dataset-combination experiments**. Results are automatically compiled into a LaTeX research paper.
 
 ---
 
@@ -377,10 +377,10 @@ from constants import FIELDS, IMAGE_EXTS, MAX_LENGTH, BASE_MODEL, SEED, NEW_TOKE
 | 1 | SROIE only (baseline) | ~500 | 0.83–0.84 |
 | 2 | SROIE + WildReceipt | ~2,240 | 0.85–0.86 |
 | 3 | SROIE + Invoices-DONUT | ~1,300 | 0.84–0.85 |
-| 4 | SROIE + CORD | ~1,400 | 0.86–0.87 |
-| 5 | SROIE + WildReceipt + CORD | ~3,140 | 0.87–0.88 |
+| 4 | SROIE + FUNSD | ~1,400 | 0.86–0.87 |
+| 5 | SROIE + WildReceipt + FUNSD | ~3,140 | 0.87–0.88 |
 | 6 | SROIE + WildReceipt + Invoices | ~3,040 | 0.87–0.88 |
-| 7 | SROIE + CORD + Invoices | ~2,200 | 0.86–0.87 |
+| 7 | SROIE + FUNSD + Invoices | ~2,200 | 0.86–0.87 |
 | 8 | SROIE + All datasets | ~3,940 | 0.88–0.90 |
 
 `ExperimentConfig` is the single source of truth for all hyperparameters. `DonutTrainer` reads all values via duck-typed attribute access — no magic numbers anywhere else.
@@ -393,7 +393,7 @@ from constants import FIELDS, IMAGE_EXTS, MAX_LENGTH, BASE_MODEL, SEED, NEW_TOKE
 |---|---|---|
 | SROIE | `https://github.com/zzzDavid/ICDAR-2019-SROIE.git` | Auto-cloned; 80/10/10 split applied |
 | WildReceipt | `https://download.openmmlab.com/mmocr/data/wildreceipt.tar` | OpenMMLab tar |
-| CORD | HuggingFace `naver-clova-ix/cord-v2` | HF token for 5–10× faster download |
+| FUNSD | HuggingFace `nielsr/funsd` | No HF token required |
 | Invoices-DONUT | HuggingFace `katanaml-org/invoices-donut-data-v1` | HF token for 5–10× faster download |
 
 **HF Token:** Place your token in `hf_token.txt` (single line). Gitignored — never commit. Enables parallel accelerated downloads.
@@ -739,7 +739,7 @@ The complete flow from raw source data to the filled LaTeX paper. Every arrow is
 ═══════════════════════════════════════════════════════════════════════════════
 
   WildReceipt tar  ──► WildReceiptLoader._download() ──► data/wildreceipt/
-  CORD (HF)        ──► CORDLoader._download()        ──► data/cord/
+  FUNSD (HF)       ──► FUNSDLoader._download()       ──► data/funsd/
   Invoices (HF)    ──► InvoicesDonutLoader._download()──► data/invoices_donut/
   donut-base-finetuned-cord-v2 ──► HF cache (blocking, single-threaded)
 
@@ -783,7 +783,7 @@ The complete flow from raw source data to the filled LaTeX paper. Every arrow is
   │  Every sample, regardless of source dataset, is:                        │
   │    {"company": "...", "date": "...", "address": "...", "total": "..."}  │
   │                                                                         │
-  │  Raw CORD tags (store_info, total_price…) → _cord_remap()              │
+  │  Raw FUNSD words/ner_tags → _normalize()                                │
   │  Raw WildReceipt label indices (1,3,7,10) → _IDX_TO_FIELD map          │
   │  Raw Invoices fields → _normalize()                                     │
   │                                                                         │

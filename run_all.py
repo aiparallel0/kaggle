@@ -1376,7 +1376,7 @@ def _quick_all_mode_handler(args, logger: logging.Logger) -> int:
 
                 sweep_id = i  # Use iteration number as sweep ID
                 custom_config = ExperimentConfig(
-                    id=sweep_id,
+                    experiment_id=sweep_id,
                     name=f"Sweep: bs={bs}, ep={ep}, lr={lr:.0e}, sched={sched}",
                     description="Hyperparameter sweep experiment",
                     datasets=["sroie"],  # Quick mode: SROIE only
@@ -1384,7 +1384,6 @@ def _quick_all_mode_handler(args, logger: logging.Logger) -> int:
                     gradient_accumulation_steps=2,
                     epochs=ep,
                     lr=lr,
-                    lr_scheduler_type=sched,
                 )
 
                 # Prepare result file

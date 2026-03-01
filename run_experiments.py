@@ -326,10 +326,12 @@ def train_experiment(
     val_samples: list[tuple[Path, dict]] = None,
     base_processor=None,
     base_model=None,
+    config=None,
 ) -> list[dict]:
     """Fine-tune DONUT on *samples* and save the model to *output_dir*.
 
-    All hyperparameters come from ``EXPERIMENTS[exp_id]`` (an ExperimentConfig).
+    All hyperparameters come from *config* if supplied, otherwise from
+    ``EXPERIMENTS[exp_id]``.  Pass a custom ExperimentConfig for sweeps.
     Training is delegated to ``DonutTrainer`` from ``train.py``, which reads
     hyperparameters from the config via duck-typed attributes.
 
@@ -343,7 +345,8 @@ def train_experiment(
     """
     from train import DonutTrainer
 
-    config = EXPERIMENTS[exp_id]
+    if config is None:
+        config = EXPERIMENTS[exp_id]
 
     set_seed(config.seed)
     print(f"\n[Exp {exp_id}] Training on {len(samples)} samples → {output_dir}")
@@ -612,7 +615,7 @@ def run_custom_experiment(config: "ExperimentConfig", result_file: Path) -> dict
         Result dict with metrics, training_log, etc.
     """
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    exp_id = config.id
+    exp_id = config.experiment_id
 
     print(f"\n{'=' * 72}")
     print(f"Sweep Experiment {exp_id}: {config.name}")
@@ -643,6 +646,7 @@ def run_custom_experiment(config: "ExperimentConfig", result_file: Path) -> dict
         train_samples,
         model_dir,
         val_samples=val_samples,
+        config=config,
     )
 
     # Evaluate (pass custom config to avoid EXPERIMENTS lookup)
