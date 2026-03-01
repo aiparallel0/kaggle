@@ -77,6 +77,7 @@ from pathlib import Path
 os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
 
 from constants import BASE_MODEL, IMAGE_EXTS, SEED  # noqa: E402, I001
+from retro_ui import RetroUIFormatter  # ASCII-only terminal formatting
 
 
 # ---------------------------------------------------------------------------
@@ -545,14 +546,14 @@ def stage_download(args) -> StageResult:
                 counts[ds_name] = count
                 print(f"    → '{ds_name}' ready: {count} train samples ({elapsed:.1f}s)")
 
-    print(f"\n  ┌{'─' * 50}┐")
-    print(f"  │ {'Dataset':<25} {'Samples':>10} {'Status':>12} │")
-    print(f"  ├{'─' * 50}┤")
+    print(f"\n  +{'-' * 50}+")
+    print(f"  | {'Dataset':<25} {'Samples':>10} {'Status':>12} |")
+    print(f"  +{'-' * 50}+")
     for ds_name in ["sroie", "wildreceipt", "funsd", "invoices_donut"]:
         count = counts.get(ds_name, 0)
-        status = "✓ OK" if count > 0 else "✗ EMPTY"
-        print(f"  │ {ds_name:<25} {count:>10} {status:>12} │")
-    print(f"  └{'─' * 50}┘")
+        status_sym = "[OK]" if count > 0 else "[EMPTY]"
+        print(f"  | {ds_name:<25} {count:>10} {status_sym:>12} |")
+    print(f"  +{'-' * 50}+")
 
     if failed_datasets:
         # Report which experiment IDs are affected by the failed downloads
@@ -1195,17 +1196,17 @@ class PipelineOrchestrator:
         """Phase 5A visual output — formatted pipeline execution summary table."""
         W = 70  # inner width
         lines = []
-        lines.append(f"╔{'═' * W}╗")
+        lines.append(f"+{'-' * W}+")
         title = "PIPELINE EXECUTION SUMMARY"
-        lines.append(f"║{title:^{W}}║")
-        lines.append(f"╠{'═' * W}╣")
+        lines.append(f"|{title:^{W}}|")
+        lines.append(f"+{'-' * W}+")
 
         # Header
-        hdr = f"  {'Stage':<24}│ {'Duration':>8} │ {'Status':<7} │ {'Warnings':<20}"
-        lines.append(f"║{hdr:<{W}}║")
+        hdr = f"  {'Stage':<24}| {'Duration':>8} | {'Status':<7} | {'Warnings':<20}"
+        lines.append(f"|{hdr:<{W}}|")
 
-        sep = f"{'═' * 25}╪{'═' * 10}╪{'═' * 9}╪{'═' * (W - 46)}"
-        lines.append(f"╠{sep}╣")
+        sep = f"{'-' * 25}+-{'-' * 10}-+-{'-' * 9}-+-{'-' * (W - 48)}-"
+        lines.append(f"+{sep}+")
 
         # Stage labels for display order
         stage_labels = {
@@ -1224,20 +1225,20 @@ class PipelineOrchestrator:
             label = stage_labels.get(sr.name, sr.name)
             dur = f"{sr.duration:.1f}s"
             if sr.exit_status == 0:
-                status = "✓ OK"
+                status = "[OK]"
             elif sr.exit_status == 1:
-                status = "⚠ PART"
+                status = "[PART]"
             else:
-                status = "✗ FAIL"
+                status = "[FAIL]"
             warn_text = (
                 f"{len(sr.warnings)} warning{'s' if len(sr.warnings) != 1 else ''}"
                 if sr.warnings
                 else ""
             )
-            row = f"  {label:<24}│ {dur:>8} │ {status:<7} │ {warn_text:<20}"
-            lines.append(f"║{row:<{W}}║")
+            row = f"  {label:<24}| {dur:>8} | {status:<7} | {warn_text:<20}"
+            lines.append(f"|{row:<{W}}|")
 
-        lines.append(f"╚{'═' * W}╝")
+        lines.append(f"+{'-' * W}+")
         return "\n".join(lines)
 
 

@@ -199,7 +199,7 @@ class ResultsGenerator:
 
         # Write to file
         output_path.write_text("\n".join(lines), encoding="utf-8")
-        print(f"✓ Results saved to {output_path}")
+        print(f"[OK] Results saved to {output_path}")
 
     def _generate_header(self) -> list[str]:
         """Generate LaTeX document header."""

@@ -682,11 +682,11 @@ def compute_metrics(bench: BenchmarkResult) -> BenchmarkResult:
 # ─��───────────────────────────────────────────────────────────────────────────
 def print_report(results: list[BenchmarkResult], n_samples: int) -> None:
     """Print a formatted comparison table to stdout."""
-    SEP = "─" * 72
+    SEP = "-" * 72
 
-    print(f"\n{'═' * 72}")
-    print(f"  BENCHMARK REPORT — {n_samples} samples")
-    print(f"{'═' * 72}")
+    print(f"\n{'=' * 72}")
+    print(f"  BENCHMARK REPORT -- {n_samples} samples")
+    print(f"{'=' * 72}")
 
     # ── Summary table ────────────────────────────────────────────────────────
     header = f"{'Metric':<28}" + "".join(f"{r.method:>20}" for r in results)
@@ -696,29 +696,29 @@ def print_report(results: list[BenchmarkResult], n_samples: int) -> None:
     def row(name, vals, fmt=".4f"):
         return f"{name:<28}" + "".join(f"{v:>20{fmt}}" for v in vals)
 
-    print(row("Global F1  (↑)", [r.global_f1 for r in results]))
-    print(row("Global Accuracy  (↑)", [r.global_accuracy for r in results]))
-    print(row("NED  (↓ = better)", [r.global_ned for r in results]))
-    print(row("Mean inference (ms)  (↓)", [r.mean_inference_ms for r in results], ".1f"))
+    print(row("Global F1  [UP]", [r.global_f1 for r in results]))
+    print(row("Global Accuracy  [UP]", [r.global_accuracy for r in results]))
+    print(row("NED  [DN=better]", [r.global_ned for r in results]))
+    print(row("Mean inference (ms)  [DN]", [r.mean_inference_ms for r in results], ".1f"))
     print(row("Median inference (ms)", [r.median_inference_ms for r in results], ".1f"))
     print(row("P95 inference (ms)", [r.p95_inference_ms for r in results], ".1f"))
 
-    # ── Per-field breakdown ──────────────────────────────────────────────────
-    print(f"\n{'─' * 72}")
+    # -- Per-field breakdown -------------------------------------------------
+    print(f"\n{'-' * 72}")
     print("  Per-Field F1")
     print(SEP)
     for fld in FIELDS:
         vals = [r.per_field_f1.get(fld, 0.0) for r in results]
         print(row(f"  {fld:<26}", vals))
 
-    print(f"\n{'─' * 72}")
+    print(f"\n{'-' * 72}")
     print("  Per-Field Exact-Match Accuracy")
     print(SEP)
     for fld in FIELDS:
         vals = [r.per_field_accuracy.get(fld, 0.0) for r in results]
         print(row(f"  {fld:<26}", vals))
 
-    print(f"\n{'═' * 72}\n")
+    print(f"\n{'=' * 72}\n")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -985,7 +985,7 @@ def main() -> None:
     if not args.labels_dir.exists():
         sys.exit(f"FATAL: labels_dir not found: {args.labels_dir}")
 
-    print(f"\n{'═' * 60}")
+    print(f"\n{'=' * 60}")
     print("  RECEIPT KIE BENCHMARK")
     print(f"  DONUT model  : {args.donut_model}")
     print(f"  YOLO model   : {args.yolo_model}")
@@ -994,7 +994,7 @@ def main() -> None:
     print(f"  labels_dir   : {args.labels_dir}")
     if args.max_samples:
         print(f"  max_samples  : {args.max_samples}")
-    print(f"{'═' * 60}\n")
+    print(f"{'=' * 60}\n")
 
     # ── Discover paired data ─────────────────────────────────────────────────
     pairs = find_pairs(args.images_dir, args.labels_dir, args.max_samples)
@@ -1004,7 +1004,7 @@ def main() -> None:
 
     # ── Run DONUT ───────────────────────���────────────────────────────────────
     if not args.skip_donut:
-        print("─── Pipeline A: DONUT ───────────────────────────────────────")
+        print("--- Pipeline A: DONUT -----------------------------------------------")
         donut = DonutPipeline(model_id_or_path=args.donut_model)
         donut_result = donut.run_benchmark(pairs, desc="DONUT inference")
         donut_result = compute_metrics(donut_result)
@@ -1019,7 +1019,7 @@ def main() -> None:
 
     # ── Run YOLOv8 + TrOCR + Regex ──────────────────────────────────────────
     if not args.skip_yolo:
-        print("\n─── Pipeline B: YOLOv8 + TrOCR-base-printed + Regex ─────────")
+        print("\n--- Pipeline B: YOLOv8 + TrOCR-base-printed + Regex ----------")
         yolo_trocr = TrOCRYOLOPipeline(
             yolo_model_path=args.yolo_model,
             trocr_model_id=args.trocr_model,

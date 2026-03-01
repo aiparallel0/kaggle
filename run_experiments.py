@@ -370,7 +370,7 @@ def train_experiment(
         config = EXPERIMENTS[exp_id]
 
     set_seed(config.seed)
-    print(f"\n[Exp {exp_id}] Training on {len(samples)} samples → {output_dir}")
+    print(f"\n[Exp {exp_id}] Training on {len(samples)} samples -> {output_dir}")
     print(
         f"[Exp {exp_id}] Hyperparams: epochs={config.epochs}, "
         f"lr={config.lr}, batch_size={config.batch_size}, "
@@ -586,13 +586,13 @@ def run_experiment(exp_id: int, base_processor=None, base_model=None) -> dict:
             )
             result_file.unlink()
         else:
-            print(f"[Exp {exp_id}] Valid cached result found — skipping.")
+            print(f"[Exp {exp_id}] Valid cached result found - skipping.")
             return cached
 
     # Load data
     train_samples, val_samples = dataset_loaders.get_combined_dataset(config.datasets)
     if len(train_samples) == 0:
-        print(f"[Exp {exp_id}] WARNING: No samples loaded — saving empty result.")
+        print(f"[Exp {exp_id}] WARNING: No samples loaded - saving empty result.")
         result = {
             "experiment_id": exp_id,
             "name": config.name,
@@ -659,7 +659,7 @@ def run_experiment(exp_id: int, base_processor=None, base_model=None) -> dict:
         "training_log": log_history,
     }
     result_file.write_text(json.dumps(result, indent=2))
-    print(f"[Exp {exp_id}] Results saved → {result_file}")
+    print(f"[Exp {exp_id}] Results saved -> {result_file}")
     print(f"[Exp {exp_id}] Global F1 = {metrics.get('global_f1', 'N/A')}")
     return result
 
@@ -692,7 +692,7 @@ def run_custom_experiment(config: "ExperimentConfig", result_file: Path) -> dict
     # Load data
     train_samples, val_samples = dataset_loaders.get_combined_dataset(config.datasets)
     if len(train_samples) == 0:
-        print(f"[Sweep Exp {exp_id}] WARNING: No samples loaded — saving empty result.")
+        print(f"[Sweep Exp {exp_id}] WARNING: No samples loaded - saving empty result.")
         result = {
             "experiment_id": exp_id,
             "name": config.name,
@@ -728,7 +728,7 @@ def run_custom_experiment(config: "ExperimentConfig", result_file: Path) -> dict
         "training_log": log_history,
     }
     result_file.write_text(json.dumps(result, indent=2))
-    print(f"[Sweep Exp {exp_id}] Results saved → {result_file}")
+    print(f"[Sweep Exp {exp_id}] Results saved -> {result_file}")
     print(f"[Sweep Exp {exp_id}] Global F1 = {metrics.get('global_f1', 'N/A')}")
     return result
 
@@ -750,7 +750,7 @@ def save_summary() -> None:
 
     summary_file = RESULTS_DIR / "all_experiments.json"
     summary_file.write_text(json.dumps(all_results, indent=2))
-    print(f"\nSummary saved → {summary_file}")
+    print(f"\nSummary saved -> {summary_file}")
 
     # Pretty-print leaderboard
     print(f"\n{'=' * 72}")
