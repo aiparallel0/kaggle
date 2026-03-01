@@ -57,6 +57,7 @@ TRAIN_CONFIG.
 
 import json
 import logging
+import math
 import os
 import random
 import time
@@ -367,13 +368,28 @@ class DonutTrainer:
         use_bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
         use_fp16 = torch.cuda.is_available() and not use_bf16
 
+        # Cap warmup_steps to ≤10% of total optimizer steps.
+        # warmup=500 is correct for large datasets (Exp 8, ~3940 samples, ~1250 opt steps),
+        # but exceeds total training for small datasets (Exp 1, ~500 samples, ~320 opt steps),
+        # causing the LR to never reach peak value and producing CORD-schema hallucinations.
+        _grad_accum = getattr(self.config, "gradient_accumulation_steps", 2)
+        _steps_epoch = math.ceil(len(self.train_dataset) / self.config.per_device_train_batch_size)
+        _total_opt_steps = math.ceil(_steps_epoch / _grad_accum) * self.config.max_epochs
+        _cfg_warmup = getattr(self.config, "warmup_steps", 100)
+        _eff_warmup = min(_cfg_warmup, max(10, _total_opt_steps // 10))
+        if _eff_warmup != _cfg_warmup:
+            logger.warning(
+                "warmup_steps capped %d → %d (dataset has only %d opt steps over %d epochs)",
+                _cfg_warmup, _eff_warmup, _total_opt_steps, self.config.max_epochs,
+            )
+
         training_args = Seq2SeqTrainingArguments(
             output_dir=str(self._output_dir),
             num_train_epochs=self.config.max_epochs,
             per_device_train_batch_size=self.config.per_device_train_batch_size,
-            gradient_accumulation_steps=getattr(self.config, "gradient_accumulation_steps", 2),
+            gradient_accumulation_steps=_grad_accum,
             learning_rate=self.config.learning_rate,
-            warmup_steps=getattr(self.config, "warmup_steps", 100),
+            warmup_steps=_eff_warmup,
             weight_decay=getattr(self.config, "weight_decay", 0.01),
             save_strategy="epoch",
             eval_strategy="epoch" if do_eval else "no",

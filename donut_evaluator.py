@@ -392,7 +392,7 @@ class DonutEvaluator:
             raise RuntimeError("Self-test failed: test_dataset is empty")
 
         img_path, gt = self.test_dataset[0]
-        logger.info("Self-test: running inference on %s", img_path)
+        logger.debug("Self-test: running inference on %s", img_path)
 
         # Run raw generation to capture token sequence for diagnostics
         image = Image.open(img_path).convert("RGB")
@@ -512,9 +512,9 @@ class DonutEvaluator:
         sequence = sequence.replace(self.processor.tokenizer.eos_token, "")
         sequence = sequence.replace(self.processor.tokenizer.pad_token, "").strip()
 
-        # Diagnostic logging for the first few calls
+        # Diagnostic logging for the first few calls (file only — too verbose for console)
         if self._inference_call_count <= _DIAGNOSTIC_LOG_COUNT:
-            logger.info(
+            logger.debug(
                 "Inference #%d raw tokens: %s",
                 self._inference_call_count,
                 sequence[:200] + ("..." if len(sequence) > 200 else ""),
@@ -684,9 +684,9 @@ def run_inference(model, processor, image_path, task_prompt, max_length=512, pre
     sequence = sequence.replace(processor.tokenizer.eos_token, "")
     sequence = sequence.replace(processor.tokenizer.pad_token, "").strip()
 
-    # Diagnostic logging for the first few calls
+    # Diagnostic logging for the first few calls (file only — too verbose for console)
     if _module_inference_count <= _DIAGNOSTIC_LOG_COUNT:
-        logger.info(
+        logger.debug(
             "run_inference #%d [%s] raw tokens: %s",
             _module_inference_count,
             task_prompt,
@@ -704,7 +704,7 @@ def run_inference(model, processor, image_path, task_prompt, max_length=512, pre
             # CORD multi-page format: token2json returns a list when the
             # generated sequence contains <sep/> tokens (multiple line items).
             # Pass the list through so remap_cord_to_sroie can merge pages.
-            logger.info(
+            logger.debug(
                 "token2json returned list for %s (%d pages) — passing to caller",
                 image_path,
                 len(result),
