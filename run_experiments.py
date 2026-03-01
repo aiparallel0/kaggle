@@ -94,6 +94,16 @@ from resource_optimizer import (
 )
 
 # ---------------------------------------------------------------------------
+# Logging Configuration — MUST be set before any third-party imports
+# ---------------------------------------------------------------------------
+
+logger = logging.getLogger(__name__)
+
+# Suppress verbose third-party HTTP loggers to keep output clean
+for pkg in ["httpx", "urllib3", "datasets", "transformers", "huggingface_hub"]:
+    logging.getLogger(pkg).setLevel(logging.WARNING)
+
+# ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
