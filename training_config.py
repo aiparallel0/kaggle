@@ -38,6 +38,7 @@ class TrainingConfig:
 
     These values are applied during training and appear in results.tex.
     """
+
     batch_size: int = 8
     epochs: int = 10
     learning_rate: float = 5e-5
@@ -46,13 +47,9 @@ class TrainingConfig:
     def validate(self) -> None:
         """Sanity-check hyperparameters before training starts."""
         if not (1 <= self.batch_size <= 64):
-            raise ValueError(
-                f"batch_size must be in range [1, 64], got {self.batch_size}"
-            )
+            raise ValueError(f"batch_size must be in range [1, 64], got {self.batch_size}")
         if not (1 <= self.epochs <= 100):
-            raise ValueError(
-                f"epochs must be in range [1, 100], got {self.epochs}"
-            )
+            raise ValueError(f"epochs must be in range [1, 100], got {self.epochs}")
         if not (1e-6 <= self.learning_rate <= 1e-2):
             raise ValueError(
                 f"learning_rate must be in range [1e-6, 1e-2], got {self.learning_rate}"
@@ -76,8 +73,8 @@ class TrainingConfig:
 # Default parameter grids for hyperparameter sweep (--quick -all mode)
 # Customize these values before running quick mode with parameter sweep
 PARAM_GRIDS_DEFAULT = {
-    "batch_sizes": [4, 8, 16],           # Test: 4, 8, 16
-    "epochs_list": [5, 10, 15],          # Test: 5, 10, 15
+    "batch_sizes": [4, 8, 16],  # Test: 4, 8, 16
+    "epochs_list": [5, 10, 15],  # Test: 5, 10, 15
     "learning_rates": [1e-5, 5e-5, 1e-4],  # Test: 1e-5, 5e-5, 1e-4
-    "schedulers": ["linear", "cosine"],   # Test: linear, cosine (skip constant for speed)
+    "schedulers": ["linear", "cosine"],  # Test: linear, cosine (skip constant for speed)
 }

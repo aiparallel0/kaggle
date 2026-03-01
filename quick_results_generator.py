@@ -31,16 +31,17 @@ Classes:
 """
 
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Optional
-import json
 from datetime import datetime
+from pathlib import Path
+from typing import Any
 
 try:
     import matplotlib
-    matplotlib.use('Agg')  # Non-interactive backend
+
+    matplotlib.use("Agg")  # Non-interactive backend
     import matplotlib.pyplot as plt
     import numpy as np
+
     HAS_MATPLOTLIB = True
 except ImportError:
     HAS_MATPLOTLIB = False
@@ -96,19 +97,28 @@ def generate_loss_plots_from_results(results_dir: Path = Path("results")) -> dic
             for (exp_id, loss_hist), color in zip(sorted(loss_data.items()), colors):
                 if isinstance(loss_hist, dict) and "train_loss" in loss_hist:
                     epochs = range(1, len(loss_hist["train_loss"]) + 1)
-                    ax.plot(epochs, loss_hist["train_loss"],
-                           marker='o', label=f"Exp {exp_id} (train)",
-                           color=color, linewidth=2)
+                    ax.plot(
+                        epochs,
+                        loss_hist["train_loss"],
+                        marker="o",
+                        label=f"Exp {exp_id} (train)",
+                        color=color,
+                        linewidth=2,
+                    )
                 elif isinstance(loss_hist, list):
                     epochs = range(1, len(loss_hist) + 1)
-                    ax.plot(epochs, loss_hist,
-                           marker='o', label=f"Exp {exp_id}",
-                           color=color, linewidth=2)
+                    ax.plot(
+                        epochs,
+                        loss_hist,
+                        marker="o",
+                        label=f"Exp {exp_id}",
+                        color=color,
+                        linewidth=2,
+                    )
 
             ax.set_xlabel("Epoch", fontsize=12, fontweight="bold")
             ax.set_ylabel("Training Loss", fontsize=12, fontweight="bold")
-            ax.set_title("DONUT Training Loss Across Experiments",
-                        fontsize=13, fontweight="bold")
+            ax.set_title("DONUT Training Loss Across Experiments", fontsize=13, fontweight="bold")
             ax.legend(fontsize=10, loc="best")
             ax.grid(True, alpha=0.3, linestyle="--")
             fig.tight_layout()
@@ -118,7 +128,7 @@ def generate_loss_plots_from_results(results_dir: Path = Path("results")) -> dic
             plt.close(fig)
             plots_generated["donut_loss_overlay"] = plot_path
 
-    except Exception as e:
+    except Exception:
         pass  # Gracefully skip if loss data unavailable
 
     return plots_generated
@@ -127,8 +137,9 @@ def generate_loss_plots_from_results(results_dir: Path = Path("results")) -> dic
 @dataclass
 class QuickResults:
     """Container for quick mode execution results."""
+
     donut_train_losses: list[float]  # per epoch
-    donut_val_losses: list[float]    # per epoch
+    donut_val_losses: list[float]  # per epoch
     donut_metrics: dict[str, float]  # global_f1, per-field F1/NED
     trocr_yolo_losses: dict[str, list[float]]  # {"yolo_train": [...], "trocr_train": [...]}
     trocr_yolo_metrics: dict[str, float]
@@ -140,7 +151,7 @@ class QuickResults:
 class ResultsGenerator:
     """Generate results.tex with 2D plots, tables, and terminal output snippets."""
 
-    def __init__(self, quick_results: Optional[QuickResults] = None):
+    def __init__(self, quick_results: QuickResults | None = None):
         """Initialize generator.
 
         Args:
@@ -187,7 +198,7 @@ class ResultsGenerator:
         lines.extend(self._generate_footer())
 
         # Write to file
-        output_path.write_text('\n'.join(lines), encoding='utf-8')
+        output_path.write_text("\n".join(lines), encoding="utf-8")
         print(f"✓ Results saved to {output_path}")
 
     def _generate_header(self) -> list[str]:
@@ -223,23 +234,26 @@ class ResultsGenerator:
 
         # Configuration table
         config = self.quick_results.training_config
-        lines.extend([
-            r"\begin{center}",
-            r"\begin{tabular}{|l|r|}",
-            r"\hline",
-            f"Batch Size & {config.get('batch_size', 8)} \\\\\\hline",
-            f"Epochs & {config.get('epochs', 10)} \\\\\\hline",
-            f"Learning Rate & {config.get('learning_rate', 5e-5):.0e} \\\\\\hline",
-            f"Scheduler & {config.get('lr_scheduler', 'cosine')} \\\\\\hline",
-            f"Training Time & {self.quick_results.training_time_seconds / 60:.1f} min \\\\\\hline",
-            r"\end{tabular}",
-            r"\end{center}",
-            r"",
-        ])
+        lines.extend(
+            [
+                r"\begin{center}",
+                r"\begin{tabular}{|l|r|}",
+                r"\hline",
+                f"Batch Size & {config.get('batch_size', 8)} \\\\\\hline",
+                f"Epochs & {config.get('epochs', 10)} \\\\\\hline",
+                f"Learning Rate & {config.get('learning_rate', 5e-5):.0e} \\\\\\hline",
+                f"Scheduler & {config.get('lr_scheduler', 'cosine')} \\\\\\hline",
+                f"Training Time & {self.quick_results.training_time_seconds / 60:.1f} min \\\\\\hline",
+                r"\end{tabular}",
+                r"\end{center}",
+                r"",
+            ]
+        )
 
         # Loss plots
-        if HAS_MATPLOTLIB and (self.quick_results.donut_train_losses or
-                                self.quick_results.trocr_yolo_losses):
+        if HAS_MATPLOTLIB and (
+            self.quick_results.donut_train_losses or self.quick_results.trocr_yolo_losses
+        ):
             lines.extend(self._generate_loss_plots())
 
         # Metrics table
@@ -262,37 +276,41 @@ class ResultsGenerator:
                 ax.plot(
                     epochs,
                     self.quick_results.donut_train_losses,
-                    'b-o',
-                    label='Train Loss',
+                    "b-o",
+                    label="Train Loss",
                     linewidth=2,
-                    markersize=4
+                    markersize=4,
                 )
                 ax.plot(
                     epochs,
                     self.quick_results.donut_val_losses,
-                    'r--s',
-                    label='Val Loss',
+                    "r--s",
+                    label="Val Loss",
                     linewidth=2,
-                    markersize=4
+                    markersize=4,
                 )
-                ax.set_xlabel('Epoch', fontsize=11)
-                ax.set_ylabel('Cross-Entropy Loss', fontsize=11)
-                ax.set_title('DONUT Exp 1 (SROIE Baseline) Training', fontsize=12, fontweight='bold')
+                ax.set_xlabel("Epoch", fontsize=11)
+                ax.set_ylabel("Cross-Entropy Loss", fontsize=11)
+                ax.set_title(
+                    "DONUT Exp 1 (SROIE Baseline) Training", fontsize=12, fontweight="bold"
+                )
                 ax.legend(fontsize=10)
-                ax.grid(True, alpha=0.3, linestyle='--')
+                ax.grid(True, alpha=0.3, linestyle="--")
                 fig.tight_layout()
 
                 plot_path = self.plots_dir / "donut_loss.png"
-                fig.savefig(str(plot_path), dpi=100, bbox_inches='tight')
+                fig.savefig(str(plot_path), dpi=100, bbox_inches="tight")
                 plt.close(fig)
 
-                lines.extend([
-                    r"\subsubsection{DONUT Loss}",
-                    r"\begin{center}",
-                    rf"\includegraphics[width=0.75\textwidth]{{results_plots/donut_loss.png}}",
-                    r"\end{center}",
-                    r"",
-                ])
+                lines.extend(
+                    [
+                        r"\subsubsection{DONUT Loss}",
+                        r"\begin{center}",
+                        r"\includegraphics[width=0.75\textwidth]{results_plots/donut_loss.png}",
+                        r"\end{center}",
+                        r"",
+                    ]
+                )
             except Exception as e:
                 lines.append(f"% Error generating DONUT loss plot: {e}")
 
@@ -302,25 +320,27 @@ class ResultsGenerator:
                 fig, ax = plt.subplots(figsize=(8, 4))
                 for label, losses in self.quick_results.trocr_yolo_losses.items():
                     if losses:
-                        ax.plot(losses, marker='o', label=label, linewidth=2, markersize=4)
-                ax.set_xlabel('Epoch', fontsize=11)
-                ax.set_ylabel('Loss', fontsize=11)
-                ax.set_title('TrOCR + YOLO Training', fontsize=12, fontweight='bold')
+                        ax.plot(losses, marker="o", label=label, linewidth=2, markersize=4)
+                ax.set_xlabel("Epoch", fontsize=11)
+                ax.set_ylabel("Loss", fontsize=11)
+                ax.set_title("TrOCR + YOLO Training", fontsize=12, fontweight="bold")
                 ax.legend(fontsize=10)
-                ax.grid(True, alpha=0.3, linestyle='--')
+                ax.grid(True, alpha=0.3, linestyle="--")
                 fig.tight_layout()
 
                 plot_path = self.plots_dir / "trocr_yolo_loss.png"
-                fig.savefig(str(plot_path), dpi=100, bbox_inches='tight')
+                fig.savefig(str(plot_path), dpi=100, bbox_inches="tight")
                 plt.close(fig)
 
-                lines.extend([
-                    r"\subsubsection{TrOCR + YOLO Loss}",
-                    r"\begin{center}",
-                    rf"\includegraphics[width=0.75\textwidth]{{results_plots/trocr_yolo_loss.png}}",
-                    r"\end{center}",
-                    r"",
-                ])
+                lines.extend(
+                    [
+                        r"\subsubsection{TrOCR + YOLO Loss}",
+                        r"\begin{center}",
+                        r"\includegraphics[width=0.75\textwidth]{results_plots/trocr_yolo_loss.png}",
+                        r"\end{center}",
+                        r"",
+                    ]
+                )
             except Exception as e:
                 lines.append(f"% Error generating TrOCR loss plot: {e}")
 
@@ -334,13 +354,15 @@ class ResultsGenerator:
             return lines
 
         metrics = self.quick_results.donut_metrics
-        lines.extend([
-            r"\begin{center}",
-            r"\begin{tabular}{|l|r|r|}",
-            r"\hline",
-            r"\textbf{Field} & \textbf{F1 Score} & \textbf{NED} \\",
-            r"\hline",
-        ])
+        lines.extend(
+            [
+                r"\begin{center}",
+                r"\begin{tabular}{|l|r|r|}",
+                r"\hline",
+                r"\textbf{Field} & \textbf{F1 Score} & \textbf{NED} \\",
+                r"\hline",
+            ]
+        )
 
         # Per-field metrics
         fields = ["company", "date", "address", "total"]
@@ -349,32 +371,38 @@ class ResultsGenerator:
             ned = metrics.get(f"{field}_ned", 0.0)
             lines.append(rf"{field.capitalize():12s} & {f1:8.4f} & {ned:8.4f} \\")
 
-        lines.extend([
-            r"\hline",
-            r"\textbf{Global} & "
-            f"{metrics.get('global_f1', 0.0):8.4f} & - \\",
-            r"\hline",
-            r"\end{tabular}",
-            r"\end{center}",
-            r"",
-        ])
-
-        # TrOCR+YOLO metrics if available
-        if self.quick_results.trocr_yolo_metrics:
-            lines.extend([
-                r"\subsubsection{TrOCR + YOLO Metrics}",
-                r"\begin{center}",
-                r"\begin{tabular}{|l|r|}",
+        lines.extend(
+            [
                 r"\hline",
-            ])
-            for key, value in self.quick_results.trocr_yolo_metrics.items():
-                lines.append(rf"{key:30s} & {value:10.4f} \\")
-            lines.extend([
+                r"\textbf{Global} & "
+                f"{metrics.get('global_f1', 0.0):8.4f} & - \\",
                 r"\hline",
                 r"\end{tabular}",
                 r"\end{center}",
                 r"",
-            ])
+            ]
+        )
+
+        # TrOCR+YOLO metrics if available
+        if self.quick_results.trocr_yolo_metrics:
+            lines.extend(
+                [
+                    r"\subsubsection{TrOCR + YOLO Metrics}",
+                    r"\begin{center}",
+                    r"\begin{tabular}{|l|r|}",
+                    r"\hline",
+                ]
+            )
+            for key, value in self.quick_results.trocr_yolo_metrics.items():
+                lines.append(rf"{key:30s} & {value:10.4f} \\")
+            lines.extend(
+                [
+                    r"\hline",
+                    r"\end{tabular}",
+                    r"\end{center}",
+                    r"",
+                ]
+            )
 
         return lines
 
@@ -387,18 +415,20 @@ class ResultsGenerator:
             return lines
 
         try:
-            content = self.quick_results.terminal_output_file.read_text(encoding='utf-8')
+            content = self.quick_results.terminal_output_file.read_text(encoding="utf-8")
             # Extract ERROR, WARNING, and CRITICAL lines
             errors = []
-            for line in content.split('\n'):
-                if any(x in line for x in ['ERROR', 'CRITICAL', 'WARNING', 'FAILED']):
+            for line in content.split("\n"):
+                if any(x in line for x in ["ERROR", "CRITICAL", "WARNING", "FAILED"]):
                     errors.append(line.strip())
 
             if errors:
-                lines.extend([
-                    r"\subsubsection{Errors \& Warnings}",
-                    r"\begin{lstlisting}",
-                ])
+                lines.extend(
+                    [
+                        r"\subsubsection{Errors \& Warnings}",
+                        r"\begin{lstlisting}",
+                    ]
+                )
                 # Show first 10 errors
                 for error in errors[:10]:
                     # Escape LaTeX special characters
@@ -425,34 +455,36 @@ class ResultsGenerator:
             return lines
 
         # Create comparison table
-        lines.extend([
-            r"\begin{center}",
-            r"\begin{tabular}{|l|r|r|r|r|r|}",
-            r"\hline",
-            r"\textbf{Batch} & \textbf{Epochs} & \textbf{LR} & \textbf{Sched} & "
-            r"\textbf{DONUT F1} & \textbf{Time (s)} \\",
-            r"\hline",
-        ])
+        lines.extend(
+            [
+                r"\begin{center}",
+                r"\begin{tabular}{|l|r|r|r|r|r|}",
+                r"\hline",
+                r"\textbf{Batch} & \textbf{Epochs} & \textbf{LR} & \textbf{Sched} & "
+                r"\textbf{DONUT F1} & \textbf{Time (s)} \\",
+                r"\hline",
+            ]
+        )
 
-        for key, result in sorted(self.sweep_results.items()):
-            bs = result.get('batch_size', '-')
-            ep = result.get('epochs', '-')
-            lr = result.get('learning_rate', '-')
+        for _key, result in sorted(self.sweep_results.items()):
+            bs = result.get("batch_size", "-")
+            ep = result.get("epochs", "-")
+            lr = result.get("learning_rate", "-")
             if isinstance(lr, float):
                 lr = f"{lr:.0e}"
-            sched = result.get('scheduler', '-')[:3]  # abbreviate
-            f1 = result.get('donut_f1', 0.0)
-            t = result.get('training_time', 0.0)
-            lines.append(
-                rf"{bs} & {ep} & {lr} & {sched} & {f1:.4f} & {t:.0f} \\"
-            )
+            sched = result.get("scheduler", "-")[:3]  # abbreviate
+            f1 = result.get("donut_f1", 0.0)
+            t = result.get("training_time", 0.0)
+            lines.append(rf"{bs} & {ep} & {lr} & {sched} & {f1:.4f} & {t:.0f} \\")
 
-        lines.extend([
-            r"\hline",
-            r"\end{tabular}",
-            r"\end{center}",
-            r"",
-        ])
+        lines.extend(
+            [
+                r"\hline",
+                r"\end{tabular}",
+                r"\end{center}",
+                r"",
+            ]
+        )
 
         # Generate comparison plots
         try:
@@ -473,45 +505,48 @@ class ResultsGenerator:
             # Plot 1: F1 vs batch_size (colored by scheduler)
             fig, ax = plt.subplots(figsize=(8, 5))
 
-            schedulers = set(r.get('scheduler', 'unknown') for r in self.sweep_results.values())
-            colors = {'cosine': 'blue', 'linear': 'orange', 'constant': 'green', 'unknown': 'red'}
+            schedulers = set(r.get("scheduler", "unknown") for r in self.sweep_results.values())
+            colors = {"cosine": "blue", "linear": "orange", "constant": "green", "unknown": "red"}
 
             for scheduler in sorted(schedulers):
                 results_for_sched = [
-                    (r.get('batch_size', 0), r.get('donut_f1', 0.0))
+                    (r.get("batch_size", 0), r.get("donut_f1", 0.0))
                     for r in self.sweep_results.values()
-                    if r.get('scheduler') == scheduler
+                    if r.get("scheduler") == scheduler
                 ]
                 if results_for_sched:
                     results_for_sched.sort()
                     bs_values, f1_values = zip(*results_for_sched)
                     ax.plot(
-                        bs_values, f1_values,
-                        marker='o',
+                        bs_values,
+                        f1_values,
+                        marker="o",
                         label=scheduler,
                         linewidth=2,
                         markersize=6,
-                        color=colors.get(scheduler, 'gray')
+                        color=colors.get(scheduler, "gray"),
                     )
 
-            ax.set_xlabel('Batch Size', fontsize=11)
-            ax.set_ylabel('Global F1', fontsize=11)
-            ax.set_title('F1 Score vs Batch Size (by Scheduler)', fontsize=12, fontweight='bold')
+            ax.set_xlabel("Batch Size", fontsize=11)
+            ax.set_ylabel("Global F1", fontsize=11)
+            ax.set_title("F1 Score vs Batch Size (by Scheduler)", fontsize=12, fontweight="bold")
             ax.legend(fontsize=10)
-            ax.grid(True, alpha=0.3, linestyle='--')
+            ax.grid(True, alpha=0.3, linestyle="--")
             fig.tight_layout()
 
             plot_path = self.plots_dir / "sweep_f1_vs_batchsize.png"
-            fig.savefig(str(plot_path), dpi=100, bbox_inches='tight')
+            fig.savefig(str(plot_path), dpi=100, bbox_inches="tight")
             plt.close(fig)
 
-            lines.extend([
-                r"\subsubsection{F1 vs Batch Size}",
-                r"\begin{center}",
-                rf"\includegraphics[width=0.75\textwidth]{{results_plots/sweep_f1_vs_batchsize.png}}",
-                r"\end{center}",
-                r"",
-            ])
+            lines.extend(
+                [
+                    r"\subsubsection{F1 vs Batch Size}",
+                    r"\begin{center}",
+                    r"\includegraphics[width=0.75\textwidth]{results_plots/sweep_f1_vs_batchsize.png}",
+                    r"\end{center}",
+                    r"",
+                ]
+            )
         except Exception as e:
             lines.append(f"% Error generating F1 vs batch size plot: {e}")
 
