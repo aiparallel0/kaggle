@@ -458,7 +458,6 @@ class DonutTrainer:
         self.model.save_pretrained(str(save_dir))
         self.processor.save_pretrained(str(save_dir))
         logger.info("Model + processor saved → %s", save_dir)
-        print(f"Model + processor saved → {save_dir}")
 
     # ------------------------------------------------------------------
     # Internals
@@ -524,6 +523,7 @@ def main():
     model.config.decoder_start_token_id = processor.tokenizer.convert_tokens_to_ids(["<s_sroie>"])[
         0
     ]
+    model.config.use_cache = False  # Required with gradient_checkpointing
     model.gradient_checkpointing_enable()
 
     # Load SROIE data
@@ -557,9 +557,11 @@ def main():
     result = trainer.train()
     trainer.save()
 
-    print(
-        f"TRAINING_COMPLETE  (duration={result.duration_seconds:.1f}s, "
-        f"train={result.train_samples}, val={result.val_samples})"
+    logger.info(
+        "TRAINING_COMPLETE  (duration=%.1fs, train=%d, val=%d)",
+        result.duration_seconds,
+        result.train_samples,
+        result.val_samples,
     )
 
 

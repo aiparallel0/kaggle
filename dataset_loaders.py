@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import random
 import re
@@ -299,12 +300,12 @@ class BaseDatasetLoader(ABC):
     # ── helpers available to subclasses ───────────────────────────────
 
     def _log(self, message: str) -> None:
-        """Print a bracketed log line to stdout."""
-        print(f"[{self.name}] {message}", flush=True)
+        """Log a bracketed info line (non-blocking, no GIL flush)."""
+        logging.getLogger(__name__).info("[%s] %s", self.name, message)
 
     def _warn(self, message: str) -> None:
-        """Print a bracketed warning to stderr."""
-        print(f"[{self.name}] WARNING: {message}", file=sys.stderr, flush=True)
+        """Log a bracketed warning (non-blocking, no GIL flush)."""
+        logging.getLogger(__name__).warning("[%s] %s", self.name, message)
 
     def _fatal(self, reason: str) -> DatasetLoadError:
         """Build and return a :class:`DatasetLoadError` (also prints FATAL:)."""
