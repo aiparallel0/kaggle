@@ -74,6 +74,30 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
+def _parse_sroie_output(tokens: str) -> dict:
+    """Parse SROIE XML-like output format into a dict.
+
+    SROIE format: <s_sroie><s_company>VALUE</s_company><s_date>VALUE</s_date>...
+    This parser extracts values between opening and closing tags for each field.
+
+    Returns a dict with keys from FIELDS; missing fields default to empty string.
+    """
+    result = EMPTY_GT.copy()
+
+    for field in FIELDS:
+        open_tag = f"<s_{field}>"
+        close_tag = f"</s_{field}>"
+
+        start_idx = tokens.find(open_tag)
+        if start_idx != -1:
+            start_idx += len(open_tag)
+            end_idx = tokens.find(close_tag, start_idx)
+            if end_idx != -1:
+                result[field] = tokens[start_idx:end_idx].strip()
+
+    return result
+
+
 def _merge_token2json_pages(result: Any) -> dict:
     """Merge multi-page CORD output (list) into single dict (Phase 0b).
 
@@ -421,19 +445,31 @@ class DonutEvaluator:
         cleaned = raw_tokens.replace(self.processor.tokenizer.eos_token, "")
         cleaned = cleaned.replace(self.processor.tokenizer.pad_token, "").strip()
 
-        try:
-            parsed = self.processor.token2json(cleaned)
-        except Exception as exc:
-            raise RuntimeError(
-                f"Self-test FAILED: token2json raised {type(exc).__name__}: {exc}\n"
-                f"  Raw tokens: {raw_tokens!r}\n"
-                f"  Cleaned:    {cleaned!r}\n"
-                f"  Model path: {self.model_path}"
-            ) from exc
+        # For SROIE, use custom parser; for CORD, use token2json
+        if self.task_prompt.startswith("<s_sroie"):
+            try:
+                parsed = _parse_sroie_output(cleaned)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Self-test FAILED: SROIE parser raised {type(exc).__name__}: {exc}\n"
+                    f"  Raw tokens: {raw_tokens!r}\n"
+                    f"  Cleaned:    {cleaned!r}\n"
+                    f"  Model path: {self.model_path}"
+                ) from exc
+        else:
+            try:
+                parsed = self.processor.token2json(cleaned)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Self-test FAILED: token2json raised {type(exc).__name__}: {exc}\n"
+                    f"  Raw tokens: {raw_tokens!r}\n"
+                    f"  Cleaned:    {cleaned!r}\n"
+                    f"  Model path: {self.model_path}"
+                ) from exc
 
-        # token2json returns a list when <sep/> tokens are present (CORD multi-page).
-        # Merge pages before unwrapping so the dict check below works correctly. (Phase 0b)
-        parsed = _merge_token2json_pages(parsed)
+            # token2json returns a list when <sep/> tokens are present (CORD multi-page).
+            # Merge pages before unwrapping so the dict check below works correctly. (Phase 0b)
+            parsed = _merge_token2json_pages(parsed)
 
         # Unwrap task-prompt wrappers
         parsed = _unwrap_prediction(parsed, self.task_prompt)
@@ -528,9 +564,11 @@ class DonutEvaluator:
     # ------------------------------------------------------------------
 
     def _parse_prediction(self, tokens: str) -> dict:
-        """Guarded token2json: returns {} on failure with log.
+        """Parse prediction using appropriate parser for the task format.
 
-        Increments ``parse_failure_count`` on every failure.
+        For SROIE task prompts (<s_sroie>), uses the custom _parse_sroie_output()
+        parser to extract values from XML-like tags.
+        For CORD task prompts, falls back to token2json().
 
         token2json returns a list when the generated sequence contains <sep/>
         tokens (CORD multi-page format).  Even SROIE fine-tuned models can
@@ -538,6 +576,22 @@ class DonutEvaluator:
         knows the token.  Merge pages into one dict (first occurrence of each
         key wins) so callers always receive a flat dict.
         """
+        # For SROIE output, use the custom parser that understands SROIE tags
+        if self.task_prompt.startswith("<s_sroie"):
+            try:
+                result = _parse_sroie_output(tokens)
+                if result and any(v for v in result.values()):  # At least one non-empty field
+                    return result
+                # No fields extracted — log and increment failure
+                logger.warning("SROIE parser returned empty result from tokens: %.100s", tokens)
+                self.parse_failure_count += 1
+                return {}
+            except Exception as exc:
+                logger.warning("SROIE parser failed: %s — tokens: %.100s", exc, tokens)
+                self.parse_failure_count += 1
+                return {}
+
+        # For CORD/other formats, use token2json
         try:
             result = self.processor.token2json(tokens)
             result = _merge_token2json_pages(result)  # Phase 0b: consolidate list merging
@@ -682,8 +736,6 @@ def run_inference(model, processor, image_path, task_prompt, max_length=512, pre
     sequence = processor.batch_decode(outputs.sequences)[0]
     sequence = sequence.replace(processor.tokenizer.eos_token, "")
     sequence = sequence.replace(processor.tokenizer.pad_token, "").strip()
-    # Strip decoder_input_ids prefix (e.g. "<s_sroie>") so token2json receives clean tags
-    sequence = re.sub(r"<[^>]+>", "", sequence, count=1).strip()
 
     # Diagnostic logging for the first few calls (file only — too verbose for console)
     if _module_inference_count <= _DIAGNOSTIC_LOG_COUNT:
@@ -694,6 +746,16 @@ def run_inference(model, processor, image_path, task_prompt, max_length=512, pre
             sequence[:200] + ("..." if len(sequence) > 200 else ""),
         )
 
+    # For SROIE output, use custom parser; for CORD, use token2json
+    if task_prompt.startswith("<s_sroie"):
+        try:
+            result = _parse_sroie_output(sequence)
+            return result if result and any(v for v in result.values()) else {}
+        except Exception as e:
+            logger.warning("SROIE parser failed for %s: %s", image_path, e)
+            return {}
+
+    # For CORD/other formats, use token2json
     try:
         result = processor.token2json(sequence)
     except Exception as e:
