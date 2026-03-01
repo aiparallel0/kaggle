@@ -420,8 +420,6 @@ class DonutEvaluator:
         raw_tokens = self.processor.batch_decode(outputs.sequences)[0]
         cleaned = raw_tokens.replace(self.processor.tokenizer.eos_token, "")
         cleaned = cleaned.replace(self.processor.tokenizer.pad_token, "").strip()
-        # Strip decoder_input_ids prefix (e.g. "<s_sroie>") so token2json receives clean tags
-        cleaned = re.sub(r"<[^>]+>", "", cleaned, count=1).strip()
 
         try:
             parsed = self.processor.token2json(cleaned)
@@ -512,9 +510,6 @@ class DonutEvaluator:
         sequence = self.processor.batch_decode(outputs.sequences)[0]
         sequence = sequence.replace(self.processor.tokenizer.eos_token, "")
         sequence = sequence.replace(self.processor.tokenizer.pad_token, "").strip()
-        # outputs.sequences includes the decoder_input_ids prefix (e.g. "<s_sroie>").
-        # Strip the first tag so token2json receives a clean single-wrapped sequence.
-        sequence = re.sub(r"<[^>]+>", "", sequence, count=1).strip()
 
         # Diagnostic logging for the first few calls (file only — too verbose for console)
         if self._inference_call_count <= _DIAGNOSTIC_LOG_COUNT:
