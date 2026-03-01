@@ -56,13 +56,55 @@ from transformers import DonutProcessor, VisionEncoderDecoderModel
 
 # FIX: Import shared constants from single source of truth (constants.py)
 # instead of duplicating FIELDS/IMAGE_EXTS independently in this file.
-from constants import BASE_MODEL, DEVICE, FIELDS, IMAGE_EXTS, MAX_LENGTH, _get_sroie_dir
+from constants import BASE_MODEL, DEVICE, EMPTY_GT, FIELDS, IMAGE_EXTS, MAX_LENGTH, _get_sroie_dir
+
+# Phase 7 FIX: Use canonical key file loading from dataset_loaders to ensure
+# consistent .txt-first loading order across all modules (not .json-first).
+from dataset_loaders import _load_key_file
 
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Utility Functions
+# ---------------------------------------------------------------------------
+
+
+def _merge_token2json_pages(result: Any) -> dict:
+    """Merge multi-page CORD output (list) into single dict (Phase 0b).
+
+    The base checkpoint (donut-base-finetuned-cord-v2) knows about <sep/>
+    (CORD multi-page separator). Even SROIE fine-tuned models can emit <sep/>
+    because it's in the inherited vocabulary. When present, token2json()
+    returns a list of dicts (one per page) instead of a single dict.
+
+    This utility merges pages with "first occurrence of each key wins" logic,
+    ensuring callers always receive a flat dict.
+
+    Args:
+        result: Output from processor.token2json() — either dict or list of dicts
+
+    Returns:
+        Single flat dict with all pages merged; empty dict if input is None/empty
+    """
+    if isinstance(result, list):
+        merged: dict = {}
+        for page in result:
+            if isinstance(page, dict):
+                for k, v in page.items():
+                    if k not in merged:
+                        merged[k] = v
+        return merged if merged else {}
+
+    if isinstance(result, dict):
+        return result
+
+    # Neither list nor dict (shouldn't happen, but defensive)
+    return {}
+
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -389,15 +431,8 @@ class DonutEvaluator:
             ) from exc
 
         # token2json returns a list when <sep/> tokens are present (CORD multi-page).
-        # Merge pages before unwrapping so the dict check below works correctly.
-        if isinstance(parsed, list):
-            merged: dict = {}
-            for page in parsed:
-                if isinstance(page, dict):
-                    for k, v in page.items():
-                        if k not in merged:
-                            merged[k] = v
-            parsed = merged
+        # Merge pages before unwrapping so the dict check below works correctly. (Phase 0b)
+        parsed = _merge_token2json_pages(parsed)
 
         # Unwrap task-prompt wrappers
         parsed = _unwrap_prediction(parsed, self.task_prompt)
@@ -506,26 +541,13 @@ class DonutEvaluator:
         """
         try:
             result = self.processor.token2json(tokens)
-            if isinstance(result, list):
-                merged: dict = {}
-                for page in result:
-                    if isinstance(page, dict):
-                        for k, v in page.items():
-                            if k not in merged:
-                                merged[k] = v
-                if merged:
-                    return merged
-                logger.warning(
-                    "token2json returned list but all pages are non-dicts: %s",
-                    result,
-                )
-                self.parse_failure_count += 1
-                return {}
-            if not isinstance(result, dict):
-                logger.warning("token2json returned non-dict: %s", type(result))
-                self.parse_failure_count += 1
-                return {}
-            return result
+            result = _merge_token2json_pages(result)  # Phase 0b: consolidate list merging
+            if result:
+                return result
+            # Empty result from token2json (either [] list or {} dict)
+            logger.warning("token2json returned empty result: %s", type(result))
+            self.parse_failure_count += 1
+            return {}
         except Exception as exc:
             logger.warning("token2json failed: %s — tokens: %.100s", exc, tokens)
             self.parse_failure_count += 1
@@ -709,19 +731,11 @@ def remap_cord_to_sroie(cord_output):
       - ``date.date_value`` (dict, list, or plain string) → ``date``
       - Plain string values for any key
     """
-    result = {"company": "", "date": "", "address": "", "total": ""}
+    result = EMPTY_GT.copy()  # Phase 0b: use single source of truth
 
     # Handle list output from token2json (multi-page CORD with <sep/> tokens).
-    # Merge all pages: first occurrence of each top-level key wins so that
-    # store_info and total (usually on page 0) are always captured.
-    if isinstance(cord_output, list):
-        merged: dict = {}
-        for page in cord_output:
-            if isinstance(page, dict):
-                for k, v in page.items():
-                    if k not in merged:
-                        merged[k] = v
-        cord_output = merged
+    # Merge all pages: first occurrence of each top-level key wins. (Phase 0b)
+    cord_output = _merge_token2json_pages(cord_output)
 
     if not isinstance(cord_output, dict):
         return result
@@ -937,25 +951,10 @@ def main():
     for img_path in sorted(
         p for p in img_dir.iterdir() if p.is_file() and p.suffix.lower() in IMAGE_EXTS
     ):
-        gt = None
-        key_json = key_dir / (img_path.stem + ".json")
-        if key_json.exists():
-            try:
-                gt = json.loads(key_json.read_text(encoding="utf-8"))
-            except json.JSONDecodeError:
-                pass
-        if gt is None:
-            key_txt = key_dir / (img_path.stem + ".txt")
-            if key_txt.exists():
-                lines = key_txt.read_text(encoding="utf-8").strip().splitlines()
-                if len(lines) >= 4:
-                    gt = {
-                        "company": lines[0].strip(),
-                        "date": lines[1].strip(),
-                        "address": lines[2].strip(),
-                        "total": lines[3].strip(),
-                    }
-        if gt is not None:
+        # Phase 7 FIX: Use canonical _load_key_file() for consistent .txt-first loading
+        # (not .json-first). Canonical function: dataset_loaders._load_key_file()
+        gt = _load_key_file(key_dir, img_path.stem)
+        if gt:
             test_samples.append((img_path, gt))
 
     print(f"Evaluating on {len(test_samples)} test images")

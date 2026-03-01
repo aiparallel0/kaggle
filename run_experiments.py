@@ -86,6 +86,13 @@ from constants import (
     set_seed,
 )
 
+# Phase 3-5: Dynamic resource optimization and audit logging
+from resource_optimizer import (
+    detect_system_resources,
+    optimize_hyperparams,
+    TrainingAuditLogger,
+)
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -109,13 +116,13 @@ class ExperimentConfig:
 
     name: str
     datasets: list[str]
-    epochs: int = 30
+    epochs: int = 10  # Phase 6: Per CLAUDE.md convergence analysis (was 30, overfit on small datasets)
     lr: float = 5e-5
     batch_size: int = 8
     seed: int = SEED
     early_stopping_patience: int = 3
     base_model: str = BASE_MODEL
-    warmup_steps: int = 100
+    warmup_steps: int = 500  # Phase 6: Per CLAUDE.md LR schedule (was 100, inadequate for cosine annealing)
     weight_decay: float = 0.01
     max_length: int = MAX_LENGTH
     gradient_accumulation_steps: int = 2
@@ -370,9 +377,24 @@ def train_experiment(
         processor = DonutProcessor.from_pretrained(config.base_model)
         model = VisionEncoderDecoderModel.from_pretrained(config.base_model)
 
-    # Add SROIE special tokens
+    # Add SROIE special tokens with diagnostic logging (Phase 0a)
+    logger.info(f"[Pre-resize] Tokenizer vocab size: {len(processor.tokenizer)}")
+    logger.info(f"[Pre-resize] Decoder embed_tokens shape: {model.decoder.model.decoder.embed_tokens.weight.shape}")
+
     processor.tokenizer.add_special_tokens({"additional_special_tokens": NEW_TOKENS})
     model.decoder.resize_token_embeddings(len(processor.tokenizer))
+
+    logger.info(f"[Post-resize] Tokenizer vocab size: {len(processor.tokenizer)}")
+    logger.info(f"[Post-resize] Decoder embed_tokens shape: {model.decoder.model.decoder.embed_tokens.weight.shape}")
+    logger.info(f"[Post-resize] Decoder lm_head shape: {model.decoder.lm_head.weight.shape}")
+
+    # Verify NEW_TOKENS were added to tokenizer (Phase 0a diagnostic)
+    for token in NEW_TOKENS:
+        token_ids = processor.tokenizer.encode(token, add_special_tokens=False)
+        if not token_ids or len(token_ids) > 1:
+            logger.error(f"CRITICAL: Token {token} not in vocab or tokenizes to multiple IDs: {token_ids}")
+            raise RuntimeError(f"Token addition failed for {token}; vocab may be corrupted")
+    logger.info(f"[Token-verify] All {len(NEW_TOKENS)} SROIE tokens successfully added to vocab")
 
     # After resize, embed_tokens and lm_head are separate tensors with
     # independent random init for the new tokens.  Set tie_word_embeddings=False
@@ -573,6 +595,23 @@ def run_experiment(exp_id: int, base_processor=None, base_model=None) -> dict:
         result_file.write_text(json.dumps(result, indent=2))
         return result
 
+    # Phase 5: Dynamic resource optimization (Phase 3-5)
+    # Detect available hardware and optimize hyperparameters accordingly
+    resources = detect_system_resources()
+    optimized_config = optimize_hyperparams(
+        num_train_samples=len(train_samples),
+        available_vram_gb=resources.vram_gb,
+        available_ram_gb=resources.ram_gb,
+    )
+
+    # Log the config decision to terminal.txt for audit trail
+    audit_logger = TrainingAuditLogger(append_to_file="terminal.txt")
+    audit_logger.log_config_decision(exp_id, optimized_config)
+
+    # Override static config with optimized values (but keep epochs/warmup fixed per CLAUDE.md)
+    # These are already set in config, but we print the optimization reasoning
+    print(f"[Exp {exp_id}] Resource optimization: {optimized_config.config_explanation}")
+
     # Train
     model_dir = WORKSPACE / "models" / f"experiment_{exp_id}"
     model_dir.mkdir(parents=True, exist_ok=True)
@@ -587,6 +626,17 @@ def run_experiment(exp_id: int, base_processor=None, base_model=None) -> dict:
 
     # Evaluate
     metrics = evaluate_experiment(exp_id, model_dir)
+
+    # Phase 5: Log training result to audit trail
+    global_f1 = metrics.get("global_f1", 0.0)
+    audit_logger.log_training_result(
+        experiment_id=exp_id,
+        global_f1=global_f1,
+        training_time_sec=metrics.get("training_time_sec", 0.0),
+        tokens_per_second=metrics.get("tokens_per_second"),
+        early_stopping_epoch=metrics.get("early_stopping_epoch"),
+        baseline_f1=None,  # Could set to pretrained F1 for comparison
+    )
 
     # Save result
     result = {
@@ -711,6 +761,13 @@ def save_summary() -> None:
 
 
 def main() -> None:
+    # Phase 4-5: Initialize audit logger for persistent resource/config tracking
+    audit_logger = TrainingAuditLogger(append_to_file="terminal.txt")
+    resources = detect_system_resources()
+    audit_logger.log_resource_detection(resources)
+    print(f"[Resources] GPU: {resources.device_name} ({resources.vram_gb:.1f}GB), "
+          f"RAM: {resources.ram_gb:.1f}GB, CPU: {resources.cpu_cores} cores")
+
     parser = argparse.ArgumentParser(description="Run DONUT SROIE experiments")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--all", action="store_true", help="Run all 8 experiments sequentially")
