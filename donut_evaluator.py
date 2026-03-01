@@ -334,8 +334,8 @@ class DonutEvaluator:
         """
         self._self_test()
 
+        image_paths = [s[0] for s in self.test_dataset]
         ground_truths = [s[1] for s in self.test_dataset]
-        [s[0] for s in self.test_dataset]
 
         predictions = []
         self.parse_failure_count = 0
@@ -406,20 +406,22 @@ class DonutEvaluator:
             # FIX: Removed early_stopping=True — it is deprecated/invalid with
             # num_beams=1 (greedy decoding) and generates thousands of warnings
             # per eval call in transformers>=4.35.
+            # Also removed repetition_penalty and no_repeat_ngram_size which were
+            # blocking structural tags like </s_company> and </s_date>.
             outputs = self.model.generate(
                 pixel_values,
                 decoder_input_ids=decoder_input_ids,
                 max_length=self.max_length,
                 use_cache=True,
                 num_beams=1,
-                repetition_penalty=1.5,
-                no_repeat_ngram_size=3,
                 bad_words_ids=[[self.processor.tokenizer.unk_token_id]],
                 return_dict_in_generate=True,
             )
         raw_tokens = self.processor.batch_decode(outputs.sequences)[0]
         cleaned = raw_tokens.replace(self.processor.tokenizer.eos_token, "")
         cleaned = cleaned.replace(self.processor.tokenizer.pad_token, "").strip()
+        # Strip decoder_input_ids prefix (e.g. "<s_sroie>") so token2json receives clean tags
+        cleaned = re.sub(r"<[^>]+>", "", cleaned, count=1).strip()
 
         try:
             parsed = self.processor.token2json(cleaned)
@@ -671,20 +673,22 @@ def run_inference(model, processor, image_path, task_prompt, max_length=512, pre
 
     # FIX: Removed early_stopping=True — invalid with num_beams=1 (greedy
     # decoding).  This caused thousands of deprecation warnings per eval run.
+    # Also removed repetition_penalty and no_repeat_ngram_size which were
+    # blocking structural tags like </s_company> and </s_date>.
     outputs = model.generate(
         pixel_values,
         decoder_input_ids=decoder_input_ids,
         max_length=max_length,
         use_cache=True,
         num_beams=1,
-        repetition_penalty=1.5,
-        no_repeat_ngram_size=3,
         bad_words_ids=[[processor.tokenizer.unk_token_id]],
         return_dict_in_generate=True,
     )
     sequence = processor.batch_decode(outputs.sequences)[0]
     sequence = sequence.replace(processor.tokenizer.eos_token, "")
     sequence = sequence.replace(processor.tokenizer.pad_token, "").strip()
+    # Strip decoder_input_ids prefix (e.g. "<s_sroie>") so token2json receives clean tags
+    sequence = re.sub(r"<[^>]+>", "", sequence, count=1).strip()
 
     # Diagnostic logging for the first few calls (file only — too verbose for console)
     if _module_inference_count <= _DIAGNOSTIC_LOG_COUNT:
