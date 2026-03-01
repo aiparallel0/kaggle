@@ -44,18 +44,15 @@ setup(
     author="AI Parallel Team",
     author_email="contact@aiparallel.com",
     url="https://github.com/aiparallel0/kaggle",
-
     # Package configuration
     py_modules=["run_all"],  # Single module entry point
     install_requires=read_requirements(),
-
     # Entry point for CLI
     entry_points={
         "console_scripts": [
             "donut-kie=run_all:main",  # Install as CLI command: donut-kie
         ],
     },
-
     # Metadata
     python_requires=">=3.9",
     classifiers=[
@@ -68,9 +65,9 @@ setup(
         "Programming Language :: Python :: 3.11",
         "Topic :: Scientific/Engineering :: Artificial Intelligence",
     ],
-
     keywords="donut transformers ocr kie receipts yolo trocr",
     long_description=Path(__file__).parent.joinpath("README.md").read_text(encoding="utf-8")
-    if Path(__file__).parent.joinpath("README.md").exists() else "",
+    if Path(__file__).parent.joinpath("README.md").exists()
+    else "",
     long_description_content_type="text/markdown",
 )

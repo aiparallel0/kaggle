@@ -54,6 +54,7 @@ class TestExperimentConfigFields:
     def test_does_not_accept_lr_scheduler_type(self):
         """lr_scheduler_type is NOT a valid field — prevents regression of Bug A."""
         import dataclasses
+
         field_names = {f.name for f in dataclasses.fields(ExperimentConfig)}
         assert "lr_scheduler_type" not in field_names, (
             "lr_scheduler_type is not a valid ExperimentConfig field. "
@@ -114,10 +115,7 @@ class TestExperimentsRegistry:
 
     def test_all_configs_have_experiment_id(self):
         """Every config in EXPERIMENTS must have experiment_id set (not 0 default)."""
-        bad = [
-            exp_id for exp_id, config in EXPERIMENTS.items()
-            if config.experiment_id == 0
-        ]
+        bad = [exp_id for exp_id, config in EXPERIMENTS.items() if config.experiment_id == 0]
         assert not bad, (
             f"Experiments {bad} have experiment_id=0 (default). "
             "Set experiment_id=N explicitly in each ExperimentConfig."

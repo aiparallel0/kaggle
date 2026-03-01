@@ -458,7 +458,9 @@ def train_experiment(
 # ---------------------------------------------------------------------------
 
 
-def evaluate_experiment(exp_id: int, model_dir: Path, config: "ExperimentConfig | None" = None) -> dict:
+def evaluate_experiment(
+    exp_id: int, model_dir: Path, config: "ExperimentConfig | None" = None
+) -> dict:
     """Evaluate a fine-tuned model (at *model_dir*) on the SROIE test set.
 
     Uses DonutEvaluator from evaluate.py which handles:

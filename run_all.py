@@ -146,7 +146,7 @@ class _DualStreamHandler(logging.Handler):
     def __init__(self, file_path: Path):
         super().__init__()
         self.file_path = file_path
-        self.file_handle = open(str(file_path), 'a', encoding='utf-8')  # noqa: SIM115
+        self.file_handle = open(str(file_path), "a", encoding="utf-8")  # noqa: SIM115
         self._last_line = None
         self._repeat_count = 0
 
@@ -155,7 +155,7 @@ class _DualStreamHandler(logging.Handler):
             msg = self.format(record)
 
             # Always write to file
-            self.file_handle.write(msg + '\n')
+            self.file_handle.write(msg + "\n")
             self.file_handle.flush()
 
             # Selectively write to console
@@ -176,7 +176,7 @@ class _DualStreamHandler(logging.Handler):
     def _should_suppress_console(self, msg: str) -> bool:
         """Skip repetitive progress logs."""
         # Suppress repeated lines that look like progress bars
-        if any(x in msg for x in ['Epoch ', 'Step ', '[====', '%|', 'batch']):
+        if any(x in msg for x in ["Epoch ", "Step ", "[====", "%|", "batch"]):
             if msg == self._last_line:
                 self._repeat_count += 1
                 return True
@@ -210,8 +210,7 @@ def _setup_logging(log_file: Path = Path("terminal.txt")) -> logging.Logger:
     # Create dual-stream handler
     handler = _DualStreamHandler(log_file)
     formatter = logging.Formatter(
-        fmt='%(asctime)s | %(name)s | %(levelname)-8s | %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
+        fmt="%(asctime)s | %(name)s | %(levelname)-8s | %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
     )
     handler.setFormatter(formatter)
 
@@ -220,7 +219,7 @@ def _setup_logging(log_file: Path = Path("terminal.txt")) -> logging.Logger:
     root.setLevel(logging.DEBUG)
 
     # Suppress verbose third-party loggers
-    for pkg in ['transformers', 'torch', 'urllib3', 'datasets', 'huggingface_hub']:
+    for pkg in ["transformers", "torch", "urllib3", "datasets", "huggingface_hub"]:
         logging.getLogger(pkg).setLevel(logging.WARNING)
 
     return root
@@ -309,7 +308,9 @@ def _setup_hf_auth() -> None:
         # Validate token format (HF tokens start with 'hf_' or are 39 chars legacy format)
         token_masked = f"{token[:4]}****" if len(token) > 8 else "****"
         if not (token.startswith("hf_") or len(token) == 39):
-            print("  [HF Auth] WARNING: Token format may be invalid (expected 'hf_...' or 39-char legacy)")
+            print(
+                "  [HF Auth] WARNING: Token format may be invalid (expected 'hf_...' or 39-char legacy)"
+            )
             print(f"            Token preview: {token_masked}")
 
         try:
@@ -1311,6 +1312,7 @@ def _quick_mode_handler(args, logger: logging.Logger) -> int:
     except Exception as e:
         logger.error(f"Quick mode failed: {e}")
         import traceback
+
         traceback.print_exc()
         return 2
 
@@ -1338,24 +1340,26 @@ def _quick_all_mode_handler(args, logger: logging.Logger) -> int:
             for group in args.param_grid:
                 param_name = group[0]
                 values = group[1:]
-                if param_name == 'batch_size':
+                if param_name == "batch_size":
                     param_grid.batch_sizes = [int(v) for v in values]
-                elif param_name == 'epochs':
+                elif param_name == "epochs":
                     param_grid.epochs_list = [int(v) for v in values]
-                elif param_name == 'learning_rate':
+                elif param_name == "learning_rate":
                     param_grid.learning_rates = [float(v) for v in values]
-                elif param_name == 'scheduler':
+                elif param_name == "scheduler":
                     param_grid.schedulers = values
 
         logger.info(f"Parameter grid: {param_grid}")
 
         # Generate all combinations
-        combinations = list(itertools.product(
-            param_grid.batch_sizes,
-            param_grid.epochs_list,
-            param_grid.learning_rates,
-            param_grid.schedulers,
-        ))
+        combinations = list(
+            itertools.product(
+                param_grid.batch_sizes,
+                param_grid.epochs_list,
+                param_grid.learning_rates,
+                param_grid.schedulers,
+            )
+        )
 
         logger.info(f"Total combinations to test: {len(combinations)}")
 
@@ -1389,6 +1393,7 @@ def _quick_all_mode_handler(args, logger: logging.Logger) -> int:
 
                 # Run experiment
                 import time
+
                 start_time = time.time()
                 result = run_custom_experiment(custom_config, result_file)
                 elapsed_time = time.time() - start_time
@@ -1403,8 +1408,9 @@ def _quick_all_mode_handler(args, logger: logging.Logger) -> int:
                     "donut_f1": metrics.get("global_f1", 0.0),
                     "training_time": elapsed_time,
                 }
-                logger.info(f"  F1 = {sweep_results[key]['donut_f1']:.4f}, "
-                           f"time = {elapsed_time:.1f}s")
+                logger.info(
+                    f"  F1 = {sweep_results[key]['donut_f1']:.4f}, time = {elapsed_time:.1f}s"
+                )
 
             except Exception as e:
                 logger.error(f"Sweep iteration {i} failed: {e}")
@@ -1419,12 +1425,14 @@ def _quick_all_mode_handler(args, logger: logging.Logger) -> int:
                     "error": str(e),
                 }
                 import traceback
+
                 traceback.print_exc()
 
         # Generate comparison results.tex
         logger.info("Generating comprehensive results.tex with parameter comparisons...")
         try:
             from quick_results_generator import ResultsGenerator
+
             gen = ResultsGenerator.from_sweep_results(sweep_results)
             gen.generate(output_path=Path("results.tex"))
             logger.info("✓ Parameter sweep complete. Results saved to results.tex")
@@ -1436,6 +1444,7 @@ def _quick_all_mode_handler(args, logger: logging.Logger) -> int:
     except Exception as e:
         logger.error(f"Quick sweep mode failed: {e}")
         import traceback
+
         traceback.print_exc()
         return 2
 
@@ -1532,9 +1541,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--param-grid",
-        nargs='+',
+        nargs="+",
         action="append",
-        metavar=('PARAM', 'VALUE'),
+        metavar=("PARAM", "VALUE"),
         help="Override parameter grid (e.g., --param-grid batch_size 4 8 16)",
     )
     p.add_argument(

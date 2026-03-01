@@ -10,4 +10,5 @@ This file delegates to the main() function in run_all.py
 
 if __name__ == "__main__":
     from run_all import main
+
     main()
