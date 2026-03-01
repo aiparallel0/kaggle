@@ -370,9 +370,24 @@ def train_experiment(
         processor = DonutProcessor.from_pretrained(config.base_model)
         model = VisionEncoderDecoderModel.from_pretrained(config.base_model)
 
-    # Add SROIE special tokens
+    # Add SROIE special tokens with diagnostic logging (Phase 0a)
+    logger.info(f"[Pre-resize] Tokenizer vocab size: {len(processor.tokenizer)}")
+    logger.info(f"[Pre-resize] Decoder embed_tokens shape: {model.decoder.model.decoder.embed_tokens.weight.shape}")
+
     processor.tokenizer.add_special_tokens({"additional_special_tokens": NEW_TOKENS})
     model.decoder.resize_token_embeddings(len(processor.tokenizer))
+
+    logger.info(f"[Post-resize] Tokenizer vocab size: {len(processor.tokenizer)}")
+    logger.info(f"[Post-resize] Decoder embed_tokens shape: {model.decoder.model.decoder.embed_tokens.weight.shape}")
+    logger.info(f"[Post-resize] Decoder lm_head shape: {model.decoder.lm_head.weight.shape}")
+
+    # Verify NEW_TOKENS were added to tokenizer (Phase 0a diagnostic)
+    for token in NEW_TOKENS:
+        token_ids = processor.tokenizer.encode(token, add_special_tokens=False)
+        if not token_ids or len(token_ids) > 1:
+            logger.error(f"CRITICAL: Token {token} not in vocab or tokenizes to multiple IDs: {token_ids}")
+            raise RuntimeError(f"Token addition failed for {token}; vocab may be corrupted")
+    logger.info(f"[Token-verify] All {len(NEW_TOKENS)} SROIE tokens successfully added to vocab")
 
     # After resize, embed_tokens and lm_head are separate tensors with
     # independent random init for the new tokens.  Set tie_word_embeddings=False
