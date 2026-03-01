@@ -244,8 +244,8 @@ def _setup_logging(log_file: Path = Path("terminal.txt")) -> logging.Logger:
     root.addHandler(handler)
     root.setLevel(logging.DEBUG)
 
-    # Suppress verbose third-party loggers
-    for pkg in ["transformers", "torch", "urllib3", "datasets", "huggingface_hub"]:
+    # Suppress verbose third-party loggers (including httpx for clean output)
+    for pkg in ["httpx", "transformers", "torch", "urllib3", "datasets", "huggingface_hub"]:
         logging.getLogger(pkg).setLevel(logging.WARNING)
 
     return root
