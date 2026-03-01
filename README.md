@@ -34,17 +34,146 @@ Test the pipeline faster with just Experiment 1 + TrOCR+YOLO:
 python run_all.py --quick
 ```
 
-Outputs:
+**What it does:**
+- Installs dependencies automatically
+- Sets up SROIE data (Stage 0)
+- Downloads auxiliary datasets (Stage 1)
+- Trains DONUT Experiment 1 (SROIE baseline)
+- Trains TrOCR+YOLO
+- Generates `results.tex` with 2D loss curves and metrics table
+- All output logged to `terminal.txt`
+
+**Outputs:**
 - `results.tex` — LaTeX document with loss plots and metrics
-- `results_plots/` — PNG figures
+- `results_plots/` — PNG figures (donut_loss.png, trocr_loss.png)
 - `terminal.txt` — Complete execution log
 - `results/experiment_1.json` — DONUT Exp 1 metrics
+
+### Hyperparameter Sweep Mode (Optional)
+
+Test multiple hyperparameter combinations to optimize performance:
+
+```bash
+python run_all.py --quick --all
+```
+
+**What it does:**
+- Runs quick test with default parameter grids:
+  - Batch sizes: 4, 8, 16
+  - Epochs: 5, 10, 15
+  - Learning rates: 1e-5, 5e-5, 1e-4
+  - Schedulers: linear, cosine
+- Generates comprehensive `results.tex` with parameter variation tables and overlay plots
+
+**Custom parameter grid:**
+
+```bash
+python run_all.py --quick --all --param-grid batch_size 8 16 --param-grid epochs 8 10
+```
+
+This tests only batch_size=[8, 16] and epochs=[8, 10] for faster iteration.
+
+**Configure defaults in `run_all.py`:**
+
+Edit the `TRAINING_PARAMS` dict to change defaults for quick mode:
+
+```python
+TRAINING_PARAMS = {
+    "batch_size": 8,           # Change default batch size
+    "epochs": 10,              # Change default epochs
+    "learning_rate": 5e-5,     # Change default learning rate (1e-5 to 1e-4 typical)
+    "lr_scheduler_type": "cosine",  # or "linear" / "constant"
+}
+```
 
 ### Single Experiment
 
 ```bash
 python run_all.py --experiment 2
 ```
+
+### Generate Paper Only
+
+```bash
+python run_all.py --paper-only
+```
+
+Regenerates `paper_filled.tex` from existing results without re-training.
+
+---
+
+## 🔬 Standalone Scripts (Alternative Workflows)
+
+These scripts provide isolated entry points for development and debugging. Use them for hyperparameter exploration, data validation, or testing individual components.
+
+### 01_dataset_preparation.py — Dataset & Annotation Prep
+
+Prepares YOLO bounding box labels and TrOCR line crops from SROIE images.
+
+```bash
+python 01_dataset_preparation.py                # Prepare all data
+python 01_dataset_preparation.py --validate     # Validate existing data
+python 01_dataset_preparation.py --force        # Re-prepare (clear existing)
+```
+
+**Outputs:** `data/yolo/{train,val,test}/` and `data/trocr/{train,val,test}/`
+
+### 02_train_donut.py — DONUT Reference Implementation
+
+Standalone DONUT fine-tuning (useful for hyperparameter exploration).
+
+```bash
+python 02_train_donut.py                        # Train DONUT model
+python 02_train_donut.py --dry-run              # Validate setup
+python 02_train_donut.py --sweep                # Generate hyperparameter configs
+python 02_train_donut.py --config N             # Train specific config
+```
+
+**Outputs:** `models/donut_finetuned/best/` and `models/donut_finetuned/training_history.json`
+
+### 03_train_trocr_yolo.py — TrOCR + YOLO Pipeline
+
+Two-stage OCR pipeline: YOLOv8 detection + TrOCR reading + heuristic assignment.
+
+```bash
+python 03_train_trocr_yolo.py                   # Train TrOCR+YOLO
+```
+
+**Outputs:** `models/yolo_finetuned/run/weights/best.pt` and `models/trocr_finetuned/best/`
+
+### 04_evaluate.py — Unified Model Evaluation
+
+Evaluate both architectures on the same 63 SROIE test images with standardized metrics.
+
+```bash
+python 04_evaluate.py                           # Evaluate both architectures
+python 04_evaluate.py --donut-only              # DONUT only
+python 04_evaluate.py --trocr-only              # TrOCR+YOLO only
+python 04_evaluate.py --report                  # Generate HTML report
+```
+
+**Outputs:**
+- `results/metrics.json` — Raw metrics
+- `results/evaluation_summary.json` — Structured summary
+- `results/evaluation_report.html` — Interactive HTML report
+
+### 05_compare_results.py — Cross-Architecture Comparison
+
+Generate comparison plots and analysis tables across all experiments.
+
+```bash
+python 05_compare_results.py                    # Full comparison (all plots)
+python 05_compare_results.py --export-csv       # Export to CSV
+python 05_compare_results.py --filter 0.85      # Show experiments with F1 >= 0.85
+python 05_compare_results.py --ned-plot         # Generate NED comparison plot
+```
+
+**Outputs:**
+- `results/plot_f1_comparison.png` — F1 bar chart
+- `results/plot_field_f1.png` — Per-field F1
+- `results/plot_convergence.png` — Training curves
+- `results/plot_ned_comparison.png` — NED analysis
+- `results/comparison_results.csv` — Export table
 
 ---
 
@@ -83,6 +212,66 @@ python run_experiments.py --all --force      # force re-run
 ```bash
 python inject_results.py --all --paper paper.tex --output paper_filled.tex
 ```
+
+---
+
+## 📝 Understanding the Output
+
+### terminal.txt
+
+Complete execution log with timestamps for each major stage, training progress, inference results, and errors. Check this file if something goes wrong.
+
+Example:
+```
+2025-02-28 14:32:10 | run_all | INFO | ========================================================================
+2025-02-28 14:32:10 | run_all | INFO | QUICK MODE: Single DONUT Experiment + TrOCR+YOLO
+2025-02-28 14:35:22 | run_all | INFO | [Stage 0] SROIE data install...
+2025-02-28 14:42:15 | run_all | INFO | [Stage 2] Training DONUT Experiment 1 (SROIE baseline)...
+```
+
+### results.tex (Quick Mode)
+
+LaTeX document containing:
+- Training configuration (batch size, epochs, LR, scheduler)
+- 2D loss curves (train vs val)
+- Metrics table (F1, NED per field)
+- Optional terminal output snippets
+
+Compile to PDF:
+```bash
+pdflatex results.tex
+```
+
+---
+
+## 💾 Installation Methods
+
+### Method 1: Direct Execution (Recommended)
+
+```bash
+pip install -r requirements.txt
+python run_all.py
+```
+
+### Method 2: Package Installation
+
+```bash
+pip install .                    # Install from local directory
+pip install -e .                 # Install in development mode
+python -m run_all                # Run via module invocation
+```
+
+### Method 3: GitHub Installation
+
+```bash
+pip install git+https://github.com/aiparallel0/kaggle.git
+python -m run_all
+```
+
+**Auto-Install Features:**
+- Dependencies automatically installed from `requirements.txt` if needed
+- Dual-stream logging: all output to `terminal.txt`, console shows filtered progress
+- Professional CLI interface with argparse-based options
 
 ---
 
@@ -221,6 +410,80 @@ Each experiment saves `results/experiment_N.json`:
 
 ---
 
+## 🛠️ Troubleshooting
+
+### `python run_all.py --quick` hangs
+
+- Check that SROIE data is cloned (see Stage 0 output in `terminal.txt`)
+- Try adding `--skip-install` if SROIE already exists: `python run_all.py --quick --skip-install`
+- Check GPU memory: quick mode needs ~8 GB VRAM
+
+### results.tex won't compile
+
+- Check for missing packages: `pip install matplotlib numpy`
+- Verify `results_plots/` directory exists and contains PNG files
+- Try opening the tex file in a text editor to see if there are obvious LaTeX errors
+
+### Terminal output not appearing in terminal.txt
+
+- Check file permissions: `ls -la terminal.txt`
+- Try removing and re-running: `rm terminal.txt && python run_all.py --quick`
+
+### Out of memory (OOM) errors
+
+- Reduce batch size: `--param-grid batch_size 4 8` (instead of default 8)
+- Skip TrOCR+YOLO: `python run_all.py --skip-trocr` (DONUT only)
+
+---
+
+## 📚 Common Use Cases
+
+### Test if a hyperparameter change helps
+
+```bash
+# Edit TRAINING_PARAMS to set batch_size=16 (instead of default 8)
+python run_all.py --quick
+
+# Results in results.tex show F1, NED, and loss curves
+# Compare against previous runs to see if change helped
+```
+
+### Find optimal batch size
+
+```bash
+python run_all.py --quick --all --param-grid batch_size 4 8 16 32
+```
+
+Generates results.tex with batch size comparison. Look at the "Comparison Plots" section.
+
+### Test multiple learning rates
+
+```bash
+python run_all.py --quick --all --param-grid learning_rate 1e-5 3e-5 1e-4 3e-4
+```
+
+### Debug a broken configuration
+
+Run quick test first (fast failure detection):
+
+```bash
+python run_all.py --quick
+```
+
+If it fails, check `terminal.txt` for error messages. Once fixed, run full pipeline:
+
+```bash
+python run_all.py
+```
+
+### Validate data setup
+
+```bash
+python 01_dataset_preparation.py --validate
+```
+
+---
+
 ## 🐛 Known Issues Fixed
 
 Three critical bugs that previously caused catastrophic F1 score collapses. All are fixed and guarded with tests.
@@ -270,6 +533,83 @@ If you use this project in your research, please cite the authors and datasets u
 - Test set (63 images from SROIE training split) is **not** the official SROIE test set (347 images with no public ground truth)
 - Leaderboard comparisons in paper are for contextual reference only
 - Single GPU, limited hyperparameter search, English-centric evaluation
+
+---
+
+---
+
+## 🔧 Advanced Configuration
+
+### Hyperparameter Defaults
+
+Edit `training_config.py` to change default hyperparameter grids for sweep mode:
+
+```python
+PARAM_GRIDS_DEFAULT = {
+    "batch_sizes": [8, 16],           # Test fewer sizes for speed
+    "epochs_list": [5, 10],           # Fewer epochs for speed
+    "learning_rates": [5e-5, 1e-4],   # Focus on high-performing rates
+    "schedulers": ["cosine"],         # Test only cosine scheduler
+}
+```
+
+This reduces the number of combinations and speeds up sweeps.
+
+### Environment Variables
+
+- `SROIE_DATA_DIR` — Path to SROIE data (default: `/workspace/ICDAR-2019-SROIE/data`)
+- `DONUT_WORKSPACE` — Workspace root for model checkpoints (default: `/workspace`)
+- `HF_TOKEN` — HuggingFace token (prefer `hf_token.txt` instead)
+
+### Package Installation
+
+`setup.py` enables package-style installation:
+
+```bash
+pip install -e .                     # Development mode
+pip install git+https://github.com/aiparallel0/kaggle.git
+donut-kie                            # CLI alias (if installed via setup.py)
+```
+
+### Exit Codes
+
+| Code | Meaning |
+|---|---|
+| `0` | Success |
+| `1` | One or more experiments had no training data (partial results saved) |
+| `2` | Fatal error (missing SROIE data, unrecoverable failure) |
+
+---
+
+## 📚 Key Features
+
+### ✅ Features Included
+
+- **Auto-Install Dependencies** — Automatically installs `requirements.txt` before training
+- **Dual-Stream Logging** — All output logged to `terminal.txt`; console shows filtered progress
+- **Quick Mode (`--quick`)** — Run only SROIE baseline + TrOCR+YOLO in ~30 minutes
+- **Hyperparameter Sweep** — Test multiple parameter combinations with `--quick --all`
+- **Professional CLI** — Clean argparse-based interface with backward compatibility
+- **2D Loss Curves** — Generates training/validation loss plots in results.tex
+- **Paper Generation** — Automatic LaTeX paper with all metrics dynamically injected
+
+### ⚠️ Known Limitations
+
+- Test set (63 images from SROIE training split) is **not** the official SROIE test set (347 images with no public ground truth)
+- Leaderboard comparisons in paper are for contextual reference only
+- Single GPU, limited hyperparameter search, English-centric evaluation
+- Loss history capture requires trainer.py integration to fully save and display loss curves
+- Hyperparameter application in quick mode may require additional trainer integration
+
+---
+
+## 📖 Documentation Organization
+
+| Document | Purpose | Audience |
+|---|---|---|
+| **README.md** (this file) | Quick start, CLI reference, common tasks | All users |
+| **CLAUDE.md** | Complete technical architecture, bug fixes, development workflows | Developers, AI agents |
+| Standalone scripts (01-05) | Educational, isolated components | Advanced users |
 
 ---
 
