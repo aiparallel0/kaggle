@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import List, Optional
 from datetime import datetime
 
-from types import PreflightReport, CheckResult, CheckStatus
+from pipeline_types import PreflightReport, CheckResult, CheckStatus
 
 from validators import (
     ImportChainChecker,

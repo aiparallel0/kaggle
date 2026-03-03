@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 from datetime import datetime
 
-from types import AggregatedResults, ExperimentResult
+from pipeline_types import AggregatedResults, ExperimentResult
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +39,7 @@ class ResultsAggregator:
                 data = json.loads(exp_file.read_text())
                 # Convert dict to ExperimentResult if needed
                 if isinstance(data, dict):
-                    from types import ExperimentMetrics
+                    from pipeline_types import ExperimentMetrics
 
                     metrics = ExperimentMetrics(**data.get("metrics", {}))
                     exp = ExperimentResult(
@@ -175,7 +175,7 @@ class ResultsAggregator:
         for exp_file in exp_files:
             try:
                 data = json.loads(exp_file.read_text())
-                from types import ExperimentMetrics
+                from pipeline_types import ExperimentMetrics
 
                 metrics = ExperimentMetrics(**data.get("metrics", {}))
                 exp = ExperimentResult(
