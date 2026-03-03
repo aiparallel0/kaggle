@@ -353,3 +353,61 @@ class PreflightChecker:
         logger.info("=" * 70)
 
         return report
+
+
+def validate_pipeline() -> bool:
+    """Validate that the evaluation pipeline can load and initialize models.
+
+    Migrated from evaluate.py (now deleted) so this logic lives alongside
+    the other preflight validators.
+
+    Returns:
+        True if all checks pass, False otherwise.
+    """
+    print("\n🔍 Validating evaluation pipeline...\n")
+
+    checks = {
+        "constants": False,
+        "donut_evaluator": False,
+        "device": False,
+        "device_type": False,
+    }
+
+    try:
+        from constants import FIELDS, BASE_MODEL, MAX_LENGTH  # noqa: F401
+        print(f"  ✓ Constants loaded: {len(FIELDS)} fields, max_length={MAX_LENGTH}")
+        checks["constants"] = True
+    except Exception as e:
+        print(f"  ✗ Failed to load constants: {e}")
+
+    try:
+        from donut_evaluator import DonutEvaluator  # noqa: F401
+        print("  ✓ DonutEvaluator class available")
+        checks["donut_evaluator"] = True
+    except Exception as e:
+        print(f"  ✗ Failed to load DonutEvaluator: {e}")
+
+    try:
+        import torch  # noqa: F401
+        print(f"  ✓ PyTorch loaded: {torch.__version__}")
+        checks["device"] = True
+    except Exception as e:
+        print(f"  ✗ Failed to load PyTorch: {e}")
+
+    try:
+        from donut_evaluator import DEVICE  # noqa: F401
+        print(f"  ✓ Detected device: {DEVICE}")
+        checks["device_type"] = True
+    except Exception as e:
+        print(f"  ✗ Failed to detect device: {e}")
+
+    print(f"\n{'='*50}")
+    if all(checks.values()):
+        print("✅ Pipeline validation PASSED")
+        return True
+    else:
+        print("❌ Pipeline validation FAILED:")
+        for check, result in checks.items():
+            status = "✓" if result else "✗"
+            print(f"   {status} {check}")
+        return False

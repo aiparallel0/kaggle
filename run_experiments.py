@@ -1,27 +1,11 @@
-# MIT License
-#
-# Copyright (c) 2024
-#
-# Permission is hereby granted, free of charge, to any person obtaining a copy
-# of this software and associated documentation files (the "Software"), to deal
-# in the Software without restriction, including without limitation the rights
-# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-# copies of the Software, and to permit persons to whom the Software is
-# furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in all
-# copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-# SOFTWARE.
-
 """
 run_experiments.py — Experiment orchestrator for 8 DONUT fine-tuning experiments.
+
+This module is imported by run_all.py as part of the full dual-architecture
+pipeline.  It can also be run standalone for DONUT-only experiment runs.
+
+See also: run_all.py — the canonical single entry point that calls this module
+          plus the TrOCR+YOLO stages, benchmark comparison, and paper generation.
 
 Usage
 -----
@@ -46,7 +30,7 @@ ExperimentConfig is THE single source of truth for all training hyperparameters.
 No hardcoded epoch values, learning rates, or batch sizes exist outside of it.
 DonutTrainer (from train.py) receives an ExperimentConfig and reads all
 hyperparameters from it via duck-typed attribute access.
-DonutEvaluator (from evaluate.py) handles model loading with weight re-tying
+DonutEvaluator (from donut_evaluator.py) handles model loading with weight re-tying
 and evaluation with self-test and parse-failure thresholds.
 """
 
@@ -559,7 +543,7 @@ def train_experiment(
 
 
 # ---------------------------------------------------------------------------
-# Evaluation — delegates to DonutEvaluator from evaluate.py
+# Evaluation — delegates to DonutEvaluator from donut_evaluator.py
 # ---------------------------------------------------------------------------
 
 
@@ -568,7 +552,7 @@ def evaluate_experiment(
 ) -> dict:
     """Evaluate a fine-tuned model (at *model_dir*) on the SROIE test set.
 
-    Uses DonutEvaluator from evaluate.py which handles:
+    Uses DonutEvaluator from donut_evaluator.py which handles:
       - Weight re-tying via load_model_with_tied_weights (fixes lm_head bug)
       - Self-test before full evaluation
       - Parse failure threshold checking

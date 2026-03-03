@@ -1,4 +1,8 @@
-"""Cloud pipeline configuration management."""
+"""Cloud pipeline configuration management.
+
+See also: training_config.py — TrainingConfig for model hyperparameters
+          (learning rate, batch size, epochs, etc.).
+"""
 
 import os
 import sys
