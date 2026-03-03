@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Optional
 from datetime import datetime
 
-from types import UploadReport, SyncReport
+from pipeline_types import UploadReport, SyncReport
 
 logger = logging.getLogger(__name__)
 

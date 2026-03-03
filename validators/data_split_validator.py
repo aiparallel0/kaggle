@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Tuple, List, Set
 import logging
 
-from types import DataSplitValidationReport
+from pipeline_types import DataSplitValidationReport
 
 logger = logging.getLogger(__name__)
 

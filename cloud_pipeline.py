@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 from pipeline_config import CloudConfig, PipelineMode
 from preflight_checks import PreflightChecker
-from types import PipelineResult
+from pipeline_types import PipelineResult
 
 # Import mode orchestrators (lazy load to avoid circular imports)
 MODE_A_AVAILABLE = False

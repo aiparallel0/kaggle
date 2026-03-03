@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import List, Optional
 import logging
 
-from types import BugPattern, BugReport, SeverityLevel
+from pipeline_types import BugPattern, BugReport, SeverityLevel
 
 logger = logging.getLogger(__name__)
 

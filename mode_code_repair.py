@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 
 from pipeline_config import CloudConfig
-from types import CodeRepairResult
+from pipeline_types import CodeRepairResult
 from validators import BugPatternDetector
 from test_runner import TestRunner
 from git_controller import GitController

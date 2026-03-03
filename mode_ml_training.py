@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Dict
 
 from pipeline_config import CloudConfig
-from types import MLTrainingResult, ExperimentResult
+from pipeline_types import MLTrainingResult, ExperimentResult
 from results_aggregator import ResultsAggregator
 from git_controller import GitController
 from storage_manager import StorageManager
@@ -79,7 +79,7 @@ class MLTrainingOrchestrator:
                         if result_file.exists():
                             try:
                                 data = json.loads(result_file.read_text())
-                                from types import ExperimentMetrics
+                                from pipeline_types import ExperimentMetrics
 
                                 metrics = ExperimentMetrics(**data.get("metrics", {}))
                                 exp_result = ExperimentResult(

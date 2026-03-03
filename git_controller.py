@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Tuple, Optional
 from datetime import datetime
 
-from types import GitCommitReport
+from pipeline_types import GitCommitReport
 
 logger = logging.getLogger(__name__)
 
