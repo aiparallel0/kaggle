@@ -92,18 +92,27 @@ def _optimal_num_workers() -> int:
 
 
 def _gpu_cleanup(*objects) -> None:
-    """Delete objects, run garbage collection, and empty CUDA cache.
+    """Run garbage collection and empty the CUDA cache.
 
     Use after a training/evaluation stage to free GPU memory before the
-    next stage.  Accepts any number of objects to delete; safe to call
-    with no arguments (just runs GC + empty_cache).
+    next stage.  Safe to call with no arguments.
+
+    IMPORTANT: Callers MUST ``del`` their own local references to large
+    objects (models, trainers, datasets, processors) *before* calling
+    this function.  Passing objects as arguments does NOT free them —
+    ``del obj`` inside this function only removes the local parameter
+    binding, leaving the caller's references (and the underlying GPU
+    tensors) alive.  The correct pattern is::
+
+        del model, processor, trainer, train_ds
+        if val_ds is not None:
+            del val_ds
+        _gpu_cleanup()
     """
     import gc
 
     import torch
 
-    for obj in objects:
-        del obj
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
