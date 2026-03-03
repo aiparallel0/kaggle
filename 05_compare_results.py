@@ -41,11 +41,11 @@ EXP_NAMES = {
     "1": "SROIE only",
     "2": "+WildReceipt",
     "3": "+Invoices",
-    "4": "+CORD",
-    "5": "+Wild+CORD",
-    "6": "+Wild+Inv",
-    "7": "+CORD+Inv",
-    "8": "+All",
+    "4": "+WildReceipt+Invoices",
+    "5": "+WildReceipt (2x SROIE)",
+    "6": "+Invoices (2x SROIE)",
+    "7": "+All (2x SROIE)",
+    "8": "+All (3x SROIE)",
 }
 
 

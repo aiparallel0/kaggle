@@ -205,6 +205,29 @@ def _validate_samples_nonempty(samples: list[Sample], dataset_name: str) -> list
     return samples
 
 
+def _log_field_coverage(samples: list, dataset_name: str) -> None:
+    """Log per-field fill rates for a loaded dataset.
+
+    Parameters
+    ----------
+    samples : list of (Path, dict)
+        Standard Sample tuples (image_path, ground_truth_dict).
+    dataset_name : str
+        Human-readable name for log messages.
+    """
+    if not samples:
+        return
+    from constants import FIELDS
+
+    n = len(samples)
+    for field in FIELDS:
+        filled = sum(1 for _, gt in samples if gt.get(field, "").strip())
+        pct = filled / n * 100
+        logging.getLogger(__name__).info(
+            "  %s field coverage: %s = %d/%d (%.1f%%)", dataset_name, field, filled, n, pct
+        )
+
+
 # ======================================================================
 #  SROIE key-file reader (BUG A FIX)
 # ======================================================================
@@ -451,6 +474,7 @@ class SROIELoader(BaseDatasetLoader):
                 f"img dir exists ({img_dir}) but 0 samples matched — "
                 "check that key/ files are present."
             )
+        _log_field_coverage(samples, self.name)
         return samples
 
     def validate_cache(self) -> bool:
@@ -503,15 +527,15 @@ class WildReceiptLoader(BaseDatasetLoader):
     _URL = "https://download.openmmlab.com/mmocr/data/wildreceipt.tar"
 
     # WildReceipt label index → SROIE field mapping
-    #   1 = Store_name_value → company
-    #   3 = Date_value       → date
-    #   7 = Total_value      → total
-    #  10 = Addr_value       → address
+    #   1 = Store_name_value  → company
+    #   3 = Store_addr_value  → address
+    #   7 = Date_value        → date
+    #  23 = Total_value       → total
     _IDX_TO_FIELD: dict[int, str] = {
         1: "company",
-        3: "date",
-        7: "total",
-        10: "address",
+        3: "address",
+        7: "date",
+        23: "total",
     }
 
     # ── download & extraction ─────────────────────────────────────────
@@ -601,6 +625,7 @@ class WildReceiptLoader(BaseDatasetLoader):
             if img_path.exists():
                 samples.append((img_path, gt))
 
+        _log_field_coverage(samples, self.name)
         return _validate_samples_nonempty(samples, self.name)
 
     def validate_cache(self) -> bool:
@@ -845,6 +870,7 @@ class FUNSDLoader(BaseDatasetLoader):
         if not samples:
             self._warn("FUNSD returned 0 samples — check HF cache.")
             return []
+        _log_field_coverage(samples, self.name)
         return samples
 
     def validate_cache(self) -> bool:
@@ -947,7 +973,7 @@ class InvoicesDonutLoader(BaseDatasetLoader):
         Field mapping rationale:
         - company: seller name from gt_parse.header.seller
         - date:    invoice date from gt_parse.header.invoice_date
-        - address: empty — invoices lack a reliable store-address field
+        - address: seller_address from gt_parse.header.seller_address
         - total:   total_gross_worth with currency symbol stripped
         """
         # Phase 1: Use shared consolidation utility
@@ -964,8 +990,8 @@ class InvoicesDonutLoader(BaseDatasetLoader):
             if isinstance(header, dict):
                 gt["company"] = str(header.get("seller", "")).strip()
                 gt["date"] = str(header.get("invoice_date", "")).strip()
-
-            gt["address"] = ""
+                # Extract seller address from gt_parse.header.seller_address
+                gt["address"] = str(header.get("seller_address", "")).strip()
 
             summary = gt_parse.get("summary", {})
             if isinstance(summary, dict):
@@ -1013,6 +1039,7 @@ class InvoicesDonutLoader(BaseDatasetLoader):
                         pil_image.convert("RGB").save(img_path, "JPEG")
                     samples.append((img_path, gt))
 
+        _log_field_coverage(samples, self.name)
         return _validate_samples_nonempty(samples, self.name)
 
     def validate_cache(self) -> bool:
@@ -1199,12 +1226,13 @@ def split_dataset(
 
 def get_combined_dataset(
     dataset_names: list[str],
+    sroie_oversample: int = 1,
 ) -> tuple[list[Sample], list[Sample]]:
     """Merge multiple datasets into train and validation lists.
 
     SROIE training samples are added to train as-is (train split from img/).
     SROIE validation samples (from val_img/) are added to the combined val.
-    All auxiliary datasets (WildReceipt, FUNSD, Invoices-DONUT) are split
+    All auxiliary datasets (WildReceipt, Invoices-DONUT) are split
     70/15/15; the 70% goes into combined train, the 15% validation portion
     goes into combined val, and the held-out 15% test portion is discarded.
 
@@ -1216,6 +1244,10 @@ def get_combined_dataset(
     dataset_names : list of str
         Names of datasets to include.  Valid names: sroie, wildreceipt,
         funsd, invoices_donut.
+    sroie_oversample : int, optional
+        Number of times to duplicate SROIE training samples (default 1).
+        Use 2 or 3 to counteract SROIE field dilution when combining with
+        large auxiliary datasets.
 
     Returns
     -------
@@ -1237,8 +1269,11 @@ def get_combined_dataset(
         per_loader_counts[name] = len(data)
 
         if name == "sroie":
-            # SROIE: train split → combined_train; val split → combined_val
-            combined_train.extend(data)
+            # SROIE: train split → combined_train (optionally oversampled);
+            # val split → combined_val (never oversampled).
+            # List multiplication creates N references to the same immutable
+            # Sample tuples — safe and memory-efficient for read-only iteration.
+            combined_train.extend(data * max(1, sroie_oversample))
             sroie_val = load_sroie_val()
             combined_val.extend(sroie_val)
         else:

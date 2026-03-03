@@ -84,7 +84,7 @@ def evaluate_donut_on_test(
     """Evaluate a DONUT model on the SROIE test set. Returns metrics dict."""
     from transformers import DonutProcessor
 
-    from donut_evaluator import _unwrap_prediction, load_model_with_tied_weights
+    from donut_evaluator import _parse_sroie_output, load_model_with_tied_weights
 
     processor = DonutProcessor.from_pretrained(model_path)
     model = load_model_with_tied_weights(model_path, device=DEVICE)
@@ -121,8 +121,7 @@ def evaluate_donut_on_test(
             sequence = sequence.replace(processor.tokenizer.pad_token, "").strip()
 
             try:
-                parsed = processor.token2json(sequence)
-                parsed = _unwrap_prediction(parsed, "<s_sroie>")
+                parsed = _parse_sroie_output(sequence)
             except Exception:
                 parsed = {}
                 parse_failures += 1

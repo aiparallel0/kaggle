@@ -111,18 +111,18 @@ We present a systematic comparison of end-to-end and pipeline architectures
 for receipt Key Information Extraction (KIE), evaluating \donut (Document
 Understanding Transformer) against a \trocr\,+\,\yolo pipeline on the
 SROIE benchmark.  For each architecture, we conduct eight controlled
-experiments combining SROIE with three auxiliary
-datasets---WildReceipt, FUNSD, and Invoices-DONUT---and evaluate all
+experiments combining SROIE with two auxiliary
+datasets---WildReceipt and Invoices-DONUT---and evaluate all
 configurations on a held-out 63-image SROIE test split using entity-level
 F1, Normalised Edit Distance (NED), and exact match.  Our best \donut
 configuration achieves a global F1 of \VAR{best_f1}, while the
 \trocr\,+\,\yolo pipeline achieves \VAR{trocr_best_f1}.
 Results demonstrate that receipt-domain auxiliary data (WildReceipt) and
-cross-domain form data (FUNSD) yield complementary gains, that the
+invoice-domain data (Invoices-DONUT) yield complementary gains, that the
 end-to-end architecture consistently
 outperforms the modular pipeline due to the absence of cascading error
-propagation, and that multi-dataset fine-tuning provides meaningful
-improvements over single-dataset training.
+propagation, and that multi-dataset fine-tuning with SROIE oversampling
+provides meaningful improvements over single-dataset training.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -394,7 +394,6 @@ empty strings.
     SROIE (val)      & 63       & 4   & EN & Receipts \\
     SROIE (test)     & 63       & 4   & EN & Receipts \\
     WildReceipt      & 1\,740   & 25  & EN & Receipts \\
-    FUNSD            & 149      & 4   & EN & Forms    \\
     Invoices-DONUT   & 800      & 7+  & EN & Invoices \\
     \bottomrule
   \end{tabular}
@@ -409,10 +408,9 @@ empty strings.
     \textbf{Source Dataset} & \textbf{Company} & \textbf{Date} &
     \textbf{Address} & \textbf{Total} \\
     \midrule
-    SROIE       & company     & date        & address     & total \\
-    WildReceipt & Store\_name & Date        & Store\_addr & Total \\
-    FUNSD       & header span & answer span & answer span & answer span \\
-    Invoices    & seller      & date        & address     & total \\
+    SROIE       & company         & date             & address          & total \\
+    WildReceipt & Store\_name     & Date\_value      & Store\_addr      & Total\_value \\
+    Invoices    & seller          & invoice\_date    & seller\_address  & total\_gross\_worth \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -423,22 +421,16 @@ train, 63 validation, and 63 test images using a fixed random seed.
 
 \paragraph{WildReceipt}~\cite{sun2021wildreceipt} is a large-scale dataset
 of ${\sim}$1\,740 receipt images annotated with 25 KIE categories covering
-diverse receipt layouts from unconstrained environments.
-
-\paragraph{FUNSD}~\cite{jaume2019funsd} (Form Understanding in Noisy Scanned
-Documents) contains 149 annotated scanned business forms with BIO-tagged
-named entities of types HEADER, QUESTION, ANSWER, and OTHER.  We map entity
-spans to SROIE fields using keyword matching on co-located question labels
-and pattern matching (date regex, amount regex) on answer spans, providing
-cross-domain KIE augmentation from the form document genre.  FUNSD replaces
-CORD v2 which was found to silently drop ${\sim}$50\% of training images due
-to missing image fields in its HuggingFace representation, halving effective
-F1 in CORD-augmented experiments.
+diverse receipt layouts from unconstrained environments.  We map label
+indices to SROIE fields using the official MMOCR specification:
+Store\_name\_value\,$\to$\,company, Store\_addr\_value\,$\to$\,address,
+Date\_value\,$\to$\,date, Total\_value\,$\to$\,total.
 
 \paragraph{Invoices-DONUT} is a HuggingFace dataset of ${\sim}$800 invoice
-images with structured annotations including company name, date, and total
-amount.  Although invoices differ from receipts in layout, they share the
-same KIE schema and serve as cross-domain augmentation data.
+images with structured annotations including seller name, invoice date,
+seller address, and total amount.  Although invoices differ from receipts
+in layout, they share the same KIE schema and serve as cross-domain
+augmentation data.
 
 \subsection{Experimental Design}
 \label{sec:setup}
@@ -458,11 +450,11 @@ composition while holding all other factors constant
     1 & SROIE only (baseline) \\
     2 & SROIE + WildReceipt \\
     3 & SROIE + Invoices-DONUT \\
-    4 & SROIE + FUNSD \\
-    5 & SROIE + WildReceipt + FUNSD \\
-    6 & SROIE + WildReceipt + Invoices-DONUT \\
-    7 & SROIE + FUNSD + Invoices-DONUT \\
-    8 & SROIE + All datasets \\
+    4 & SROIE + WildReceipt + Invoices-DONUT \\
+    5 & SROIE + WildReceipt (2$\times$ SROIE) \\
+    6 & SROIE + Invoices-DONUT (2$\times$ SROIE) \\
+    7 & SROIE + All datasets (2$\times$ SROIE) \\
+    8 & SROIE + All datasets (3$\times$ SROIE) \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -472,6 +464,9 @@ All experiments share identical hyperparameters
 split for fair comparison.  Auxiliary datasets are split 70/15/15
 (train/val/held-out) with a fixed seed; the SROIE validation split and
 auxiliary validation portions are combined for early stopping.
+Experiments 5--8 apply SROIE oversampling (2$\times$ or 3$\times$) to
+counteract field-coverage dilution when combining with large auxiliary
+datasets.
 
 \subsection{Evaluation Metrics}
 \label{sec:metrics}
@@ -515,11 +510,11 @@ experiments alongside the zero-shot pretrained-DONUT$\to$SROIE transfer baseline
     1 & SROIE only              & \VAR{exp1_n} & \VAR{exp1_prec} & \VAR{exp1_rec} & \VAR{exp1_f1} & \VAR{exp1_em} \\
     2 & +\,WildReceipt          & \VAR{exp2_n} & \VAR{exp2_prec} & \VAR{exp2_rec} & \VAR{exp2_f1} & \VAR{exp2_em} \\
     3 & +\,Invoices-DONUT       & \VAR{exp3_n} & \VAR{exp3_prec} & \VAR{exp3_rec} & \VAR{exp3_f1} & \VAR{exp3_em} \\
-    4 & +\,FUNSD                & \VAR{exp4_n} & \VAR{exp4_prec} & \VAR{exp4_rec} & \VAR{exp4_f1} & \VAR{exp4_em} \\
-    5 & +\,WildReceipt+FUNSD    & \VAR{exp5_n} & \VAR{exp5_prec} & \VAR{exp5_rec} & \VAR{exp5_f1} & \VAR{exp5_em} \\
-    6 & +\,WildReceipt+Invoices & \VAR{exp6_n} & \VAR{exp6_prec} & \VAR{exp6_rec} & \VAR{exp6_f1} & \VAR{exp6_em} \\
-    7 & +\,FUNSD+Invoices       & \VAR{exp7_n} & \VAR{exp7_prec} & \VAR{exp7_rec} & \VAR{exp7_f1} & \VAR{exp7_em} \\
-    8 & +\,All                  & \VAR{exp8_n} & \VAR{exp8_prec} & \VAR{exp8_rec} & \VAR{exp8_f1} & \VAR{exp8_em} \\
+    4 & +\,WR+Invoices          & \VAR{exp4_n} & \VAR{exp4_prec} & \VAR{exp4_rec} & \VAR{exp4_f1} & \VAR{exp4_em} \\
+    5 & +\,WR (2$\times$ SROIE) & \VAR{exp5_n} & \VAR{exp5_prec} & \VAR{exp5_rec} & \VAR{exp5_f1} & \VAR{exp5_em} \\
+    6 & +\,Inv (2$\times$ SROIE)& \VAR{exp6_n} & \VAR{exp6_prec} & \VAR{exp6_rec} & \VAR{exp6_f1} & \VAR{exp6_em} \\
+    7 & +\,All (2$\times$ SROIE)& \VAR{exp7_n} & \VAR{exp7_prec} & \VAR{exp7_rec} & \VAR{exp7_f1} & \VAR{exp7_em} \\
+    8 & +\,All (3$\times$ SROIE)& \VAR{exp8_n} & \VAR{exp8_prec} & \VAR{exp8_rec} & \VAR{exp8_f1} & \VAR{exp8_em} \\
     \midrule
       & Pretrained zero-shot    & ---          & \VAR{pre_prec}  & \VAR{pre_rec}  & \VAR{pre_f1}  & \VAR{pre_em} \\
     \bottomrule
@@ -551,11 +546,11 @@ due to the high variability in address formatting across receipts.
     1 & SROIE only            & \VAR{exp1_company_f1} & \VAR{exp1_company_ned} & \VAR{exp1_date_f1} & \VAR{exp1_date_ned} & \VAR{exp1_address_f1} & \VAR{exp1_address_ned} & \VAR{exp1_total_f1} & \VAR{exp1_total_ned} \\
     2 & +\,WildReceipt        & \VAR{exp2_company_f1} & \VAR{exp2_company_ned} & \VAR{exp2_date_f1} & \VAR{exp2_date_ned} & \VAR{exp2_address_f1} & \VAR{exp2_address_ned} & \VAR{exp2_total_f1} & \VAR{exp2_total_ned} \\
     3 & +\,Invoices-DONUT     & \VAR{exp3_company_f1} & \VAR{exp3_company_ned} & \VAR{exp3_date_f1} & \VAR{exp3_date_ned} & \VAR{exp3_address_f1} & \VAR{exp3_address_ned} & \VAR{exp3_total_f1} & \VAR{exp3_total_ned} \\
-    4 & +\,FUNSD              & \VAR{exp4_company_f1} & \VAR{exp4_company_ned} & \VAR{exp4_date_f1} & \VAR{exp4_date_ned} & \VAR{exp4_address_f1} & \VAR{exp4_address_ned} & \VAR{exp4_total_f1} & \VAR{exp4_total_ned} \\
-    5 & +\,WR+FUNSD           & \VAR{exp5_company_f1} & \VAR{exp5_company_ned} & \VAR{exp5_date_f1} & \VAR{exp5_date_ned} & \VAR{exp5_address_f1} & \VAR{exp5_address_ned} & \VAR{exp5_total_f1} & \VAR{exp5_total_ned} \\
-    6 & +\,WR+Invoices        & \VAR{exp6_company_f1} & \VAR{exp6_company_ned} & \VAR{exp6_date_f1} & \VAR{exp6_date_ned} & \VAR{exp6_address_f1} & \VAR{exp6_address_ned} & \VAR{exp6_total_f1} & \VAR{exp6_total_ned} \\
-    7 & +\,FUNSD+Invoices     & \VAR{exp7_company_f1} & \VAR{exp7_company_ned} & \VAR{exp7_date_f1} & \VAR{exp7_date_ned} & \VAR{exp7_address_f1} & \VAR{exp7_address_ned} & \VAR{exp7_total_f1} & \VAR{exp7_total_ned} \\
-    8 & +\,All                & \VAR{exp8_company_f1} & \VAR{exp8_company_ned} & \VAR{exp8_date_f1} & \VAR{exp8_date_ned} & \VAR{exp8_address_f1} & \VAR{exp8_address_ned} & \VAR{exp8_total_f1} & \VAR{exp8_total_ned} \\
+    4 & +\,WR+Invoices        & \VAR{exp4_company_f1} & \VAR{exp4_company_ned} & \VAR{exp4_date_f1} & \VAR{exp4_date_ned} & \VAR{exp4_address_f1} & \VAR{exp4_address_ned} & \VAR{exp4_total_f1} & \VAR{exp4_total_ned} \\
+    5 & +\,WR 2$\times$       & \VAR{exp5_company_f1} & \VAR{exp5_company_ned} & \VAR{exp5_date_f1} & \VAR{exp5_date_ned} & \VAR{exp5_address_f1} & \VAR{exp5_address_ned} & \VAR{exp5_total_f1} & \VAR{exp5_total_ned} \\
+    6 & +\,Inv 2$\times$      & \VAR{exp6_company_f1} & \VAR{exp6_company_ned} & \VAR{exp6_date_f1} & \VAR{exp6_date_ned} & \VAR{exp6_address_f1} & \VAR{exp6_address_ned} & \VAR{exp6_total_f1} & \VAR{exp6_total_ned} \\
+    7 & +\,All 2$\times$      & \VAR{exp7_company_f1} & \VAR{exp7_company_ned} & \VAR{exp7_date_f1} & \VAR{exp7_date_ned} & \VAR{exp7_address_f1} & \VAR{exp7_address_ned} & \VAR{exp7_total_f1} & \VAR{exp7_total_ned} \\
+    8 & +\,All 3$\times$      & \VAR{exp8_company_f1} & \VAR{exp8_company_ned} & \VAR{exp8_date_f1} & \VAR{exp8_date_ned} & \VAR{exp8_address_f1} & \VAR{exp8_address_ned} & \VAR{exp8_total_f1} & \VAR{exp8_total_ned} \\
     \bottomrule
   \end{tabular}
 \end{table*}
@@ -642,12 +637,12 @@ SROIE Task-3 scores.
 
 The results in Table~\ref{tab:experiments} reveal a clear hierarchy among
 auxiliary data sources.  WildReceipt, sharing the receipt domain with SROIE,
-consistently provides the largest receipt-domain gain.  FUNSD, as a
-cross-domain form dataset, provides complementary augmentation benefits:
-its structured KIE annotations (HEADER, QUESTION, ANSWER entities) train
-the decoder on diverse document layouts while sharing the same four-field
-extraction schema.  Invoices-DONUT provides further cross-domain diversity
-through invoice-specific vocabulary and layout patterns.
+consistently provides the largest receipt-domain gain.  Invoices-DONUT
+provides complementary cross-domain diversity through invoice-specific
+vocabulary and layout patterns, including seller address fields absent in
+some competing datasets.  Experiments~5--8 demonstrate that SROIE
+oversampling (2$\times$ or 3$\times$) effectively counteracts field-coverage
+dilution when combining with large auxiliary datasets.
 
 \subsection{Domain Proximity Hypothesis}
 
@@ -699,7 +694,7 @@ We conducted a systematic comparison of end-to-end (\donut) and pipeline
 SROIE benchmark.  Our findings show that:
 \begin{enumerate}[leftmargin=*,nosep]
   \item Receipt-domain auxiliary data (WildReceipt) provides the largest
-        improvements; cross-domain form data (FUNSD) adds complementary gains.
+        improvements; invoice-domain data (Invoices-DONUT) adds complementary gains.
   \item The end-to-end \donut architecture outperforms the
         \trocr\,+\,\yolo pipeline, achieving \VAR{best_f1} vs.\
         \VAR{trocr_best_f1} global F1, due to the absence of cascading

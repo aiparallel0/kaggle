@@ -88,11 +88,11 @@ EXP_NAMES: dict[str, str] = {
     "1": "SROIE only",
     "2": "+WildReceipt",
     "3": "+Invoices-DONUT",
-    "4": "+FUNSD",
-    "5": "+WildReceipt+FUNSD",
-    "6": "+WildReceipt+Invoices",
-    "7": "+FUNSD+Invoices",
-    "8": "+All",
+    "4": "+WildReceipt+Invoices",
+    "5": "+WildReceipt (2x SROIE)",
+    "6": "+Invoices (2x SROIE)",
+    "7": "+All (2x SROIE)",
+    "8": "+All (3x SROIE)",
 }
 
 
