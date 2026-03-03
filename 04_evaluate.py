@@ -38,8 +38,8 @@ SROIE_DATA_DIR = Path(os.environ.get("SROIE_DATA_DIR", "/workspace/ICDAR-2019-SR
 # ════════════════════════════════════════════════════════════════════════════
 # Shared metric computation (SROIE Task-3 compatible)
 # ════════════════════════════════════════════════════════════════════════════
-# Import compute_metrics from evaluate.py — single source of truth for SROIE
-# Task-3 F1/NED/exact-match computation shared across DONUT and TrOCR+YOLO.
+# Import compute_metrics from donut_evaluator — single source of truth for
+# SROIE Task-3 F1/NED/exact-match shared across DONUT and TrOCR+YOLO.
 from donut_evaluator import compute_metrics as compute_sroie_metrics  # noqa: E402
 
 

@@ -1,7 +1,7 @@
 """Tests for evaluation metrics — compute_metrics, normalized_edit_distance, _unwrap_prediction.
 
 These tests exercise the core metric logic without requiring GPU or model weights.
-Requires: torch, transformers (evaluate.py imports them at module level).
+Requires: torch, transformers (donut_evaluator.py imports them at module level).
 """
 
 import sys

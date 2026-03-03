@@ -1,10 +1,8 @@
 """
 05_compare_results.py — Cross-architecture comparison: DONUT vs TrOCR+YOLO.
 
-FIX: Previous version expected a single metrics.json with CER/WER/Macro-F1
-structure that didn't match the pipeline's output format.  This version
-reads the per-experiment JSON files from results/ (same format produced by
-run_experiments.py for DONUT and run_all.py for TrOCR+YOLO) and generates:
+Reads per-experiment JSON files from results/ (produced by run_experiments.py
+for DONUT and run_all.py for TrOCR+YOLO) and generates:
 
   1. Per-experiment comparison table (DONUT F1 vs TrOCR+YOLO F1)
   2. Per-field F1 grouped bar chart
@@ -13,10 +11,10 @@ run_experiments.py for DONUT and run_all.py for TrOCR+YOLO) and generates:
   5. LaTeX-injectable .tex files for the paper
   6. PNG plots for inclusion in the paper / HTML report
 
-FIX: Uses SROIE Task-3 metrics (global F1, per-field F1, NED) consistently
-across both architectures for fair comparison.
-
-FIX: Imports constants from shared module.
+See also: benchmark_compare.py — for head-to-head live evaluation that runs
+both pipelines on actual receipt images (requires model checkpoints and an
+images/labels directory). Use this file (05_compare_results.py) when results
+JSON files already exist; use benchmark_compare.py for a fresh live benchmark.
 """
 
 import json

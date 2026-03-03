@@ -23,7 +23,7 @@
 15. [Environment & Paths](#15-environment--paths)
 16. [Known Issues & Historical Fixes](#16-known-issues--historical-fixes)
 17. [Performance Tips](#17-performance-tips)
-18. [Full End-to-End Pipeline Flow](#18-full-end-to-end-pipeline-flow)
+18. [Pipeline Stage Summary](#18-pipeline-stage-summary)
 
 ---
 
@@ -31,7 +31,7 @@
 
 This repository implements a systematic study of **multi-dataset fine-tuning for receipt Key Information Extraction (KIE)** using two model architectures:
 
-1. **DONUT** (Document Understanding Transformer) — end-to-end vision-language model, `naver-clova-ix/donut-base-finetuned-cord-v2` as base checkpoint
+1. **DONUT** (Document Understanding Transformer) — end-to-end vision-language model, `naver-clova-ix/donut-base` as base checkpoint
 2. **TrOCR + YOLOv8** — two-stage OCR pipeline: YOLOv8x detects text regions, TrOCR reads crops, heuristics assign fields
 
 The goal: evaluate how adding auxiliary training datasets (WildReceipt, FUNSD, Invoices-DONUT) to SROIE fine-tuning affects performance on the SROIE Task-3 benchmark, across **8 dataset-combination experiments**. Results are automatically compiled into a LaTeX research paper.
@@ -75,7 +75,7 @@ This is the most important mental model in the codebase. Every receipt image tra
 - The image is split into non-overlapping 4×4 patches
 - Patch tokens pass through 4 Swin stages with window-based self-attention
 - The encoder output is a 2-D feature map (H/32 × W/32) that is flattened and projected into the decoder's cross-attention space
-- **Base checkpoint:** `naver-clova-ix/donut-base-finetuned-cord-v2` — already domain-adapted on receipts; converges ~3× faster than `donut-base`
+- **Base checkpoint:** `naver-clova-ix/donut-base` — clean base, no CORD task-specific prior that could compete with SROIE tokens
 
 ### Stage 3 — Exactly 4 XML Field Tags
 
@@ -107,7 +107,7 @@ Full-parameter supervised Seq2Seq fine-tuning (not LoRA/adapters). The HuggingFa
 
 ### Stage 5 — Evaluation & Results
 
-The `DonutEvaluator` in `evaluate.py` runs inference on the 63-sample SROIE test set, computes global F1 and NED per field, and writes `results/experiment_N.json`.
+The `DonutEvaluator` in `donut_evaluator.py` runs inference on the 63-sample SROIE test set, computes global F1 and NED per field, and writes `results/experiment_N.json`.
 
 ---
 
@@ -116,7 +116,7 @@ The `DonutEvaluator` in `evaluate.py` runs inference on the 63-sample SROIE test
 ### Method: Full-Parameter Seq2Seq (not LoRA)
 
 All encoder and decoder parameters are updated during fine-tuning. This is appropriate because:
-- The base checkpoint is already receipt-domain-adapted (CORD)
+- The base checkpoint (`donut-base`) has no task-specific priors competing with SROIE tokens
 - The SROIE vocabulary extension requires genuine embedding matrix updates
 - Dataset sizes (500–3,940 samples) are sufficient to avoid catastrophic forgetting at low LR
 
@@ -134,81 +134,8 @@ All encoder and decoder parameters are updated during fine-tuning. This is appro
 | Early stopping | Patience = 3 on val loss |
 | Seed | `SEED = 42` (set globally at pipeline start) |
 
-### Batch Size Optimization
-
-```
-Batch size vs. Global F1 (Exp 1 — SROIE Baseline, 10 epochs):
-
-bs=4  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  F1 = 0.812
-bs=8  ████████████████████████████████████████████████  F1 = 0.871  ← OPTIMAL
-bs=16 ██████████████████████████████████████████████    F1 = 0.855
-bs=32 ██████████████████████████████████████████        F1 = 0.831
-
-Notes:
-  bs=4  → under-utilises GPU; high gradient noise
-  bs=8  → best generalisation across heterogeneous receipt layouts
-  bs=16 → gradient signal begins to flatten; slight overfit
-  bs=32 → overfits small SROIE training set (500 samples)
-```
-
-**Gradient accumulation bridge:** physical `bs=8` + `gradient_accumulation_steps=2` achieves effective `bs=16` without OOM risk on 16 GB VRAM.
-
-### Epoch Optimization
-
-```
-Epochs vs. Global F1 (Exp 1 — SROIE Baseline, bs=8):
-
- 3 ep  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  F1 = 0.801
- 5 ep  ████████████████████████████████████████████  F1 = 0.833
- 8 ep  ██████████████████████████████████████████████████████  F1 = 0.858
-10 ep  ██████████████████████████████████████████████████████████  F1 = 0.871  ← OPTIMAL
-15 ep  █████████████████████████████████████████████████████████   F1 = 0.862  (overfit)
-
-Notes:
-  <5 ep  → decoder undertrained on SROIE-specific token patterns
-  10 ep  → sweet spot; cosine schedule reaches near-zero LR cleanly
-  >12 ep → val loss diverges on 63-sample val set (overfit)
-```
-
-### 2D Loss Curves — Exp 1 vs Exp 8
-
-The following describes the training dynamics (embed actual plot from `05_compare_results.py`):
-
-```
-Cross-Entropy Loss over Epochs
-──────────────────────────────────────────────────────────────
-Exp 1 (SROIE only, ~500 samples):
-  Train: 1.82 → 1.41 → 1.09 → 0.87 → 0.71 → 0.60 → 0.52 → 0.47 → 0.44 → 0.42
-  Val:   1.95 → 1.58 → 1.28 → 1.06 → 0.92 → 0.83 → 0.79 → 0.78 → 0.80 → 0.82 ← diverges ep 8+
-
-Exp 8 (All datasets, ~3940 samples):
-  Train: 1.68 → 1.22 → 0.94 → 0.73 → 0.58 → 0.47 → 0.39 → 0.33 → 0.29 → 0.26
-  Val:   1.78 → 1.31 → 1.02 → 0.80 → 0.65 → 0.54 → 0.46 → 0.41 → 0.38 → 0.36 ← tracks train
-
-Observation: Exp 8 val loss tracks training loss closely → auxiliary datasets
-act as regulariser. Exp 1 shows widening train/val gap from epoch 6 onward.
-──────────────────────────────────────────────────────────────
-```
-
-To generate the actual 2D plot for the paper:
-```bash
-python 05_compare_results.py  # outputs loss_curves.pdf + f1_comparison.pdf
-```
-
-### Hyperparameter Grid (Global F1)
-
-```
-                      ┌──── EPOCHS ────────────────────────────┐
-                      │  3      5      8     10     15          │
-         ┌────────────┼───────────────────────────────────────┐ │
-BATCH    │  bs=4      │ .791   .812   .823   .831   .826      │ │
-SIZE     │  bs=8      │ .802   .833   .858  [.871]  .865      │ │  ← optimal
-         │  bs=16     │ .799   .825   .849   .862   .855      │ │
-         │  bs=32     │ .785   .810   .831   .844   .839      │ │
-         └────────────┴───────────────────────────────────────┘ │
-                      └────────────────────────────────────────┘
-  [.871] = selected optimum (bs=8, epochs=10)
-```
+The optimal settings (bs=8, epochs=10) give Global F1 ≈ 0.871 on Exp 1 (SROIE baseline).
+Use `05_compare_results.py` to regenerate loss curves and F1 comparison plots.
 
 ---
 
@@ -253,7 +180,7 @@ Both must exit with code `0`. If either fails, fix the core import chain **befor
 | `protobuf` / `sentencepiece` crash at import | Missing or wrong-version package | `pip install 'protobuf>=3.20.0' sentencepiece` |
 | `JSONDecodeError` in `inject_results.py` | Trailing comma or missing field in results JSON | Validate JSON against results format spec below |
 | `CUDA out of memory` | Batch size too large for VRAM | Halve `batch_size`; double `gradient_accumulation_steps` |
-| `KeyError: 'sroie'` in evaluator | `{"sroie": {...}}` wrapper not unwrapped | Unwrap in `evaluate.py`: `result = result.get("sroie", result)` |
+| `KeyError: 'sroie'` in evaluator | `{"sroie": {...}}` wrapper not unwrapped | Unwrap in `donut_evaluator.py`: `result = result.get("sroie", result)` |
 | **`F1 ≈ 0.008`** (not zero, not 0.42) | `token2json` returned list (CORD `<sep/>` drift) | `_parse_prediction()` merges page-list → dict (Pattern 5 below) |
 | **`F1 ≈ 0.42`** (not zero, plausible-looking) | `lm_head.weight` dropped by safetensors dedup | `LmHeadCloneCallback` + `RuntimeError` check on load (Pattern 6 below) |
 | **`RuntimeError: CRITICAL: decoder.lm_head.weight missing`** | `LmHeadCloneCallback` failed or was removed | Re-register callback in `DonutTrainer.train()`; do NOT remove the check |
@@ -319,22 +246,27 @@ After any `pip install --upgrade` or dependency version bump, check these 5 thin
 kaggle/
 ├── constants.py              # SINGLE SOURCE OF TRUTH for all shared constants
 ├── dataset_loaders.py        # ABC-based download & normalization for all datasets
-├── train.py                  # DonutTrainer OOP wrapper (legacy standalone)
-├── evaluate.py               # DonutEvaluator OOP wrapper (legacy standalone)
+├── train.py                  # DonutTrainer OOP wrapper
+├── donut_evaluator.py        # DonutEvaluator OOP wrapper (computes F1, NED)
 ├── run_experiments.py        # 8-experiment DONUT orchestrator (ExperimentConfig)
 ├── run_all.py                # MAIN ENTRY POINT: full dual-architecture pipeline
 ├── inject_results.py         # PaperInjector: generates LaTeX from results JSON
+├── preflight_checks.py       # Pre-flight validators + validate_pipeline()
+├── cloud_pipeline.py         # Cloud mode orchestrator (code-repair / ML-training)
 ├── paper.tex                 # LaTeX template with \VAR{} placeholders
 ├── references.bib            # BibTeX references for paper
 ├── requirements.txt          # Python dependencies with version pins
-├── hf_token.txt              # HuggingFace token (gitignored — never commit)
+├── pyproject.toml            # Package metadata, entry points, ruff/pytest config
 │
-├── 00_project_structure.md   # Alternative numbered-script project overview
-├── 01_dataset_preparation.py # Alternative: dataset prep script
+├── 01_dataset_preparation.py # Alternative numbered-script: dataset prep
 ├── 02_train_donut.py         # Alternative: DONUT training script
 ├── 03_train_trocr_yolo.py    # TrOCR+YOLO training (also called by run_all.py)
 ├── 04_evaluate.py            # Alternative: unified evaluation
 ├── 05_compare_results.py     # Alternative: visualization & comparison
+│
+├── validators/               # BugPatternDetector, ImportChainChecker, etc.
+├── pipeline_types/           # Typed dataclasses for pipeline results
+├── tests/                    # Unit tests (pytest)
 │
 ├── results/                  # Runtime: per-experiment JSON (gitignored)
 ├── data/                     # Runtime: dataset cache (gitignored)
@@ -359,7 +291,7 @@ from constants import FIELDS, IMAGE_EXTS, MAX_LENGTH, BASE_MODEL, SEED, NEW_TOKE
 | `FIELDS` | `["company", "date", "address", "total"]` | SROIE Task-3 target fields (the 4 tags) |
 | `IMAGE_EXTS` | `frozenset({".jpg", ".jpeg", ...})` | Accepted image extensions |
 | `MAX_LENGTH` | `768` | DONUT decoder max token length |
-| `BASE_MODEL` | `"naver-clova-ix/donut-base-finetuned-cord-v2"` | Base DONUT checkpoint |
+| `BASE_MODEL` | `"naver-clova-ix/donut-base"` | Base DONUT checkpoint |
 | `SEED` | `42` | Global random seed |
 | `NEW_TOKENS` | `["<s_sroie>", "<s_company>", ...]` | SROIE special tokens added to tokenizer |
 | `EMPTY_GT` | `{"company": "", "date": "", ...}` | Empty ground-truth template |
@@ -456,7 +388,7 @@ python 05_compare_results.py
 |---|---|---|
 | `SROIELoader`, `WildReceiptLoader`, etc. | `dataset_loaders.py` | ABC hierarchy; all return `List[Tuple[image_path, gt_dict]]` |
 | `DonutTrainer` | `train.py` | Wraps `Seq2SeqTrainer`; reads all hyperparams from `ExperimentConfig` |
-| `DonutEvaluator` | `evaluate.py` | Computes global F1, NED; unwraps `{"sroie": {...}}` token2json output |
+| `DonutEvaluator` | `donut_evaluator.py` | Computes global F1, NED; unwraps `{"sroie": {...}}` token2json output |
 | `PipelineOrchestrator` | `run_all.py` | Sequential GPU stage runner; uses `StageResult` dataclass |
 | `PaperInjector` | `inject_results.py` | Resolves `\VAR{}` placeholders from JSON results |
 | `ExperimentConfig` | `run_experiments.py` | Dataclass; single source of truth for all hyperparameters |
@@ -556,7 +488,7 @@ Two-stage pipeline in `03_train_trocr_yolo.py` (called by `run_all.py`):
 | `lm_head` weight tying → F1=0 on reload | `config.tie_word_embeddings=False` after `resize_token_embeddings()` | `train.py` |
 | Key file loading failure | Try `.txt` first, then `.json` (BUG A/E fix) | `train.py` |
 | Data leakage in eval | Separate `val_img/` and `test_img/` directories in `stage_install()` | `run_all.py` |
-| `{"sroie": {...}}` wrapper in token2json | Unwrapped in evaluator | `evaluate.py` |
+| `{"sroie": {...}}` wrapper in token2json | Unwrapped in evaluator | `donut_evaluator.py` |
 | FIELDS/IMAGE_EXTS duplicated in 5+ files | Consolidated in `constants.py` | `constants.py` |
 | `transformers ≥4.47` `PreTrainedTokenizerBase` move | Compat shim added | `dataset_loaders.py` |
 | **safetensors deduplication drops `lm_head.weight` → F1~0.42** | `LmHeadCloneCallback` deep-clones weight before every save; sanity `RuntimeError` on load | `train.py`, `donut_evaluator.py` |
@@ -708,172 +640,23 @@ if "decoder.lm_head.weight" in missing_keys:
 
 ---
 
----
+## 18. Pipeline Stage Summary
 
-## 18. Full End-to-End Pipeline Flow
+`run_all.py` executes these stages in order:
 
-The complete flow from raw source data to the filled LaTeX paper. Every arrow is a function call or file write; every box is a persistent artifact. Use this map to locate where a bug lives.
+| Stage | Function | Output |
+|---|---|---|
+| 0 | `stage_install()` | SROIE 80/10/10 split: `img/`, `val_img/`, `test_img/` |
+| 1 | `stage_download()` | Aux datasets + base model in HF cache |
+| 1.5 | `stage_pretrained_baseline()` | `results/evaluation_results.json` (zero-shot F1) |
+| 2 | `run_experiments.run_experiment(N)` × 8 | `results/experiment_N.json` each |
+| 3-4 | `03_train_trocr_yolo.py` | `results/trocr_yolo_results.json` |
+| 5 | `benchmark_compare.main()` | `results/benchmark_results.json` + plots |
+| 6 | `inject_results.PaperInjector.fill()` | `paper_filled.tex` |
 
-```
-═══════════════════════════════════════════════════════════════════════════════
-  STAGE 0 — SROIE Install          run_all.py :: stage_install()
-═══════════════════════════════════════════════════════════════════════════════
+**Critical SROIE split invariant:** `val_img/` and `test_img/` are physically separate directories. `load_sroie_val()` and `load_sroie_test()` must never return overlapping images.
 
-  GitHub repo (626 images)
-       │  git clone --depth 1
-       ▼
-  img/ + key/ + box/   ──── random.Random(SEED=42).shuffle ────►  80 / 10 / 10
-                                                                        │
-                                        ┌───────────────────────────────┘
-                                        │  shutil.move  (never copy)
-                                        ▼
-              img/ (500 train)   val_img/ (63 val)   test_img/ (63 test)
-              key/ (500 train)   val_key/ (63 val)   test_key/ (63 test)
-
-  INVARIANT: these three sets NEVER overlap. val and test are in different
-  directories so load_sroie_val() and load_sroie_test() cannot return the
-  same images even if called from the same experiment.
-
-═══════════════════════════════════════════════════════════════════════════════
-  STAGE 1 — Dataset Download        run_all.py :: stage_download()
-═══════════════════════════════════════════════════════════════════════════════
-
-  WildReceipt tar  ──► WildReceiptLoader._download() ──► data/wildreceipt/
-  FUNSD (HF)       ──► FUNSDLoader._download()       ──► data/funsd/
-  Invoices (HF)    ──► InvoicesDonutLoader._download()──► data/invoices_donut/
-  donut-base-finetuned-cord-v2 ──► HF cache (blocking, single-threaded)
-
-  All three dataset downloads run in parallel (ThreadPoolExecutor).
-  Model download is blocking to prevent GPU contention during training.
-
-═══════════════════════════════════════════════════════════════════════════════
-  STAGE 1.5 — Pretrained Baseline   run_all.py :: stage_pretrained_baseline()
-═══════════════════════════════════════════════════════════════════════════════
-
-  donut-base-finetuned-cord-v2  (tie_word_embeddings unchanged — NOT our path)
-       │  model.generate() on 63 test images with "<s_cord-v2>" task prompt
-       │  token2json() → CORD-schema dict  ──► remap_cord_to_sroie()
-       ▼
-  results/pretrained_metrics (saved to workspace/evaluation_results.json)
-
-═══════════════════════════════════════════════════════════════════════════════
-  STAGE 2 — DONUT Experiments       run_experiments.py :: run_experiment(N)
-═══════════════════════════════════════════════════════════════════════════════
-
-  For each experiment 1–8:
-
-  ┌─────────────────────────────────────────────────────────────────────────┐
-  │  A. DATA ASSEMBLY          dataset_loaders.get_combined_dataset()       │
-  │                                                                         │
-  │  load_sroie_train()  ──────────────────────────────►  combined_train[]  │
-  │  load_sroie_val()    ──────────────────────────────►  combined_val[]    │
-  │                                                                         │
-  │  For each auxiliary dataset in config.datasets:                         │
-  │    loader.load("train") ──► split_dataset(70/15/15) ──► train + val     │
-  │                             └─ test 15% discarded (no leakage)          │
-  │                                                                         │
-  │  random.Random(SEED).shuffle(combined_train)                            │
-  │  random.Random(SEED).shuffle(combined_val)                              │
-  └────────────────────────────────┬────────────────────────────────────────┘
-                                   │
-                                   ▼
-  ┌─────────────────────────────────────────────────────────────────────────┐
-  │  B. NORMALIZATION          (already done inside each loader)            │
-  │                                                                         │
-  │  Every sample, regardless of source dataset, is:                        │
-  │    {"company": "...", "date": "...", "address": "...", "total": "..."}  │
-  │                                                                         │
-  │  Raw FUNSD words/ner_tags → _normalize()                                │
-  │  Raw WildReceipt label indices (1,3,7,10) → _IDX_TO_FIELD map          │
-  │  Raw Invoices fields → _normalize()                                     │
-  │                                                                         │
-  │  Result: all 4 source datasets speak SROIE schema by this point.        │
-  └────────────────────────────────┬────────────────────────────────────────┘
-                                   │
-                                   ▼
-  ┌─────────────────────────────────────────────────────────────────────────┐
-  │  C. TRAINING               DonutTrainer.train()                         │
-  │                                                                         │
-  │  SROIEDataset.__getitem__:                                              │
-  │    {"company":"X","date":"Y",...}                                       │
-  │    → "<s_sroie><s_company>X</s_company>...<s_total>Z</s_total></s_sroie>"│
-  │    → tokenized label tensor (pad=-100)                                  │
-  │                                                                         │
-  │  resize_token_embeddings(len(tokenizer))   ← adds NEW_TOKENS (10 toks) │
-  │  model.config.tie_word_embeddings = False  ← CRITICAL: must follow     │
-  │                                                resize_token_embeddings   │
-  │                                                                         │
-  │  Seq2SeqTrainer with:                                                   │
-  │    eval_dataset  = combined_val  (from val_img/; NOT test_img/)         │
-  │    callbacks     = [LmHeadCloneCallback(), EarlyStoppingCallback(p=3)]  │
-  │    load_best_model_at_end = True                                        │
-  │                                                                         │
-  │  LmHeadCloneCallback.on_save():                                         │
-  │    lm_head.weight = Parameter(lm_head.weight.data.clone())              │
-  │    ← breaks data-pointer alias with embed_tokens so safetensors         │
-  │      writes lm_head as a separate tensor in the checkpoint shard        │
-  └────────────────────────────────┬────────────────────────────────────────┘
-                                   │  best checkpoint saved to model_dir/
-                                   ▼
-  ┌─────────────────────────────────────────────────────────────────────────┐
-  │  D. MODEL LOAD             load_model_with_tied_weights(model_dir)      │
-  │                                                                         │
-  │  from_pretrained(output_loading_info=True)                              │
-  │  missing_keys = loading_info["missing_keys"]                            │
-  │                                                                         │
-  │  if "decoder.lm_head.weight" in missing_keys                           │
-  │     and NOT tie_word_embeddings:                                        │
-  │       raise RuntimeError("CRITICAL…")   ← fail loudly; never silent    │
-  │                                                                         │
-  │  _retie_decoder_head(model, missing_keys)  ← legacy compat only        │
-  └────────────────────────────────┬────────────────────────────────────────┘
-                                   │
-                                   ▼
-  ┌─────────────────────────────────────────────────────────────────────────┐
-  │  E. EVALUATION             DonutEvaluator.evaluate()                    │
-  │                                                                         │
-  │  _self_test() on test_dataset[0]:                                       │
-  │    model.generate() → raw_tokens → token2json()                        │
-  │    if isinstance(result, list): merge pages → dict   ← Bug C fix       │
-  │    _unwrap_prediction() → check non-empty                               │
-  │                                                                         │
-  │  For each of 63 test images (from test_img/; NOT val_img/):            │
-  │    model.generate() → sequence                                          │
-  │    _parse_prediction(sequence):                                         │
-  │      token2json() → result                                              │
-  │      if isinstance(result, list):                                       │
-  │        merge page dicts (first-key-wins)    ← Bug C fix               │
-  │      _unwrap_prediction() → remove {"sroie":{…}} wrapper               │
-  │    → prediction dict                                                    │
-  │                                                                         │
-  │  compute_metrics(predictions, ground_truths):                           │
-  │    TP = pred_str.lower().strip() == gt_str.lower().strip()              │
-  │    global_f1 = 2·TP / (total_pred_non_empty + total_gt_non_empty)      │
-  │    NED per field via editdistance                                       │
-  └────────────────────────────────┬────────────────────────────────────────┘
-                                   │
-                                   ▼
-                    results/experiment_N.json
-
-═══════════════════════════════════════════════════════════════════════════════
-  STAGE 3–4 — TrOCR + YOLO        03_train_trocr_yolo.py
-═══════════════════════════════════════════════════════════════════════════════
-
-  Uses the SAME img/ val_img/ test_img/ split created in Stage 0.
-  YOLOv8x trains on img/ (train split, YOLO bbox labels from box/).
-  TrOCR trains on trocr/train/ crops.  Evaluated on test_img/ (63 images).
-  Results saved to results/trocr_yolo_results.json.
-
-═══════════════════════════════════════════════════════════════════════════════
-  STAGE 6 — Paper Generation       inject_results.py :: PaperInjector
-═══════════════════════════════════════════════════════════════════════════════
-
-  results/experiment_*.json  ──► PaperInjector.build_var_map()
-  paper.tex (\VAR{} placeholders) ──► PaperInjector.fill() ──► paper_filled.tex
-
-  Placeholders: \VAR{exp1_f1}, \VAR{best_exp}, \VAR{pretrained_f1}, etc.
-  Never edit paper_filled.tex directly — it is fully regenerated each run.
-```
+**Training loop invariant:** `resize_token_embeddings()` must always be followed by `model.config.tie_word_embeddings = False` and the `LmHeadCloneCallback` must be registered — see Section 16 bug patterns.
 
 ### Quick sanity check (run before every experiment)
 

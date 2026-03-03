@@ -30,10 +30,6 @@ from pipeline_config import CloudConfig, PipelineMode
 from preflight_checks import PreflightChecker
 from pipeline_types import PipelineResult
 
-# Import mode orchestrators (lazy load to avoid circular imports)
-MODE_A_AVAILABLE = False
-MODE_B_AVAILABLE = False
-
 
 class CloudPipelineOrchestrator:
     """Main pipeline orchestrator - routes between modes and manages execution."""
