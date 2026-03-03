@@ -794,7 +794,7 @@ def stage_trocr_data_prep(args) -> StageResult:
     try:
         import importlib
 
-        ds_prep = importlib.import_module("01_dataset_preparation")
+        ds_prep = importlib.import_module("dataset_preparation")
         counts = ds_prep.prepare_all()
         for key, count in counts.items():
             print(f"  {key}: {count}")
@@ -828,8 +828,8 @@ def stage_trocr_experiments(args) -> StageResult:
     try:
         import importlib
 
-        trocr_yolo = importlib.import_module("03_train_trocr_yolo")
-        eval_mod = importlib.import_module("04_evaluate")
+        trocr_yolo = importlib.import_module("train_trocr_yolo")
+        eval_mod = importlib.import_module("evaluate_models")
 
         workspace = Path(args.workspace)
 
@@ -1060,7 +1060,7 @@ def stage_comparison(args) -> StageResult:
     try:
         import importlib
 
-        compare_mod = importlib.import_module("05_compare_results")
+        compare_mod = importlib.import_module("benchmark_compare")
         compare_mod.compare_all()
     except Exception as exc:
         w = f"Comparison stage failed: {exc}"

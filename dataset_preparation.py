@@ -1,5 +1,5 @@
 """
-01_dataset_preparation.py — Prepare YOLO bbox labels + TrOCR line crops.
+dataset_preparation.py — Prepare YOLO bbox labels + TrOCR line crops.
 
 FIX: The previous version loaded from HuggingFace 'darentang/sroie' which
 is broken.  This version uses the EXISTING SROIE split (already downloaded

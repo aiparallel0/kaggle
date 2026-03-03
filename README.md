@@ -106,74 +106,56 @@ Regenerates `paper_filled.tex` from existing results without re-training.
 
 These scripts provide isolated entry points for development and debugging. Use them for hyperparameter exploration, data validation, or testing individual components.
 
-### 01_dataset_preparation.py — Dataset & Annotation Prep
+### dataset_preparation.py — Dataset & Annotation Prep
 
 Prepares YOLO bounding box labels and TrOCR line crops from SROIE images.
 
 ```bash
-python 01_dataset_preparation.py                # Prepare all data
-python 01_dataset_preparation.py --validate     # Validate existing data
-python 01_dataset_preparation.py --force        # Re-prepare (clear existing)
+python dataset_preparation.py                # Prepare all data
+python dataset_preparation.py --validate     # Validate existing data
+python dataset_preparation.py --force        # Re-prepare (clear existing)
 ```
 
 **Outputs:** `data/yolo/{train,val,test}/` and `data/trocr/{train,val,test}/`
 
-### 02_train_donut.py — DONUT Reference Implementation
+### train_donut.py — DONUT Reference Implementation
 
 Standalone DONUT fine-tuning (useful for hyperparameter exploration).
 
 ```bash
-python 02_train_donut.py                        # Train DONUT model
-python 02_train_donut.py --dry-run              # Validate setup
-python 02_train_donut.py --sweep                # Generate hyperparameter configs
-python 02_train_donut.py --config N             # Train specific config
+python train_donut.py                        # Train DONUT model
+python train_donut.py --dry-run              # Validate setup
+python train_donut.py --sweep                # Generate hyperparameter configs
+python train_donut.py --config N             # Train specific config
 ```
 
 **Outputs:** `models/donut_finetuned/best/` and `models/donut_finetuned/training_history.json`
 
-### 03_train_trocr_yolo.py — TrOCR + YOLO Pipeline
+### train_trocr_yolo.py — TrOCR + YOLO Pipeline
 
 Two-stage OCR pipeline: YOLOv8 detection + TrOCR reading + heuristic assignment.
 
 ```bash
-python 03_train_trocr_yolo.py                   # Train TrOCR+YOLO
+python train_trocr_yolo.py                   # Train TrOCR+YOLO
 ```
 
 **Outputs:** `models/yolo_finetuned/run/weights/best.pt` and `models/trocr_finetuned/best/`
 
-### 04_evaluate.py — Unified Model Evaluation
+### evaluate_models.py — Unified Model Evaluation
 
 Evaluate both architectures on the same 63 SROIE test images with standardized metrics.
 
 ```bash
-python 04_evaluate.py                           # Evaluate both architectures
-python 04_evaluate.py --donut-only              # DONUT only
-python 04_evaluate.py --trocr-only              # TrOCR+YOLO only
-python 04_evaluate.py --report                  # Generate HTML report
+python evaluate_models.py                           # Evaluate both architectures
+python evaluate_models.py --donut-only              # DONUT only
+python evaluate_models.py --trocr-only              # TrOCR+YOLO only
+python evaluate_models.py --report                  # Generate HTML report
 ```
 
 **Outputs:**
 - `results/metrics.json` — Raw metrics
 - `results/evaluation_summary.json` — Structured summary
 - `results/evaluation_report.html` — Interactive HTML report
-
-### 05_compare_results.py — Cross-Architecture Comparison
-
-Generate comparison plots and analysis tables across all experiments.
-
-```bash
-python 05_compare_results.py                    # Full comparison (all plots)
-python 05_compare_results.py --export-csv       # Export to CSV
-python 05_compare_results.py --filter 0.85      # Show experiments with F1 >= 0.85
-python 05_compare_results.py --ned-plot         # Generate NED comparison plot
-```
-
-**Outputs:**
-- `results/plot_f1_comparison.png` — F1 bar chart
-- `results/plot_field_f1.png` — Per-field F1
-- `results/plot_convergence.png` — Training curves
-- `results/plot_ned_comparison.png` — NED analysis
-- `results/comparison_results.csv` — Export table
 
 ---
 
@@ -324,11 +306,10 @@ kaggle/
 ├── requirements.txt         # Python dependencies
 │
 ├── [Standalone/Educational Scripts]
-├── 01_dataset_preparation.py  # Data prep with validation CLI
-├── 02_train_donut.py          # DONUT training with sweep support
-├── 03_train_trocr_yolo.py     # TrOCR+YOLO pipeline
-├── 04_evaluate.py             # Unified evaluation + HTML reporting
-├── 05_compare_results.py      # Comparison with CSV export & filtering
+├── dataset_preparation.py     # Data prep with validation CLI
+├── train_donut.py             # DONUT training with sweep support
+├── train_trocr_yolo.py        # TrOCR+YOLO pipeline
+├── evaluate_models.py         # Unified evaluation + HTML reporting
 │
 ├── [Configuration & Templates]
 ├── paper.tex                # LaTeX research paper template
@@ -479,7 +460,7 @@ python run_all.py
 ### Validate data setup
 
 ```bash
-python 01_dataset_preparation.py --validate
+python dataset_preparation.py --validate
 ```
 
 ---
@@ -609,7 +590,7 @@ donut-kie                            # CLI alias (if installed via setup.py)
 |---|---|---|
 | **README.md** (this file) | Quick start, CLI reference, common tasks | All users |
 | **CLAUDE.md** | Complete technical architecture, bug fixes, development workflows | Developers, AI agents |
-| Standalone scripts (01-05) | Educational, isolated components | Advanced users |
+| Standalone scripts | Educational, isolated components | Advanced users |
 
 ---
 

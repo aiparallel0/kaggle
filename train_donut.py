@@ -1,5 +1,5 @@
 """
-02_train_donut.py — Standalone DONUT fine-tuning (reference implementation).
+train_donut.py — Standalone DONUT fine-tuning (reference implementation).
 
 WARNING: This is a reference script.  For the full 8-experiment pipeline,
 use ``python run_all.py``.  This script is provided for ad-hoc training
@@ -44,7 +44,7 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 @dataclass
 class _TrainConfig:
-    """Training configuration for standalone 02_train_donut.py."""
+    """Training configuration for standalone train_donut.py."""
 
     max_epochs: int = EPOCHS
     learning_rate: float = LR
@@ -91,7 +91,7 @@ def train():
         meta_path = data_dir / "metadata.jsonl"
         if not meta_path.exists():
             raise FileNotFoundError(
-                f"metadata.jsonl not found at {meta_path}. Run 01_dataset_preparation.py first."
+                f"metadata.jsonl not found at {meta_path}. Run dataset_preparation.py first."
             )
         samples = []
         with open(meta_path) as fh:
@@ -178,7 +178,7 @@ def sweep_hyperparameters():
             "batch_size": bs,
             "learning_rate": lr,
             "status": "configured",
-            "note": "Run 02_train_donut.py --config N to train a specific config"
+            "note": "Run train_donut.py --config N to train a specific config"
         })
         config_idx += 1
 
@@ -189,7 +189,7 @@ def sweep_hyperparameters():
         json.dump(results, f, indent=2)
 
     print(f"\n✅ Sweep results saved -> {sweep_file}")
-    print("   To train a specific config, run: python 02_train_donut.py --config N")
+    print("   To train a specific config, run: python train_donut.py --config N")
 
 
 def dry_run():
