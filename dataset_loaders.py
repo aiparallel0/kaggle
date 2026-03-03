@@ -990,8 +990,9 @@ class InvoicesDonutLoader(BaseDatasetLoader):
             if isinstance(header, dict):
                 gt["company"] = str(header.get("seller", "")).strip()
                 gt["date"] = str(header.get("invoice_date", "")).strip()
-                # Extract seller address from gt_parse.header.seller_address
-                gt["address"] = str(header.get("seller_address", "")).strip()
+                # seller_address key does not exist in the actual HuggingFace parquet data
+                # (field coverage logs confirm address = 0/475 = 0.0%), so leave it empty.
+                gt["address"] = ""
 
             summary = gt_parse.get("summary", {})
             if isinstance(summary, dict):
