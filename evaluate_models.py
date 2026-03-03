@@ -1,5 +1,5 @@
 """
-04_evaluate.py — Unified evaluation for DONUT and TrOCR+YOLO architectures.
+evaluate_models.py — Unified evaluation for DONUT and TrOCR+YOLO architectures.
 
 FIX: Previous version used separate metric conventions (CER/WER for TrOCR
 vs structured F1 for DONUT).  This version uses the SAME metrics for both
@@ -153,8 +153,8 @@ def evaluate_trocr_yolo_on_test(
     from transformers import TrOCRProcessor, VisionEncoderDecoderModel
     from ultralytics import YOLO
 
-    # Import the inference function from 03_train_trocr_yolo.py
-    trocr_yolo_module = import_module("03_train_trocr_yolo")
+    # Import the inference function from train_trocr_yolo.py
+    trocr_yolo_module = import_module("train_trocr_yolo")
     run_pipeline = trocr_yolo_module.run_trocr_yolo_inference
 
     yolo_model = YOLO(str(yolo_weights))

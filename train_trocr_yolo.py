@@ -1,5 +1,5 @@
 """
-03_train_trocr_yolo.py — TrOCR+YOLO two-stage training pipeline.
+train_trocr_yolo.py — TrOCR+YOLO two-stage training pipeline.
 
 FIX: Previous version was a standalone script that trained a single YOLOv8
 and a single TrOCR model.  This version provides functions callable from
@@ -137,7 +137,7 @@ def train_yolo(output_dir: Path | None = None) -> Path:
 
     if not YOLO_DATA_YAML.exists():
         print(f"  YOLO dataset.yaml not found at {YOLO_DATA_YAML}")
-        print("  Run 01_dataset_preparation.py first.")
+        print("  Run dataset_preparation.py first.")
         return output_dir / "run" / "weights" / "best.pt"
 
     model = YOLO(YOLO_BASE)
@@ -209,7 +209,7 @@ def train_trocr(output_dir: Path | None = None) -> dict:
 
     if not train_dir.exists() or not (train_dir / "metadata.jsonl").exists():
         print(f"  TrOCR training data not found at {train_dir}")
-        print("  Run 01_dataset_preparation.py first.")
+        print("  Run dataset_preparation.py first.")
         return {"train_loss": [], "val_loss": []}
 
     train_ds = TrOCRReceiptDataset(train_dir, processor, TROCR_MAX_LEN)

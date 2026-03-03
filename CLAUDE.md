@@ -135,7 +135,7 @@ All encoder and decoder parameters are updated during fine-tuning. This is appro
 | Seed | `SEED = 42` (set globally at pipeline start) |
 
 The optimal settings (bs=8, epochs=10) give Global F1 ≈ 0.871 on Exp 1 (SROIE baseline).
-Use `05_compare_results.py` to regenerate loss curves and F1 comparison plots.
+Use `benchmark_compare.py` to regenerate loss curves and F1 comparison plots.
 
 ---
 
@@ -258,11 +258,10 @@ kaggle/
 ├── requirements.txt          # Python dependencies with version pins
 ├── pyproject.toml            # Package metadata, entry points, ruff/pytest config
 │
-├── 01_dataset_preparation.py # Alternative numbered-script: dataset prep
-├── 02_train_donut.py         # Alternative: DONUT training script
-├── 03_train_trocr_yolo.py    # TrOCR+YOLO training (also called by run_all.py)
-├── 04_evaluate.py            # Alternative: unified evaluation
-├── 05_compare_results.py     # Alternative: visualization & comparison
+├── dataset_preparation.py    # Alternative standalone: dataset prep
+├── train_donut.py            # Alternative: DONUT training script
+├── train_trocr_yolo.py       # TrOCR+YOLO training (also called by run_all.py)
+├── evaluate_models.py        # Alternative: unified evaluation
 │
 ├── validators/               # BugPatternDetector, ImportChainChecker, etc.
 ├── pipeline_types/           # Typed dataclasses for pipeline results
@@ -274,7 +273,7 @@ kaggle/
 └── paper_filled.tex          # Runtime: generated paper output (gitignored)
 ```
 
-**Canonical entry point:** `run_all.py`. The numbered `01_`–`05_` scripts are a simplified alternative workflow for standalone use only.
+**Canonical entry point:** `run_all.py`. The standalone scripts are a simplified alternative workflow for standalone use only.
 
 ---
 
@@ -362,14 +361,13 @@ python run_experiments.py --all --force      # force re-run
 python inject_results.py --all --paper paper.tex --output paper_filled.tex
 ```
 
-### Alternative Numbered-Script Workflow
+### Alternative Standalone Workflow
 
 ```bash
-python 01_dataset_preparation.py
-python 02_train_donut.py
-python 03_train_trocr_yolo.py
-python 04_evaluate.py
-python 05_compare_results.py
+python dataset_preparation.py
+python train_donut.py
+python train_trocr_yolo.py
+python evaluate_models.py
 ```
 
 ### Exit Codes (`run_all.py`)
@@ -442,7 +440,7 @@ Each experiment saves `results/experiment_N.json`:
 
 ## 14. TrOCR + YOLO Architecture
 
-Two-stage pipeline in `03_train_trocr_yolo.py` (called by `run_all.py`):
+Two-stage pipeline in `train_trocr_yolo.py` (called by `run_all.py`):
 
 **Stage 1 — YOLOv8x detection**
 - Model: `yolov8x.pt`
@@ -650,7 +648,7 @@ if "decoder.lm_head.weight" in missing_keys:
 | 1 | `stage_download()` | Aux datasets + base model in HF cache |
 | 1.5 | `stage_pretrained_baseline()` | `results/evaluation_results.json` (zero-shot F1) |
 | 2 | `run_experiments.run_experiment(N)` × 8 | `results/experiment_N.json` each |
-| 3-4 | `03_train_trocr_yolo.py` | `results/trocr_yolo_results.json` |
+| 3-4 | `train_trocr_yolo.py` | `results/trocr_yolo_results.json` |
 | 5 | `benchmark_compare.main()` | `results/benchmark_results.json` + plots |
 | 6 | `inject_results.PaperInjector.fill()` | `paper_filled.tex` |
 
