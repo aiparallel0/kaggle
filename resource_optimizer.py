@@ -184,19 +184,16 @@ def optimize_hyperparams(
     elif vram_gb < 16.0:
         batch_size = 8
         explanation_parts.append("batch_size=8: VRAM 8-16GB (optimal per CLAUDE.md testing)")
-    elif vram_gb < 24.0:
-        # 16-24 GB: Could use batch=16, but cap for small datasets to avoid overfitting
-        if num_train_samples < 1000:
-            batch_size = 8
-            explanation_parts.append(
-                f"batch_size=8: VRAM {vram_gb:.1f}GB with small dataset ({num_train_samples} samples, "
-                "avoiding overfitting per CLAUDE.md)"
-            )
-        else:
-            batch_size = 16
-            explanation_parts.append(
-                f"batch_size=16: VRAM {vram_gb:.1f}GB with sufficient samples ({num_train_samples})"
-            )
+    elif vram_gb <= 24.0:
+        # 16-24 GB: DONUT at 960×1280 uses ~22.78 GB with batch=8, leaving
+        # essentially zero headroom on 24 GB cards (e.g. RTX 4090).  Use
+        # batch=4 with accumulation=4 to reach effective batch=16 safely.
+        batch_size = 4
+        explanation_parts.append(
+            f"batch_size=4: VRAM {vram_gb:.1f}GB (≤24 GB); DONUT at 960×1280 "
+            "requires ~22.78 GB at batch=8 — using batch=4 with "
+            "accumulation_steps=4 (effective batch=16) to avoid OOM"
+        )
     else:
         # >24 GB: Still cap at 16 for safety (Exp 8 uses ~3940 samples; batch=32 overfits)
         if num_train_samples < 2000:

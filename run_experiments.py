@@ -403,57 +403,74 @@ def train_experiment(
     if val_samples:
         print(f"[Exp {exp_id}] Validation set: {len(val_samples)} samples")
 
-    # Load base model and processor — or deep-copy from pre-loaded objects.
-    if base_processor is not None and base_model is not None:
-        processor = copy.deepcopy(base_processor)
-        model = copy.deepcopy(base_model)
-    else:
-        processor = DonutProcessor.from_pretrained(config.base_model)
-        model = VisionEncoderDecoderModel.from_pretrained(config.base_model)
+    # ---------------------------------------------------------------------------
+    # Inner helper: build a fresh model, processor, and datasets.
+    # Called once initially and again on each OOM retry so that GPU-resident
+    # tensors from the failed attempt are never referenced on the retry.
+    # ---------------------------------------------------------------------------
+    def _build_model_and_datasets():
+        if base_processor is not None and base_model is not None:
+            _proc = copy.deepcopy(base_processor)
+            _mdl = copy.deepcopy(base_model)
+        else:
+            _proc = DonutProcessor.from_pretrained(config.base_model)
+            _mdl = VisionEncoderDecoderModel.from_pretrained(config.base_model)
 
-    # Add SROIE special tokens with diagnostic logging (Phase 0a)
-    logger.debug("[Pre-resize] Tokenizer vocab size: %d", len(processor.tokenizer))
-    logger.debug("[Pre-resize] Decoder embed_tokens shape: %s", model.decoder.model.decoder.embed_tokens.weight.shape)
+        # Add SROIE special tokens with diagnostic logging (Phase 0a)
+        logger.debug("[Pre-resize] Tokenizer vocab size: %d", len(_proc.tokenizer))
+        logger.debug(
+            "[Pre-resize] Decoder embed_tokens shape: %s",
+            _mdl.decoder.model.decoder.embed_tokens.weight.shape,
+        )
 
-    processor.tokenizer.add_special_tokens({"additional_special_tokens": NEW_TOKENS})
-    model.decoder.resize_token_embeddings(len(processor.tokenizer))
+        _proc.tokenizer.add_special_tokens({"additional_special_tokens": NEW_TOKENS})
+        _mdl.decoder.resize_token_embeddings(len(_proc.tokenizer))
 
-    logger.debug("[Post-resize] Tokenizer vocab size: %d", len(processor.tokenizer))
-    logger.debug("[Post-resize] Decoder embed_tokens shape: %s", model.decoder.model.decoder.embed_tokens.weight.shape)
-    logger.debug("[Post-resize] Decoder lm_head shape: %s", model.decoder.lm_head.weight.shape)
+        logger.debug("[Post-resize] Tokenizer vocab size: %d", len(_proc.tokenizer))
+        logger.debug(
+            "[Post-resize] Decoder embed_tokens shape: %s",
+            _mdl.decoder.model.decoder.embed_tokens.weight.shape,
+        )
+        logger.debug("[Post-resize] Decoder lm_head shape: %s", _mdl.decoder.lm_head.weight.shape)
 
-    # Verify NEW_TOKENS were added to tokenizer (Phase 0a diagnostic)
-    for token in NEW_TOKENS:
-        token_ids = processor.tokenizer.encode(token, add_special_tokens=False)
-        if not token_ids or len(token_ids) > 1:
-            logger.error("CRITICAL: Token %s not in vocab or tokenizes to multiple IDs: %s", token, token_ids)
-            raise RuntimeError(f"Token addition failed for {token}; vocab may be corrupted")
-    logger.debug("[Token-verify] All %d SROIE tokens successfully added to vocab", len(NEW_TOKENS))
+        # Verify NEW_TOKENS were added to tokenizer (Phase 0a diagnostic)
+        for token in NEW_TOKENS:
+            token_ids = _proc.tokenizer.encode(token, add_special_tokens=False)
+            if not token_ids or len(token_ids) > 1:
+                logger.error(
+                    "CRITICAL: Token %s not in vocab or tokenizes to multiple IDs: %s",
+                    token,
+                    token_ids,
+                )
+                raise RuntimeError(f"Token addition failed for {token}; vocab may be corrupted")
+        logger.debug("[Token-verify] All %d SROIE tokens successfully added to vocab", len(NEW_TOKENS))
 
-    # After resize, embed_tokens and lm_head are separate tensors with
-    # independent random init for the new tokens.  Set tie_word_embeddings=False
-    # so save_pretrained() saves BOTH weights independently.  Without this,
-    # the saved checkpoint omits lm_head (or tie_weights() overwrites the
-    # learned lm_head with embed_tokens), causing F1=0 on reload.
-    model.decoder.config.tie_word_embeddings = False
+        # After resize, embed_tokens and lm_head are separate tensors with
+        # independent random init for the new tokens.  Set tie_word_embeddings=False
+        # so save_pretrained() saves BOTH weights independently.  Without this,
+        # the saved checkpoint omits lm_head (or tie_weights() overwrites the
+        # learned lm_head with embed_tokens), causing F1=0 on reload.
+        _mdl.decoder.config.tie_word_embeddings = False
 
-    model.config.pad_token_id = processor.tokenizer.pad_token_id
-    model.decoder.config.pad_token_id = processor.tokenizer.pad_token_id
-    model.config.decoder_start_token_id = processor.tokenizer.convert_tokens_to_ids(["<s_sroie>"])[
-        0
-    ]
-    model.decoder.config.decoder_start_token_id = processor.tokenizer.convert_tokens_to_ids(["<s_sroie>"])[
-        0
-    ]
-    model.config.use_cache = False  # Required with gradient_checkpointing
-    model.decoder.config.use_cache = False
-    model.gradient_checkpointing_enable()
+        _mdl.config.pad_token_id = _proc.tokenizer.pad_token_id
+        _mdl.decoder.config.pad_token_id = _proc.tokenizer.pad_token_id
+        _mdl.config.decoder_start_token_id = _proc.tokenizer.convert_tokens_to_ids(["<s_sroie>"])[0]
+        _mdl.decoder.config.decoder_start_token_id = _proc.tokenizer.convert_tokens_to_ids(
+            ["<s_sroie>"]
+        )[0]
+        _mdl.config.use_cache = False  # Required with gradient_checkpointing
+        _mdl.decoder.config.use_cache = False
+        _mdl.gradient_checkpointing_enable()
 
-    # Build PyTorch datasets
-    train_ds = MultiDataset(samples, processor, max_length=config.max_length)
-    val_ds = (
-        MultiDataset(val_samples, processor, max_length=config.max_length) if val_samples else None
-    )
+        # Build PyTorch datasets
+        _train_ds = MultiDataset(samples, _proc, max_length=config.max_length)
+        _val_ds = (
+            MultiDataset(val_samples, _proc, max_length=config.max_length) if val_samples else None
+        )
+
+        return _proc, _mdl, _train_ds, _val_ds
+
+    processor, model, train_ds, val_ds = _build_model_and_datasets()
 
     # Verify single source of truth: ExperimentConfig properties map correctly
     assert config.epochs == config.max_epochs, (
@@ -477,30 +494,42 @@ def train_experiment(
         val_dataset=val_ds,
     )
 
-    # Train with OOM recovery
-    try:
-        result = trainer.train()
-    except torch.cuda.OutOfMemoryError as e:
-        if config.batch_size > 2:
-            config.batch_size = config.batch_size // 2
-            # Release the failed trainer and its gradient tensors before retry
-            del trainer
-            gc.collect()
-            torch.cuda.empty_cache()
-            # Rebuild trainer with reduced batch size
-            trainer = DonutTrainer(
-                config=config,
-                processor=processor,
-                model=model,
-                train_dataset=train_ds,
-                val_dataset=val_ds,
-            )
+    # Train with progressive OOM recovery: halve batch_size (8→4→2) on each
+    # CUDA OOM, fully rebuilding the model and datasets from scratch each time
+    # so the retry starts on a clean, defragmented GPU.
+    while True:
+        try:
             result = trainer.train()
-        else:
-            raise RuntimeError(
-                f"[Exp {exp_id}] CUDA OOM: batch_size already at minimum (2); "
-                "cannot recover without further hardware constraints"
-            ) from e
+            break
+        except torch.cuda.OutOfMemoryError as e:
+            if config.batch_size > 2:
+                config.batch_size = config.batch_size // 2
+                print(
+                    f"[Exp {exp_id}] CUDA OOM — reducing batch_size to "
+                    f"{config.batch_size} and retrying"
+                )
+                # Delete ALL GPU-resident objects so the retry starts on a
+                # clean, defragmented GPU — not just the trainer wrapper.
+                del trainer, model, processor, train_ds
+                if val_ds is not None:
+                    del val_ds
+                gc.collect()
+                torch.cuda.empty_cache()
+                # Re-create everything from the base model to avoid inheriting
+                # any gradient state from the failed attempt.
+                processor, model, train_ds, val_ds = _build_model_and_datasets()
+                trainer = DonutTrainer(
+                    config=config,
+                    processor=processor,
+                    model=model,
+                    train_dataset=train_ds,
+                    val_dataset=val_ds,
+                )
+            else:
+                raise RuntimeError(
+                    f"[Exp {exp_id}] CUDA OOM: batch_size already at minimum (2); "
+                    "cannot recover without further hardware constraints"
+                ) from e
 
     # Save model with tied weights
     trainer.save(output_dir)
