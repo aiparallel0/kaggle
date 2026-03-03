@@ -760,6 +760,16 @@ def stage_experiments(args) -> StageResult:
             print(f"\n  ✗ FATAL: {w}")
             print("    Traceback follows:")
             traceback.print_exc()
+            # Clean up any GPU memory leaked by the crashed experiment so that
+            # subsequent experiments start with a clean, defragmented GPU.
+            import gc
+            gc.collect()
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
             failed_experiments.append(exp_id)
             warnings.append(w)
             had_empty = True
