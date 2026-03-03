@@ -61,7 +61,7 @@ class TestBaseModel:
         assert isinstance(BASE_MODEL, str)
 
     def test_base_model_value(self):
-        assert BASE_MODEL == "naver-clova-ix/donut-base-finetuned-cord-v2"
+        assert BASE_MODEL == "naver-clova-ix/donut-base"
 
 
 class TestSeed:

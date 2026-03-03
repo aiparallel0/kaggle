@@ -34,7 +34,7 @@ Run a single experiment (e.g., experiment 2):
 Force re-run (ignore cached results):
     python run_experiments.py --all --force
 
-Each experiment trains DONUT from the CORD checkpoint and evaluates on the
+Each experiment trains DONUT from the base checkpoint (donut-base) and evaluates on the
 SROIE test set (63 images in test_img / test_key — custom 80/10/10 split
 from 626 labeled training images; the official 347-image test set has no
 public ground truth).  Results are saved to
@@ -675,6 +675,7 @@ def run_experiment(exp_id: int, base_processor=None, base_model=None) -> dict:
     result_file.write_text(json.dumps(result, indent=2))
     print(f"[Exp {exp_id}] Results saved -> {result_file}")
     print(f"[Exp {exp_id}] Global F1 = {metrics.get('global_f1', 'N/A')}")
+    _print_experiment_summary(exp_id, config, metrics, elapsed_sec=metrics.get("training_time_sec", 0.0))
     return result
 
 
@@ -745,6 +746,37 @@ def run_custom_experiment(config: "ExperimentConfig", result_file: Path) -> dict
     print(f"[Sweep Exp {exp_id}] Results saved -> {result_file}")
     print(f"[Sweep Exp {exp_id}] Global F1 = {metrics.get('global_f1', 'N/A')}")
     return result
+
+
+# ---------------------------------------------------------------------------
+# Compact structured summary helpers
+# ---------------------------------------------------------------------------
+
+
+def _print_experiment_summary(exp_id: int, config: ExperimentConfig, metrics: dict, elapsed_sec: float = 0.0) -> None:
+    """Print a compact one-line JSON summary for the experiment result.
+
+    Format is AI-agent-friendly: machine-readable, minimal tokens, single line.
+    """
+    # Respect DONUT_QUIET env var — suppress if quiet mode is active
+    if os.environ.get("DONUT_QUIET") == "1":
+        return
+    summary = {
+        "exp": exp_id,
+        "name": config.name,
+        "samples": metrics.get("num_train_samples", 0),
+        "epochs": config.epochs,
+        "time_min": round(elapsed_sec / 60, 1),
+        "f1": round(metrics.get("global_f1", 0.0), 4),
+        "company_f1": round(metrics.get("company_f1", 0.0), 4),
+        "date_f1": round(metrics.get("date_f1", 0.0), 4),
+        "address_f1": round(metrics.get("address_f1", 0.0), 4),
+        "total_f1": round(metrics.get("total_f1", 0.0), 4),
+        "parse_failures": metrics.get("parse_failures", 0),
+        "status": "ok" if metrics.get("global_f1", 0.0) > 0 else "empty",
+    }
+    print(f"--- EXP {exp_id} RESULT ---")
+    print(json.dumps(summary))
 
 
 # ---------------------------------------------------------------------------

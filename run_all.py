@@ -26,7 +26,7 @@ run_all.py — Single entry point for the complete dual-architecture pipeline.
 Calling this one script does everything:
   0. Installs SROIE data (auto-clones from GitHub; 80/10/10 split)
   1. Verifies / downloads all auxiliary datasets + pre-downloads the base model
-  1.5. Evaluates the pretrained CORD model as a zero-shot baseline on SROIE test
+  1.5. Evaluates the pretrained CORD model (donut-base-finetuned-cord-v2) as a zero-shot baseline
   2. Trains DONUT for each of the 8 experiment configurations
   3. Prepares YOLO bbox + TrOCR line crop datasets from SROIE
   4. Trains YOLOv8 + TrOCR and runs TrOCR+YOLO inference on SROIE test
@@ -63,6 +63,7 @@ Exit codes
 import argparse
 import json
 import logging
+import math
 import os
 import random
 import shutil
@@ -306,6 +307,57 @@ def _banner(text: str) -> None:
 def _step(n: int, total: int, desc: str) -> None:
     print(f"\n[{n}/{total}] {desc}")
     print("-" * 60)
+
+
+def _print_final_summary(results_dir: Path) -> None:
+    """Print a compact final summary table of all experiment results.
+
+    Format is AI-agent-friendly: tabular, fixed-width columns, minimal tokens.
+    Also respects DONUT_QUIET env var for AI-agent mode.
+    """
+    try:
+        result_files = sorted(results_dir.glob("experiment_*.json"))
+        if not result_files:
+            return
+
+        rows = []
+        for rf in result_files:
+            try:
+                with open(rf) as fh:
+                    data = json.load(fh)
+                m = data.get("metrics", {})
+                rows.append({
+                    "exp": data.get("experiment_id", "?"),
+                    "name": data.get("name", "")[:28],
+                    "samples": data.get("num_train_samples", 0),
+                    "f1": m.get("global_f1", float("nan")),
+                    "company": m.get("company_f1", float("nan")),
+                    "date": m.get("date_f1", float("nan")),
+                    "addr": m.get("address_f1", float("nan")),
+                    "total": m.get("total_f1", float("nan")),
+                    "time": m.get("training_time_sec", 0.0) / 60,
+                })
+            except Exception:
+                continue
+
+        if not rows:
+            return
+
+        print("\n--- FINAL SUMMARY ---")
+        hdr = f"{'exp':>3} | {'name':<28} | {'samples':>7} | {'f1':>6} | {'company':>7} | {'date':>6} | {'addr':>6} | {'total':>6} | {'time':>5}"
+        print(hdr)
+        print("-" * len(hdr))
+        for r in rows:
+            f1_s = f"{r['f1']:>6.4f}" if not math.isnan(r["f1"]) else "   N/A"
+            co_s = f"{r['company']:>7.4f}" if not math.isnan(r["company"]) else "    N/A"
+            da_s = f"{r['date']:>6.4f}" if not math.isnan(r["date"]) else "   N/A"
+            ad_s = f"{r['addr']:>6.4f}" if not math.isnan(r["addr"]) else "   N/A"
+            to_s = f"{r['total']:>6.4f}" if not math.isnan(r["total"]) else "   N/A"
+            ti_s = f"{r['time']:>4.1f}m"
+            print(f"{r['exp']:>3} | {r['name']:<28} | {r['samples']:>7} | {f1_s} | {co_s} | {da_s} | {ad_s} | {to_s} | {ti_s}")
+        print("--- END SUMMARY ---")
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -627,7 +679,10 @@ def stage_pretrained_baseline(args) -> StageResult:
     ground_truths = [s[1] for s in test_samples]
     image_paths = [s[0] for s in test_samples]
 
-    pretrained_model_id = BASE_MODEL
+    # Use the CORD checkpoint specifically for the pretrained baseline evaluation.
+    # BASE_MODEL is now donut-base (no task fine-tuning), so this stage hardcodes
+    # the CORD checkpoint to keep a meaningful zero-shot comparison point.
+    pretrained_model_id = "naver-clova-ix/donut-base-finetuned-cord-v2"
     print(f"  Loading pretrained model: {pretrained_model_id}")
     pre_processor = DonutProcessor.from_pretrained(pretrained_model_id)
     pre_model = VisionEncoderDecoderModel.from_pretrained(pretrained_model_id)
@@ -1578,6 +1633,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Show all logs on console (DEBUG level)",
     )
+    p.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Quiet mode: suppress progress bars and verbose output; print only structured summary blocks. AI-agent-friendly.",
+    )
     return p
 
 
@@ -1603,6 +1663,14 @@ def main() -> None:
     # Propagate workspace and SROIE dir overrides to sub-modules before importing them
     os.environ["DONUT_WORKSPACE"] = args.workspace
     os.environ["SROIE_DATA_DIR"] = args.sroie_dir
+
+    # Quiet mode: AI-agent-friendly output (structured summaries only).
+    # Set env var so sub-modules (run_experiments.py) can also respect it.
+    if args.quiet:
+        os.environ["DONUT_QUIET"] = "1"
+        logging.getLogger("transformers").setLevel(logging.ERROR)
+        logging.getLogger("datasets").setLevel(logging.ERROR)
+        logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
 
     # EARLY DISPATCH: Check for quick mode before running full pipeline
     if args.quick:
@@ -1673,6 +1741,7 @@ def main() -> None:
 
     total_elapsed = time.monotonic() - t_start
     _banner(f"DONE — total wall time {total_elapsed / 60:.1f} min  |  exit code {exit_code}")
+    _print_final_summary(Path("results"))
     sys.exit(exit_code)
 
 

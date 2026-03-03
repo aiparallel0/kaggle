@@ -30,8 +30,10 @@ IMAGE_EXTS: frozenset[str] = frozenset(
 # which was the weakest-performing SROIE field.
 MAX_LENGTH: int = 768
 
-# Base model checkpoint — CORD-pretrained DONUT used as starting point.
-BASE_MODEL: str = "naver-clova-ix/donut-base-finetuned-cord-v2"
+# Base model checkpoint — clean donut-base with no task-specific fine-tuning.
+# Using donut-base (not donut-base-finetuned-cord-v2) avoids CORD decoder priors
+# that compete with SROIE tokens and cause F1 collapse when fine-tuning on SROIE.
+BASE_MODEL: str = "naver-clova-ix/donut-base"
 
 # Global random seed for reproducibility across all experiments.
 SEED: int = 42
