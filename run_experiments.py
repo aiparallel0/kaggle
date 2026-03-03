@@ -109,6 +109,11 @@ for pkg in ["httpx", "urllib3", "datasets", "transformers", "huggingface_hub"]:
 
 RESULTS_DIR = Path("results")
 
+# VRAM threshold (bytes) below which the RAM image cache is tightened to 25%
+# of available system RAM (instead of the default 50%) to reduce memory
+# pressure during sequential GPU experiments.
+_LOW_VRAM_THRESHOLD_BYTES = 25 * (1024 ** 3)  # 25 GB
+
 
 # ---------------------------------------------------------------------------
 # ExperimentConfig — THE single source of truth for all hyperparameters
@@ -287,8 +292,18 @@ class MultiDataset(Dataset):
             except ImportError:
                 available_mb = 0  # skip caching if psutil unavailable
 
-            # Only cache if we'd use less than 50% of available RAM
-            if available_mb > 0 and estimated_mb < available_mb * 0.5:
+            # Only cache if we'd use less than 50% of available RAM.
+            # On systems with limited VRAM (< 25 GB), tighten the threshold to
+            # 25% to reduce memory pressure during sequential GPU experiments.
+            ram_threshold = 0.5
+            if torch.cuda.is_available():
+                try:
+                    vram_bytes = torch.cuda.get_device_properties(0).total_memory
+                    if vram_bytes < _LOW_VRAM_THRESHOLD_BYTES:
+                        ram_threshold = 0.25
+                except Exception:
+                    pass
+            if available_mb > 0 and estimated_mb < available_mb * ram_threshold:
                 import concurrent.futures
 
                 def _load_one(idx_path):
@@ -468,6 +483,10 @@ def train_experiment(
     except torch.cuda.OutOfMemoryError as e:
         if config.batch_size > 2:
             config.batch_size = config.batch_size // 2
+            # Release the failed trainer and its gradient tensors before retry
+            del trainer
+            gc.collect()
+            torch.cuda.empty_cache()
             # Rebuild trainer with reduced batch size
             trainer = DonutTrainer(
                 config=config,
@@ -495,13 +514,19 @@ def train_experiment(
     # FIX: Explicit GPU cleanup between experiments to prevent OOM on GPUs
     # with limited VRAM.  The RTX 4090 has 24GB — sufficient for DONUT but
     # running 8+ experiments sequentially without cleanup risks fragmentation.
-    _gpu_cleanup(model, processor, trainer, train_ds)
+    # NOTE: local references MUST be deleted before _gpu_cleanup() is called;
+    # passing them as arguments to _gpu_cleanup() is a no-op for freeing memory.
+    # log_history is a plain list of dicts — a detached copy not tied to the
+    # trainer's internals, so it's safe to capture before deleting the trainer.
+    log_history = result.log_history
+    del trainer, model, processor, train_ds
     if val_ds is not None:
         del val_ds
     gc.collect()
+    torch.cuda.empty_cache()
     print(f"[Exp {exp_id}] GPU memory released")
 
-    return result.log_history
+    return log_history
 
 
 # ---------------------------------------------------------------------------
