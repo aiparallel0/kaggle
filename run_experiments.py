@@ -138,6 +138,7 @@ class ExperimentConfig:
     gradient_accumulation_steps: int = 2
     description: str = ""
     experiment_id: int = 0
+    sroie_oversample: int = 1  # Number of times to duplicate SROIE training samples (1–3 typical)
 
     # -- Duck-typed aliases for DonutTrainer compatibility ----------------
     # DonutTrainer reads config.max_epochs, config.learning_rate, etc.
@@ -185,33 +186,41 @@ EXPERIMENTS: dict[int, ExperimentConfig] = {
         experiment_id=3,
     ),
     4: ExperimentConfig(
-        name="SROIE + FUNSD",
-        datasets=["sroie", "funsd"],
-        description="Add ~149 FUNSD scanned business forms for cross-domain KIE augmentation.",
+        name="SROIE + WildReceipt + Invoices",
+        datasets=["sroie", "wildreceipt", "invoices_donut"],
+        description="Combine SROIE with both auxiliary receipt/invoice datasets.",
         experiment_id=4,
     ),
     5: ExperimentConfig(
-        name="SROIE + WildReceipt + FUNSD",
-        datasets=["sroie", "wildreceipt", "funsd"],
-        description="Combine SROIE, WildReceipt, and FUNSD.",
+        name="SROIE + WildReceipt (2x SROIE)",
+        datasets=["sroie", "wildreceipt"],
+        description="SROIE + WildReceipt with 2x SROIE oversampling to preserve field coverage.",
+        epochs=15,
+        sroie_oversample=2,
         experiment_id=5,
     ),
     6: ExperimentConfig(
-        name="SROIE + WildReceipt + Invoices",
-        datasets=["sroie", "wildreceipt", "invoices_donut"],
-        description="Combine SROIE, WildReceipt, and Invoices-DONUT.",
+        name="SROIE + Invoices (2x SROIE)",
+        datasets=["sroie", "invoices_donut"],
+        description="SROIE + Invoices-DONUT with 2x SROIE oversampling.",
+        epochs=15,
+        sroie_oversample=2,
         experiment_id=6,
     ),
     7: ExperimentConfig(
-        name="SROIE + FUNSD + Invoices",
-        datasets=["sroie", "funsd", "invoices_donut"],
-        description="Combine SROIE, FUNSD, and Invoices-DONUT.",
+        name="SROIE + All (2x SROIE)",
+        datasets=["sroie", "wildreceipt", "invoices_donut"],
+        description="All datasets with 2x SROIE oversampling to counteract dilution.",
+        epochs=15,
+        sroie_oversample=2,
         experiment_id=7,
     ),
     8: ExperimentConfig(
-        name="SROIE + All",
-        datasets=["sroie", "wildreceipt", "funsd", "invoices_donut"],
-        description="Combine all four available datasets.",
+        name="SROIE + All (3x SROIE)",
+        datasets=["sroie", "wildreceipt", "invoices_donut"],
+        description="All datasets with 3x SROIE oversampling for maximum field coverage.",
+        epochs=15,
+        sroie_oversample=3,
         experiment_id=8,
     ),
 }
@@ -595,7 +604,7 @@ def run_experiment(exp_id: int, base_processor=None, base_model=None) -> dict:
             return cached
 
     # Load data
-    train_samples, val_samples = dataset_loaders.get_combined_dataset(config.datasets)
+    train_samples, val_samples = dataset_loaders.get_combined_dataset(config.datasets, sroie_oversample=config.sroie_oversample)
     if len(train_samples) == 0:
         print(f"[Exp {exp_id}] WARNING: No samples loaded - saving empty result.")
         result = {
@@ -695,7 +704,7 @@ def run_custom_experiment(config: "ExperimentConfig", result_file: Path) -> dict
     print(f"{'=' * 72}")
 
     # Load data
-    train_samples, val_samples = dataset_loaders.get_combined_dataset(config.datasets)
+    train_samples, val_samples = dataset_loaders.get_combined_dataset(config.datasets, sroie_oversample=config.sroie_oversample)
     if len(train_samples) == 0:
         print(f"[Sweep Exp {exp_id}] WARNING: No samples loaded - saving empty result.")
         result = {
