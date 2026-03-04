@@ -35,11 +35,9 @@ from transformers import DonutProcessor, VisionEncoderDecoderModel
 
 # FIX: Import shared constants from single source of truth (constants.py)
 # instead of duplicating FIELDS/IMAGE_EXTS independently in this file.
-from constants import BASE_MODEL, DEVICE, EMPTY_GT, FIELDS, IMAGE_EXTS, MAX_LENGTH, _get_sroie_dir
+from constants import BASE_MODEL, DEVICE, EMPTY_GT, FIELDS, MAX_LENGTH
 
-# Phase 7 FIX: Use canonical key file loading from dataset_loaders to ensure
-# consistent .txt-first loading order across all modules (not .json-first).
-from dataset_loaders import _load_key_file
+__all__ = ["DonutEvaluator", "EvaluationResult", "compute_metrics", "normalized_edit_distance"]
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -983,20 +981,10 @@ def main():
 
     For the full 8-experiment pipeline, use ``python run_all.py`` instead.
     """
-    # Load test images + ground truth
-    sroie_dir = _get_sroie_dir()
-    img_dir = sroie_dir / "test_img"
-    key_dir = sroie_dir / "test_key"
+    # Load test images + ground truth using canonical loader
+    from dataset_loaders import load_sroie_test
 
-    test_samples = []
-    for img_path in sorted(
-        p for p in img_dir.iterdir() if p.is_file() and p.suffix.lower() in IMAGE_EXTS
-    ):
-        # Phase 7 FIX: Use canonical _load_key_file() for consistent .txt-first loading
-        # (not .json-first). Canonical function: dataset_loaders._load_key_file()
-        gt = _load_key_file(key_dir, img_path.stem)
-        if gt:
-            test_samples.append((img_path, gt))
+    test_samples = load_sroie_test()
 
     print(f"Evaluating on {len(test_samples)} test images")
 

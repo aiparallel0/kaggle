@@ -792,9 +792,8 @@ def stage_trocr_data_prep(args) -> StageResult:
     warnings: list[str] = []
 
     try:
-        import importlib
+        import dataset_preparation as ds_prep
 
-        ds_prep = importlib.import_module("dataset_preparation")
         counts = ds_prep.prepare_all()
         for key, count in counts.items():
             print(f"  {key}: {count}")
@@ -826,10 +825,8 @@ def stage_trocr_experiments(args) -> StageResult:
     warnings: list[str] = []
 
     try:
-        import importlib
-
-        trocr_yolo = importlib.import_module("train_trocr_yolo")
-        eval_mod = importlib.import_module("evaluate_models")
+        import evaluate_models as eval_mod
+        import train_trocr_yolo as trocr_yolo
 
         workspace = Path(args.workspace)
 
@@ -979,9 +976,7 @@ def stage_benchmark(args) -> StageResult:
 
     # --- Run benchmark_compare programmatically ---
     try:
-        import importlib
-
-        bench_mod = importlib.import_module("benchmark_compare")
+        import benchmark_compare as bench_mod
 
         pairs = bench_mod.find_pairs(test_img_dir, test_key_dir)
         print(f"  Found {len(pairs)} test image+label pairs.")
@@ -1058,9 +1053,8 @@ def stage_comparison(args) -> StageResult:
     warnings: list[str] = []
 
     try:
-        import importlib
+        import benchmark_compare as compare_mod
 
-        compare_mod = importlib.import_module("benchmark_compare")
         compare_mod.compare_all()
     except Exception as exc:
         w = f"Comparison stage failed: {exc}"

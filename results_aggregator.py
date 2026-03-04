@@ -123,15 +123,18 @@ class ResultsAggregator:
     ) -> bool:
         """Save aggregated results to JSON.
 
+        NOTE: all_experiments.json is owned by run_experiments.save_summary() —
+        do not write to it from this class.
+
         Args:
             agg: Aggregated results
-            output_file: Output path (default: all_experiments.json)
+            output_file: Output path (default: aggregated_summary.json)
 
         Returns:
             True if successful
         """
         if output_file is None:
-            output_file = self.results_dir / "all_experiments.json"
+            output_file = self.results_dir / "aggregated_summary.json"
 
         try:
             data = {

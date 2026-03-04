@@ -60,6 +60,14 @@ from constants import IMAGE_EXTS as _IMAGE_EXTS_SET
 # ── Type alias ────────────────────────────────────────────────────────
 Sample = tuple[Path, dict[str, str]]
 
+__all__ = [
+    "Sample", "DatasetLoadError", "BaseDatasetLoader",
+    "SROIELoader", "WildReceiptLoader", "FUNSDLoader", "InvoicesDonutLoader",
+    "load_sroie_train", "load_sroie_test", "load_sroie_val",
+    "load_wildreceipt", "load_funsd", "load_invoices_donut",
+    "get_combined_dataset", "split_dataset",
+]
+
 # ── Shared constants (derived from constants.py) ─────────────────────
 _SROIE_FIELDS = frozenset(EMPTY_GT.keys())
 _IMAGE_EXTS = _IMAGE_EXTS_SET
