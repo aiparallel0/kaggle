@@ -220,3 +220,51 @@ class TestSROIESplitDirectories:
         img_subdir, key_subdir = loader._SPLIT_DIRS["train"]
         assert img_subdir == "img"
         assert key_subdir == "key"
+
+
+# ---------------------------------------------------------------------------
+# Seller split cache
+# ---------------------------------------------------------------------------
+
+
+class TestSellerSplitCache:
+    def test_load_returns_dict(self):
+        from dataset_loaders import _load_seller_split_cache
+
+        cache = _load_seller_split_cache()
+        assert isinstance(cache, dict)
+
+    def test_no_metadata_key(self):
+        from dataset_loaders import _load_seller_split_cache
+
+        cache = _load_seller_split_cache()
+        assert "_metadata" not in cache
+
+    def test_entries_have_company_and_address(self):
+        from dataset_loaders import _load_seller_split_cache
+
+        cache = _load_seller_split_cache()
+        for seller, split in cache.items():
+            assert "company" in split, f"Missing 'company' for {seller!r}"
+            assert "address" in split, f"Missing 'address' for {seller!r}"
+
+    def test_cache_used_in_remap(self):
+        """When seller is in cache, _invoices_donut_remap uses cached values."""
+        import json
+        from dataset_loaders import InvoicesDonutLoader, _SELLER_SPLIT_CACHE, _load_seller_split_cache
+
+        # Ensure cache is loaded
+        cache = _load_seller_split_cache()
+        if not cache:
+            pytest.skip("seller_split_cache.json is empty — skipping cache integration test")
+        seller, expected = next(iter(cache.items()))
+
+        gt_str = json.dumps({
+            "gt_parse": {
+                "header": {"seller": seller, "invoice_date": "2024-01-01"},
+                "summary": {"total_gross_worth": "100.00"},
+            }
+        })
+        result = InvoicesDonutLoader._invoices_donut_remap(gt_str)
+        assert result["company"] == expected["company"]
+        assert result["address"] == expected["address"]
