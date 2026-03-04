@@ -138,9 +138,7 @@ class TestMaskEmptyFieldLabels:
     def _make_labels(self):
         """Return a label tensor covering all four fields with dummy content."""
         # Layout: <s_co> CO </s_co> <s_da> DA </s_da> <s_ad> AD </s_ad> <s_to> TO </s_to>
-        return torch.tensor(
-            [10, 100, 11, 12, 200, 13, 14, 300, 15, 16, 400, 17, -100]
-        )
+        return torch.tensor([10, 100, 11, 12, 200, 13, 14, 300, 15, 16, 400, 17, -100])
 
     def test_empty_address_masked(self):
         labels = self._make_labels()
@@ -156,11 +154,11 @@ class TestMaskEmptyFieldLabels:
         gt = {"company": "ACME", "date": "2024", "address": "", "total": "9.99"}
         result = _mask_empty_field_labels(labels, gt, _FakeTokenizer())
         # company, date, total spans should be untouched
-        assert result[0].item() == 10   # <s_company>
+        assert result[0].item() == 10  # <s_company>
         assert result[1].item() == 100  # company value
-        assert result[2].item() == 11   # </s_company>
+        assert result[2].item() == 11  # </s_company>
         assert result[4].item() == 200  # date value
-        assert result[10].item() == 400 # total value
+        assert result[10].item() == 400  # total value
 
     def test_all_empty_all_masked(self):
         labels = self._make_labels()

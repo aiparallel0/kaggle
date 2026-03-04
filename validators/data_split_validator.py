@@ -50,7 +50,14 @@ class DataSplitValidator:
         test_img_dir = sroie_dir / "test_img"
         test_key_dir = sroie_dir / "test_key"
 
-        for dir_path in [train_img_dir, train_key_dir, val_img_dir, val_key_dir, test_img_dir, test_key_dir]:
+        for dir_path in [
+            train_img_dir,
+            train_key_dir,
+            val_img_dir,
+            val_key_dir,
+            test_img_dir,
+            test_key_dir,
+        ]:
             if not dir_path.exists():
                 report.passed = False
                 report.errors.append(f"Missing directory: {dir_path}")
@@ -115,7 +122,7 @@ class DataSplitValidator:
             )
 
         # Check that all images have key files
-        for split_name, img_dir, key_dir, img_set in [
+        for split_name, _img_dir, key_dir, img_set in [
             ("train", train_img_dir, train_key_dir, train_images),
             ("val", val_img_dir, val_key_dir, val_images),
             ("test", test_img_dir, test_key_dir, test_images),

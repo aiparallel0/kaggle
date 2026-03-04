@@ -4,9 +4,11 @@ import os
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from dataset_loaders import (
+from dataset_loaders import (  # noqa: E402, I001
     DatasetLoadError,
     _ensure_dir,
     _validate_sample_schema,
@@ -263,12 +265,14 @@ class TestSellerSplitCache:
             pytest.skip("seller_split_cache.json is empty — skipping cache integration test")
         seller, expected = next(iter(cache.items()))
 
-        gt_str = json.dumps({
-            "gt_parse": {
-                "header": {"seller": seller, "invoice_date": "2024-01-01"},
-                "summary": {"total_gross_worth": "100.00"},
+        gt_str = json.dumps(
+            {
+                "gt_parse": {
+                    "header": {"seller": seller, "invoice_date": "2024-01-01"},
+                    "summary": {"total_gross_worth": "100.00"},
+                }
             }
-        })
+        )
         result = InvoicesDonutLoader._invoices_donut_remap(gt_str)
         assert result["company"] == expected["company"]
         assert result["address"] == expected["address"]

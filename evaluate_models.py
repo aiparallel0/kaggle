@@ -17,7 +17,6 @@ FIX: Imports constants from shared module instead of duplicating.
 """
 
 import json
-import os
 import time
 from pathlib import Path
 
@@ -26,13 +25,13 @@ import torch
 from PIL import Image
 from tqdm import tqdm
 
-from constants import DEVICE, FIELDS, MAX_LENGTH, _gpu_cleanup
+from constants import DEVICE, FIELDS, MAX_LENGTH, _get_sroie_dir, _gpu_cleanup
 from dataset_loaders import load_sroie_test
 
 # ── Config ──────────────────────────────────────────────────────────────────
 RESULTS_DIR = Path("results")
 
-SROIE_DATA_DIR = Path(os.environ.get("SROIE_DATA_DIR", "/workspace/ICDAR-2019-SROIE/data"))
+SROIE_DATA_DIR = _get_sroie_dir()
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -210,7 +209,9 @@ def generate_comparison_report(results: dict) -> None:
     else:
         # Extract architectures and create comparison table
         html_lines.append("<h2>Global Performance Comparison</h2>")
-        html_lines.append("<table><tr><th>Architecture</th><th>Global F1</th><th>Precision</th><th>Recall</th><th>Exact Match</th><th>Latency (ms)</th></tr>")
+        html_lines.append(
+            "<table><tr><th>Architecture</th><th>Global F1</th><th>Precision</th><th>Recall</th><th>Exact Match</th><th>Latency (ms)</th></tr>"
+        )
 
         for arch, metrics in results.items():
             f1 = metrics.get("global_f1", 0)
@@ -272,20 +273,12 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Evaluate DONUT and TrOCR+YOLO models")
     parser.add_argument(
-        "--donut-only",
-        action="store_true",
-        help="Only evaluate DONUT (skip TrOCR+YOLO)"
+        "--donut-only", action="store_true", help="Only evaluate DONUT (skip TrOCR+YOLO)"
     )
     parser.add_argument(
-        "--trocr-only",
-        action="store_true",
-        help="Only evaluate TrOCR+YOLO (skip DONUT)"
+        "--trocr-only", action="store_true", help="Only evaluate TrOCR+YOLO (skip DONUT)"
     )
-    parser.add_argument(
-        "--report",
-        action="store_true",
-        help="Generate HTML comparison report"
-    )
+    parser.add_argument("--report", action="store_true", help="Generate HTML comparison report")
 
     args = parser.parse_args()
 
@@ -322,8 +315,7 @@ if __name__ == "__main__":
         json.dump(results, f, indent=2)
     print(f"\n📄 Metrics saved -> {out_path}")
 
-    # Optional: generate report
-    if args.report or True:  # Always generate summary now
-        generate_json_summary(results)
-        if results:
-            generate_comparison_report(results)
+    # Always generate summary
+    generate_json_summary(results)
+    if results:
+        generate_comparison_report(results)

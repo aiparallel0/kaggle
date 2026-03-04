@@ -1,15 +1,15 @@
 """Type definitions for cloud pipeline."""
 
-import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
 class SeverityLevel(str, Enum):
     """Bug severity levels."""
+
     CRITICAL = "CRITICAL"
     WARNING = "WARNING"
     INFO = "INFO"
@@ -17,6 +17,7 @@ class SeverityLevel(str, Enum):
 
 class CheckStatus(str, Enum):
     """Status of a preflight check."""
+
     PASSED = "passed"
     FAILED = "failed"
     WARNING = "warning"
@@ -24,6 +25,7 @@ class CheckStatus(str, Enum):
 
 class RecoveryAction(str, Enum):
     """Available error recovery actions."""
+
     FIX_IMPORTS = "fix_imports"
     REDUCE_BATCH_SIZE = "reduce_batch_size"
     REINSTALL_DATA = "reinstall_data"
@@ -37,9 +39,11 @@ class RecoveryAction(str, Enum):
 # Preflight & Validation Results
 # ============================================================================
 
+
 @dataclass
 class CheckResult:
     """Result of a single preflight check."""
+
     name: str
     status: CheckStatus
     message: str
@@ -50,6 +54,7 @@ class CheckResult:
 @dataclass
 class PreflightReport:
     """Comprehensive preflight validation report."""
+
     passed: bool
     checks: dict[str, CheckResult] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
@@ -70,9 +75,11 @@ class PreflightReport:
 # Bug Detection Results
 # ============================================================================
 
+
 @dataclass
 class BugPattern:
     """Detected code issue from bug pattern scanner."""
+
     severity: SeverityLevel
     category: str  # "syntax", "logic", "compatibility"
     file: Path
@@ -86,6 +93,7 @@ class BugPattern:
 @dataclass
 class BugReport:
     """Report of all detected bugs in codebase."""
+
     bugs: list[BugPattern] = field(default_factory=list)
     total_critical: int = 0
     total_warnings: int = 0
@@ -116,9 +124,11 @@ class BugReport:
 # File Operations Results
 # ============================================================================
 
+
 @dataclass
 class FileFix:
     """Result of fixing a single file."""
+
     file_path: Path
     success: bool
     original_content: str
@@ -131,9 +141,11 @@ class FileFix:
 # Validation Reports
 # ============================================================================
 
+
 @dataclass
 class ValidationReport:
     """Result of validating a code change."""
+
     passed: bool
     error: str | None = None
     recovery_action: RecoveryAction | None = None
@@ -143,6 +155,7 @@ class ValidationReport:
 @dataclass
 class DataSplitValidationReport:
     """Result of SROIE data split validation."""
+
     passed: bool
     train_count: int = 0
     val_count: int = 0
@@ -155,9 +168,11 @@ class DataSplitValidationReport:
 # Code Repair Results
 # ============================================================================
 
+
 @dataclass
 class CodeRepairResult:
     """Result of Mode A (code repair)."""
+
     success: bool
     files_fixed: int = 0
     files_failed: int = 0
@@ -172,9 +187,11 @@ class CodeRepairResult:
 # ML Training & Experiment Results
 # ============================================================================
 
+
 @dataclass
 class ExperimentMetrics:
     """Metrics from a single experiment."""
+
     global_f1: float
     global_precision: float = 0.0
     global_recall: float = 0.0
@@ -194,6 +211,7 @@ class ExperimentMetrics:
 @dataclass
 class ExperimentResult:
     """Result of a single training experiment."""
+
     experiment_id: int
     name: str
     datasets: list[str]
@@ -218,6 +236,7 @@ class ExperimentResult:
 @dataclass
 class AggregatedResults:
     """Aggregation of all experiment results."""
+
     experiments: list[ExperimentResult] = field(default_factory=list)
     best_experiment: ExperimentResult | None = None
     baseline_f1: float = 0.0
@@ -229,6 +248,7 @@ class AggregatedResults:
 @dataclass
 class ExperimentValidationReport:
     """Validation report for experiment results."""
+
     passed: bool
     checks: list[CheckResult] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
@@ -238,9 +258,11 @@ class ExperimentValidationReport:
 # Cloud Storage Results
 # ============================================================================
 
+
 @dataclass
 class UploadReport:
     """Result of uploading a file to cloud storage."""
+
     success: bool
     local_path: Path
     remote_path: str
@@ -253,6 +275,7 @@ class UploadReport:
 @dataclass
 class SyncReport:
     """Result of syncing entire directory to cloud."""
+
     backend_type: str
     total_files: int = 0
     uploaded: int = 0
@@ -265,9 +288,11 @@ class SyncReport:
 # Git Results
 # ============================================================================
 
+
 @dataclass
 class GitCommitReport:
     """Result of creating a git commit."""
+
     success: bool
     commit_hash: str | None = None
     branch: str | None = None
@@ -279,9 +304,11 @@ class GitCommitReport:
 # ML Training Results
 # ============================================================================
 
+
 @dataclass
 class MLTrainingResult:
     """Result of Mode B (ML training)."""
+
     success: bool
     experiments_run: dict[int, ExperimentResult] = field(default_factory=dict)
     best_experiment_id: int | None = None
@@ -298,9 +325,11 @@ class MLTrainingResult:
 # Overall Pipeline Results
 # ============================================================================
 
+
 @dataclass
 class PipelineResult:
     """Final result of entire pipeline execution."""
+
     success: bool
     mode: str  # "code_repair" | "ml_training"
     mode_result: Any | None = None  # CodeRepairResult | MLTrainingResult

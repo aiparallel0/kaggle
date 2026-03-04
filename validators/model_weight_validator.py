@@ -29,8 +29,6 @@ class ModelWeightValidator:
             (exists: bool, error_message: str)
         """
         try:
-            import json
-
             from safetensors import safe_open
 
             # Try loading safetensors files
@@ -144,9 +142,7 @@ class ModelWeightValidator:
                     )
                 else:
                     # If tie_word_embeddings=True, lm_head is tied to embed_tokens, OK to be missing
-                    logger.info(
-                        f"Note: {key} missing but tie_word_embeddings=True (expected)"
-                    )
+                    logger.info(f"Note: {key} missing but tie_word_embeddings=True (expected)")
 
         if unexpected_keys:
             logger.warning(f"Unexpected keys in checkpoint: {unexpected_keys[:5]}...")

@@ -10,6 +10,8 @@ from pathlib import Path
 
 from pipeline_types import SyncReport, UploadReport
 
+__all__ = ["StorageManager"]
+
 logger = logging.getLogger(__name__)
 
 

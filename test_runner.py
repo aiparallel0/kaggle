@@ -6,6 +6,8 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
+__all__ = ["TestRunner", "RuffReport", "RuffFormatReport", "PytestReport", "AllChecksReport"]
+
 logger = logging.getLogger(__name__)
 
 
@@ -101,9 +103,7 @@ class TestRunner:
 
             # Parse output for issues
             if result.stdout:
-                report.issues = [
-                    line.strip() for line in result.stdout.split("\n") if line.strip()
-                ]
+                report.issues = [line.strip() for line in result.stdout.split("\n") if line.strip()]
 
             if report.passed:
                 logger.info("✓ Ruff check passed")
@@ -129,9 +129,7 @@ class TestRunner:
             )
 
     @staticmethod
-    async def run_ruff_format(
-        format_dir: Path = Path("."), fix: bool = False
-    ) -> RuffFormatReport:
+    async def run_ruff_format(format_dir: Path = Path("."), fix: bool = False) -> RuffFormatReport:
         """Run ruff format check/fix.
 
         Args:
@@ -249,9 +247,7 @@ class TestRunner:
                     except ValueError:
                         pass
 
-            report.tests_run = (
-                report.tests_passed + report.tests_failed + report.tests_skipped
-            )
+            report.tests_run = report.tests_passed + report.tests_failed + report.tests_skipped
 
             if report.passed:
                 logger.info(f"✓ All {report.tests_passed} tests passed")
@@ -308,9 +304,7 @@ class TestRunner:
             pytest_report = await TestRunner.run_pytest(test_dir)
 
         # Combine results
-        all_passed = (
-            ruff_report.passed and ruff_format_report.passed
-        )
+        all_passed = ruff_report.passed and ruff_format_report.passed
         if pytest_report:
             all_passed = all_passed and pytest_report.passed
 

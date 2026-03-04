@@ -303,17 +303,19 @@ def _print_final_summary(results_dir: Path) -> None:
                 with open(rf) as fh:
                     data = json.load(fh)
                 m = data.get("metrics", {})
-                rows.append({
-                    "exp": data.get("experiment_id", "?"),
-                    "name": data.get("name", "")[:28],
-                    "samples": data.get("num_train_samples", 0),
-                    "f1": m.get("global_f1", float("nan")),
-                    "company": m.get("company_f1", float("nan")),
-                    "date": m.get("date_f1", float("nan")),
-                    "addr": m.get("address_f1", float("nan")),
-                    "total": m.get("total_f1", float("nan")),
-                    "time": m.get("training_time_sec", 0.0) / 60,
-                })
+                rows.append(
+                    {
+                        "exp": data.get("experiment_id", "?"),
+                        "name": data.get("name", "")[:28],
+                        "samples": data.get("num_train_samples", 0),
+                        "f1": m.get("global_f1", float("nan")),
+                        "company": m.get("company_f1", float("nan")),
+                        "date": m.get("date_f1", float("nan")),
+                        "addr": m.get("address_f1", float("nan")),
+                        "total": m.get("total_f1", float("nan")),
+                        "time": m.get("training_time_sec", 0.0) / 60,
+                    }
+                )
             except Exception:
                 continue
 
@@ -331,7 +333,9 @@ def _print_final_summary(results_dir: Path) -> None:
             ad_s = f"{r['addr']:>6.4f}" if not math.isnan(r["addr"]) else "   N/A"
             to_s = f"{r['total']:>6.4f}" if not math.isnan(r["total"]) else "   N/A"
             ti_s = f"{r['time']:>4.1f}m"
-            print(f"{r['exp']:>3} | {r['name']:<28} | {r['samples']:>7} | {f1_s} | {co_s} | {da_s} | {ad_s} | {to_s} | {ti_s}")
+            print(
+                f"{r['exp']:>3} | {r['name']:<28} | {r['samples']:>7} | {f1_s} | {co_s} | {da_s} | {ad_s} | {to_s} | {ti_s}"
+            )
         print("--- END SUMMARY ---")
     except Exception:
         pass
@@ -740,9 +744,11 @@ def stage_experiments(args) -> StageResult:
             # Clean up any GPU memory leaked by the crashed experiment so that
             # subsequent experiments start with a clean, defragmented GPU.
             import gc
+
             gc.collect()
             try:
                 import torch
+
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
             except Exception:

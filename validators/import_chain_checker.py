@@ -22,14 +22,12 @@ class ImportChainChecker:
             (success: bool, error_message: str)
         """
         try:
-            # Try importing all required constants
+            # Try importing the critical constants required by every pipeline stage.
+            # IMAGE_EXTS, MAX_LENGTH, NEW_TOKENS, and EMPTY_GT are validated in
+            # PreflightChecker.check_constants_integrity (preflight_checks.py).
             from constants import (
                 BASE_MODEL,
-                EMPTY_GT,
                 FIELDS,
-                IMAGE_EXTS,
-                MAX_LENGTH,
-                NEW_TOKENS,
                 SEED,
             )
 
@@ -63,6 +61,7 @@ class ImportChainChecker:
         """
         try:
             from dataset_loaders import SROIELoader
+
             _ = SROIELoader()  # Try instantiating to catch runtime issues
             return True, ""
 

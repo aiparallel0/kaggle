@@ -7,6 +7,8 @@ from pathlib import Path
 
 from pipeline_types import AggregatedResults, ExperimentResult
 
+__all__ = ["ResultsAggregator"]
+
 logger = logging.getLogger(__name__)
 
 
@@ -78,8 +80,11 @@ class ResultsAggregator:
 
         return agg
 
-    def build_paper_metrics(self, agg: AggregatedResults) -> dict[str, str]:
+    def build_paper_metrics(self, agg: "AggregatedResults") -> dict[str, str]:
         r"""Build \VAR{} key→value map for LaTeX template.
+
+        NOTE: build_var_map in inject_results.py is the canonical implementation.
+        Delegates to inject_results.build_var_map — single source of truth.
 
         Args:
             agg: Aggregated results
@@ -87,35 +92,10 @@ class ResultsAggregator:
         Returns:
             Dictionary of template variable → value
         """
-        logger.info("Building paper metrics...")
+        from inject_results import build_var_map  # lazy to avoid circular import
 
-        metrics = {}
-
-        # Best experiment metrics
-        if agg.best_experiment:
-            metrics["best_exp_id"] = str(agg.best_experiment.experiment_id)
-            metrics["best_exp_name"] = agg.best_experiment.name
-            metrics["best_exp_f1"] = f"{agg.best_experiment.metrics.global_f1:.4f}"
-            metrics["best_exp_precision"] = f"{agg.best_experiment.metrics.global_precision:.4f}"
-            metrics["best_exp_recall"] = f"{agg.best_experiment.metrics.global_recall:.4f}"
-
-        # Baseline (Exp 1)
-        metrics["baseline_f1"] = f"{agg.baseline_f1:.4f}"
-        metrics["improvement"] = f"{agg.improvement:+.4f}"
-        metrics["improvement_percent"] = (
-            f"{(agg.improvement / agg.baseline_f1 * 100):+.1f}%" if agg.baseline_f1 > 0 else "0%"
-        )
-
-        # Individual experiment results
-        for exp in agg.experiments:
-            base = f"exp{exp.experiment_id}"
-            metrics[f"{base}_name"] = exp.name
-            metrics[f"{base}_f1"] = f"{exp.metrics.global_f1:.4f}"
-            metrics[f"{base}_datasets"] = ", ".join(exp.datasets)
-
-        logger.info(f"Built {len(metrics)} paper metrics")
-
-        return metrics
+        all_exp = {str(e.experiment_id): e.__dict__ for e in agg.experiments}
+        return build_var_map(all_exp)
 
     def save_aggregated_results(
         self, agg: AggregatedResults, output_file: Path | None = None

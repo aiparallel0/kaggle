@@ -28,11 +28,17 @@ from pathlib import Path
 from constants import FIELDS
 
 __all__ = [
-    "PaperInjector", "UnresolvedVarError",
-    "LEADERBOARD", "DONUT_PUBLISHED_F1", "EXP_NAMES",
-    "build_var_map", "fill_paper",
-    "print_table1_dataset_stats", "print_table2_experiments",
-    "print_table3_perfield", "print_table4_leaderboard",
+    "PaperInjector",
+    "UnresolvedVarError",
+    "LEADERBOARD",
+    "DONUT_PUBLISHED_F1",
+    "EXP_NAMES",
+    "build_var_map",
+    "fill_paper",
+    "print_table1_dataset_stats",
+    "print_table2_experiments",
+    "print_table3_perfield",
+    "print_table4_leaderboard",
 ]
 
 # Pre-compiled regex for \VAR{...} template placeholders — compiled once at

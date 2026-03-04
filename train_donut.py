@@ -164,26 +164,26 @@ def sweep_hyperparameters():
 
     config_idx = 1
     for bs, lr in itertools.product(batch_sizes, learning_rates):
-        print(f"\n▶️  Config {config_idx}/{len(batch_sizes) * len(learning_rates)}: bs={bs}, lr={lr:.0e}")
-
-        cfg = _TrainConfig(
-            per_device_train_batch_size=bs,
-            learning_rate=lr,
+        print(
+            f"\n▶️  Config {config_idx}/{len(batch_sizes) * len(learning_rates)}: bs={bs}, lr={lr:.0e}"
         )
 
         # Note: This is a placeholder; actual training would require integrating
         # the full DonutTrainer loop here. For now, we just record the config.
-        results.append({
-            "config_id": config_idx,
-            "batch_size": bs,
-            "learning_rate": lr,
-            "status": "configured",
-            "note": "Run train_donut.py --config N to train a specific config"
-        })
+        results.append(
+            {
+                "config_id": config_idx,
+                "batch_size": bs,
+                "learning_rate": lr,
+                "status": "configured",
+                "note": "Run train_donut.py --config N to train a specific config",
+            }
+        )
         config_idx += 1
 
     # Save sweep results
     import json
+
     sweep_file = sweep_dir / "sweep_results.json"
     with open(sweep_file, "w") as f:
         json.dump(results, f, indent=2)
@@ -210,7 +210,7 @@ def dry_run():
         return False
 
     try:
-        model = __import__("transformers").VisionEncoderDecoderModel.from_pretrained(MODEL_ID)
+        __import__("transformers").VisionEncoderDecoderModel.from_pretrained(MODEL_ID)
         print(f"  ✓ Loaded model from {MODEL_ID}")
     except Exception as e:
         print(f"  ✗ Failed to load model: {e}")
@@ -247,7 +247,7 @@ def dry_run():
 
     # Check dataset creation
     try:
-        train_ds = SROIEDataset.from_samples(processor, train_samples[:1], max_length=MAX_LENGTH)
+        SROIEDataset.from_samples(processor, train_samples[:1], max_length=MAX_LENGTH)
         print("  ✓ Successfully created training dataset")
     except Exception as e:
         print(f"  ✗ Failed to create dataset: {e}")
@@ -261,21 +261,12 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="DONUT fine-tuning with hyperparameter sweep")
+    parser.add_argument("--dry-run", action="store_true", help="Validate setup without training")
     parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Validate setup without training"
+        "--sweep", action="store_true", help="Generate hyperparameter sweep configurations"
     )
     parser.add_argument(
-        "--sweep",
-        action="store_true",
-        help="Generate hyperparameter sweep configurations"
-    )
-    parser.add_argument(
-        "--config",
-        type=int,
-        metavar="N",
-        help="Train specific config N from sweep (1-indexed)"
+        "--config", type=int, metavar="N", help="Train specific config N from sweep (1-indexed)"
     )
 
     args = parser.parse_args()

@@ -9,6 +9,8 @@ from pipeline_types import CodeRepairResult
 from test_runner import TestRunner
 from validators import BugPatternDetector
 
+__all__ = ["CodeRepairOrchestrator"]
+
 logger = logging.getLogger(__name__)
 
 
@@ -40,16 +42,14 @@ class CodeRepairOrchestrator:
                 return result
 
             self.logger.warning(
-                f"Found {bug_report.total_critical} critical, "
-                f"{bug_report.total_warnings} warnings"
+                f"Found {bug_report.total_critical} critical, {bug_report.total_warnings} warnings"
             )
 
             # Step 2: Connect to Ollama (stub for now)
             self.logger.info("\n[2] Connecting to Ollama...")
             if not self.config.ollama_auto_start:
                 self.logger.info(
-                    f"Ollama URL: {self.config.ollama_base_url} "
-                    f"(Model: {self.config.ollama_model})"
+                    f"Ollama URL: {self.config.ollama_base_url} (Model: {self.config.ollama_model})"
                 )
             else:
                 self.logger.info("Ollama auto-start: enabled (stub)")
@@ -61,9 +61,7 @@ class CodeRepairOrchestrator:
 
             # Step 4: Validation
             self.logger.info("\n[4] Running validation checks...")
-            check_report = await TestRunner.run_all_checks(
-                run_tests=self.config.enable_pytest
-            )
+            check_report = await TestRunner.run_all_checks(run_tests=self.config.enable_pytest)
 
             if check_report.passed:
                 self.logger.info("✓ All validation checks passed")

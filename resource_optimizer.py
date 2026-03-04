@@ -22,6 +22,14 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+__all__ = [
+    "ResourceOptimizedConfig",
+    "SystemResources",
+    "detect_system_resources",
+    "optimize_hyperparams",
+    "TrainingAuditLogger",
+]
+
 try:
     import psutil
 except ImportError:
@@ -193,10 +201,14 @@ def optimize_hyperparams(
 
     if batch_size <= 4:
         accumulation_steps = 4
-        explanation_parts.append("accumulation_steps=4: physical batch=4, reaching effective batch=16")
+        explanation_parts.append(
+            "accumulation_steps=4: physical batch=4, reaching effective batch=16"
+        )
     else:
         accumulation_steps = 2
-        explanation_parts.append(f"accumulation_steps=2: physical batch={batch_size}, effective batch={batch_size * 2}")
+        explanation_parts.append(
+            f"accumulation_steps=2: physical batch={batch_size}, effective batch={batch_size * 2}"
+        )
 
     # ───────────────────────────────────────────────────────────────────
     # Fixed Hyperparameters (per CLAUDE.md § 3)
@@ -210,7 +222,9 @@ def optimize_hyperparams(
     explanation_parts.append("epochs=10 (fixed per CLAUDE.md § 3 convergence analysis)")
 
     warmup_steps = 40
-    explanation_parts.append("warmup_steps=40 (fixed: 500 overflowed total steps on small datasets)")
+    explanation_parts.append(
+        "warmup_steps=40 (fixed: 500 overflowed total steps on small datasets)"
+    )
 
     # ───────────────────────────────────────────────────────────────────
     # Early Stopping Patience
@@ -220,7 +234,9 @@ def optimize_hyperparams(
     # to allow more val-loss monitoring, but Exp 1 shows overfitting at >8 epochs anyway.
 
     early_stopping_patience = 3
-    explanation_parts.append("early_stopping_patience=3 (fixed to prevent overfitting on small val set)")
+    explanation_parts.append(
+        "early_stopping_patience=3 (fixed to prevent overfitting on small val set)"
+    )
 
     config_explanation = "; ".join(explanation_parts)
 
@@ -294,7 +310,8 @@ class TrainingAuditLogger:
         """
         lines = [
             f"[{self._timestamp()}] RESOURCE_DETECTION",
-            f"GPU: {resources.device_name} ({resources.vram_gb:.1f} GB)" if resources.cuda_available
+            f"GPU: {resources.device_name} ({resources.vram_gb:.1f} GB)"
+            if resources.cuda_available
             else "GPU: CPU-only (CUDA unavailable)",
             f"RAM: {resources.ram_gb:.1f} GB total",
             f"CPU: {resources.cpu_cores} cores",
@@ -304,9 +321,7 @@ class TrainingAuditLogger:
         with open(self.log_path, "a", encoding="utf-8") as f:
             f.write("\n".join(lines))
 
-    def log_config_decision(
-        self, experiment_id: int, config: ResourceOptimizedConfig
-    ) -> None:
+    def log_config_decision(self, experiment_id: int, config: ResourceOptimizedConfig) -> None:
         """Log hyperparameter optimization decision.
 
         Args:
@@ -394,7 +409,9 @@ class TrainingAuditLogger:
 if __name__ == "__main__":
     # Test resource detection and optimization
     resources = detect_system_resources()
-    print(f"Detected: {resources.vram_gb:.1f}GB VRAM, {resources.ram_gb:.1f}GB RAM, {resources.cpu_cores} CPU cores")
+    print(
+        f"Detected: {resources.vram_gb:.1f}GB VRAM, {resources.ram_gb:.1f}GB RAM, {resources.cpu_cores} CPU cores"
+    )
 
     config = optimize_hyperparams(num_train_samples=500)
     print("\nOptimized config for 500 samples:")

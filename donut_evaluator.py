@@ -59,16 +59,16 @@ def _parse_sroie_output(tokens: str) -> dict:
     """
     result = EMPTY_GT.copy()
 
-    for field in FIELDS:
-        open_tag = f"<s_{field}>"
-        close_tag = f"</s_{field}>"
+    for field_name in FIELDS:
+        open_tag = f"<s_{field_name}>"
+        close_tag = f"</s_{field_name}>"
 
         start_idx = tokens.find(open_tag)
         if start_idx != -1:
             start_idx += len(open_tag)
             end_idx = tokens.find(close_tag, start_idx)
             if end_idx != -1:
-                result[field] = tokens[start_idx:end_idx].strip()
+                result[field_name] = tokens[start_idx:end_idx].strip()
 
     return result
 
@@ -333,7 +333,6 @@ class DonutEvaluator:
         """
         self._self_test()
 
-        image_paths = [s[0] for s in self.test_dataset]
         ground_truths = [s[1] for s in self.test_dataset]
 
         predictions = []

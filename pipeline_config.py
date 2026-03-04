@@ -9,9 +9,12 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
+__all__ = ["CloudConfig", "PipelineMode", "LogLevel"]
+
 
 class PipelineMode(str, Enum):
     """Available pipeline execution modes."""
+
     CODE_REPAIR = "code_repair"
     ML_TRAINING = "ml_training"
     AUTO = "auto"
@@ -19,6 +22,7 @@ class PipelineMode(str, Enum):
 
 class LogLevel(str, Enum):
     """Log level options."""
+
     DEBUG = "DEBUG"
     INFO = "INFO"
     WARNING = "WARNING"
@@ -45,7 +49,7 @@ class CloudConfig:
     dry_run: bool = False
 
     # ====== Common Settings ======
-    workspace: Path = Path("/workspace")
+    workspace: Path = Path("/workspace")  # overridden by DONUT_WORKSPACE env var
     git_branch: str = "claude/setup-cloud-ai-agents-Olrqd"
     github_repo: str = "aiparallel0/kaggle"
     skip_validation: bool = False
@@ -237,9 +241,12 @@ class CloudConfig:
         self.log_dir.mkdir(parents=True, exist_ok=True)
 
         # If ML training mode, SROIE data must exist
-        if self.mode in [PipelineMode.ML_TRAINING, PipelineMode.AUTO]:
-            if self.sroie_data_dir and not self.sroie_data_dir.exists():
-                errors.append(f"SROIE data directory does not exist: {self.sroie_data_dir}")
+        if (
+            self.mode in [PipelineMode.ML_TRAINING, PipelineMode.AUTO]
+            and self.sroie_data_dir
+            and not self.sroie_data_dir.exists()
+        ):
+            errors.append(f"SROIE data directory does not exist: {self.sroie_data_dir}")
 
         # Experiments must be in range 1-8
         for exp_id in self.experiments_to_run:

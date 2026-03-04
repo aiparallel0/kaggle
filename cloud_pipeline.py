@@ -17,16 +17,18 @@ import logging
 import sys
 from datetime import datetime
 
+from pipeline_config import CloudConfig, PipelineMode
+from pipeline_types import PipelineResult
+from preflight_checks import PreflightChecker
+
+__all__ = ["CloudPipelineOrchestrator"]
+
 # Set up logging early
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
-
-from pipeline_config import CloudConfig, PipelineMode
-from pipeline_types import PipelineResult
-from preflight_checks import PreflightChecker
 
 
 class CloudPipelineOrchestrator:
@@ -116,9 +118,7 @@ class CloudPipelineOrchestrator:
                 success = False
         else:
             self.logger.error(f"Unknown mode: {mode}")
-            return PipelineResult(
-                success=False, mode="unknown", errors=["Unknown pipeline mode"]
-            )
+            return PipelineResult(success=False, mode="unknown", errors=["Unknown pipeline mode"])
 
         # Finalize
         duration = (datetime.utcnow() - start_time).total_seconds()

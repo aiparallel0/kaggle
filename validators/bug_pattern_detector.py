@@ -102,7 +102,7 @@ class BugPatternDetector:
             if '"""' in line or "'''" in line:
                 continue
 
-            for pattern, description in BugPatternDetector.PYTHON_JSON_PATTERNS:
+            for pattern, _description in BugPatternDetector.PYTHON_JSON_PATTERNS:
                 matches = re.finditer(pattern, line)
                 for match in matches:
                     json_literal = match.group()
@@ -226,25 +226,27 @@ class BugPatternDetector:
         """
         bugs = []
 
-        if "token2json" in code and "_parse_prediction" in code:
-            # Check if list handling is present
-            if "isinstance(result, list)" not in code:
-                bugs.append(
-                    BugPattern(
-                        severity=SeverityLevel.WARNING,
-                        category="logic",
-                        file=file_path,
-                        line=0,
-                        column=0,
-                        description="token2json list output handling not found",
-                        code_snippet="",
-                        fix_suggestion=(
-                            "Add list handling in _parse_prediction():\n"
-                            "if isinstance(result, list): merged = {}; "
-                            "for page in result: merged.update(page)"
-                        ),
-                    )
+        if (
+            "token2json" in code
+            and "_parse_prediction" in code
+            and "isinstance(result, list)" not in code
+        ):
+            bugs.append(
+                BugPattern(
+                    severity=SeverityLevel.WARNING,
+                    category="logic",
+                    file=file_path,
+                    line=0,
+                    column=0,
+                    description="token2json list output handling not found",
+                    code_snippet="",
+                    fix_suggestion=(
+                        "Add list handling in _parse_prediction():\n"
+                        "if isinstance(result, list): merged = {}; "
+                        "for page in result: merged.update(page)"
+                    ),
                 )
+            )
 
         return bugs
 
