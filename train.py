@@ -203,7 +203,11 @@ class SROIEDataset(Dataset):
 
     @staticmethod
     def _parse_txt_key(path: Path) -> dict[str, str] | None:
-        """Parse a 4-line SROIE key file into a dict."""
+        """Parse a SROIE key file into a dict.
+
+        Supports multi-line addresses: lines[2:-1] are joined with a space
+        for address, and lines[-1] is always used for total.
+        """
         try:
             lines = path.read_text(encoding="utf-8").strip().splitlines()
         except UnicodeDecodeError:
@@ -213,8 +217,8 @@ class SROIEDataset(Dataset):
         return {
             "company": lines[0].strip(),
             "date": lines[1].strip(),
-            "address": lines[2].strip(),
-            "total": lines[3].strip(),
+            "address": " ".join(line.strip() for line in lines[2:-1]).strip(),
+            "total": lines[-1].strip(),
         }
 
     # ------------------------------------------------------------------
