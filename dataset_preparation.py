@@ -26,7 +26,7 @@ from pathlib import Path
 from PIL import Image
 
 from constants import FIELDS, IMAGE_EXTS
-from dataset_loaders import _load_key_file
+from dataset_loaders import SROIELoader, _load_key_file
 
 # ── Config ────────────────────────────────────────────────────────────────────
 DATA_DIR = Path("data")
@@ -38,11 +38,7 @@ TROCR_DIR = DATA_DIR / "trocr"
 SROIE_DATA_DIR = Path(os.environ.get("SROIE_DATA_DIR", "/workspace/ICDAR-2019-SROIE/data"))
 
 # Map split names to (img_subdir, key_subdir) in the SROIE tree
-SPLIT_MAP = {
-    "train": ("img", "key"),
-    "val": ("val_img", "val_key"),
-    "test": ("test_img", "test_key"),
-}
+SPLIT_MAP = SROIELoader._SPLIT_DIRS  # single source of truth
 
 # Candidate box/ subdirectory names per split (tried in order).
 # The SROIE dataset ships one shared "box/" for train; some re-packagings

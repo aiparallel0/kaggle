@@ -9,6 +9,13 @@ import multiprocessing
 import os
 from pathlib import Path
 
+__all__ = [
+    "FIELDS", "IMAGE_EXTS", "MAX_LENGTH", "BASE_MODEL",
+    "SEED", "NEW_TOKENS", "EMPTY_GT", "DEVICE", "WORKSPACE",
+]
+# _get_sroie_dir, _optimal_num_workers, _gpu_cleanup are intentionally
+# NOT in __all__ (underscore-prefixed internal helpers)
+
 # SROIE Task-3 target fields — the four key-value pairs extracted from receipts.
 FIELDS: list[str] = ["company", "date", "address", "total"]
 

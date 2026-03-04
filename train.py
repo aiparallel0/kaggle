@@ -33,11 +33,9 @@ pipeline.  For standalone usage, main() defines defaults that match
 TRAIN_CONFIG.
 """
 
-import json
 import logging
 import math
 import os
-import random
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -61,14 +59,14 @@ from transformers import (
 from constants import (
     BASE_MODEL,
     FIELDS,
-    IMAGE_EXTS,
     MAX_LENGTH,
     NEW_TOKENS,
     SEED,
-    _get_sroie_dir,
     _mask_empty_field_labels,
     _optimal_num_workers,
 )
+
+__all__ = ["SROIEDataset", "DonutTrainer", "TrainingResult"]
 
 logger = logging.getLogger(__name__)
 
@@ -142,10 +140,9 @@ class SROIEDataset(Dataset):
     ----------
     processor : DonutProcessor
         HuggingFace processor for DONUT image/text encoding.
-    img_dir : str or Path
-        Directory containing receipt images.
-    key_dir : str or Path
-        Directory containing ground-truth key files (.txt or .json).
+    samples : list of (Path, dict)
+        Pre-built list of (image_path, ground_truth_dict) tuples, as
+        returned by ``dataset_loaders.load_sroie_train()`` etc.
     max_length : int
         Maximum token length for the decoder target sequence.
     """
@@ -153,77 +150,25 @@ class SROIEDataset(Dataset):
     def __init__(
         self,
         processor: DonutProcessor,
-        img_dir,
-        key_dir,
+        samples: list[tuple[Path, dict[str, str]]],
         max_length: int = MAX_LENGTH,
     ):
+        super().__init__()
         self.processor = processor
         self.max_length = max_length
-        self.samples: list[tuple[Path, dict[str, str]]] = []
-
-        img_dir = Path(img_dir)
-        key_dir = Path(key_dir)
-
-        for img_path in sorted(
-            p for p in img_dir.iterdir() if p.is_file() and p.suffix.lower() in IMAGE_EXTS
-        ):
-            gt = self._load_ground_truth(key_dir, img_path.stem)
-            if gt is not None:
-                self.samples.append((img_path, gt))
-
-    # ------------------------------------------------------------------
-    # Ground-truth loading helpers
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _load_ground_truth(
-        key_dir: Path,
-        stem: str,
-    ) -> dict[str, str] | None:
-        """Load ground-truth dict from a key directory.
-
-        BUG A/E FIX: Try .txt first (canonical 4-line SROIE format), then
-        fall back to .json for pre-converted datasets.
-        """
-        # Try .txt first (native SROIE format)
-        key_txt = key_dir / (stem + ".txt")
-        if key_txt.exists():
-            gt = SROIEDataset._parse_txt_key(key_txt)
-            if gt is not None:
-                return gt
-
-        # Fall back to .json
-        key_json = key_dir / (stem + ".json")
-        if key_json.exists():
-            try:
-                return json.loads(key_json.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                pass
-
-        return None
-
-    @staticmethod
-    def _parse_txt_key(path: Path) -> dict[str, str] | None:
-        """Parse a SROIE key file into a dict.
-
-        Supports multi-line addresses: lines[2:-1] are joined with a space
-        for address, and lines[-1] is always used for total.
-        """
-        try:
-            lines = path.read_text(encoding="utf-8").strip().splitlines()
-        except UnicodeDecodeError:
-            return None
-        if len(lines) < 4:
-            return None
-        return {
-            "company": lines[0].strip(),
-            "date": lines[1].strip(),
-            "address": " ".join(line.strip() for line in lines[2:-1]).strip(),
-            "total": lines[-1].strip(),
-        }
+        self.samples = list(samples)
+        # Log per-field masking statistics so empty-field dilution is visible.
+        if samples:
+            for f in FIELDS:
+                n = sum(1 for _, gt in samples if not gt.get(f, "").strip())
+                if n:
+                    logger.info(
+                        "Field masking: %d/%d samples will have <%s> masked (%.1f%%)",
+                        n, len(samples), f, 100.0 * n / len(samples),
+                    )
 
     # ------------------------------------------------------------------
-    # Alternate constructors
+    # Backward-compatible alternate constructor
     # ------------------------------------------------------------------
 
     @classmethod
@@ -233,23 +178,8 @@ class SROIEDataset(Dataset):
         samples: list[tuple[Path, dict[str, str]]],
         max_length: int = MAX_LENGTH,
     ) -> "SROIEDataset":
-        """Create a SROIEDataset from a pre-built list of (path, gt) tuples."""
-        obj = cls.__new__(cls)
-        Dataset.__init__(obj)
-        obj.processor = processor
-        obj.max_length = max_length
-        obj.samples = list(samples)
-        # Log per-field masking statistics so empty-field dilution is visible.
-        if samples:
-            _log = logging.getLogger(__name__)
-            for f in FIELDS:
-                n = sum(1 for _, gt in samples if not gt.get(f, "").strip())
-                if n:
-                    _log.info(
-                        "Field masking: %d/%d samples will have <%s> masked (%.1f%%)",
-                        n, len(samples), f, 100.0 * n / len(samples),
-                    )
-        return obj
+        """Backward-compatible alias for ``SROIEDataset(processor, samples, max_length)``."""
+        return cls(processor, samples, max_length)
 
     # ------------------------------------------------------------------
     # PyTorch Dataset interface
@@ -542,21 +472,14 @@ def main():
     model.decoder.config.use_cache = False
     model.gradient_checkpointing_enable()
 
-    # Load SROIE data
-    sroie_dir = _get_sroie_dir()
-    full_ds = SROIEDataset(processor, sroie_dir / "img", sroie_dir / "key")
-    all_samples = full_ds.samples
+    # Load SROIE data using canonical loaders (single source of truth)
+    from dataset_loaders import load_sroie_train, load_sroie_val
 
-    # Use last 15 % of samples as validation for early stopping
-    shuffled = list(all_samples)
-    random.seed(SEED)
-    random.shuffle(shuffled)
-    n_val = max(1, int(len(shuffled) * 0.15))
-    train_samples = shuffled[n_val:]
-    val_samples = shuffled[:n_val]
+    train_samples = load_sroie_train()
+    val_samples = load_sroie_val()
 
-    train_ds = SROIEDataset.from_samples(processor, train_samples)
-    val_ds = SROIEDataset.from_samples(processor, val_samples)
+    train_ds = SROIEDataset(processor, train_samples)
+    val_ds = SROIEDataset(processor, val_samples) if val_samples else None
 
     workspace = os.environ.get("DONUT_WORKSPACE", "/workspace")
     output_dir = os.path.join(workspace, "donut-sroie-finetuned")

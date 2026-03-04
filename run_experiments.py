@@ -78,6 +78,8 @@ from resource_optimizer import (
     TrainingAuditLogger,
 )
 
+__all__ = ["ExperimentConfig", "EXPERIMENTS", "TRAIN_CONFIG", "run_experiment", "run_custom_experiment", "save_summary"]
+
 # ---------------------------------------------------------------------------
 # Logging Configuration — MUST be set before any third-party imports
 # ---------------------------------------------------------------------------

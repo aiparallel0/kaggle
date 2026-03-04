@@ -132,39 +132,39 @@ class TestSROIEKeyFileParsing:
         assert gt["total"] == "9.90"
 
     def test_train_parse_txt_key_four_lines(self, tmp_path):
-        """_parse_txt_key handles standard 4-line file."""
-        pytest.importorskip("torch", reason="torch required by train.py")
-        pytest.importorskip("transformers", reason="transformers required by train.py")
-        from train import SROIEDataset  # noqa: E402, I001
+        """_load_key_file handles standard 4-line file."""
+        from dataset_loaders import _load_key_file  # noqa: E402, I001
 
-        key_file = tmp_path / "sample.txt"
+        key_dir = tmp_path / "key"
+        key_dir.mkdir()
+        key_file = key_dir / "sample.txt"
         key_file.write_text("STORE\n02/02/2024\n100 MAIN ST\n5.00", encoding="utf-8")
-        gt = SROIEDataset._parse_txt_key(key_file)
+        gt = _load_key_file(key_dir, "sample")
         assert gt is not None
         assert gt["address"] == "100 MAIN ST"
         assert gt["total"] == "5.00"
 
     def test_train_parse_txt_key_multiline_address(self, tmp_path):
-        """_parse_txt_key handles 5-line file with multi-line address."""
-        pytest.importorskip("torch", reason="torch required by train.py")
-        pytest.importorskip("transformers", reason="transformers required by train.py")
-        from train import SROIEDataset  # noqa: E402, I001
+        """_load_key_file handles 5-line file with multi-line address."""
+        from dataset_loaders import _load_key_file  # noqa: E402, I001
 
-        key_file = tmp_path / "sample.txt"
+        key_dir = tmp_path / "key"
+        key_dir.mkdir()
+        key_file = key_dir / "sample.txt"
         key_file.write_text(
             "STORE\n02/02/2024\n100 MAIN ST\nSUITE 5\n5.00", encoding="utf-8"
         )
-        gt = SROIEDataset._parse_txt_key(key_file)
+        gt = _load_key_file(key_dir, "sample")
         assert gt is not None
         assert gt["address"] == "100 MAIN ST SUITE 5"
         assert gt["total"] == "5.00"
 
     def test_train_parse_txt_key_too_few_lines(self, tmp_path):
-        """_parse_txt_key returns None for files with fewer than 4 lines."""
-        pytest.importorskip("torch", reason="torch required by train.py")
-        pytest.importorskip("transformers", reason="transformers required by train.py")
-        from train import SROIEDataset  # noqa: E402, I001
+        """_load_key_file returns empty dict for files with fewer than 4 lines."""
+        from dataset_loaders import _load_key_file  # noqa: E402, I001
 
-        key_file = tmp_path / "sample.txt"
+        key_dir = tmp_path / "key"
+        key_dir.mkdir()
+        key_file = key_dir / "sample.txt"
         key_file.write_text("STORE\n02/02/2024\n100 MAIN ST", encoding="utf-8")
-        assert SROIEDataset._parse_txt_key(key_file) is None
+        assert _load_key_file(key_dir, "sample") == {}
