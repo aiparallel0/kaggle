@@ -8,9 +8,8 @@ This validator ensures the critical 80/10/10 split is maintained with physical
 directory separation to prevent accidental use of test data during training.
 """
 
-from pathlib import Path
-from typing import Tuple, List, Set
 import logging
+from pathlib import Path
 
 from pipeline_types import DataSplitValidationReport
 
@@ -51,7 +50,14 @@ class DataSplitValidator:
         test_img_dir = sroie_dir / "test_img"
         test_key_dir = sroie_dir / "test_key"
 
-        for dir_path in [train_img_dir, train_key_dir, val_img_dir, val_key_dir, test_img_dir, test_key_dir]:
+        for dir_path in [
+            train_img_dir,
+            train_key_dir,
+            val_img_dir,
+            val_key_dir,
+            test_img_dir,
+            test_key_dir,
+        ]:
             if not dir_path.exists():
                 report.passed = False
                 report.errors.append(f"Missing directory: {dir_path}")
@@ -116,7 +122,7 @@ class DataSplitValidator:
             )
 
         # Check that all images have key files
-        for split_name, img_dir, key_dir, img_set in [
+        for split_name, _img_dir, key_dir, img_set in [
             ("train", train_img_dir, train_key_dir, train_images),
             ("val", val_img_dir, val_key_dir, val_images),
             ("test", test_img_dir, test_key_dir, test_images),
@@ -130,7 +136,7 @@ class DataSplitValidator:
                 )
 
         if not report.passed:
-            logger.error(f"SROIE split validation FAILED:\n" + "\n".join(report.errors))
+            logger.error("SROIE split validation FAILED:\n" + "\n".join(report.errors))
         else:
             logger.info(
                 f"✓ SROIE split validation passed: "
@@ -140,7 +146,7 @@ class DataSplitValidator:
         return report
 
     @staticmethod
-    def check_no_val_test_leakage(val_dir: Path, test_dir: Path) -> Tuple[bool, str]:
+    def check_no_val_test_leakage(val_dir: Path, test_dir: Path) -> tuple[bool, str]:
         """Critical check: val and test directories must be physically separate.
 
         This prevents accidental usage of test data during validation.

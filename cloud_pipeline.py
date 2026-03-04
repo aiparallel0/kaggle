@@ -11,13 +11,17 @@ Usage:
   python cloud_pipeline.py --mode auto  (detect from git branch)
 """
 
-import asyncio
-import sys
-import logging
 import argparse
-from pathlib import Path
+import asyncio
+import logging
+import sys
 from datetime import datetime
-import os
+
+from pipeline_config import CloudConfig, PipelineMode
+from pipeline_types import PipelineResult
+from preflight_checks import PreflightChecker
+
+__all__ = ["CloudPipelineOrchestrator"]
 
 # Set up logging early
 logging.basicConfig(
@@ -25,10 +29,6 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
-
-from pipeline_config import CloudConfig, PipelineMode
-from preflight_checks import PreflightChecker
-from pipeline_types import PipelineResult
 
 
 class CloudPipelineOrchestrator:
@@ -118,9 +118,7 @@ class CloudPipelineOrchestrator:
                 success = False
         else:
             self.logger.error(f"Unknown mode: {mode}")
-            return PipelineResult(
-                success=False, mode="unknown", errors=["Unknown pipeline mode"]
-            )
+            return PipelineResult(success=False, mode="unknown", errors=["Unknown pipeline mode"])
 
         # Finalize
         duration = (datetime.utcnow() - start_time).total_seconds()

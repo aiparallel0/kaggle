@@ -340,7 +340,9 @@ def validate_preparation() -> bool:
             if crop_count == 0:
                 issues.append(f"❌ TrOCR {split}: no crop images")
             if crop_count != meta_count:
-                issues.append(f"⚠️  TrOCR {split}: {crop_count} crops but {meta_count} metadata entries")
+                issues.append(
+                    f"⚠️  TrOCR {split}: {crop_count} crops but {meta_count} metadata entries"
+                )
 
     if issues:
         print("\n❌ Validation FAILED:")
@@ -361,12 +363,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--validate",
         action="store_true",
-        help="Only validate existing preparation (do not re-prepare)"
+        help="Only validate existing preparation (do not re-prepare)",
     )
     parser.add_argument(
-        "--force",
-        action="store_true",
-        help="Re-prepare all data even if directories already exist"
+        "--force", action="store_true", help="Re-prepare all data even if directories already exist"
     )
 
     args = parser.parse_args()
@@ -376,6 +376,7 @@ if __name__ == "__main__":
     else:
         if args.force:
             import shutil
+
             if YOLO_DIR.exists():
                 shutil.rmtree(YOLO_DIR)
             if TROCR_DIR.exists():
@@ -383,7 +384,7 @@ if __name__ == "__main__":
             print("Cleared existing data directories due to --force flag")
 
         counts = prepare_all()
-        print(f"\nPreparation summary:")
+        print("\nPreparation summary:")
         for key, val in sorted(counts.items()):
             print(f"  {key:15s} {val:4d}")
 

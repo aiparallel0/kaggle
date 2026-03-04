@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import re
 
+__all__ = ["extract_address_from_seller"]
+
 # ---------------------------------------------------------------------------
 # Compiled regex patterns
 # ---------------------------------------------------------------------------
@@ -35,9 +37,7 @@ _STREET_SUFFIX_RE = re.compile(
 )
 
 # US-style state abbreviation + ZIP (e.g. "MA 46228" or "CA 90210-1234").
-_STATE_ZIP_RE = re.compile(
-    r"\b[A-Z]{2}\s+\d{5}(?:-\d{4})?\b"
-)
+_STATE_ZIP_RE = re.compile(r"\b[A-Z]{2}\s+\d{5}(?:-\d{4})?\b")
 
 # Compiled list of patterns ordered by decreasing specificity.
 _ADDRESS_PATTERNS: list[re.Pattern[str]] = [

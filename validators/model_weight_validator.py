@@ -11,7 +11,6 @@ missing_keys and is randomly re-initialized."
 
 import logging
 from pathlib import Path
-from typing import Optional, Dict, List, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +19,7 @@ class ModelWeightValidator:
     """Validate model weights after checkpoint load."""
 
     @staticmethod
-    def check_lm_head_weight_in_checkpoint(checkpoint_path: Path) -> Tuple[bool, str]:
+    def check_lm_head_weight_in_checkpoint(checkpoint_path: Path) -> tuple[bool, str]:
         """Check if decoder.lm_head.weight exists in checkpoint.
 
         Args:
@@ -31,7 +30,6 @@ class ModelWeightValidator:
         """
         try:
             from safetensors import safe_open
-            import json
 
             # Try loading safetensors files
             safetensors_files = list(checkpoint_path.glob("*.safetensors"))
@@ -70,8 +68,8 @@ class ModelWeightValidator:
     def validate_model_forward_pass(
         model,
         processor,
-        test_image_path: Optional[Path] = None,
-    ) -> Tuple[bool, str]:
+        test_image_path: Path | None = None,
+    ) -> tuple[bool, str]:
         """Test that model can do forward pass (catches silent failures).
 
         Args:
@@ -83,8 +81,8 @@ class ModelWeightValidator:
             (success: bool, error_message: str)
         """
         try:
-            from PIL import Image
             import torch
+            from PIL import Image
 
             # Create dummy input if no test image
             if test_image_path is None:
@@ -116,10 +114,10 @@ class ModelWeightValidator:
 
     @staticmethod
     def check_missing_keys_after_load(
-        missing_keys: List[str],
-        unexpected_keys: List[str],
+        missing_keys: list[str],
+        unexpected_keys: list[str],
         tie_word_embeddings: bool,
-    ) -> Tuple[bool, str]:
+    ) -> tuple[bool, str]:
         """Check if critical keys are missing after model load.
 
         Args:
@@ -144,9 +142,7 @@ class ModelWeightValidator:
                     )
                 else:
                     # If tie_word_embeddings=True, lm_head is tied to embed_tokens, OK to be missing
-                    logger.info(
-                        f"Note: {key} missing but tie_word_embeddings=True (expected)"
-                    )
+                    logger.info(f"Note: {key} missing but tie_word_embeddings=True (expected)")
 
         if unexpected_keys:
             logger.warning(f"Unexpected keys in checkpoint: {unexpected_keys[:5]}...")

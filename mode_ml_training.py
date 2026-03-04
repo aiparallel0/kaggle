@@ -1,17 +1,17 @@
 """Mode B: ML Training Orchestrator - GPU experiment runner on Vast.ai."""
 
 import asyncio
-import subprocess
-import logging
 import json
-from pathlib import Path
-from typing import Dict
+import logging
+import subprocess
 
-from pipeline_config import CloudConfig
-from pipeline_types import MLTrainingResult, ExperimentResult
-from results_aggregator import ResultsAggregator
 from git_controller import GitController
+from pipeline_config import CloudConfig
+from pipeline_types import ExperimentResult, MLTrainingResult
+from results_aggregator import ResultsAggregator
 from storage_manager import StorageManager
+
+__all__ = ["MLTrainingOrchestrator"]
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ class MLTrainingOrchestrator:
             self.logger.info("DONUT EXPERIMENTS")
             self.logger.info("=" * 70)
 
-            experiments_run: Dict[int, ExperimentResult] = {}
+            experiments_run: dict[int, ExperimentResult] = {}
 
             for exp_id in self.config.experiments_to_run:
                 self.logger.info(f"\n▶ Running Experiment {exp_id}...")
@@ -170,14 +170,14 @@ class MLTrainingOrchestrator:
                     best_exp = agg.best_experiment if agg else None
                     if best_exp:
                         message = (
-                            f"AI experiment: [{', '.join(str(e) for e in experiments_run.keys())}] "
+                            f"AI experiment: [{', '.join(str(e) for e in experiments_run)}] "
                             f"— best=exp_{best_exp.experiment_id} "
                             f"F1={best_exp.metrics.global_f1:.4f} "
                             f"on {', '.join(best_exp.datasets)}"
                         )
                     else:
                         message = (
-                            f"AI experiment: [{', '.join(str(e) for e in experiments_run.keys())}] "
+                            f"AI experiment: [{', '.join(str(e) for e in experiments_run)}] "
                             f"— experiments completed"
                         )
 

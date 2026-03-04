@@ -61,11 +61,21 @@ from constants import IMAGE_EXTS as _IMAGE_EXTS_SET
 Sample = tuple[Path, dict[str, str]]
 
 __all__ = [
-    "Sample", "DatasetLoadError", "BaseDatasetLoader",
-    "SROIELoader", "WildReceiptLoader", "FUNSDLoader", "InvoicesDonutLoader",
-    "load_sroie_train", "load_sroie_test", "load_sroie_val",
-    "load_wildreceipt", "load_funsd", "load_invoices_donut",
-    "get_combined_dataset", "split_dataset",
+    "Sample",
+    "DatasetLoadError",
+    "BaseDatasetLoader",
+    "SROIELoader",
+    "WildReceiptLoader",
+    "FUNSDLoader",
+    "InvoicesDonutLoader",
+    "load_sroie_train",
+    "load_sroie_test",
+    "load_sroie_val",
+    "load_wildreceipt",
+    "load_funsd",
+    "load_invoices_donut",
+    "get_combined_dataset",
+    "split_dataset",
 ]
 
 # ── Shared constants (derived from constants.py) ─────────────────────
@@ -86,8 +96,7 @@ def _load_seller_split_cache() -> dict[str, dict[str, str]]:
                 raw = json.loads(cache_path.read_text(encoding="utf-8"))
                 # Strip metadata key so only seller-string entries remain.
                 _SELLER_SPLIT_CACHE = {
-                    k: v for k, v in raw.items()
-                    if k != "_metadata" and isinstance(v, dict)
+                    k: v for k, v in raw.items() if k != "_metadata" and isinstance(v, dict)
                 }
             except (json.JSONDecodeError, OSError):
                 _SELLER_SPLIT_CACHE = {}

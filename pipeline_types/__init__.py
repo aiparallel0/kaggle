@@ -1,15 +1,15 @@
 """Type definitions for cloud pipeline."""
 
-from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, field
 from datetime import datetime
-from pathlib import Path
 from enum import Enum
-import json
+from pathlib import Path
+from typing import Any
 
 
 class SeverityLevel(str, Enum):
     """Bug severity levels."""
+
     CRITICAL = "CRITICAL"
     WARNING = "WARNING"
     INFO = "INFO"
@@ -17,6 +17,7 @@ class SeverityLevel(str, Enum):
 
 class CheckStatus(str, Enum):
     """Status of a preflight check."""
+
     PASSED = "passed"
     FAILED = "failed"
     WARNING = "warning"
@@ -24,6 +25,7 @@ class CheckStatus(str, Enum):
 
 class RecoveryAction(str, Enum):
     """Available error recovery actions."""
+
     FIX_IMPORTS = "fix_imports"
     REDUCE_BATCH_SIZE = "reduce_batch_size"
     REINSTALL_DATA = "reinstall_data"
@@ -37,23 +39,26 @@ class RecoveryAction(str, Enum):
 # Preflight & Validation Results
 # ============================================================================
 
+
 @dataclass
 class CheckResult:
     """Result of a single preflight check."""
+
     name: str
     status: CheckStatus
     message: str
-    details: Optional[str] = None
-    recovery_action: Optional[RecoveryAction] = None
+    details: str | None = None
+    recovery_action: RecoveryAction | None = None
 
 
 @dataclass
 class PreflightReport:
     """Comprehensive preflight validation report."""
+
     passed: bool
-    checks: Dict[str, CheckResult] = field(default_factory=dict)
-    errors: List[str] = field(default_factory=list)
-    warnings: List[str] = field(default_factory=list)
+    checks: dict[str, CheckResult] = field(default_factory=dict)
+    errors: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
     timestamp: datetime = field(default_factory=datetime.utcnow)
 
     def to_dict(self) -> dict:
@@ -70,9 +75,11 @@ class PreflightReport:
 # Bug Detection Results
 # ============================================================================
 
+
 @dataclass
 class BugPattern:
     """Detected code issue from bug pattern scanner."""
+
     severity: SeverityLevel
     category: str  # "syntax", "logic", "compatibility"
     file: Path
@@ -86,7 +93,8 @@ class BugPattern:
 @dataclass
 class BugReport:
     """Report of all detected bugs in codebase."""
-    bugs: List[BugPattern] = field(default_factory=list)
+
+    bugs: list[BugPattern] = field(default_factory=list)
     total_critical: int = 0
     total_warnings: int = 0
     timestamp: datetime = field(default_factory=datetime.utcnow)
@@ -116,54 +124,61 @@ class BugReport:
 # File Operations Results
 # ============================================================================
 
+
 @dataclass
 class FileFix:
     """Result of fixing a single file."""
+
     file_path: Path
     success: bool
     original_content: str
-    fixed_content: Optional[str] = None
-    validation_report: Optional[Any] = None
-    error: Optional[str] = None
+    fixed_content: str | None = None
+    validation_report: Any | None = None
+    error: str | None = None
 
 
 # ============================================================================
 # Validation Reports
 # ============================================================================
 
+
 @dataclass
 class ValidationReport:
     """Result of validating a code change."""
+
     passed: bool
-    error: Optional[str] = None
-    recovery_action: Optional[RecoveryAction] = None
-    details: Dict[str, Any] = field(default_factory=dict)
+    error: str | None = None
+    recovery_action: RecoveryAction | None = None
+    details: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class DataSplitValidationReport:
     """Result of SROIE data split validation."""
+
     passed: bool
     train_count: int = 0
     val_count: int = 0
     test_count: int = 0
-    errors: List[str] = field(default_factory=list)
-    warnings: List[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
 
 # ============================================================================
 # Code Repair Results
 # ============================================================================
 
+
 @dataclass
 class CodeRepairResult:
     """Result of Mode A (code repair)."""
+
     success: bool
     files_fixed: int = 0
     files_failed: int = 0
-    validation_report: Optional[PreflightReport] = None
-    git_commits: List[str] = field(default_factory=list)
-    errors: List[str] = field(default_factory=list)
+    validation_report: PreflightReport | None = None
+    git_commits: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
     duration_sec: float = 0.0
     timestamp: datetime = field(default_factory=datetime.utcnow)
 
@@ -172,9 +187,11 @@ class CodeRepairResult:
 # ML Training & Experiment Results
 # ============================================================================
 
+
 @dataclass
 class ExperimentMetrics:
     """Metrics from a single experiment."""
+
     global_f1: float
     global_precision: float = 0.0
     global_recall: float = 0.0
@@ -194,12 +211,13 @@ class ExperimentMetrics:
 @dataclass
 class ExperimentResult:
     """Result of a single training experiment."""
+
     experiment_id: int
     name: str
-    datasets: List[str]
+    datasets: list[str]
     num_train_samples: int
     metrics: ExperimentMetrics
-    checkpoint_path: Optional[Path] = None
+    checkpoint_path: Path | None = None
     duration_sec: float = 0.0
     timestamp: datetime = field(default_factory=datetime.utcnow)
 
@@ -218,78 +236,87 @@ class ExperimentResult:
 @dataclass
 class AggregatedResults:
     """Aggregation of all experiment results."""
-    experiments: List[ExperimentResult] = field(default_factory=list)
-    best_experiment: Optional[ExperimentResult] = None
+
+    experiments: list[ExperimentResult] = field(default_factory=list)
+    best_experiment: ExperimentResult | None = None
     baseline_f1: float = 0.0
     improvement: float = 0.0
-    per_field_analysis: Dict[str, Any] = field(default_factory=dict)
+    per_field_analysis: dict[str, Any] = field(default_factory=dict)
     generated_timestamp: datetime = field(default_factory=datetime.utcnow)
 
 
 @dataclass
 class ExperimentValidationReport:
     """Validation report for experiment results."""
+
     passed: bool
-    checks: List[CheckResult] = field(default_factory=list)
-    errors: List[str] = field(default_factory=list)
+    checks: list[CheckResult] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
 
 
 # ============================================================================
 # Cloud Storage Results
 # ============================================================================
 
+
 @dataclass
 class UploadReport:
     """Result of uploading a file to cloud storage."""
+
     success: bool
     local_path: Path
     remote_path: str
     size_bytes: int = 0
     duration_sec: float = 0.0
     storage_type: str = "local"  # "s3" | "gcs" | "local"
-    error: Optional[str] = None
+    error: str | None = None
 
 
 @dataclass
 class SyncReport:
     """Result of syncing entire directory to cloud."""
+
     backend_type: str
     total_files: int = 0
     uploaded: int = 0
     failed: int = 0
     duration_sec: float = 0.0
-    details: List[UploadReport] = field(default_factory=list)
+    details: list[UploadReport] = field(default_factory=list)
 
 
 # ============================================================================
 # Git Results
 # ============================================================================
 
+
 @dataclass
 class GitCommitReport:
     """Result of creating a git commit."""
+
     success: bool
-    commit_hash: Optional[str] = None
-    branch: Optional[str] = None
-    message: Optional[str] = None
-    error: Optional[str] = None
+    commit_hash: str | None = None
+    branch: str | None = None
+    message: str | None = None
+    error: str | None = None
 
 
 # ============================================================================
 # ML Training Results
 # ============================================================================
 
+
 @dataclass
 class MLTrainingResult:
     """Result of Mode B (ML training)."""
+
     success: bool
-    experiments_run: Dict[int, ExperimentResult] = field(default_factory=dict)
-    best_experiment_id: Optional[int] = None
-    aggregated_results: Optional[AggregatedResults] = None
+    experiments_run: dict[int, ExperimentResult] = field(default_factory=dict)
+    best_experiment_id: int | None = None
+    aggregated_results: AggregatedResults | None = None
     paper_generated: bool = False
-    cloud_sync_report: Optional[SyncReport] = None
-    git_commits: List[str] = field(default_factory=list)
-    errors: List[str] = field(default_factory=list)
+    cloud_sync_report: SyncReport | None = None
+    git_commits: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
     duration_sec: float = 0.0
     timestamp: datetime = field(default_factory=datetime.utcnow)
 
@@ -298,15 +325,17 @@ class MLTrainingResult:
 # Overall Pipeline Results
 # ============================================================================
 
+
 @dataclass
 class PipelineResult:
     """Final result of entire pipeline execution."""
+
     success: bool
     mode: str  # "code_repair" | "ml_training"
-    mode_result: Optional[Any] = None  # CodeRepairResult | MLTrainingResult
+    mode_result: Any | None = None  # CodeRepairResult | MLTrainingResult
     duration_sec: float = 0.0
-    errors: List[str] = field(default_factory=list)
-    warnings: List[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
     timestamp: datetime = field(default_factory=datetime.utcnow)
 
     @property

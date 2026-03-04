@@ -48,6 +48,8 @@ import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 
+__all__ = ["SampleResult", "BenchmarkResult", "main"]
+
 import numpy as np
 
 # Defer heavy imports to avoid import-time crashes when deps are missing

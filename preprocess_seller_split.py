@@ -117,9 +117,8 @@ def _spacy_split(seller: str, nlp) -> tuple[str, str] | None:
     # Find the rightmost end of any ORG or PERSON entity.
     company_end: int | None = None
     for ent in doc.ents:
-        if ent.label_ in ("ORG", "PERSON"):
-            if company_end is None or ent.end_char > company_end:
-                company_end = ent.end_char
+        if ent.label_ in ("ORG", "PERSON") and (company_end is None or ent.end_char > company_end):
+            company_end = ent.end_char
 
     if company_end is None:
         # No clear company entity — cannot split with confidence.
@@ -161,7 +160,7 @@ def _llm_split(seller: str) -> tuple[str, str] | None:
     anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
 
     prompt = (
-        f'Split this seller string into company name and street address.\n'
+        f"Split this seller string into company name and street address.\n"
         f'Input: "{seller}"\n'
         f'Output JSON only (no commentary): {{"company": "...", "address": "..."}}'
     )
@@ -313,7 +312,9 @@ def build_cache(
 
     log.info(
         "Split breakdown — spaCy: %d, heuristic: %d, LLM: %d",
-        n_spacy, n_heuristic, n_llm,
+        n_spacy,
+        n_heuristic,
+        n_llm,
     )
     return cache
 

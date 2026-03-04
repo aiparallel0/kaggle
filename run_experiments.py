@@ -50,8 +50,6 @@ from typing import Any
 os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
 
 import torch
-from PIL import Image
-from torch.utils.data import Dataset
 from transformers import DonutProcessor, VisionEncoderDecoderModel
 
 import dataset_loaders
@@ -61,24 +59,30 @@ import dataset_loaders
 from constants import (
     BASE_MODEL,
     DEVICE,
-    FIELDS,
     MAX_LENGTH,
     NEW_TOKENS,
     SEED,
     WORKSPACE,
     _gpu_cleanup,
-    _mask_empty_field_labels,
     set_seed,
 )
 
 # Phase 3-5: Dynamic resource optimization and audit logging
 from resource_optimizer import (
+    TrainingAuditLogger,
     detect_system_resources,
     optimize_hyperparams,
-    TrainingAuditLogger,
 )
+from train import MultiDataset  # moved to train.py
 
-__all__ = ["ExperimentConfig", "EXPERIMENTS", "TRAIN_CONFIG", "run_experiment", "run_custom_experiment", "save_summary"]
+__all__ = [
+    "ExperimentConfig",
+    "EXPERIMENTS",
+    "TRAIN_CONFIG",
+    "run_experiment",
+    "run_custom_experiment",
+    "save_summary",
+]
 
 # ---------------------------------------------------------------------------
 # Logging Configuration — MUST be set before any third-party imports
@@ -96,9 +100,6 @@ for pkg in ["httpx", "urllib3", "datasets", "transformers", "huggingface_hub"]:
 
 RESULTS_DIR = Path("results")
 
-from train import MultiDataset, _LOW_VRAM_THRESHOLD_BYTES  # moved to train.py
-
-
 # ---------------------------------------------------------------------------
 # ExperimentConfig — THE single source of truth for all hyperparameters
 # ---------------------------------------------------------------------------
@@ -115,7 +116,9 @@ class ExperimentConfig:
 
     name: str
     datasets: list[str]
-    epochs: int = 10  # Per CLAUDE.md Section 3: optimal is 10 epochs. >12 causes overfit on 63-sample val set
+    epochs: int = (
+        10  # Per CLAUDE.md Section 3: optimal is 10 epochs. >12 causes overfit on 63-sample val set
+    )
     lr: float = 5e-5
     batch_size: int = 8
     seed: int = SEED
@@ -326,7 +329,9 @@ def train_experiment(
                     token_ids,
                 )
                 raise RuntimeError(f"Token addition failed for {token}; vocab may be corrupted")
-        logger.debug("[Token-verify] All %d SROIE tokens successfully added to vocab", len(NEW_TOKENS))
+        logger.debug(
+            "[Token-verify] All %d SROIE tokens successfully added to vocab", len(NEW_TOKENS)
+        )
 
         # After resize, embed_tokens and lm_head are separate tensors with
         # independent random init for the new tokens.  Set tie_word_embeddings=False
@@ -541,7 +546,9 @@ def run_experiment(exp_id: int, base_processor=None, base_model=None) -> dict:
             return cached
 
     # Load data
-    train_samples, val_samples = dataset_loaders.get_combined_dataset(config.datasets, sroie_oversample=config.sroie_oversample)
+    train_samples, val_samples = dataset_loaders.get_combined_dataset(
+        config.datasets, sroie_oversample=config.sroie_oversample
+    )
     if len(train_samples) == 0:
         print(f"[Exp {exp_id}] WARNING: No samples loaded - saving empty result.")
         result = {
@@ -612,7 +619,9 @@ def run_experiment(exp_id: int, base_processor=None, base_model=None) -> dict:
     result_file.write_text(json.dumps(result, indent=2))
     print(f"[Exp {exp_id}] Results saved -> {result_file}")
     print(f"[Exp {exp_id}] Global F1 = {metrics.get('global_f1', 'N/A')}")
-    _print_experiment_summary(exp_id, config, metrics, elapsed_sec=metrics.get("training_time_sec", 0.0))
+    _print_experiment_summary(
+        exp_id, config, metrics, elapsed_sec=metrics.get("training_time_sec", 0.0)
+    )
     return result
 
 
@@ -642,7 +651,9 @@ def run_custom_experiment(config: "ExperimentConfig", result_file: Path) -> dict
     print(f"{'=' * 72}")
 
     # Load data
-    train_samples, val_samples = dataset_loaders.get_combined_dataset(config.datasets, sroie_oversample=config.sroie_oversample)
+    train_samples, val_samples = dataset_loaders.get_combined_dataset(
+        config.datasets, sroie_oversample=config.sroie_oversample
+    )
     if len(train_samples) == 0:
         print(f"[Sweep Exp {exp_id}] WARNING: No samples loaded - saving empty result.")
         result = {
@@ -690,7 +701,9 @@ def run_custom_experiment(config: "ExperimentConfig", result_file: Path) -> dict
 # ---------------------------------------------------------------------------
 
 
-def _print_experiment_summary(exp_id: int, config: ExperimentConfig, metrics: dict, elapsed_sec: float = 0.0) -> None:
+def _print_experiment_summary(
+    exp_id: int, config: ExperimentConfig, metrics: dict, elapsed_sec: float = 0.0
+) -> None:
     """Print a compact one-line JSON summary for the experiment result.
 
     Format is AI-agent-friendly: machine-readable, minimal tokens, single line.
@@ -758,8 +771,10 @@ def main() -> None:
     audit_logger = TrainingAuditLogger(append_to_file="terminal.txt")
     resources = detect_system_resources()
     audit_logger.log_resource_detection(resources)
-    print(f"[Resources] GPU: {resources.device_name} ({resources.vram_gb:.1f}GB), "
-          f"RAM: {resources.ram_gb:.1f}GB, CPU: {resources.cpu_cores} cores")
+    print(
+        f"[Resources] GPU: {resources.device_name} ({resources.vram_gb:.1f}GB), "
+        f"RAM: {resources.ram_gb:.1f}GB, CPU: {resources.cpu_cores} cores"
+    )
 
     parser = argparse.ArgumentParser(description="Run DONUT SROIE experiments")
     group = parser.add_mutually_exclusive_group(required=True)

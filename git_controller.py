@@ -1,12 +1,11 @@
 """Git operations controller - branch/commit management."""
 
-import subprocess
 import logging
-from pathlib import Path
-from typing import Tuple, Optional
-from datetime import datetime
+import subprocess
 
 from pipeline_types import GitCommitReport
+
+__all__ = ["GitController"]
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +14,7 @@ class GitController:
     """Manage git operations for the pipeline."""
 
     @staticmethod
-    def get_current_branch() -> Optional[str]:
+    def get_current_branch() -> str | None:
         """Get current git branch name.
 
         Returns:
@@ -79,7 +78,7 @@ class GitController:
             return False
 
     @staticmethod
-    def commit(message: str, files: Optional[list] = None) -> GitCommitReport:
+    def commit(message: str, files: list | None = None) -> GitCommitReport:
         """Create a git commit.
 
         Args:
@@ -98,9 +97,7 @@ class GitController:
 
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
             if result.returncode != 0:
-                return GitCommitReport(
-                    success=False, error=f"Stage failed: {result.stderr}"
-                )
+                return GitCommitReport(success=False, error=f"Stage failed: {result.stderr}")
 
             # Commit
             result = subprocess.run(
@@ -135,12 +132,12 @@ class GitController:
             elif "nothing to commit" in result.stdout.lower():
                 logger.warning("Nothing to commit")
                 return GitCommitReport(
-                    success=True, message="Nothing to commit", branch=GitController.get_current_branch()
+                    success=True,
+                    message="Nothing to commit",
+                    branch=GitController.get_current_branch(),
                 )
             else:
-                return GitCommitReport(
-                    success=False, error=f"Commit failed: {result.stderr}"
-                )
+                return GitCommitReport(success=False, error=f"Commit failed: {result.stderr}")
 
         except Exception as e:
             logger.error(f"Git commit error: {e}")

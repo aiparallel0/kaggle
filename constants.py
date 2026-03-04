@@ -10,8 +10,15 @@ import os
 from pathlib import Path
 
 __all__ = [
-    "FIELDS", "IMAGE_EXTS", "MAX_LENGTH", "BASE_MODEL",
-    "SEED", "NEW_TOKENS", "EMPTY_GT", "DEVICE", "WORKSPACE",
+    "FIELDS",
+    "IMAGE_EXTS",
+    "MAX_LENGTH",
+    "BASE_MODEL",
+    "SEED",
+    "NEW_TOKENS",
+    "EMPTY_GT",
+    "DEVICE",
+    "WORKSPACE",
 ]
 # _get_sroie_dir, _optimal_num_workers, _gpu_cleanup are intentionally
 # NOT in __all__ (underscore-prefixed internal helpers)
@@ -125,7 +132,7 @@ def _gpu_cleanup(*objects) -> None:
         torch.cuda.empty_cache()
 
 
-def _mask_empty_field_labels(labels, gt: dict, tokenizer) -> "torch.Tensor":  # type: ignore[name-defined]
+def _mask_empty_field_labels(labels, gt: dict, tokenizer) -> "torch.Tensor":  # type: ignore[name-defined]  # noqa: F821
     """Set label token IDs for empty-field spans to -100.
 
     When a ground-truth field value is empty (e.g. address=""), including the

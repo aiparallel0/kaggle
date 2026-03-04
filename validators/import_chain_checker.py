@@ -1,9 +1,5 @@
 """Validator for checking the import chain - CRITICAL first check."""
 
-import sys
-import subprocess
-from pathlib import Path
-from typing import Tuple, List
 import logging
 
 logger = logging.getLogger(__name__)
@@ -19,22 +15,20 @@ class ImportChainChecker:
     """
 
     @staticmethod
-    def check_constants_import() -> Tuple[bool, str]:
+    def check_constants_import() -> tuple[bool, str]:
         """Check if constants.py can be imported.
 
         Returns:
             (success: bool, error_message: str)
         """
         try:
-            # Try importing all required constants
+            # Try importing the critical constants required by every pipeline stage.
+            # IMAGE_EXTS, MAX_LENGTH, NEW_TOKENS, and EMPTY_GT are validated in
+            # PreflightChecker.check_constants_integrity (preflight_checks.py).
             from constants import (
-                FIELDS,
                 BASE_MODEL,
+                FIELDS,
                 SEED,
-                IMAGE_EXTS,
-                MAX_LENGTH,
-                NEW_TOKENS,
-                EMPTY_GT,
             )
 
             # Validate required fields exist
@@ -59,7 +53,7 @@ class ImportChainChecker:
             return False, f"Unexpected error: {type(e).__name__}: {str(e)}"
 
     @staticmethod
-    def check_dataset_loaders_import() -> Tuple[bool, str]:
+    def check_dataset_loaders_import() -> tuple[bool, str]:
         """Check if dataset_loaders.py can be imported.
 
         Returns:
@@ -67,6 +61,7 @@ class ImportChainChecker:
         """
         try:
             from dataset_loaders import SROIELoader
+
             _ = SROIELoader()  # Try instantiating to catch runtime issues
             return True, ""
 
@@ -78,7 +73,7 @@ class ImportChainChecker:
             return False, f"Unexpected error: {type(e).__name__}: {str(e)}"
 
     @staticmethod
-    def check_all() -> Tuple[bool, List[str]]:
+    def check_all() -> tuple[bool, list[str]]:
         """Run all import chain checks.
 
         Returns:

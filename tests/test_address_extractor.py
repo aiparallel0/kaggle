@@ -5,7 +5,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import pytest
 
 from address_extractor import extract_address_from_seller
 
@@ -151,9 +150,7 @@ class TestSROIEKeyFileParsing:
         key_dir = tmp_path / "key"
         key_dir.mkdir()
         key_file = key_dir / "sample.txt"
-        key_file.write_text(
-            "STORE\n02/02/2024\n100 MAIN ST\nSUITE 5\n5.00", encoding="utf-8"
-        )
+        key_file.write_text("STORE\n02/02/2024\n100 MAIN ST\nSUITE 5\n5.00", encoding="utf-8")
         gt = _load_key_file(key_dir, "sample")
         assert gt is not None
         assert gt["address"] == "100 MAIN ST SUITE 5"

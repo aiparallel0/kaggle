@@ -164,7 +164,10 @@ class SROIEDataset(Dataset):
                 if n:
                     logger.info(
                         "Field masking: %d/%d samples will have <%s> masked (%.1f%%)",
-                        n, len(samples), f, 100.0 * n / len(samples),
+                        n,
+                        len(samples),
+                        f,
+                        100.0 * n / len(samples),
                     )
 
     # ------------------------------------------------------------------
@@ -219,7 +222,7 @@ class SROIEDataset(Dataset):
 # MultiDataset
 # ---------------------------------------------------------------------------
 
-_LOW_VRAM_THRESHOLD_BYTES = 25 * (1024 ** 3)  # 25 GB
+_LOW_VRAM_THRESHOLD_BYTES = 25 * (1024**3)  # 25 GB
 
 
 class MultiDataset(Dataset):
@@ -296,7 +299,10 @@ class MultiDataset(Dataset):
                 if n:
                     _log.info(
                         "Field masking: %d/%d samples will have <%s> masked (%.1f%%)",
-                        n, len(samples), f, 100.0 * n / len(samples),
+                        n,
+                        len(samples),
+                        f,
+                        100.0 * n / len(samples),
                     )
 
     def __len__(self) -> int:
@@ -421,7 +427,10 @@ class DonutTrainer:
         if _eff_warmup != _cfg_warmup:
             logger.warning(
                 "warmup_steps capped %d → %d (dataset has only %d opt steps over %d epochs)",
-                _cfg_warmup, _eff_warmup, _total_opt_steps, self.config.max_epochs,
+                _cfg_warmup,
+                _eff_warmup,
+                _total_opt_steps,
+                self.config.max_epochs,
             )
 
         training_args = Seq2SeqTrainingArguments(
@@ -581,9 +590,9 @@ def main():
     model.config.decoder_start_token_id = processor.tokenizer.convert_tokens_to_ids(["<s_sroie>"])[
         0
     ]
-    model.decoder.config.decoder_start_token_id = processor.tokenizer.convert_tokens_to_ids(["<s_sroie>"])[
-        0
-    ]
+    model.decoder.config.decoder_start_token_id = processor.tokenizer.convert_tokens_to_ids(
+        ["<s_sroie>"]
+    )[0]
     model.config.use_cache = False  # Required with gradient_checkpointing
     model.decoder.config.use_cache = False
     model.gradient_checkpointing_enable()

@@ -1,11 +1,12 @@
 """Test runner orchestration - ruff checks and pytest execution."""
 
 import asyncio
-import subprocess
 import logging
+import subprocess
 from dataclasses import dataclass, field
-from typing import List, Optional
 from pathlib import Path
+
+__all__ = ["TestRunner", "RuffReport", "RuffFormatReport", "PytestReport", "AllChecksReport"]
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +18,7 @@ class RuffReport:
     passed: bool
     stdout: str = ""
     stderr: str = ""
-    issues: List[str] = field(default_factory=list)
+    issues: list[str] = field(default_factory=list)
     exit_code: int = 0
 
 
@@ -56,7 +57,7 @@ class AllChecksReport:
     ruff_format_report: RuffFormatReport = field(
         default_factory=lambda: RuffFormatReport(passed=False)
     )
-    pytest_report: Optional[PytestReport] = None
+    pytest_report: PytestReport | None = None
 
     @property
     def all_passed(self) -> bool:
@@ -102,9 +103,7 @@ class TestRunner:
 
             # Parse output for issues
             if result.stdout:
-                report.issues = [
-                    line.strip() for line in result.stdout.split("\n") if line.strip()
-                ]
+                report.issues = [line.strip() for line in result.stdout.split("\n") if line.strip()]
 
             if report.passed:
                 logger.info("✓ Ruff check passed")
@@ -130,9 +129,7 @@ class TestRunner:
             )
 
     @staticmethod
-    async def run_ruff_format(
-        format_dir: Path = Path("."), fix: bool = False
-    ) -> RuffFormatReport:
+    async def run_ruff_format(format_dir: Path = Path("."), fix: bool = False) -> RuffFormatReport:
         """Run ruff format check/fix.
 
         Args:
@@ -169,7 +166,7 @@ class TestRunner:
             if report.passed:
                 logger.info("✓ Ruff format passed")
             else:
-                logger.warning(f"⚠ Ruff format issues found")
+                logger.warning("⚠ Ruff format issues found")
 
             return report
 
@@ -250,9 +247,7 @@ class TestRunner:
                     except ValueError:
                         pass
 
-            report.tests_run = (
-                report.tests_passed + report.tests_failed + report.tests_skipped
-            )
+            report.tests_run = report.tests_passed + report.tests_failed + report.tests_skipped
 
             if report.passed:
                 logger.info(f"✓ All {report.tests_passed} tests passed")
@@ -309,9 +304,7 @@ class TestRunner:
             pytest_report = await TestRunner.run_pytest(test_dir)
 
         # Combine results
-        all_passed = (
-            ruff_report.passed and ruff_format_report.passed
-        )
+        all_passed = ruff_report.passed and ruff_format_report.passed
         if pytest_report:
             all_passed = all_passed and pytest_report.passed
 
