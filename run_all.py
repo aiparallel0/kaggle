@@ -58,6 +58,20 @@ os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
 from constants import BASE_MODEL, IMAGE_EXTS, SEED  # noqa: E402, I001
 from retro_ui import RetroUIFormatter  # ASCII-only terminal formatting
 
+__all__ = [
+    "PipelineOrchestrator",
+    "StageResult",
+    "stage_install",
+    "stage_download",
+    "stage_pretrained_baseline",
+    "stage_experiments",
+    "stage_trocr_data_prep",
+    "stage_trocr_experiments",
+    "stage_benchmark",
+    "stage_comparison",
+    "stage_paper",
+]
+
 
 # ---------------------------------------------------------------------------
 # Auto-Install Dependencies (Phase 1)
@@ -244,20 +258,6 @@ class StageResult:
     duration: float  # seconds
     exit_status: int  # 0=success, 1=partial, 2=fatal
     warnings: list[str] = field(default_factory=list)
-
-
-@dataclass
-class QuickResults:
-    """Results container for quick mode execution."""
-
-    donut_train_losses: list[float]
-    donut_val_losses: list[float]
-    donut_metrics: dict
-    trocr_yolo_losses: dict
-    trocr_yolo_metrics: dict
-    training_config: dict
-    terminal_output_file: Path
-    training_time_seconds: float
 
 
 @dataclass
@@ -1336,7 +1336,6 @@ def _quick_mode_handler(args, logger: logging.Logger) -> int:
         # Generate results.tex
         logger.info("[Finale] Generating results.tex...")
         try:
-            from pathlib import Path  # noqa: E402, I001
             from quick_results_generator import ResultsGenerator, QuickResults  # noqa: E402
 
             # Load metrics from results/experiment_1.json

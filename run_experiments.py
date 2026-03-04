@@ -96,10 +96,7 @@ for pkg in ["httpx", "urllib3", "datasets", "transformers", "huggingface_hub"]:
 
 RESULTS_DIR = Path("results")
 
-# VRAM threshold (bytes) below which the RAM image cache is tightened to 25%
-# of available system RAM (instead of the default 50%) to reduce memory
-# pressure during sequential GPU experiments.
-_LOW_VRAM_THRESHOLD_BYTES = 25 * (1024 ** 3)  # 25 GB
+from train import MultiDataset, _LOW_VRAM_THRESHOLD_BYTES  # moved to train.py
 
 
 # ---------------------------------------------------------------------------
@@ -243,120 +240,6 @@ TRAIN_CONFIG: dict[str, Any] = {
     "seed": _default_config.seed,
     "gradient_accumulation_steps": _default_config.gradient_accumulation_steps,
 }
-
-
-# ---------------------------------------------------------------------------
-# PyTorch Dataset that works from a list of (image_path, gt_dict) tuples
-# ---------------------------------------------------------------------------
-
-
-class MultiDataset(Dataset):
-    """Wraps a list of (Path, dict) samples into a PyTorch Dataset.
-
-    When sufficient RAM is available, pre-loads all images into memory
-    to eliminate disk I/O during training.
-    """
-
-    def __init__(
-        self,
-        samples: list[tuple[Path, dict]],
-        processor: DonutProcessor,
-        max_length: int = MAX_LENGTH,
-        cache_in_ram: bool = True,
-    ):
-        self.samples = samples
-        self.processor = processor
-        self.max_length = max_length
-        self._image_cache: dict[int, Image.Image] = {}
-
-        if cache_in_ram and len(samples) > 0:
-            # Estimate memory: ~3MB per receipt image × num_samples
-            estimated_mb = len(samples) * 3
-            try:
-                import psutil
-
-                available_mb = psutil.virtual_memory().available // (1024 * 1024)
-            except ImportError:
-                available_mb = 0  # skip caching if psutil unavailable
-
-            # Only cache if we'd use less than 50% of available RAM.
-            # On systems with limited VRAM (< 25 GB), tighten the threshold to
-            # 25% to reduce memory pressure during sequential GPU experiments.
-            ram_threshold = 0.5
-            if torch.cuda.is_available():
-                try:
-                    vram_bytes = torch.cuda.get_device_properties(0).total_memory
-                    if vram_bytes < _LOW_VRAM_THRESHOLD_BYTES:
-                        ram_threshold = 0.25
-                except Exception:
-                    pass
-            if available_mb > 0 and estimated_mb < available_mb * ram_threshold:
-                import concurrent.futures
-
-                def _load_one(idx_path):
-                    idx, path = idx_path
-                    try:
-                        return idx, Image.open(path).convert("RGB")
-                    except Exception:
-                        return idx, None
-
-                with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
-                    for idx, img in pool.map(_load_one, enumerate(s[0] for s in samples)):
-                        if img is not None:
-                            self._image_cache[idx] = img
-
-                logging.getLogger(__name__).info(
-                    "[RAM Cache] %d/%d images cached", len(self._image_cache), len(samples)
-                )
-            else:
-                if available_mb > 0:
-                    logging.getLogger(__name__).info(
-                        "[RAM Cache] Skipped (need ~%dMB, available %dMB)",
-                        estimated_mb,
-                        available_mb,
-                    )
-
-        # Log per-field masking statistics so empty-field dilution is visible.
-        if samples:
-            _log = logging.getLogger(__name__)
-            for f in FIELDS:
-                n = sum(1 for _, gt in samples if not gt.get(f, "").strip())
-                if n:
-                    _log.info(
-                        "Field masking: %d/%d samples will have <%s> masked (%.1f%%)",
-                        n, len(samples), f, 100.0 * n / len(samples),
-                    )
-
-    def __len__(self) -> int:
-        return len(self.samples)
-
-    def __getitem__(self, idx: int) -> dict:
-        img_path, gt = self.samples[idx]
-
-        # Use cached image if available, otherwise load from disk
-        if idx in self._image_cache:
-            image = self._image_cache[idx]
-        else:
-            image = Image.open(img_path).convert("RGB")
-
-        target = "<s_sroie>"
-        for f in FIELDS:
-            v = gt.get(f, "")
-            target += f"<s_{f}>{v}</s_{f}>"
-        target += "</s_sroie>"
-
-        pixel_values = self.processor(image, return_tensors="pt").pixel_values.squeeze()
-        labels = self.processor.tokenizer(
-            target,
-            max_length=self.max_length,
-            padding="max_length",
-            truncation=True,
-            return_tensors="pt",
-        ).input_ids.squeeze()
-        labels[labels == self.processor.tokenizer.pad_token_id] = -100
-        # Mask empty-field spans so they contribute no gradient to the loss.
-        labels = _mask_empty_field_labels(labels, gt, self.processor.tokenizer)
-        return {"pixel_values": pixel_values, "labels": labels}
 
 
 # ---------------------------------------------------------------------------
