@@ -78,18 +78,35 @@ def _load_ocr_bboxes(box_dir: Path, stem: str) -> list[tuple[list[int], str]]:
     Each line has format: x1,y1,x2,y2,x3,y3,x4,y4,text
     Returns list of ([x1,y1,x2,y2], text) tuples using the axis-aligned
     bounding box of the four corner points.
+
+    Diagnostic notes are printed when the file is missing, when lines fail to
+    parse, or when the file exists but yields zero valid boxes — helping trace
+    stem mismatches and format problems without crashing the pipeline.
     """
     box_file = box_dir / f"{stem}.txt"
     if not box_file.exists():
+        # Check for case-insensitive match to surface stem-mismatch bugs.
+        candidates = [p for p in box_dir.iterdir() if p.stem.lower() == stem.lower()]
+        if candidates:
+            print(
+                f"  [YOLO] WARNING: box file not found for stem={stem!r} "
+                f"but case-insensitive match exists: {candidates[0].name!r}. "
+                "File system may be case-sensitive — rename the box file."
+            )
+        else:
+            print(f"  [YOLO] DEBUG: no box file for stem={stem!r} in {box_dir}")
         return []
 
+    raw_lines = box_file.read_text(encoding="utf-8", errors="replace").splitlines()
     results = []
-    for line in box_file.read_text(encoding="utf-8", errors="replace").splitlines():
+    parse_errors = 0
+    for line in raw_lines:
         line = line.strip()
         if not line:
             continue
         parts = line.split(",", 8)
         if len(parts) < 9:
+            parse_errors += 1
             continue
         try:
             coords = [int(p) for p in parts[:8]]
@@ -101,7 +118,19 @@ def _load_ocr_bboxes(box_dir: Path, stem: str) -> list[tuple[list[int], str]]:
             if text and (x2 - x1) > 0 and (y2 - y1) > 0:
                 results.append(([x1, y1, x2, y2], text))
         except (ValueError, IndexError):
+            parse_errors += 1
             continue
+
+    if parse_errors:
+        print(
+            f"  [YOLO] WARNING: {parse_errors} line(s) in {box_file.name} failed to parse "
+            f"(expected 'x1,y1,x2,y2,x3,y3,x4,y4,text' format)"
+        )
+    if not results and raw_lines:
+        print(
+            f"  [YOLO] WARNING: {box_file.name} has {len(raw_lines)} raw line(s) but "
+            "yielded 0 valid boxes — check coordinate/text format"
+        )
     return results
 
 
