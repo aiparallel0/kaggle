@@ -28,6 +28,15 @@ from PIL import Image
 from constants import FIELDS, IMAGE_EXTS
 from dataset_loaders import SROIELoader, _load_key_file
 
+__all__ = [
+    "group_words_into_lines",
+    "build_yolo_split",
+    "build_trocr_split",
+    "write_yolo_yaml",
+    "prepare_all",
+    "validate_preparation",
+]
+
 # ── Config ────────────────────────────────────────────────────────────────────
 DATA_DIR = Path("data")
 YOLO_DIR = DATA_DIR / "yolo"

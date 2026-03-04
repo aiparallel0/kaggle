@@ -2,6 +2,8 @@
 
 import logging
 
+__all__ = ["ImportChainChecker"]
+
 logger = logging.getLogger(__name__)
 
 

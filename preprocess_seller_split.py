@@ -47,6 +47,8 @@ from pathlib import Path
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
+__all__ = ["build_cache", "main"]
+
 # ---------------------------------------------------------------------------
 # Path
 # ---------------------------------------------------------------------------

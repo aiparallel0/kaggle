@@ -12,6 +12,8 @@ missing_keys and is randomly re-initialized."
 import logging
 from pathlib import Path
 
+__all__ = ["ModelWeightValidator"]
+
 logger = logging.getLogger(__name__)
 
 
