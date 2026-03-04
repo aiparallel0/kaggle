@@ -219,8 +219,17 @@ def build_yolo_split(split: str) -> int:
                 # 95% of image width/height centred — gives YOLO room to learn
                 # that the entire receipt is a "text_region"
                 margin = 0.025
-                boxes = [([int(W * margin), int(H * margin),
-                           int(W * (1 - margin)), int(H * (1 - margin))], "receipt")]
+                boxes = [
+                    (
+                        [
+                            int(W * margin),
+                            int(H * margin),
+                            int(W * (1 - margin)),
+                            int(H * (1 - margin)),
+                        ],
+                        "receipt",
+                    )
+                ]
 
         # Save image
         dest_img = out_img_dir / img_path.name
@@ -247,8 +256,7 @@ def build_yolo_split(split: str) -> int:
     label_files = [
         out_lbl_dir / f"{p.stem}.txt"
         for p in sorted(img_dir.iterdir())
-        if p.suffix.lower() in IMAGE_EXTS
-        and (out_lbl_dir / f"{p.stem}.txt").exists()
+        if p.suffix.lower() in IMAGE_EXTS and (out_lbl_dir / f"{p.stem}.txt").exists()
     ]
     total_instances = sum(1 for lbl in label_files if lbl.stat().st_size > 0)
     if count > 0 and total_instances == 0:

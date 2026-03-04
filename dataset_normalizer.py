@@ -129,7 +129,7 @@ class DatasetNormalizer:
             total = result["total"].strip()
             for prefix in _CURRENCY_PREFIXES:
                 if total.upper().startswith(prefix.upper()):
-                    total = total[len(prefix):].strip()
+                    total = total[len(prefix) :].strip()
                     break
             result["total"] = total
 
@@ -152,7 +152,11 @@ class DatasetNormalizer:
                 )
             logger.info(
                 "[DatasetNormalizer] %s: field '%s' coverage %.1f%% (%d/%d)",
-                self.source_name, field, coverage * 100, count, n,
+                self.source_name,
+                field,
+                coverage * 100,
+                count,
+                n,
             )
 
 
