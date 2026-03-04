@@ -29,6 +29,7 @@ Usage
   python run_all.py -quick                    # Quick test: Exp 1 + TrOCR+YOLO, gen results.tex
   python run_all.py -quick -all               # Hyperparameter sweep (batch_size, epochs, etc.)
   python run_all.py --skip-trocr              # Skip TrOCR+YOLO stages
+  python run_all.py --yolo                    # Start from TrOCR+YOLO only (skip DONUT stages)
   python run_all.py --force                   # Force re-run (delete cached results)
 
 Exit codes
@@ -1190,24 +1191,29 @@ class PipelineOrchestrator:
             print(repr(self))
             return exit_code
 
+        # --yolo: jump straight to TrOCR+YOLO stages, skipping install,
+        # download, pretrained baseline, and all DONUT experiments.
+        yolo_only = getattr(self.args, "yolo", False)
+
         # Stage 0 — SROIE install
-        if not self.args.skip_install:
+        if not self.args.skip_install and not yolo_only:
             self._run_stage("SROIE Install", stage_install)
 
         # Stage 1 — Dataset download + inline model pre-download
-        if not self.args.skip_download:
+        if not self.args.skip_download and not yolo_only:
             r = self._run_stage("Dataset Download", stage_download)
             if r.exit_status > exit_code:
                 exit_code = r.exit_status
 
         # Stage 1.5 — Pretrained baseline evaluation
-        if not self.args.skip_pretrained:
+        if not self.args.skip_pretrained and not yolo_only:
             self._run_stage("Pretrained Eval", stage_pretrained_baseline)
 
         # Stage 2 — DONUT experiments (sequential, one at a time)
-        r = self._run_stage("DONUT Experiments", stage_experiments)
-        if r.exit_status > exit_code:
-            exit_code = r.exit_status
+        if not yolo_only:
+            r = self._run_stage("DONUT Experiments", stage_experiments)
+            if r.exit_status > exit_code:
+                exit_code = r.exit_status
 
         # Stage 3 — TrOCR+YOLO dataset preparation
         # FIX: New stage — prepares YOLO bbox + TrOCR line crop data from
@@ -1565,6 +1571,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Skip TrOCR+YOLO stages (data prep, training, evaluation)",
     )
     p.add_argument(
+        "--yolo",
+        action="store_true",
+        help=(
+            "Start from TrOCR+YOLO stages only (Stage 3+). "
+            "Skips SROIE install, dataset download, pretrained baseline, and DONUT experiments. "
+            "Use this to re-run or test YOLO/TrOCR changes without waiting for DONUT training."
+        ),
+    )
+    p.add_argument(
         "--skip-benchmark",
         action="store_true",
         help="Skip head-to-head benchmark (DONUT vs YOLOv8+TrOCR+Regex)",
@@ -1670,6 +1685,9 @@ def main() -> None:
         total_elapsed = time.monotonic() - t_start
         logger.info(f"Quick mode complete in {total_elapsed / 60:.1f} min (exit code {exit_code})")
         sys.exit(exit_code)
+
+    if getattr(args, "yolo", False):
+        logger.info("--yolo flag detected: starting from TrOCR+YOLO stages (Stage 3+)")
 
     # ── Diagnostic: environment snapshot ──────────────────────────────────
     import importlib
