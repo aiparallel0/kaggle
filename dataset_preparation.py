@@ -58,6 +58,10 @@ BOX_DIR_CANDIDATES: dict[str, list[str]] = {
     "test": ["box_test", "test_box", "box"],
 }
 
+# Extensions to probe when resolving OCR box annotation files, in priority order.
+# Standard SROIE ships .txt; some distributions use .csv with the identical format.
+_BOX_EXTENSIONS = [".txt", ".csv"]
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -83,19 +87,29 @@ def _load_ocr_bboxes(box_dir: Path, stem: str) -> list[tuple[list[int], str]]:
     parse, or when the file exists but yields zero valid boxes — helping trace
     stem mismatches and format problems without crashing the pipeline.
     """
-    box_file = box_dir / f"{stem}.txt"
-    if not box_file.exists():
-        # Check for case-insensitive match to surface stem-mismatch bugs.
-        candidates = [p for p in box_dir.iterdir() if p.stem.lower() == stem.lower()]
-        if candidates:
+    # Probe extensions in priority order: .txt (standard SROIE), then .csv
+    box_file: Path | None = None
+    for ext in _BOX_EXTENSIONS:
+        candidate = box_dir / f"{stem}{ext}"
+        if candidate.exists():
+            box_file = candidate
+            break
+
+    if box_file is None:
+        # Try case-insensitive match for both extensions
+        ci_candidates = [
+            p for p in box_dir.iterdir()
+            if p.stem.lower() == stem.lower() and p.suffix.lower() in _BOX_EXTENSIONS
+        ]
+        if ci_candidates:
+            box_file = ci_candidates[0]
             print(
-                f"  [YOLO] WARNING: box file not found for stem={stem!r} "
-                f"but case-insensitive match exists: {candidates[0].name!r}. "
-                "File system may be case-sensitive — rename the box file."
+                f"  [YOLO] NOTE: using case-insensitive match {box_file.name!r} "
+                f"for stem={stem!r}."
             )
         else:
             print(f"  [YOLO] DEBUG: no box file for stem={stem!r} in {box_dir}")
-        return []
+            return []
 
     raw_lines = box_file.read_text(encoding="utf-8", errors="replace").splitlines()
     results = []
