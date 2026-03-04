@@ -976,7 +976,7 @@ def stage_benchmark(args) -> StageResult:
             )
             print(f"  WARNING: {w}")
             warnings.append(w)
-            donut_model_dir = Path(BASE_MODEL)  # HuggingFace hub ID
+            donut_model_dir = BASE_MODEL  # plain str — valid HuggingFace hub ID
 
     print(f"  DONUT model  : {donut_model_dir} (experiment {best_exp_id}, F1={best_f1:.4f})")
 
