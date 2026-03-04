@@ -199,10 +199,10 @@ def train_trocr(output_dir: Path | None = None) -> dict:
     print("=" * 60)
 
     processor = TrOCRProcessor.from_pretrained(TROCR_MODEL_ID)
-    # FIX: low_cpu_mem_usage=False forces all tensors to be materialized on CPU
-    # immediately.  Without this, accelerate may place weights on the meta device
-    # and the subsequent model.to(DEVICE) call crashes because meta tensors
-    # cannot be moved to a real device.
+    # FIX: low_cpu_mem_usage=False forces weight tensors to be materialized on CPU
+    # immediately instead of deferred loading via the meta device.
+    # FIX 2: After .to(DEVICE), non-persistent buffers (e.g. embed_positions._float_tensor)
+    # may still be on the meta device — see buffer sweep below.
     model = VisionEncoderDecoderModel.from_pretrained(TROCR_MODEL_ID, low_cpu_mem_usage=False)
 
     model.config.decoder_start_token_id = processor.tokenizer.cls_token_id
@@ -214,6 +214,15 @@ def train_trocr(output_dir: Path | None = None) -> dict:
     model.config.num_beams = 4
 
     model = model.to(DEVICE)
+    # FIX: Non-persistent buffers (e.g. embed_positions._float_tensor in TrOCR's
+    # sinusoidal positional embedding) are skipped by model.to() in newer versions
+    # of PyTorch and remain on the meta device, causing:
+    #   RuntimeError: Tensor on device meta is not on the expected device cuda:0!
+    # Walk all modules and force-materialise any remaining meta buffers.
+    for module in model.modules():
+        for buf_name, buf in list(module._buffers.items()):
+            if buf is not None and buf.device.type == "meta":
+                module._buffers[buf_name] = torch.zeros_like(buf, device=DEVICE)
 
     train_dir = TROCR_DATA_DIR / "train"
     val_dir = TROCR_DATA_DIR / "val"
