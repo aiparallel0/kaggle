@@ -48,7 +48,7 @@ import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 
-__all__ = ["SampleResult", "BenchmarkResult", "main"]
+__all__ = ["SampleResult", "BenchmarkResult", "compare_all", "main"]
 
 import numpy as np
 
@@ -978,6 +978,81 @@ def parse_args() -> argparse.Namespace:
         help="YOLO NMS IoU threshold",
     )
     return p.parse_args()
+
+
+def compare_all(
+    results_dir: Path = Path("results"), figures_dir: Path = Path("figures")
+) -> None:
+    """Generate cross-architecture comparison plots from saved benchmark results.
+
+    Called by run_all.py stage_comparison.  Gracefully no-ops when result
+    files are not yet available (e.g. first --yolo-only run with no DONUT data).
+    """
+    results_dir = Path(results_dir)
+    figures_dir = Path(figures_dir)
+
+    benchmark_path = results_dir / "benchmark_results.json"
+    all_exp_path = results_dir / "all_experiments.json"
+
+    if not benchmark_path.exists() and not all_exp_path.exists():
+        print(
+            "  [compare_all] No result files found "
+            f"({benchmark_path}, {all_exp_path}) — skipping comparison plots."
+        )
+        return
+
+    figures_dir.mkdir(parents=True, exist_ok=True)
+
+    # Load benchmark results if available
+    bench_data = {}
+    if benchmark_path.exists():
+        with open(benchmark_path) as f:
+            bench_data = json.load(f)
+
+    # Load DONUT experiment results if available
+    donut_data = {}
+    if all_exp_path.exists():
+        with open(all_exp_path) as f:
+            donut_data = json.load(f)
+
+    # Generate a simple comparison bar chart
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.set_title("Cross-Architecture Comparison (DONUT vs TrOCR+YOLO+Regex)")
+    ax.set_xlabel("Architecture / Experiment")
+    ax.set_ylabel("F1 Score")
+
+    labels: list[str] = []
+    values: list[float] = []
+
+    # Add DONUT experiment F1s
+    if isinstance(donut_data, dict):
+        for exp_key, exp_val in donut_data.items():
+            if isinstance(exp_val, dict):
+                f1 = exp_val.get("metrics", {}).get("global_f1")
+                if f1 is not None:
+                    labels.append(f"DONUT {exp_key}")
+                    values.append(float(f1))
+
+    # Add benchmark pipeline F1s
+    if isinstance(bench_data, list):
+        for entry in bench_data:
+            method = entry.get("method", "Unknown")
+            f1 = entry.get("global_f1") or entry.get("metrics", {}).get("global_f1")
+            if f1 is not None:
+                labels.append(method)
+                values.append(float(f1))
+
+    if labels:
+        ax.bar(range(len(labels)), values, tick_label=labels)
+        plt.xticks(rotation=45, ha="right")
+        plt.tight_layout()
+        out_path = figures_dir / "cross_arch_comparison.png"
+        fig.savefig(str(out_path), dpi=150)
+        print(f"  [compare_all] Saved comparison plot → {out_path}")
+    else:
+        print("  [compare_all] No F1 metrics found in result files — skipping plot.")
+
+    plt.close(fig)
 
 
 def main() -> None:

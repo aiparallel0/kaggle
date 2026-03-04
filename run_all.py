@@ -840,6 +840,19 @@ def stage_trocr_experiments(args) -> StageResult:
         yolo_output = workspace / "models" / "yolo_finetuned"
         yolo_weights = yolo_output / "run" / "weights" / "best.pt"
         if not yolo_weights.exists():
+            # Guard: skip YOLO training if the images/val split is absent or empty
+            yolo_images_val = workspace / "data" / "yolo" / "images" / "val"
+            if not yolo_images_val.exists() or not any(yolo_images_val.iterdir()):
+                w = (
+                    "YOLO images/val directory is empty or missing — "
+                    "skipping YOLO training. Ensure SROIE data is installed "
+                    "(run without --yolo first, or run stage_install)."
+                )
+                print(f"  WARNING: {w}", file=sys.stderr)
+                warnings.append(w)
+                return StageResult(
+                    name="TrOCR+YOLO", duration=0.0, exit_status=1, warnings=warnings
+                )
             print("  Training YOLOv8 text detector ...")
             trocr_yolo.train_yolo(yolo_output)
         else:
