@@ -27,7 +27,7 @@ from PIL import Image
 from tqdm import tqdm
 
 from constants import DEVICE, FIELDS, IMAGE_EXTS, MAX_LENGTH, _gpu_cleanup
-from dataset_loaders import _load_key_file
+from dataset_loaders import load_sroie_test
 
 # ── Config ──────────────────────────────────────────────────────────────────
 RESULTS_DIR = Path("results")
@@ -47,31 +47,12 @@ from donut_evaluator import compute_metrics as compute_sroie_metrics  # noqa: E4
 # Load SROIE test set (shared by both architectures)
 # ════════════════════════════════════════════════════════════════════════════
 def load_test_samples() -> list[tuple[Path, dict[str, str]]]:
-    """Load the 63 SROIE test images + ground truth.
+    """Load the 63 SROIE test images + ground truth via the canonical loader.
 
-    Returns list of (image_path, gt_dict) tuples.  Both DONUT and TrOCR+YOLO
-    are evaluated on this EXACT same set for fair comparison.
-
-    Uses _load_key_file from dataset_loaders (single source of truth for
-    SROIE key file parsing) instead of duplicating the .txt/.json logic.
+    Both DONUT and TrOCR+YOLO are evaluated on this EXACT same set.
+    Delegates to dataset_loaders.load_sroie_test() — single source of truth.
     """
-    test_img_dir = SROIE_DATA_DIR / "test_img"
-    test_key_dir = SROIE_DATA_DIR / "test_key"
-
-    samples = []
-    if not test_img_dir.exists():
-        print(f"  WARNING: test_img/ not found at {test_img_dir}")
-        return samples
-
-    for img_path in sorted(test_img_dir.iterdir()):
-        if img_path.suffix.lower() not in IMAGE_EXTS:
-            continue
-
-        gt = _load_key_file(test_key_dir, img_path.stem)
-        if gt:
-            samples.append((img_path, gt))
-
-    return samples
+    return load_sroie_test()
 
 
 # ════════════════════════════════════════════════════════════════════════════

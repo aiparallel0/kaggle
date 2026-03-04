@@ -13,6 +13,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from constants import FIELDS
+
 try:
     import matplotlib
 
@@ -23,6 +25,12 @@ try:
     HAS_MATPLOTLIB = True
 except ImportError:
     HAS_MATPLOTLIB = False
+
+__all__ = [
+    "QuickResults",
+    "ResultsGenerator",
+    "generate_loss_plots_from_results",
+]
 
 
 # ============================================================================
@@ -343,8 +351,7 @@ class ResultsGenerator:
         )
 
         # Per-field metrics
-        fields = ["company", "date", "address", "total"]
-        for field in fields:
+        for field in FIELDS:
             f1 = metrics.get(f"{field}_f1", 0.0)
             ned = metrics.get(f"{field}_ned", 0.0)
             lines.append(rf"{field.capitalize():12s} & {f1:8.4f} & {ned:8.4f} \\")

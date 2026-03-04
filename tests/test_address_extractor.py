@@ -88,7 +88,7 @@ class TestSROIEKeyFileParsing:
 
     def test_four_line_file(self, tmp_path):
         """Standard 4-line SROIE key file parses correctly."""
-        from dataset_loaders import _load_key_file
+        from dataset_loaders import _load_key_file  # testing internal behaviour — intentional
 
         key_dir = tmp_path / "key"
         key_dir.mkdir()
@@ -103,7 +103,7 @@ class TestSROIEKeyFileParsing:
 
     def test_five_line_file_multi_line_address(self, tmp_path):
         """5-line key file: address spans lines 2 and 3, total is line 4."""
-        from dataset_loaders import _load_key_file
+        from dataset_loaders import _load_key_file  # testing internal behaviour — intentional
 
         key_dir = tmp_path / "key"
         key_dir.mkdir()
@@ -119,7 +119,7 @@ class TestSROIEKeyFileParsing:
 
     def test_six_line_file_multi_line_address(self, tmp_path):
         """6-line key file: address spans lines 2-4, total is line 5."""
-        from dataset_loaders import _load_key_file
+        from dataset_loaders import _load_key_file  # testing internal behaviour — intentional
 
         key_dir = tmp_path / "key"
         key_dir.mkdir()

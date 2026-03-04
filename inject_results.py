@@ -107,13 +107,21 @@ class UnresolvedVarError(Exception):
 class PaperInjector:
     """Reads experiment JSON results and fills a LaTeX template."""
 
-    def __init__(self, results_dir: Path, template_path: Path) -> None:
+    def __init__(
+        self,
+        results_dir: Path,
+        template_path: Path,
+        _preloaded_experiments: dict | None = None,
+    ) -> None:
         self.results_dir = results_dir
         self.template_path = template_path
+        self._preloaded_experiments = _preloaded_experiments
 
     # -- data loading -------------------------------------------------------
 
     def _load_all_experiments(self) -> dict:
+        if self._preloaded_experiments is not None:
+            return self._preloaded_experiments
         path = self.results_dir / "all_experiments.json"
         if not path.exists():
             return {}
@@ -501,51 +509,35 @@ def generate_training_plots(results_dir: Path = Path("results")) -> None:
 def build_var_map(all_exp: dict) -> dict:
     """Build \\VAR{key} → replacement mapping (module-level wrapper).
 
-    Delegates to :class:`PaperInjector` via a temporary results directory
-    containing the supplied ``all_exp`` dict, so the logic lives in one place.
+    Delegates to PaperInjector.build_var_map(). Passes all_exp via
+    _preloaded_experiments to avoid a tempdir disk round-trip.
     """
-    import tempfile
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        tmp = Path(tmpdir)
-        # Write all_exp so PaperInjector can read it
-        (tmp / "all_experiments.json").write_text(json.dumps(all_exp), encoding="utf-8")
-        # Copy evaluation_results.json from legacy workspace if available
-        legacy_path = (
-            Path(os.environ.get("DONUT_WORKSPACE", "/workspace")) / "evaluation_results.json"
-        )
-        if legacy_path.exists():
-            (tmp / "evaluation_results.json").write_text(
-                legacy_path.read_text(encoding="utf-8"), encoding="utf-8"
-            )
-        # Use a dummy template path — we only need build_var_map
-        injector = PaperInjector(
-            results_dir=tmp,
-            template_path=Path("paper.tex"),
-        )
-        return injector.build_var_map()
+    injector = PaperInjector(
+        results_dir=Path("results"),
+        template_path=Path("paper.tex"),
+        _preloaded_experiments=all_exp,
+    )
+    return injector.build_var_map()
 
 
 def fill_paper(paper_path: str, output_path: str, var_map: dict) -> None:
     """Replace all \\VAR{key} tokens in paper.tex and write output_path.
 
-    Raises :class:`UnresolvedVarError` if any placeholder remains.
+    Raises UnresolvedVarError if any placeholder remains.
     """
     text = Path(paper_path).read_text(encoding="utf-8")
 
     def _replace(m: re.Match) -> str:
-        key = m.group(1)
-        return var_map.get(key, m.group(0))
+        return var_map.get(m.group(1), m.group(0))
 
-    filled = re.sub(r"\\VAR\{([^}]+)\}", _replace, text)
-    Path(output_path).write_text(filled, encoding="utf-8")
-    print(f"Filled paper written -> {output_path}")
-
-    remaining = re.findall(r"\\VAR\{([^}]+)\}", filled)
+    filled = _VAR_RE.sub(_replace, text)
+    remaining = _VAR_RE.findall(filled)
     if remaining:
         raise UnresolvedVarError(
             f"{len(remaining)} unresolved \\VAR{{}} placeholder(s): {remaining}"
         )
+    Path(output_path).write_text(filled, encoding="utf-8")
+    print(f"Filled paper written -> {output_path}")
 
 
 # ---------------------------------------------------------------------------
