@@ -13,6 +13,8 @@ from pathlib import Path
 
 from pipeline_types import DataSplitValidationReport
 
+__all__ = ["DataSplitValidator"]
+
 logger = logging.getLogger(__name__)
 
 

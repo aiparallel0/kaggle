@@ -7,6 +7,8 @@ from pathlib import Path
 
 from pipeline_types import BugPattern, BugReport, SeverityLevel
 
+__all__ = ["BugPatternDetector"]
+
 logger = logging.getLogger(__name__)
 
 

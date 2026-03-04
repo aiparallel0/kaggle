@@ -27,6 +27,8 @@ from transformers import DonutProcessor, VisionEncoderDecoderModel
 
 from constants import BASE_MODEL, MAX_LENGTH, NEW_TOKENS, SEED, _gpu_cleanup
 
+__all__ = ["train", "sweep_hyperparameters", "dry_run"]
+
 # ── Config ──────────────────────────────────────────────────────────────────
 MODEL_ID = BASE_MODEL
 DATA_DIR = Path("data/donut")

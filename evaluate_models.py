@@ -28,6 +28,15 @@ from tqdm import tqdm
 from constants import DEVICE, FIELDS, MAX_LENGTH, _get_sroie_dir, _gpu_cleanup
 from dataset_loaders import load_sroie_test
 
+__all__ = [
+    "load_test_samples",
+    "evaluate_donut_on_test",
+    "evaluate_trocr_yolo_on_test",
+    "print_metrics",
+    "generate_comparison_report",
+    "generate_json_summary",
+]
+
 # ── Config ──────────────────────────────────────────────────────────────────
 RESULTS_DIR = Path("results")
 

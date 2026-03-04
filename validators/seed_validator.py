@@ -2,6 +2,8 @@
 
 import logging
 
+__all__ = ["SeedValidator"]
+
 logger = logging.getLogger(__name__)
 
 

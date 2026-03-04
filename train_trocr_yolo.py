@@ -33,6 +33,13 @@ from transformers import (
 
 from constants import DEVICE, FIELDS, SEED, WORKSPACE, _gpu_cleanup, _optimal_num_workers
 
+__all__ = [
+    "TrOCRReceiptDataset",
+    "train_yolo",
+    "train_trocr",
+    "run_trocr_yolo_inference",
+]
+
 # ── Config ──────────────────────────────────────────────────────────────────
 TROCR_MODEL_ID = "microsoft/trocr-large-printed"
 YOLO_BASE = "yolov8x.pt"  # extra-large — leverages available GPU VRAM (~95GB)
