@@ -53,6 +53,7 @@ except Exception:
 
 # FIX: Import shared constants from single source of truth (constants.py)
 # instead of defining EMPTY_GT and IMAGE_EXTS independently here.
+from address_extractor import extract_address_from_seller
 from constants import EMPTY_GT, SEED, _get_sroie_dir
 from constants import IMAGE_EXTS as _IMAGE_EXTS_SET
 
@@ -231,8 +232,8 @@ def _load_key_file(key_dir: Path, stem: str) -> dict[str, str]:
                 return {
                     "company": lines[0].strip(),
                     "date": lines[1].strip(),
-                    "address": lines[2].strip(),
-                    "total": lines[3].strip(),
+                    "address": " ".join(line.strip() for line in lines[2:-1]).strip(),
+                    "total": lines[-1].strip(),
                 }
         except OSError:
             pass
@@ -968,11 +969,11 @@ class InvoicesDonutLoader(BaseDatasetLoader):
 
             header = gt_parse.get("header", {})
             if isinstance(header, dict):
-                gt["company"] = str(header.get("seller", "")).strip()
+                seller_raw = str(header.get("seller", "")).strip()
+                company_name, address = extract_address_from_seller(seller_raw)
+                gt["company"] = company_name
                 gt["date"] = str(header.get("invoice_date", "")).strip()
-                # seller_address key does not exist in the actual HuggingFace parquet data
-                # (field coverage logs confirm address = 0/475 = 0.0%), so leave it empty.
-                gt["address"] = ""
+                gt["address"] = address
 
             summary = gt_parse.get("summary", {})
             if isinstance(summary, dict):
