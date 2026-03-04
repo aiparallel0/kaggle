@@ -205,12 +205,38 @@ def build_yolo_split(split: str) -> int:
             raw_boxes = _load_ocr_bboxes(box_dir, img_path.stem)
             boxes = group_words_into_lines(raw_boxes)
 
+        # FIX: When no box/ directory exists, fall back to a single full-image
+        # bounding box so YOLO is not trained on pure background images.
+        # This produces a degraded but functional text-region detector
+        # (vs. the previous behaviour of writing empty label files and training
+        # YOLO on 500 "background" images for 50 epochs to no effect).
+        if not boxes and box_dir is None:
+            # Load key file to confirm the image contains receipt content
+            _, key_subdir = SPLIT_MAP[split]
+            key_dir = SROIE_DATA_DIR / key_subdir
+            gt = _load_key_file(key_dir, img_path.stem)
+            if any(v for v in gt.values()):
+                # 95% of image width/height centred — gives YOLO room to learn
+                # that the entire receipt is a "text_region"
+                margin = 0.025
+                boxes = [
+                    (
+                        [
+                            int(W * margin),
+                            int(H * margin),
+                            int(W * (1 - margin)),
+                            int(H * (1 - margin)),
+                        ],
+                        "receipt",
+                    )
+                ]
+
         # Save image
         dest_img = out_img_dir / img_path.name
         if not dest_img.exists():
             img.save(dest_img)
 
-        # Write YOLO label file (may be empty if no box annotations)
+        # Write YOLO label file
         lbl_path = out_lbl_dir / f"{img_path.stem}.txt"
         with open(lbl_path, "w") as f:
             for bbox, _text in boxes:
@@ -224,6 +250,27 @@ def build_yolo_split(split: str) -> int:
         count += 1
 
     print(f"  [YOLO] {split}: {count} images -> {out_img_dir}")
+
+    # Safety: if every label file is empty after preparation, abort with a
+    # clear diagnostic rather than silently training YOLO on nothing.
+    label_files = [
+        out_lbl_dir / f"{p.stem}.txt"
+        for p in sorted(img_dir.iterdir())
+        if p.suffix.lower() in IMAGE_EXTS and (out_lbl_dir / f"{p.stem}.txt").exists()
+    ]
+    total_instances = sum(1 for lbl in label_files if lbl.stat().st_size > 0)
+    if count > 0 and total_instances == 0:
+        raise RuntimeError(
+            f"[YOLO] build_yolo_split('{split}'): {count} images processed but "
+            f"every label file is empty — YOLO would train on pure background. "
+            f"Check SROIE_DATA_DIR={SROIE_DATA_DIR} and that box/ or key/ files exist."
+        )
+    if box_dir is None and count > 0:
+        print(
+            f"  [YOLO] {split}: WARNING — no box/ directory found; "
+            f"used full-image fallback boxes for {count} images. "
+            f"Label quality is degraded; provide box/ annotations for best results."
+        )
     return count
 
 

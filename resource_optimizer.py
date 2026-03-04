@@ -11,7 +11,7 @@ a persistent terminal.txt file, enabling data-driven refactoring decisions.
 CLAUDE.md Reference:
   - Optimal batch size: 8 (from testing); fallback 4 (low VRAM) or 16 (high VRAM)
   - Epochs: 10 (fixed per CLAUDE.md convergence analysis, NOT 30)
-  - Warmup steps: 500 (fixed per CLAUDE.md LR schedule)
+  - Warmup steps: 40 (fixed per CLAUDE.md LR schedule; see ExperimentConfig.warmup_steps)
   - Learning rates: encoder=5e-5, decoder=1e-4 (fixed, layerwise LR)
   - Early stopping patience: 3 (fixed)
 """

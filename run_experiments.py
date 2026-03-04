@@ -576,11 +576,23 @@ def run_experiment(exp_id: int, base_processor=None, base_model=None) -> dict:
     audit_logger = TrainingAuditLogger(append_to_file="terminal.txt")
     audit_logger.log_config_decision(exp_id, optimized_config)
 
-    # Override static config with optimized values (but keep epochs/warmup fixed per CLAUDE.md)
-    # These are already set in config, but we print the optimization reasoning
-    print(f"[Exp {exp_id}] Resource optimization: {optimized_config.config_explanation}")
+    # FIX: Actually apply the optimized values to the experiment config.
+    # Previously this was a no-op — optimized_config was computed and discarded.
+    # Only batch_size and gradient_accumulation_steps are overridden; epochs and
+    # warmup_steps remain fixed per CLAUDE.md experiment design.
+    config = EXPERIMENTS[exp_id]
+    old_batch = config.batch_size
+    old_accum = config.gradient_accumulation_steps
+    config.batch_size = optimized_config.batch_size
+    config.gradient_accumulation_steps = optimized_config.gradient_accumulation_steps
+    print(
+        f"[Exp {exp_id}] Resource optimization applied: "
+        f"batch_size {old_batch} → {config.batch_size}, "
+        f"grad_accum {old_accum} → {config.gradient_accumulation_steps} "
+        f"({optimized_config.config_explanation})"
+    )
 
-    # Train
+    # Train — pass config explicitly so train_experiment uses the optimized values
     model_dir = WORKSPACE / "models" / f"experiment_{exp_id}"
     model_dir.mkdir(parents=True, exist_ok=True)
     log_history = train_experiment(
@@ -590,6 +602,7 @@ def run_experiment(exp_id: int, base_processor=None, base_model=None) -> dict:
         val_samples=val_samples,
         base_processor=base_processor,
         base_model=base_model,
+        config=config,
     )
 
     # Evaluate
