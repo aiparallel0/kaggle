@@ -199,7 +199,11 @@ def train_trocr(output_dir: Path | None = None) -> dict:
     print("=" * 60)
 
     processor = TrOCRProcessor.from_pretrained(TROCR_MODEL_ID)
-    model = VisionEncoderDecoderModel.from_pretrained(TROCR_MODEL_ID)
+    # FIX: low_cpu_mem_usage=False forces all tensors to be materialized on CPU
+    # immediately.  Without this, accelerate may place weights on the meta device
+    # and the subsequent model.to(DEVICE) call crashes because meta tensors
+    # cannot be moved to a real device.
+    model = VisionEncoderDecoderModel.from_pretrained(TROCR_MODEL_ID, low_cpu_mem_usage=False)
 
     model.config.decoder_start_token_id = processor.tokenizer.cls_token_id
     model.config.pad_token_id = processor.tokenizer.pad_token_id

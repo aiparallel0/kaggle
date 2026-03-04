@@ -72,7 +72,7 @@ except ImportError as e:
 # ─────────────────────────────────────────────────────────────────────────────
 # Constants — imported from single source of truth (constants.py)
 # ─────────────────────────────────────────────────────────────────────────────
-from constants import BASE_MODEL, FIELDS, IMAGE_EXTS
+from constants import BASE_MODEL, FIELDS, IMAGE_EXTS, MAX_LENGTH
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -324,7 +324,7 @@ class DonutPipeline:
             outputs = self.model.generate(
                 pixel_values,
                 decoder_input_ids=decoder_input_ids,
-                max_length=self.model.config.max_length,
+                max_length=MAX_LENGTH,
                 early_stopping=True,
                 pad_token_id=self.processor.tokenizer.pad_token_id,
                 eos_token_id=self.processor.tokenizer.eos_token_id,
