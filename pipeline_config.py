@@ -5,11 +5,9 @@ See also: training_config.py — TrainingConfig for model hyperparameters
 """
 
 import os
-import sys
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Optional, List
 from enum import Enum
+from pathlib import Path
 
 
 class PipelineMode(str, Enum):
@@ -62,14 +60,14 @@ class CloudConfig:
     gpu_required: bool = True
     skip_trocr: bool = False
     skip_pretrained_baseline: bool = False
-    experiments_to_run: List[int] = field(default_factory=lambda: list(range(1, 9)))
+    experiments_to_run: list[int] = field(default_factory=lambda: list(range(1, 9)))
 
     # ====== Cloud Storage Settings ======
     # Note: Based on user feedback, we commit results to GitHub (via git)
     # No S3/GCS needed, simplifies implementation
-    s3_bucket: Optional[str] = None
-    s3_region: Optional[str] = None
-    gcs_bucket: Optional[str] = None
+    s3_bucket: str | None = None
+    s3_region: str | None = None
+    gcs_bucket: str | None = None
 
     # ====== Validation Settings ======
     enable_ruff_check: bool = True
@@ -87,7 +85,7 @@ class CloudConfig:
     stream_training_logs: bool = False  # Show training details in console
 
     # ====== Paths ======
-    sroie_data_dir: Optional[Path] = None
+    sroie_data_dir: Path | None = None
     results_dir: Path = Path("./results")
 
     @staticmethod
@@ -220,7 +218,7 @@ class CloudConfig:
 
         return config
 
-    def validate(self) -> tuple[bool, List[str]]:
+    def validate(self) -> tuple[bool, list[str]]:
         """Validate configuration for consistency.
 
         Returns:

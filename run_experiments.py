@@ -50,8 +50,6 @@ from typing import Any
 os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
 
 import torch
-from PIL import Image
-from torch.utils.data import Dataset
 from transformers import DonutProcessor, VisionEncoderDecoderModel
 
 import dataset_loaders
@@ -61,21 +59,19 @@ import dataset_loaders
 from constants import (
     BASE_MODEL,
     DEVICE,
-    FIELDS,
     MAX_LENGTH,
     NEW_TOKENS,
     SEED,
     WORKSPACE,
     _gpu_cleanup,
-    _mask_empty_field_labels,
     set_seed,
 )
 
 # Phase 3-5: Dynamic resource optimization and audit logging
 from resource_optimizer import (
+    TrainingAuditLogger,
     detect_system_resources,
     optimize_hyperparams,
-    TrainingAuditLogger,
 )
 
 __all__ = ["ExperimentConfig", "EXPERIMENTS", "TRAIN_CONFIG", "run_experiment", "run_custom_experiment", "save_summary"]
@@ -96,8 +92,7 @@ for pkg in ["httpx", "urllib3", "datasets", "transformers", "huggingface_hub"]:
 
 RESULTS_DIR = Path("results")
 
-from train import MultiDataset, _LOW_VRAM_THRESHOLD_BYTES  # moved to train.py
-
+from train import MultiDataset  # moved to train.py
 
 # ---------------------------------------------------------------------------
 # ExperimentConfig — THE single source of truth for all hyperparameters

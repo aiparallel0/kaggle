@@ -10,15 +10,11 @@ This module runs all safety checks before any pipeline stage executes.
 import asyncio
 import logging
 from pathlib import Path
-from typing import List, Optional
-from datetime import datetime
 
-from pipeline_types import PreflightReport, CheckResult, CheckStatus
-
+from pipeline_types import CheckResult, CheckStatus, PreflightReport
 from validators import (
-    ImportChainChecker,
-    BugPatternDetector,
     DataSplitValidator,
+    ImportChainChecker,
     SeedValidator,
 )
 
@@ -28,7 +24,7 @@ logger = logging.getLogger(__name__)
 class PreflightChecker:
     """Run comprehensive preflight validation before pipeline execution."""
 
-    def __init__(self, sroie_dir: Optional[Path] = None):
+    def __init__(self, sroie_dir: Path | None = None):
         self.sroie_dir = sroie_dir or Path("/workspace/ICDAR-2019-SROIE/data")
 
     async def check_import_chain(self) -> CheckResult:
@@ -55,13 +51,13 @@ class PreflightChecker:
 
         try:
             from constants import (
-                FIELDS,
                 BASE_MODEL,
-                SEED,
+                EMPTY_GT,
+                FIELDS,
                 IMAGE_EXTS,
                 MAX_LENGTH,
                 NEW_TOKENS,
-                EMPTY_GT,
+                SEED,
             )
 
             errors = []
@@ -342,11 +338,11 @@ class PreflightChecker:
         # Log summary
         logger.info("=" * 70)
         if report.passed:
-            logger.info(f"✓ PREFLIGHT CHECKS PASSED")
+            logger.info("✓ PREFLIGHT CHECKS PASSED")
             if report.warnings:
                 logger.warning(f"  Warnings: {len(report.warnings)}")
         else:
-            logger.error(f"❌ PREFLIGHT CHECKS FAILED")
+            logger.error("❌ PREFLIGHT CHECKS FAILED")
             for error in report.errors:
                 logger.error(f"  - {error}")
 
@@ -374,7 +370,7 @@ def validate_pipeline() -> bool:
     }
 
     try:
-        from constants import FIELDS, BASE_MODEL, MAX_LENGTH  # noqa: F401
+        from constants import BASE_MODEL, FIELDS, MAX_LENGTH  # noqa: F401
         print(f"  ✓ Constants loaded: {len(FIELDS)} fields, max_length={MAX_LENGTH}")
         checks["constants"] = True
     except Exception as e:

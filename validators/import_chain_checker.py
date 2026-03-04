@@ -1,9 +1,5 @@
 """Validator for checking the import chain - CRITICAL first check."""
 
-import sys
-import subprocess
-from pathlib import Path
-from typing import Tuple, List
 import logging
 
 logger = logging.getLogger(__name__)
@@ -19,7 +15,7 @@ class ImportChainChecker:
     """
 
     @staticmethod
-    def check_constants_import() -> Tuple[bool, str]:
+    def check_constants_import() -> tuple[bool, str]:
         """Check if constants.py can be imported.
 
         Returns:
@@ -28,13 +24,13 @@ class ImportChainChecker:
         try:
             # Try importing all required constants
             from constants import (
-                FIELDS,
                 BASE_MODEL,
-                SEED,
+                EMPTY_GT,
+                FIELDS,
                 IMAGE_EXTS,
                 MAX_LENGTH,
                 NEW_TOKENS,
-                EMPTY_GT,
+                SEED,
             )
 
             # Validate required fields exist
@@ -59,7 +55,7 @@ class ImportChainChecker:
             return False, f"Unexpected error: {type(e).__name__}: {str(e)}"
 
     @staticmethod
-    def check_dataset_loaders_import() -> Tuple[bool, str]:
+    def check_dataset_loaders_import() -> tuple[bool, str]:
         """Check if dataset_loaders.py can be imported.
 
         Returns:
@@ -78,7 +74,7 @@ class ImportChainChecker:
             return False, f"Unexpected error: {type(e).__name__}: {str(e)}"
 
     @staticmethod
-    def check_all() -> Tuple[bool, List[str]]:
+    def check_all() -> tuple[bool, list[str]]:
         """Run all import chain checks.
 
         Returns:

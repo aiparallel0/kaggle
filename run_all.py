@@ -56,7 +56,6 @@ from pathlib import Path
 os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
 
 from constants import BASE_MODEL, IMAGE_EXTS, SEED  # noqa: E402, I001
-from retro_ui import RetroUIFormatter  # ASCII-only terminal formatting
 
 __all__ = [
     "PipelineOrchestrator",
@@ -378,7 +377,7 @@ def _setup_hf_auth() -> None:
         except Exception as e:
             print(f"  [HF Auth] Login failed: {e} — continuing unauthenticated")
     else:
-        raise EnvironmentError(
+        raise OSError(
             "[HF Auth] No HuggingFace token found. Authenticated downloads are required.\n"
             "Fix: export HF_TOKEN=hf_... or create hf_token.txt in the project root."
         )
@@ -1336,7 +1335,7 @@ def _quick_mode_handler(args, logger: logging.Logger) -> int:
         # Generate results.tex
         logger.info("[Finale] Generating results.tex...")
         try:
-            from quick_results_generator import ResultsGenerator, QuickResults  # noqa: E402
+            from quick_results_generator import QuickResults, ResultsGenerator  # noqa: E402
 
             # Load metrics from results/experiment_1.json
             results_file = Path("results") / "experiment_1.json"

@@ -194,9 +194,10 @@ def sweep_hyperparameters():
 
 def dry_run():
     """Validate training setup without actually training the model."""
-    from train import SROIEDataset
     import json
     from pathlib import Path
+
+    from train import SROIEDataset
 
     print("\n🧪 Running dry-run validation...\n")
 
@@ -240,19 +241,19 @@ def dry_run():
     print(f"  ✓ Found {len(train_samples)} training samples")
 
     if not val_samples:
-        print(f"  ⚠️  No validation samples found (early stopping disabled)")
+        print("  ⚠️  No validation samples found (early stopping disabled)")
     else:
         print(f"  ✓ Found {len(val_samples)} validation samples")
 
     # Check dataset creation
     try:
         train_ds = SROIEDataset.from_samples(processor, train_samples[:1], max_length=MAX_LENGTH)
-        print(f"  ✓ Successfully created training dataset")
+        print("  ✓ Successfully created training dataset")
     except Exception as e:
         print(f"  ✗ Failed to create dataset: {e}")
         return False
 
-    print(f"\n✅ Dry-run PASSED: Ready to train")
+    print("\n✅ Dry-run PASSED: Ready to train")
     return True
 
 

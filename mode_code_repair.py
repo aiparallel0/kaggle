@@ -1,14 +1,13 @@
 """Mode A: Code Repair Orchestrator - Ollama-based automated bug fixing."""
 
-import asyncio
 import logging
 from pathlib import Path
 
+from git_controller import GitController
 from pipeline_config import CloudConfig
 from pipeline_types import CodeRepairResult
-from validators import BugPatternDetector
 from test_runner import TestRunner
-from git_controller import GitController
+from validators import BugPatternDetector
 
 logger = logging.getLogger(__name__)
 

@@ -2,9 +2,8 @@
 
 import json
 import logging
-from pathlib import Path
-from typing import Dict, List, Optional
 from datetime import datetime
+from pathlib import Path
 
 from pipeline_types import AggregatedResults, ExperimentResult
 
@@ -18,7 +17,7 @@ class ResultsAggregator:
         self.results_dir = results_dir
         self.results_dir.mkdir(parents=True, exist_ok=True)
 
-    def aggregate_experiments(self) -> Optional[AggregatedResults]:
+    def aggregate_experiments(self) -> AggregatedResults | None:
         """Load and aggregate all experiment results.
 
         Returns:
@@ -79,8 +78,8 @@ class ResultsAggregator:
 
         return agg
 
-    def build_paper_metrics(self, agg: AggregatedResults) -> Dict[str, str]:
-        """Build \VAR{} key→value map for LaTeX template.
+    def build_paper_metrics(self, agg: AggregatedResults) -> dict[str, str]:
+        r"""Build \VAR{} key→value map for LaTeX template.
 
         Args:
             agg: Aggregated results
@@ -119,7 +118,7 @@ class ResultsAggregator:
         return metrics
 
     def save_aggregated_results(
-        self, agg: AggregatedResults, output_file: Optional[Path] = None
+        self, agg: AggregatedResults, output_file: Path | None = None
     ) -> bool:
         """Save aggregated results to JSON.
 
@@ -163,7 +162,7 @@ class ResultsAggregator:
             return False
 
     @staticmethod
-    def load_all_experiments(results_dir: Path) -> List[ExperimentResult]:
+    def load_all_experiments(results_dir: Path) -> list[ExperimentResult]:
         """Load all experiments from results directory.
 
         Args:

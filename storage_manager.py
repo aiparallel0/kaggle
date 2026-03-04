@@ -7,10 +7,8 @@ No S3/GCS needed for MVP.
 
 import logging
 from pathlib import Path
-from typing import Optional
-from datetime import datetime
 
-from pipeline_types import UploadReport, SyncReport
+from pipeline_types import SyncReport, UploadReport
 
 logger = logging.getLogger(__name__)
 

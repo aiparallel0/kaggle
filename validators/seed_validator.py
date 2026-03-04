@@ -1,6 +1,5 @@
 """Validator for seed reproducibility - ensures SEED=42 is consistent."""
 
-from typing import Tuple, List
 import logging
 
 logger = logging.getLogger(__name__)
@@ -12,7 +11,7 @@ class SeedValidator:
     EXPECTED_SEED = 42
 
     @staticmethod
-    def check_constants_seed() -> Tuple[bool, str]:
+    def check_constants_seed() -> tuple[bool, str]:
         """Check if constants.SEED == 42.
 
         Returns:
@@ -36,7 +35,7 @@ class SeedValidator:
             return False, f"Unexpected error: {e}"
 
     @staticmethod
-    def check_seed_set_calls() -> Tuple[bool, str]:
+    def check_seed_set_calls() -> tuple[bool, str]:
         """Check if set_seed() is called before experiments.
 
         Returns:
@@ -45,7 +44,6 @@ class SeedValidator:
         try:
             # Try importing set_seed
             import importlib
-            import sys
 
             # Look for set_seed in common locations
             for module_name in ["utils", "train", "run_experiments", "run_all"]:
@@ -65,7 +63,7 @@ class SeedValidator:
             return True, ""
 
     @staticmethod
-    def test_rng_consistency() -> Tuple[bool, str]:
+    def test_rng_consistency() -> tuple[bool, str]:
         """Test that RNGs are consistent when seeded.
 
         Returns:
@@ -73,6 +71,7 @@ class SeedValidator:
         """
         try:
             import random
+
             import numpy as np
 
             # Seed all RNGs
@@ -101,7 +100,7 @@ class SeedValidator:
             return True, ""
 
     @staticmethod
-    def check_all() -> Tuple[bool, List[str]]:
+    def check_all() -> tuple[bool, list[str]]:
         """Run all seed checks.
 
         Returns:

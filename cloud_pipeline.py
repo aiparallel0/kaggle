@@ -11,13 +11,11 @@ Usage:
   python cloud_pipeline.py --mode auto  (detect from git branch)
 """
 
-import asyncio
-import sys
-import logging
 import argparse
-from pathlib import Path
+import asyncio
+import logging
+import sys
 from datetime import datetime
-import os
 
 # Set up logging early
 logging.basicConfig(
@@ -27,8 +25,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 from pipeline_config import CloudConfig, PipelineMode
-from preflight_checks import PreflightChecker
 from pipeline_types import PipelineResult
+from preflight_checks import PreflightChecker
 
 
 class CloudPipelineOrchestrator:

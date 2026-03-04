@@ -26,7 +26,7 @@ import torch
 from PIL import Image
 from tqdm import tqdm
 
-from constants import DEVICE, FIELDS, IMAGE_EXTS, MAX_LENGTH, _gpu_cleanup
+from constants import DEVICE, FIELDS, MAX_LENGTH, _gpu_cleanup
 from dataset_loaders import load_sroie_test
 
 # ── Config ──────────────────────────────────────────────────────────────────

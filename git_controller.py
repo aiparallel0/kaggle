@@ -1,10 +1,7 @@
 """Git operations controller - branch/commit management."""
 
-import subprocess
 import logging
-from pathlib import Path
-from typing import Tuple, Optional
-from datetime import datetime
+import subprocess
 
 from pipeline_types import GitCommitReport
 
@@ -15,7 +12,7 @@ class GitController:
     """Manage git operations for the pipeline."""
 
     @staticmethod
-    def get_current_branch() -> Optional[str]:
+    def get_current_branch() -> str | None:
         """Get current git branch name.
 
         Returns:
@@ -79,7 +76,7 @@ class GitController:
             return False
 
     @staticmethod
-    def commit(message: str, files: Optional[list] = None) -> GitCommitReport:
+    def commit(message: str, files: list | None = None) -> GitCommitReport:
         """Create a git commit.
 
         Args:

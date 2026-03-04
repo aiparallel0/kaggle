@@ -251,7 +251,11 @@ class TestSellerSplitCache:
     def test_cache_used_in_remap(self):
         """When seller is in cache, _invoices_donut_remap uses cached values."""
         import json
-        from dataset_loaders import InvoicesDonutLoader, _SELLER_SPLIT_CACHE, _load_seller_split_cache
+
+        from dataset_loaders import (
+            InvoicesDonutLoader,
+            _load_seller_split_cache,
+        )
 
         # Ensure cache is loaded
         cache = _load_seller_split_cache()

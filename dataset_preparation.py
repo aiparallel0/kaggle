@@ -383,7 +383,7 @@ if __name__ == "__main__":
             print("Cleared existing data directories due to --force flag")
 
         counts = prepare_all()
-        print(f"\nPreparation summary:")
+        print("\nPreparation summary:")
         for key, val in sorted(counts.items()):
             print(f"  {key:15s} {val:4d}")
 

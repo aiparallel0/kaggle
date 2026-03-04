@@ -1,10 +1,9 @@
 """Detector for the ~2-PR bugs documented in CLAUDE.md Section 5."""
 
-import re
 import ast
-from pathlib import Path
-from typing import List, Optional
 import logging
+import re
+from pathlib import Path
 
 from pipeline_types import BugPattern, BugReport, SeverityLevel
 
@@ -39,7 +38,7 @@ class BugPatternDetector:
     ]
 
     @staticmethod
-    def detect_syntax_errors(code: str, file_path: Path) -> List[BugPattern]:
+    def detect_syntax_errors(code: str, file_path: Path) -> list[BugPattern]:
         """Detect syntax errors (missing brackets, commas, etc).
 
         Args:
@@ -83,7 +82,7 @@ class BugPatternDetector:
         return bugs
 
     @staticmethod
-    def detect_python_json_confusion(code: str, file_path: Path) -> List[BugPattern]:
+    def detect_python_json_confusion(code: str, file_path: Path) -> list[BugPattern]:
         """Detect JSON literals in Python code (true/false/null instead of True/False/None).
 
         Args:
@@ -129,7 +128,7 @@ class BugPatternDetector:
         return bugs
 
     @staticmethod
-    def detect_missing_tie_word_embeddings(code: str, file_path: Path) -> List[BugPattern]:
+    def detect_missing_tie_word_embeddings(code: str, file_path: Path) -> list[BugPattern]:
         """Detect missing config.tie_word_embeddings = False after resize_token_embeddings().
 
         This is critical - without this line, lm_head.weight gets dropped by safetensors,
@@ -178,7 +177,7 @@ class BugPatternDetector:
         return bugs
 
     @staticmethod
-    def detect_lm_head_issues(code: str, file_path: Path) -> List[BugPattern]:
+    def detect_lm_head_issues(code: str, file_path: Path) -> list[BugPattern]:
         """Detect potential lm_head weight issues from safetensors deduplication.
 
         From CLAUDE.md BUG B: safetensors deduplication drops lm_head.weight
@@ -212,7 +211,7 @@ class BugPatternDetector:
         return bugs
 
     @staticmethod
-    def detect_token2json_list_handling(code: str, file_path: Path) -> List[BugPattern]:
+    def detect_token2json_list_handling(code: str, file_path: Path) -> list[BugPattern]:
         """Detect missing token2json list output handling.
 
         From CLAUDE.md BUG C: token2json can return list instead of dict when <sep/> is present.
@@ -298,7 +297,7 @@ class BugPatternDetector:
 
         return report
 
-    async def scan_file(self, file_path: Path) -> List[BugPattern]:
+    async def scan_file(self, file_path: Path) -> list[BugPattern]:
         """Scan a single file for bugs.
 
         Args:

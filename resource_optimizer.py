@@ -16,13 +16,11 @@ CLAUDE.md Reference:
   - Early stopping patience: 3 (fixed)
 """
 
-import json
 import logging
 import os
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 try:
     import psutil
@@ -121,8 +119,8 @@ def detect_system_resources() -> SystemResources:
 
 def optimize_hyperparams(
     num_train_samples: int,
-    available_vram_gb: Optional[float] = None,
-    available_ram_gb: Optional[float] = None,
+    available_vram_gb: float | None = None,
+    available_ram_gb: float | None = None,
 ) -> ResourceOptimizedConfig:
     """Recommend optimal training hyperparameters based on system resources.
 
@@ -198,9 +196,7 @@ def optimize_hyperparams(
         explanation_parts.append("accumulation_steps=4: physical batch=4, reaching effective batch=16")
     else:
         accumulation_steps = 2
-        explanation_parts.append("accumulation_steps=2: physical batch={}, effective batch={}".format(
-            batch_size, batch_size * 2
-        ))
+        explanation_parts.append(f"accumulation_steps=2: physical batch={batch_size}, effective batch={batch_size * 2}")
 
     # ───────────────────────────────────────────────────────────────────
     # Fixed Hyperparameters (per CLAUDE.md § 3)
@@ -299,7 +295,7 @@ class TrainingAuditLogger:
         lines = [
             f"[{self._timestamp()}] RESOURCE_DETECTION",
             f"GPU: {resources.device_name} ({resources.vram_gb:.1f} GB)" if resources.cuda_available
-            else f"GPU: CPU-only (CUDA unavailable)",
+            else "GPU: CPU-only (CUDA unavailable)",
             f"RAM: {resources.ram_gb:.1f} GB total",
             f"CPU: {resources.cpu_cores} cores",
             "",
@@ -338,9 +334,9 @@ class TrainingAuditLogger:
         experiment_id: int,
         global_f1: float,
         training_time_sec: float,
-        tokens_per_second: Optional[float] = None,
-        early_stopping_epoch: Optional[int] = None,
-        baseline_f1: Optional[float] = None,
+        tokens_per_second: float | None = None,
+        early_stopping_epoch: int | None = None,
+        baseline_f1: float | None = None,
     ) -> None:
         """Log training result after experiment completes.
 
@@ -401,7 +397,7 @@ if __name__ == "__main__":
     print(f"Detected: {resources.vram_gb:.1f}GB VRAM, {resources.ram_gb:.1f}GB RAM, {resources.cpu_cores} CPU cores")
 
     config = optimize_hyperparams(num_train_samples=500)
-    print(f"\nOptimized config for 500 samples:")
+    print("\nOptimized config for 500 samples:")
     print(f"  batch_size={config.batch_size}, accumulation={config.gradient_accumulation_steps}")
     print(f"  epochs={config.epochs}, warmup={config.warmup_steps}")
     print(f"  encoder_lr={config.encoder_lr:.2e}, decoder_lr={config.decoder_lr:.2e}")
@@ -419,4 +415,4 @@ if __name__ == "__main__":
         early_stopping_epoch=8,
         baseline_f1=0.82,
     )
-    print(f"\nAudit log written to test_terminal.txt")
+    print("\nAudit log written to test_terminal.txt")

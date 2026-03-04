@@ -1,10 +1,9 @@
 """Test runner orchestration - ruff checks and pytest execution."""
 
 import asyncio
-import subprocess
 import logging
+import subprocess
 from dataclasses import dataclass, field
-from typing import List, Optional
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -17,7 +16,7 @@ class RuffReport:
     passed: bool
     stdout: str = ""
     stderr: str = ""
-    issues: List[str] = field(default_factory=list)
+    issues: list[str] = field(default_factory=list)
     exit_code: int = 0
 
 
@@ -56,7 +55,7 @@ class AllChecksReport:
     ruff_format_report: RuffFormatReport = field(
         default_factory=lambda: RuffFormatReport(passed=False)
     )
-    pytest_report: Optional[PytestReport] = None
+    pytest_report: PytestReport | None = None
 
     @property
     def all_passed(self) -> bool:
@@ -169,7 +168,7 @@ class TestRunner:
             if report.passed:
                 logger.info("✓ Ruff format passed")
             else:
-                logger.warning(f"⚠ Ruff format issues found")
+                logger.warning("⚠ Ruff format issues found")
 
             return report
 
