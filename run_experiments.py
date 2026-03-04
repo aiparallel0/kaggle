@@ -67,6 +67,7 @@ from constants import (
     SEED,
     WORKSPACE,
     _gpu_cleanup,
+    _mask_empty_field_labels,
     set_seed,
 )
 
@@ -313,6 +314,17 @@ class MultiDataset(Dataset):
                         available_mb,
                     )
 
+        # Log per-field masking statistics so empty-field dilution is visible.
+        if samples:
+            _log = logging.getLogger(__name__)
+            for f in FIELDS:
+                n = sum(1 for _, gt in samples if not gt.get(f, "").strip())
+                if n:
+                    _log.info(
+                        "Field masking: %d/%d samples will have <%s> masked (%.1f%%)",
+                        n, len(samples), f, 100.0 * n / len(samples),
+                    )
+
     def __len__(self) -> int:
         return len(self.samples)
 
@@ -340,6 +352,8 @@ class MultiDataset(Dataset):
             return_tensors="pt",
         ).input_ids.squeeze()
         labels[labels == self.processor.tokenizer.pad_token_id] = -100
+        # Mask empty-field spans so they contribute no gradient to the loss.
+        labels = _mask_empty_field_labels(labels, gt, self.processor.tokenizer)
         return {"pixel_values": pixel_values, "labels": labels}
 
 

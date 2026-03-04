@@ -64,6 +64,29 @@ Sample = tuple[Path, dict[str, str]]
 _SROIE_FIELDS = frozenset(EMPTY_GT.keys())
 _IMAGE_EXTS = _IMAGE_EXTS_SET
 
+# ── Seller split cache (loaded lazily on first use) ───────────────────
+_SELLER_SPLIT_CACHE: dict[str, dict[str, str]] | None = None
+
+
+def _load_seller_split_cache() -> dict[str, dict[str, str]]:
+    """Load seller_split_cache.json from the repo root (lazy, cached in module)."""
+    global _SELLER_SPLIT_CACHE
+    if _SELLER_SPLIT_CACHE is None:
+        cache_path = Path(__file__).parent / "seller_split_cache.json"
+        if cache_path.exists():
+            try:
+                raw = json.loads(cache_path.read_text(encoding="utf-8"))
+                # Strip metadata key so only seller-string entries remain.
+                _SELLER_SPLIT_CACHE = {
+                    k: v for k, v in raw.items()
+                    if k != "_metadata" and isinstance(v, dict)
+                }
+            except (json.JSONDecodeError, OSError):
+                _SELLER_SPLIT_CACHE = {}
+        else:
+            _SELLER_SPLIT_CACHE = {}
+    return _SELLER_SPLIT_CACHE
+
 
 # ======================================================================
 #  Custom exception
@@ -954,7 +977,7 @@ class InvoicesDonutLoader(BaseDatasetLoader):
         Field mapping rationale:
         - company: seller name from gt_parse.header.seller
         - date:    invoice date from gt_parse.header.invoice_date
-        - address: seller_address from gt_parse.header.seller_address
+        - address: parsed from gt_parse.header.seller via ML/cache lookup
         - total:   total_gross_worth with currency symbol stripped
         """
         # Phase 1: Use shared consolidation utility
@@ -970,7 +993,13 @@ class InvoicesDonutLoader(BaseDatasetLoader):
             header = gt_parse.get("header", {})
             if isinstance(header, dict):
                 seller_raw = str(header.get("seller", "")).strip()
-                company_name, address = extract_address_from_seller(seller_raw)
+                cache = _load_seller_split_cache()
+                if seller_raw in cache:
+                    entry = cache[seller_raw]
+                    company_name = entry.get("company", "")
+                    address = entry.get("address", "")
+                else:
+                    company_name, address = extract_address_from_seller(seller_raw)
                 gt["company"] = company_name
                 gt["date"] = str(header.get("invoice_date", "")).strip()
                 gt["address"] = address

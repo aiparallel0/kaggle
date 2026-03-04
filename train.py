@@ -66,6 +66,7 @@ from constants import (
     NEW_TOKENS,
     SEED,
     _get_sroie_dir,
+    _mask_empty_field_labels,
     _optimal_num_workers,
 )
 
@@ -238,6 +239,16 @@ class SROIEDataset(Dataset):
         obj.processor = processor
         obj.max_length = max_length
         obj.samples = list(samples)
+        # Log per-field masking statistics so empty-field dilution is visible.
+        if samples:
+            _log = logging.getLogger(__name__)
+            for f in FIELDS:
+                n = sum(1 for _, gt in samples if not gt.get(f, "").strip())
+                if n:
+                    _log.info(
+                        "Field masking: %d/%d samples will have <%s> masked (%.1f%%)",
+                        n, len(samples), f, 100.0 * n / len(samples),
+                    )
         return obj
 
     # ------------------------------------------------------------------
@@ -269,6 +280,8 @@ class SROIEDataset(Dataset):
             return_tensors="pt",
         ).input_ids.squeeze()
         labels[labels == self.processor.tokenizer.pad_token_id] = -100
+        # Mask empty-field spans so they contribute no gradient to the loss.
+        labels = _mask_empty_field_labels(labels, gt, self.processor.tokenizer)
         return {"pixel_values": pixel_values, "labels": labels}
 
 

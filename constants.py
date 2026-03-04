@@ -118,6 +118,51 @@ def _gpu_cleanup(*objects) -> None:
         torch.cuda.empty_cache()
 
 
+def _mask_empty_field_labels(labels, gt: dict, tokenizer) -> "torch.Tensor":  # type: ignore[name-defined]
+    """Set label token IDs for empty-field spans to -100.
+
+    When a ground-truth field value is empty (e.g. address=""), including the
+    open/close tag pair in the label sequence teaches the model to output
+    ``<s_address></s_address>`` — a negative training signal.  Setting those
+    positions to -100 prevents any gradient from flowing for empty fields.
+    Uses the same -100 convention as padding masks (CrossEntropyLoss ignores
+    index -100).
+
+    Parameters
+    ----------
+    labels:
+        1-D label tensor from ``tokenizer(...).input_ids.squeeze()``.
+    gt:
+        Ground-truth dict with keys matching ``FIELDS``.
+    tokenizer:
+        HuggingFace tokenizer that has the SROIE special tokens registered via
+        ``add_special_tokens``.  Each ``<s_{field}>`` / ``</s_{field}>`` encodes
+        to exactly one token.
+
+    Returns
+    -------
+    torch.Tensor
+        The labels tensor with empty-field span positions set to -100.
+    """
+    unk_id = getattr(tokenizer, "unk_token_id", None)
+    for f in FIELDS:
+        if gt.get(f, "").strip():
+            continue  # field has content — do not mask
+        open_id = tokenizer.convert_tokens_to_ids(f"<s_{f}>")
+        close_id = tokenizer.convert_tokens_to_ids(f"</s_{f}>")
+        # Skip if the special tokens are not registered in the vocabulary.
+        if unk_id is not None and (open_id == unk_id or close_id == unk_id):
+            continue
+        open_pos = (labels == open_id).nonzero(as_tuple=True)[0]
+        close_pos = (labels == close_id).nonzero(as_tuple=True)[0]
+        if len(open_pos) > 0 and len(close_pos) > 0:
+            start = int(open_pos[0])
+            end = int(close_pos[0])
+            if end >= start:
+                labels[start : end + 1] = -100
+    return labels
+
+
 def set_seed(seed: int = SEED) -> None:
     """Set all random seeds for fully reproducible training runs.
 
