@@ -845,6 +845,10 @@ def stage_trocr_experiments(args) -> StageResult:
         workspace = Path(args.workspace)
 
         # Stage 4a: Train YOLO
+        # Ensure GPU is clean from DONUT experiment stage before loading YOLO.
+        from constants import _gpu_cleanup
+
+        _gpu_cleanup()
         yolo_output = workspace / "models" / "yolo_finetuned"
         yolo_weights = yolo_output / "run" / "weights" / "best.pt"
         if not yolo_weights.exists():
@@ -865,6 +869,10 @@ def stage_trocr_experiments(args) -> StageResult:
             trocr_yolo.train_yolo(yolo_output)
         else:
             print(f"  YOLO weights cached at {yolo_weights}")
+
+        # Explicit GPU cleanup between YOLO and TrOCR to prevent OOM.
+        _gpu_cleanup()
+        print("  GPU memory freed between YOLO and TrOCR stages.")
 
         # Stage 4b: Train TrOCR
         trocr_output = workspace / "models" / "trocr_finetuned"
