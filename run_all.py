@@ -797,6 +797,14 @@ def stage_trocr_data_prep(args) -> StageResult:
     _banner("STAGE 3 — TrOCR+YOLO dataset preparation")
     warnings: list[str] = []
 
+    workspace = Path(args.workspace)
+    yolo_train_images = workspace / "data" / "yolo" / "images" / "train"
+    trocr_train_meta = workspace / "data" / "trocr" / "train" / "metadata.jsonl"
+
+    if yolo_train_images.exists() and trocr_train_meta.exists():
+        print("  TrOCR+YOLO data already prepared — skipping.")
+        return StageResult(name="TrOCR Data Prep", duration=0.0, exit_status=0, warnings=warnings)
+
     try:
         import dataset_preparation as ds_prep
 
@@ -861,11 +869,17 @@ def stage_trocr_experiments(args) -> StageResult:
         # Stage 4b: Train TrOCR
         trocr_output = workspace / "models" / "trocr_finetuned"
         trocr_best = trocr_output / "best"
+        trocr_history: dict = {"train_loss": [], "val_loss": [], "num_train_samples": 0}
         if not trocr_best.exists():
             print("  Training TrOCR OCR model ...")
-            trocr_yolo.train_trocr(trocr_output)
+            trocr_history = trocr_yolo.train_trocr(trocr_output)
         else:
             print(f"  TrOCR model cached at {trocr_best}")
+            # Read num_train_samples from saved training history if available
+            hist_path = trocr_output / "training_history.json"
+            if hist_path.exists():
+                with open(hist_path) as _fh:
+                    trocr_history = json.load(_fh)
 
         # Stage 4c: Evaluate on test set
         test_samples = eval_mod.load_test_samples()
@@ -886,12 +900,13 @@ def stage_trocr_experiments(args) -> StageResult:
                 results_dir = Path("results")
                 results_dir.mkdir(exist_ok=True)
                 trocr_results = {}
+                num_samples = trocr_history.get("num_train_samples", 0)
                 # Store as experiment 1 (same test set, single model)
                 for exp_id in range(1, 9):
                     trocr_results[str(exp_id)] = {
                         "name": f"TrOCR+YOLO Exp {exp_id}",
                         "metrics": metrics,
-                        "num_train_samples": 0,  # Will be filled per-experiment
+                        "num_train_samples": num_samples,
                     }
                 out_path = results_dir / "trocr_yolo_results.json"
                 with open(out_path, "w") as fh:
