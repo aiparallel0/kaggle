@@ -451,7 +451,7 @@ Two-stage pipeline in `train_trocr_yolo.py` (called by `run_all.py`):
 - Training data YAML: `data/yolo/dataset.yaml`
 
 **Stage 2 — TrOCR reading**
-- Model: `microsoft/trocr-large-printed`
+- Model: `microsoft/trocr-base-printed`
 - Reads text from YOLOv8-cropped regions
 - Config: `TROCR_EPOCHS=10`, `TROCR_BATCH=16`, `TROCR_LR=5e-5`, `TROCR_MAX_LEN=128`
 - Crops saved to: `data/trocr/`
