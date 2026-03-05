@@ -691,6 +691,14 @@ def stage_pretrained_baseline(args) -> StageResult:
         json.dump(output, fh, indent=2, default=str)
     print(f"  Saved → {output_path}")
 
+    # Free the CORD baseline model from GPU before DONUT training starts.
+    # NOTE: local references MUST be deleted before _gpu_cleanup() is called,
+    # otherwise the garbage collector cannot free them (still referenced here).
+    del pre_model, pre_processor
+    from constants import _gpu_cleanup
+
+    _gpu_cleanup()
+
     return StageResult(name="Pretrained Eval", duration=0.0, exit_status=0, warnings=warnings)
 
 
@@ -987,11 +995,17 @@ def stage_benchmark(args) -> StageResult:
         except Exception:
             continue
 
+    def _is_valid_model_dir(p: Path) -> bool:
+        """Return True only if p looks like a saved HuggingFace model directory."""
+        return p.is_dir() and (
+            (p / "preprocessor_config.json").exists() or (p / "config.json").exists()
+        )
+
     donut_model_dir = workspace / "models" / f"experiment_{best_exp_id}"
-    if not donut_model_dir.exists():
+    if not _is_valid_model_dir(donut_model_dir):
         # Fallback: try standalone fine-tuned model path
         donut_model_dir_alt = workspace / "donut-sroie-finetuned"
-        if donut_model_dir_alt.exists():
+        if _is_valid_model_dir(donut_model_dir_alt):
             donut_model_dir = donut_model_dir_alt
         else:
             w = (
