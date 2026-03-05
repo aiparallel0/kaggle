@@ -987,9 +987,7 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def compare_all(
-    results_dir: Path = Path("results"), figures_dir: Path = Path("figures")
-) -> None:
+def compare_all(results_dir: Path = Path("results"), figures_dir: Path = Path("figures")) -> None:
     """Generate cross-architecture comparison plots from saved benchmark results.
 
     Called by run_all.py stage_comparison.  Gracefully no-ops when result

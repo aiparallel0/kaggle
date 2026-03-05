@@ -45,9 +45,9 @@ __all__ = [
 TROCR_MODEL_ID = "microsoft/trocr-large-printed"
 YOLO_BASE = "yolov8x.pt"  # extra-large YOLOv8 (~68M params); batch/imgsz kept low to fit in VRAM
 YOLO_EPOCHS = 50
-YOLO_IMG_SIZE = 512        # reduced from 640 to lower VRAM usage
-YOLO_BATCH = 8             # reduced from 32 to prevent CUDA OOM in TaskAlignedAssigner
-YOLO_AMP = True            # mixed precision — halves activation memory
+YOLO_IMG_SIZE = 512  # reduced from 640 to lower VRAM usage
+YOLO_BATCH = 8  # reduced from 32 to prevent CUDA OOM in TaskAlignedAssigner
+YOLO_AMP = True  # mixed precision — halves activation memory
 TROCR_EPOCHS = 10
 TROCR_BATCH = 16
 TROCR_LR = 5e-5
@@ -160,15 +160,15 @@ def _materialize_meta_buffers(model: torch.nn.Module, device: str) -> int:
         # --- Persistent and non-persistent buffers via _buffers dict ---
         for buf_name, buf in list(module._buffers.items()):
             if buf is not None and buf.device.type == "meta":
-                module._buffers[buf_name] = torch.zeros(
-                    buf.shape, dtype=buf.dtype, device=device
-                )
+                module._buffers[buf_name] = torch.zeros(buf.shape, dtype=buf.dtype, device=device)
                 fixed += 1
         # --- Any plain tensor attributes (e.g. _float_tensor set directly) ---
         for attr_name, attr_val in list(vars(module).items()):
             if (
-                not attr_name.startswith("_") or attr_name == "_float_tensor"
-            ) and isinstance(attr_val, torch.Tensor) and attr_val.device.type == "meta":
+                (not attr_name.startswith("_") or attr_name == "_float_tensor")
+                and isinstance(attr_val, torch.Tensor)
+                and attr_val.device.type == "meta"
+            ):
                 try:
                     setattr(
                         module,
@@ -277,8 +277,8 @@ def train_trocr(output_dir: Path | None = None) -> dict:
     model.config.pad_token_id = processor.tokenizer.pad_token_id
     model.config.eos_token_id = processor.tokenizer.sep_token_id
     model.config.max_length = TROCR_MAX_LEN
-    model.config.no_repeat_ngram_size = 0   # disabled — harmful for short OCR text
-    model.config.length_penalty = 1.0       # neutral — do not penalise short outputs
+    model.config.no_repeat_ngram_size = 0  # disabled — harmful for short OCR text
+    model.config.length_penalty = 1.0  # neutral — do not penalise short outputs
     model.config.num_beams = 4
 
     model = model.to(DEVICE)
@@ -315,9 +315,7 @@ def train_trocr(output_dir: Path | None = None) -> dict:
                 f"(free={free_gb:.1f} GiB / {total_gb:.1f} GiB, grad_accum={grad_accum})"
             )
         else:
-            print(
-                f"  [TrOCR] VRAM OK: batch_size={trocr_batch}, free={free_gb:.1f} GiB"
-            )
+            print(f"  [TrOCR] VRAM OK: batch_size={trocr_batch}, free={free_gb:.1f} GiB")
 
     train_dir = TROCR_DATA_DIR / "train"
     val_dir = TROCR_DATA_DIR / "val"

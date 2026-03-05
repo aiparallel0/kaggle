@@ -98,14 +98,14 @@ def _load_ocr_bboxes(box_dir: Path, stem: str) -> list[tuple[list[int], str]]:
     if box_file is None:
         # Try case-insensitive match for both extensions
         ci_candidates = [
-            p for p in box_dir.iterdir()
+            p
+            for p in box_dir.iterdir()
             if p.stem.lower() == stem.lower() and p.suffix.lower() in _BOX_EXTENSIONS
         ]
         if ci_candidates:
             box_file = ci_candidates[0]
             print(
-                f"  [YOLO] NOTE: using case-insensitive match {box_file.name!r} "
-                f"for stem={stem!r}."
+                f"  [YOLO] NOTE: using case-insensitive match {box_file.name!r} for stem={stem!r}."
             )
         else:
             print(f"  [YOLO] DEBUG: no box file for stem={stem!r} in {box_dir}")
