@@ -142,13 +142,19 @@ def evaluate_trocr_yolo_on_test(
     from transformers import TrOCRProcessor, VisionEncoderDecoderModel
     from ultralytics import YOLO
 
-    # Import the inference function from train_trocr_yolo.py
+    # Import the inference function and meta-buffer fix from train_trocr_yolo.py
     trocr_yolo_module = import_module("train_trocr_yolo")
     run_pipeline = trocr_yolo_module.run_trocr_yolo_inference
+    _materialize_meta_buffers = trocr_yolo_module._materialize_meta_buffers
 
     yolo_model = YOLO(str(yolo_weights))
     trocr_processor = TrOCRProcessor.from_pretrained(trocr_model_path)
-    trocr_model = VisionEncoderDecoderModel.from_pretrained(trocr_model_path).to(DEVICE)
+    # FIX: low_cpu_mem_usage=False + _materialize_meta_buffers prevents the
+    # meta-device crash on TrOCR's sinusoidal positional embedding buffer.
+    trocr_model = VisionEncoderDecoderModel.from_pretrained(
+        trocr_model_path, low_cpu_mem_usage=False
+    ).to(DEVICE)
+    _materialize_meta_buffers(trocr_model, DEVICE)
     trocr_model.eval()
 
     predictions = []

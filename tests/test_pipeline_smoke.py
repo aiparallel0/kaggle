@@ -43,10 +43,7 @@ class TestExperimentsImmutability:
     def test_resource_optimization_does_not_mutate_global(self):
         """Applying resource-optimized batch_size must not change EXPERIMENTS."""
         # Snapshot original values
-        original = {
-            exp_id: dataclasses.replace(config)
-            for exp_id, config in EXPERIMENTS.items()
-        }
+        original = {exp_id: dataclasses.replace(config) for exp_id, config in EXPERIMENTS.items()}
         # Verify snapshot matches current values (no prior mutation)
         for exp_id, config in EXPERIMENTS.items():
             assert config.batch_size == original[exp_id].batch_size, (
@@ -55,7 +52,9 @@ class TestExperimentsImmutability:
                 "run_experiment() must use dataclasses.replace() instead of "
                 "mutating the global EXPERIMENTS dict."
             )
-            assert config.gradient_accumulation_steps == original[exp_id].gradient_accumulation_steps, (
+            assert (
+                config.gradient_accumulation_steps == original[exp_id].gradient_accumulation_steps
+            ), (
                 f"EXPERIMENTS[{exp_id}].gradient_accumulation_steps was mutated from "
                 f"{original[exp_id].gradient_accumulation_steps} to "
                 f"{config.gradient_accumulation_steps}. "

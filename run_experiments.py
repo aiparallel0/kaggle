@@ -560,7 +560,10 @@ def run_experiment(exp_id: int, base_processor=None, base_model=None) -> dict:
     if result_file.exists():
         with open(result_file) as fh:
             cached = json.load(fh)
-        if cached.get("datasets") != config.datasets or cached.get("config") != original_config_dict:
+        if (
+            cached.get("datasets") != config.datasets
+            or cached.get("config") != original_config_dict
+        ):
             # NOTE: JSON round-trip preserves numeric equality for floats like 5e-5,
             # so this comparison is safe (5e-5 == 5e-05 after json.load).
             print(
