@@ -14,6 +14,7 @@ inspect signatures, and check dict keys. Torch is required only because
 run_experiments.py imports it at the top level.
 """
 
+import dataclasses
 import inspect
 import sys
 from pathlib import Path
@@ -29,10 +30,58 @@ pytest.importorskip("transformers", reason="transformers required by run_experim
 from run_experiments import (  # noqa: E402, I001
     EXPERIMENTS,
     ExperimentConfig,
+    _config_to_dict,
     run_custom_experiment,
     train_experiment,
 )
 from dataset_loaders import _LOADERS  # noqa: E402, I001
+
+
+class TestExperimentsImmutability:
+    """EXPERIMENTS global dict must not be mutated by run_experiment()."""
+
+    def test_resource_optimization_does_not_mutate_global(self):
+        """Applying resource-optimized batch_size must not change EXPERIMENTS."""
+        # Snapshot original values
+        original = {
+            exp_id: dataclasses.replace(config)
+            for exp_id, config in EXPERIMENTS.items()
+        }
+        # Verify snapshot matches current values (no prior mutation)
+        for exp_id, config in EXPERIMENTS.items():
+            assert config.batch_size == original[exp_id].batch_size, (
+                f"EXPERIMENTS[{exp_id}].batch_size was mutated from "
+                f"{original[exp_id].batch_size} to {config.batch_size}. "
+                "run_experiment() must use dataclasses.replace() instead of "
+                "mutating the global EXPERIMENTS dict."
+            )
+            assert config.gradient_accumulation_steps == original[exp_id].gradient_accumulation_steps, (
+                f"EXPERIMENTS[{exp_id}].gradient_accumulation_steps was mutated from "
+                f"{original[exp_id].gradient_accumulation_steps} to "
+                f"{config.gradient_accumulation_steps}. "
+                "run_experiment() must use dataclasses.replace() instead of "
+                "mutating the global EXPERIMENTS dict."
+            )
+
+    def test_config_to_dict_reflects_actual_values(self):
+        """_config_to_dict must serialize the passed config, not global defaults."""
+        for exp_id, config in EXPERIMENTS.items():
+            config_dict = _config_to_dict(config)
+            assert config_dict["max_epochs"] == config.epochs, (
+                f"_config_to_dict for Exp {exp_id} recorded epochs={config_dict['max_epochs']} "
+                f"but config.epochs={config.epochs}"
+            )
+            assert config_dict["per_device_train_batch_size"] == config.batch_size
+            assert config_dict["gradient_accumulation_steps"] == config.gradient_accumulation_steps
+
+        # Verify that a modified (resource-optimized) copy produces correct dict
+        modified = dataclasses.replace(EXPERIMENTS[1], batch_size=4, gradient_accumulation_steps=4)
+        d = _config_to_dict(modified)
+        assert d["per_device_train_batch_size"] == 4
+        assert d["gradient_accumulation_steps"] == 4
+        # Global EXPERIMENTS[1] must be unchanged
+        assert EXPERIMENTS[1].batch_size == 8
+        assert EXPERIMENTS[1].gradient_accumulation_steps == 2
 
 
 class TestExperimentConfigFields:
@@ -53,8 +102,6 @@ class TestExperimentConfigFields:
 
     def test_does_not_accept_lr_scheduler_type(self):
         """lr_scheduler_type is NOT a valid field — prevents regression of Bug A."""
-        import dataclasses
-
         field_names = {f.name for f in dataclasses.fields(ExperimentConfig)}
         assert "lr_scheduler_type" not in field_names, (
             "lr_scheduler_type is not a valid ExperimentConfig field. "
