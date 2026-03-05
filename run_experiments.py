@@ -36,6 +36,7 @@ and evaluation with self-test and parse-failure thresholds.
 
 import argparse
 import copy
+import dataclasses
 import gc
 import json
 import logging
@@ -79,6 +80,7 @@ __all__ = [
     "ExperimentConfig",
     "EXPERIMENTS",
     "TRAIN_CONFIG",
+    "_config_to_dict",
     "run_experiment",
     "run_custom_experiment",
     "save_summary",
@@ -243,6 +245,26 @@ TRAIN_CONFIG: dict[str, Any] = {
     "seed": _default_config.seed,
     "gradient_accumulation_steps": _default_config.gradient_accumulation_steps,
 }
+
+
+def _config_to_dict(config: "ExperimentConfig") -> dict:
+    """Serialize an ExperimentConfig to the TRAIN_CONFIG dict format.
+
+    Used to record the *actual* training hyperparameters in the result JSON,
+    so cache validation compares against what was truly used.
+    """
+    return {
+        "max_epochs": config.epochs,
+        "learning_rate": config.lr,
+        "per_device_train_batch_size": config.batch_size,
+        "early_stopping_patience": config.early_stopping_patience,
+        "base_model": config.base_model,
+        "warmup_steps": config.warmup_steps,
+        "weight_decay": config.weight_decay,
+        "max_length": config.max_length,
+        "seed": config.seed,
+        "gradient_accumulation_steps": config.gradient_accumulation_steps,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -530,10 +552,15 @@ def run_experiment(exp_id: int, base_processor=None, base_model=None) -> dict:
 
     # Check if already done — validate cached result matches current experiment
     # definition (datasets AND hyperparameters) before reusing.
+    # Compare against the original (unoptimized) experiment config so that
+    # cache hits are hardware-independent: resource optimization is deterministic
+    # for the same hardware, so if the experiment definition hasn't changed the
+    # cached result is still valid.
+    original_config_dict = _config_to_dict(EXPERIMENTS[exp_id])
     if result_file.exists():
         with open(result_file) as fh:
             cached = json.load(fh)
-        if cached.get("datasets") != config.datasets or cached.get("config") != TRAIN_CONFIG:
+        if cached.get("datasets") != config.datasets or cached.get("config") != original_config_dict:
             # NOTE: JSON round-trip preserves numeric equality for floats like 5e-5,
             # so this comparison is safe (5e-5 == 5e-05 after json.load).
             print(
@@ -555,7 +582,7 @@ def run_experiment(exp_id: int, base_processor=None, base_model=None) -> dict:
             "experiment_id": exp_id,
             "name": config.name,
             "datasets": config.datasets,
-            "config": TRAIN_CONFIG,
+            "config": _config_to_dict(config),
             "num_train_samples": 0,
             "metrics": {},
             "error": "No training samples available",
@@ -576,15 +603,17 @@ def run_experiment(exp_id: int, base_processor=None, base_model=None) -> dict:
     audit_logger = TrainingAuditLogger(append_to_file="terminal.txt")
     audit_logger.log_config_decision(exp_id, optimized_config)
 
-    # FIX: Actually apply the optimized values to the experiment config.
-    # Previously this was a no-op — optimized_config was computed and discarded.
+    # Apply the optimized values to an isolated copy of the experiment config using
+    # dataclasses.replace() so the global EXPERIMENTS dict is never mutated.
     # Only batch_size and gradient_accumulation_steps are overridden; epochs and
     # warmup_steps remain fixed per CLAUDE.md experiment design.
-    config = EXPERIMENTS[exp_id]
     old_batch = config.batch_size
     old_accum = config.gradient_accumulation_steps
-    config.batch_size = optimized_config.batch_size
-    config.gradient_accumulation_steps = optimized_config.gradient_accumulation_steps
+    config = dataclasses.replace(
+        EXPERIMENTS[exp_id],
+        batch_size=optimized_config.batch_size,
+        gradient_accumulation_steps=optimized_config.gradient_accumulation_steps,
+    )
     print(
         f"[Exp {exp_id}] Resource optimization applied: "
         f"batch_size {old_batch} → {config.batch_size}, "
@@ -619,12 +648,13 @@ def run_experiment(exp_id: int, base_processor=None, base_model=None) -> dict:
         baseline_f1=None,  # Could set to pretrained F1 for comparison
     )
 
-    # Save result
+    # Save result — record the *actual* (resource-optimized) config so future
+    # cache checks correctly detect if the training parameters have changed.
     result = {
         "experiment_id": exp_id,
         "name": config.name,
         "datasets": config.datasets,
-        "config": TRAIN_CONFIG,
+        "config": _config_to_dict(config),
         "num_train_samples": len(train_samples),
         "metrics": metrics,
         "training_log": log_history,
