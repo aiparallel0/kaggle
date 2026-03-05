@@ -38,6 +38,7 @@ __all__ = [
     "train_yolo",
     "train_trocr",
     "run_trocr_yolo_inference",
+    "_materialize_meta_buffers",
 ]
 
 # ── Config ──────────────────────────────────────────────────────────────────
@@ -127,6 +128,57 @@ class TrOCRReceiptDataset(Dataset):
 
         labels[labels == self.processor.tokenizer.pad_token_id] = -100
         return {"pixel_values": pixel_values, "labels": labels}
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Meta-device buffer materialisation helper
+# ════════════════════════════════════════════════════════════════════════════
+
+
+def _materialize_meta_buffers(model: torch.nn.Module, device: str) -> int:
+    """Walk all modules and force-materialise any remaining meta-device tensors.
+
+    This covers:
+      - Persistent buffers  (module._buffers)
+      - Non-persistent buffers tracked in module._non_persistent_buffers_set
+        (e.g. TrOCR's embed_positions._float_tensor)
+      - Any plain tensor attributes that happen to be on 'meta'
+
+    FIX: The existing partial fix (buffer sweep over module._buffers) misses
+    non-persistent buffers such as TrOCR's sinusoidal positional embedding
+    ``decoder.model.decoder.embed_positions._float_tensor``, which is
+    registered via ``register_buffer(..., persistent=False)`` and therefore
+    stored as a plain attribute rather than in ``_buffers``.  With
+    ``low_cpu_mem_usage=False`` the weight tensors are materialised on CPU,
+    but non-persistent buffers may still end up on the meta device causing:
+        RuntimeError: Tensor on device meta is not on the expected device cuda:0!
+
+    Returns the count of buffers that were fixed.
+    """
+    fixed = 0
+    for module in model.modules():
+        # --- Persistent and non-persistent buffers via _buffers dict ---
+        for buf_name, buf in list(module._buffers.items()):
+            if buf is not None and buf.device.type == "meta":
+                module._buffers[buf_name] = torch.zeros(
+                    buf.shape, dtype=buf.dtype, device=device
+                )
+                fixed += 1
+        # --- Any plain tensor attributes (e.g. _float_tensor set directly) ---
+        for attr_name, attr_val in list(vars(module).items()):
+            if (
+                not attr_name.startswith("_") or attr_name == "_float_tensor"
+            ) and isinstance(attr_val, torch.Tensor) and attr_val.device.type == "meta":
+                try:
+                    setattr(
+                        module,
+                        attr_name,
+                        torch.zeros(attr_val.shape, dtype=attr_val.dtype, device=device),
+                    )
+                    fixed += 1
+                except Exception:
+                    pass
+    return fixed
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -234,11 +286,11 @@ def train_trocr(output_dir: Path | None = None) -> dict:
     # sinusoidal positional embedding) are skipped by model.to() in newer versions
     # of PyTorch and remain on the meta device, causing:
     #   RuntimeError: Tensor on device meta is not on the expected device cuda:0!
-    # Walk all modules and force-materialise any remaining meta buffers.
-    for module in model.modules():
-        for buf_name, buf in list(module._buffers.items()):
-            if buf is not None and buf.device.type == "meta":
-                module._buffers[buf_name] = torch.zeros_like(buf, device=DEVICE)
+    # _materialize_meta_buffers covers persistent buffers, non-persistent buffers,
+    # and any plain tensor attributes (including _float_tensor set directly on modules).
+    n_fixed = _materialize_meta_buffers(model, DEVICE)
+    if n_fixed:
+        print(f"  [TrOCR] Materialised {n_fixed} meta-device buffer(s) onto {DEVICE}")
 
     # VRAM-aware batch size auto-scaling — reduce batch when free VRAM is tight.
     # TrOCR-large uses ~2.4 GiB for weights; each batch item needs ~0.3 GiB for

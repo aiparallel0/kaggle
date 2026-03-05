@@ -425,6 +425,8 @@ class TrOCRYOLOPipeline:
         from transformers import TrOCRProcessor, VisionEncoderDecoderModel
         from ultralytics import YOLO
 
+        from train_trocr_yolo import _materialize_meta_buffers
+
         self.device = (
             ("cuda" if torch.cuda.is_available() else "cpu") if device == "auto" else device
         )
@@ -436,8 +438,13 @@ class TrOCRYOLOPipeline:
 
         print(f"[TrOCR] Loading model: {trocr_model_id}  →  {self.device}")
         self.trocr_processor = TrOCRProcessor.from_pretrained(trocr_model_id)
-        self.trocr_model = VisionEncoderDecoderModel.from_pretrained(trocr_model_id)
-        self.trocr_model.to(self.device).eval()
+        # FIX: low_cpu_mem_usage=False + _materialize_meta_buffers prevents the
+        # meta-device crash on TrOCR's sinusoidal positional embedding buffer.
+        self.trocr_model = VisionEncoderDecoderModel.from_pretrained(
+            trocr_model_id, low_cpu_mem_usage=False
+        ).to(self.device)
+        _materialize_meta_buffers(self.trocr_model, self.device)
+        self.trocr_model.eval()
 
     # ── YOLO: detect text bounding boxes ───────────────────────────────────
     def _detect_boxes(self, image: Image.Image) -> list[tuple[int, int, int, int]]:
