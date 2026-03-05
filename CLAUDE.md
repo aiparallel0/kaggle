@@ -445,7 +445,7 @@ Two-stage pipeline in `train_trocr_yolo.py` (called by `run_all.py`):
 **Stage 1 — YOLOv8x detection**
 - Model: `yolov8x.pt`
 - Detects text regions as bounding boxes on receipt images
-- Config: `YOLO_EPOCHS=50`, `YOLO_IMG_SIZE=640`, `YOLO_BATCH=32`
+- Config: `YOLO_EPOCHS=50`, `YOLO_IMG_SIZE=512`, `YOLO_BATCH=8`, `YOLO_AMP=True`
 - Training data YAML: `data/yolo/dataset.yaml`
 
 **Stage 2 — TrOCR reading**

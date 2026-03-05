@@ -42,10 +42,11 @@ __all__ = [
 
 # ── Config ──────────────────────────────────────────────────────────────────
 TROCR_MODEL_ID = "microsoft/trocr-large-printed"
-YOLO_BASE = "yolov8x.pt"  # extra-large — leverages available GPU VRAM (~95GB)
+YOLO_BASE = "yolov8x.pt"  # extra-large YOLOv8 (~68M params); batch/imgsz kept low to fit in VRAM
 YOLO_EPOCHS = 50
-YOLO_IMG_SIZE = 640
-YOLO_BATCH = 32
+YOLO_IMG_SIZE = 512        # reduced from 640 to lower VRAM usage
+YOLO_BATCH = 8             # reduced from 32 to prevent CUDA OOM in TaskAlignedAssigner
+YOLO_AMP = True            # mixed precision — halves activation memory
 TROCR_EPOCHS = 10
 TROCR_BATCH = 16
 TROCR_LR = 5e-5
@@ -173,6 +174,7 @@ def train_yolo(output_dir: Path | None = None) -> Path:
         lrf=0.01,
         patience=15,
         seed=SEED,
+        amp=YOLO_AMP,
     )
 
     elapsed = time.time() - start
