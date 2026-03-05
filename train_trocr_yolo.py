@@ -276,10 +276,10 @@ def train_trocr(output_dir: Path | None = None) -> dict:
     model.config.decoder_start_token_id = processor.tokenizer.cls_token_id
     model.config.pad_token_id = processor.tokenizer.pad_token_id
     model.config.eos_token_id = processor.tokenizer.sep_token_id
-    model.config.max_length = TROCR_MAX_LEN
-    model.config.no_repeat_ngram_size = 0  # disabled — harmful for short OCR text
-    model.config.length_penalty = 1.0  # neutral — do not penalise short outputs
-    model.config.num_beams = 4
+    model.generation_config.max_new_tokens = TROCR_MAX_LEN
+    model.generation_config.no_repeat_ngram_size = 0  # disabled — harmful for short OCR text
+    model.generation_config.length_penalty = 1.0  # neutral — do not penalise short outputs
+    model.generation_config.num_beams = 4
 
     model = model.to(DEVICE)
     # FIX: Non-persistent buffers (e.g. embed_positions._float_tensor in TrOCR's
