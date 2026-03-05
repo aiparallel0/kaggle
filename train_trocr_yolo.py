@@ -53,8 +53,8 @@ TROCR_MAX_LEN = 128
 GRAD_ACCUM = 4
 
 RESULTS_DIR = Path("results")
-YOLO_DATA_YAML = Path("data/yolo/dataset.yaml")
-TROCR_DATA_DIR = Path("data/trocr")
+YOLO_DATA_YAML = WORKSPACE / "data" / "yolo" / "dataset.yaml"
+TROCR_DATA_DIR = WORKSPACE / "data" / "trocr"
 
 # Pre-compiled regex patterns for field assignment heuristics — compiled once
 # at module load instead of on every call to assign_fields_heuristic().
@@ -75,11 +75,15 @@ _TOTAL_RE = re.compile(
 # Matches a standalone monetary amount at end of line (last-resort total finder)
 _MONEY_RE = re.compile(r"[\$\£\€RM]?\s*\d+[.,]\d{2}\s*$")
 _NUMBER_RE = re.compile(r"[\d]+[.,][\d]{2}")
-# Road/address keywords common in Malaysian/SE Asian receipts
+# Road/address keywords common in Malaysian/SE Asian receipts, plus generic
+# English building references and postcode patterns.
 _ADDRESS_RE = re.compile(
     r"\b(?:JALAN|JLN|LORONG|LRG|ROAD|STREET|ST|AVENUE|AVE|BOULEVARD|BLVD"
-    r"|TAMAN|TMN|BANDAR|PUSAT|KOMPLEKS|NO\.?\s*\d|LOT\s*\d|\d{5}\s+[A-Z])",
-    re.IGNORECASE,
+    r"|TAMAN|TMN|BANDAR|PUSAT|KOMPLEKS|NO\.?\s*\d|LOT\s*\d|\d{5}\s+[A-Z]"
+    r"|FLOOR|LEVEL|UNIT|BLOCK|BLK)"
+    r"|\b\d{5}\b"  # standalone 5-digit postcode
+    r"|^\d+\s+[A-Z]",  # line starting with street number + word
+    re.IGNORECASE | re.MULTILINE,
 )
 
 
@@ -176,8 +180,9 @@ def train_yolo(output_dir: Path | None = None) -> Path:
     print(f"\nYOLO training complete in {elapsed:.1f}s")
     print(f"Best weights -> {best_path}")
 
-    # FIX: GPU cleanup after YOLO training
-    _gpu_cleanup(model)
+    # FIX: GPU cleanup after YOLO training — delete local reference first
+    del model
+    _gpu_cleanup()
 
     return best_path
 
@@ -209,8 +214,8 @@ def train_trocr(output_dir: Path | None = None) -> dict:
     model.config.pad_token_id = processor.tokenizer.pad_token_id
     model.config.eos_token_id = processor.tokenizer.sep_token_id
     model.config.max_length = TROCR_MAX_LEN
-    model.config.no_repeat_ngram_size = 3
-    model.config.length_penalty = 2.0
+    model.config.no_repeat_ngram_size = 0   # disabled — harmful for short OCR text
+    model.config.length_penalty = 1.0       # neutral — do not penalise short outputs
     model.config.num_beams = 4
 
     model = model.to(DEVICE)
@@ -261,7 +266,8 @@ def train_trocr(output_dir: Path | None = None) -> dict:
     )
 
     best_val_loss = float("inf")
-    history = {"train_loss": [], "val_loss": []}
+    history = {"train_loss": [], "val_loss": [], "num_train_samples": 0}
+    history["num_train_samples"] = len(train_ds)
     start = time.time()
 
     for epoch in range(TROCR_EPOCHS):
@@ -321,8 +327,11 @@ def train_trocr(output_dir: Path | None = None) -> dict:
     elapsed = time.time() - start
     print(f"\nTrOCR training complete in {elapsed:.1f}s. Best val_loss={best_val_loss:.4f}")
 
-    # FIX: GPU cleanup after TrOCR training
-    _gpu_cleanup(model, optimizer, scheduler)
+    # FIX: GPU cleanup after TrOCR training — delete local references first so
+    # the underlying GPU tensors are freed; passing objects to _gpu_cleanup()
+    # would only remove the parameter binding inside that function.
+    del model, optimizer, scheduler, train_ds, val_ds, train_loader, val_loader
+    _gpu_cleanup()
 
     return history
 
@@ -460,7 +469,12 @@ def run_trocr_yolo_inference(
             pixel_values = trocr_processor(crop, return_tensors="pt").pixel_values.to(DEVICE)
 
             with torch.no_grad():
-                generated_ids = trocr_model.generate(pixel_values)
+                generated_ids = trocr_model.generate(
+                    pixel_values,
+                    num_beams=4,
+                    length_penalty=1.0,
+                    no_repeat_ngram_size=0,
+                )
             text = trocr_processor.batch_decode(generated_ids, skip_special_tokens=True)[0].strip()
 
             if text:
