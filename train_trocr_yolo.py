@@ -9,7 +9,7 @@ comparison.
 
 Architecture:
   Stage 1: YOLOv8x detects text regions (~68.2M params)
-  Stage 2: TrOCR-large reads text from crops (~558M params)
+  Stage 2: TrOCR-base reads text from crops (~246M params)
   Stage 3: Rule-based heuristics assign fields to extracted text
 
 FIX: Added GPU cleanup between experiments.
@@ -42,7 +42,7 @@ __all__ = [
 ]
 
 # ── Config ──────────────────────────────────────────────────────────────────
-TROCR_MODEL_ID = "microsoft/trocr-large-printed"
+TROCR_MODEL_ID = "microsoft/trocr-base-printed"
 YOLO_BASE = "yolov8x.pt"  # extra-large YOLOv8 (~68M params); batch/imgsz kept low to fit in VRAM
 YOLO_EPOCHS = 50
 YOLO_IMG_SIZE = 512  # reduced from 640 to lower VRAM usage
@@ -254,8 +254,8 @@ def train_trocr(output_dir: Path | None = None) -> dict:
     Returns the training history dict.
     """
     # Defensive GPU cleanup — free any leaked memory from prior stages
-    # (DONUT experiments, YOLO training, etc.) before loading the 558M-param
-    # TrOCR-large model.
+    # (DONUT experiments, YOLO training, etc.) before loading the 246M-param
+    # TrOCR-base model.
     _gpu_cleanup()
 
     if output_dir is None:
@@ -293,7 +293,7 @@ def train_trocr(output_dir: Path | None = None) -> dict:
         print(f"  [TrOCR] Materialised {n_fixed} meta-device buffer(s) onto {DEVICE}")
 
     # Enable gradient checkpointing — trades compute for ~30-40% activation memory savings.
-    # Required for TrOCR-large (558M params) to fit on 24 GiB without OOM during backward.
+    # Required for TrOCR-base (246M params) to fit on lower-VRAM GPUs during backward.
     # use_cache must be False when gradient_checkpointing is True (they are incompatible).
     model.config.use_cache = False
     model.decoder.config.use_cache = False
@@ -315,12 +315,12 @@ def train_trocr(output_dir: Path | None = None) -> dict:
     )
 
     # VRAM-aware batch size auto-scaling.
-    # Reserve accounts for: model weights (~2.1 GiB) + gradients (~2.1 GiB) +
-    # AdamW optimizer states (~4.2 GiB) + system overhead (~1 GiB) = ~9.4 GiB.
-    # Per-item cost with AMP (bf16 activations): ~0.5 GiB for TrOCR-large.
-    # These constants are empirically calibrated for TrOCR-large with AMP enabled.
-    _TROCR_RESERVED_GB = 10.0  # total non-activation overhead (weights + grads + optimizer)
-    _TROCR_PER_ITEM_GB = 0.5  # activation cost per batch item with AMP
+    # Reserve accounts for: model weights (~0.9 GiB) + gradients (~0.9 GiB) +
+    # AdamW optimizer states (~1.8 GiB) + system overhead (~0.9 GiB) = ~4.5 GiB.
+    # Per-item cost with AMP (bf16 activations): ~0.3 GiB for TrOCR-base.
+    # These constants are empirically calibrated for TrOCR-base with AMP enabled.
+    _TROCR_RESERVED_GB = 6.0  # total non-activation overhead (weights + grads + optimizer)
+    _TROCR_PER_ITEM_GB = 0.3  # activation cost per batch item with AMP
     trocr_batch = TROCR_BATCH
     grad_accum = GRAD_ACCUM
     if torch.cuda.is_available():
