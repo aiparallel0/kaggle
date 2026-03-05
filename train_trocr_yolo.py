@@ -292,18 +292,43 @@ def train_trocr(output_dir: Path | None = None) -> dict:
     if n_fixed:
         print(f"  [TrOCR] Materialised {n_fixed} meta-device buffer(s) onto {DEVICE}")
 
-    # VRAM-aware batch size auto-scaling — reduce batch when free VRAM is tight.
-    # TrOCR-large uses ~2.4 GiB for weights; each batch item needs ~0.3 GiB for
-    # activations + gradients.  We reserve 3 GiB for model + overhead and scale
-    # down if the remainder is insufficient for the default batch size.
+    # Enable gradient checkpointing — trades compute for ~30-40% activation memory savings.
+    # Required for TrOCR-large (558M params) to fit on 24 GiB without OOM during backward.
+    # use_cache must be False when gradient_checkpointing is True (they are incompatible).
+    model.config.use_cache = False
+    model.decoder.config.use_cache = False
+    model.gradient_checkpointing_enable()
+
+    # Detect mixed precision dtype — bf16 preferred on Ampere+, fp16 as fallback.
+    # This mirrors exactly how DonutTrainer (train.py lines 413-418) handles precision.
+    _use_amp = torch.cuda.is_available()
+    _amp_dtype = (
+        torch.bfloat16
+        if (torch.cuda.is_available() and torch.cuda.is_bf16_supported())
+        else torch.float16
+    )
+    scaler = torch.cuda.amp.GradScaler(enabled=(_use_amp and _amp_dtype == torch.float16))
+    print(
+        f"  [TrOCR] AMP enabled: dtype={_amp_dtype}, gradient_checkpointing=True"
+        if _use_amp
+        else "  [TrOCR] AMP disabled (CPU mode)"
+    )
+
+    # VRAM-aware batch size auto-scaling.
+    # Reserve accounts for: model weights (~2.1 GiB) + gradients (~2.1 GiB) +
+    # AdamW optimizer states (~4.2 GiB) + system overhead (~1 GiB) = ~9.4 GiB.
+    # Per-item cost with AMP (bf16 activations): ~0.5 GiB for TrOCR-large.
+    # These constants are empirically calibrated for TrOCR-large with AMP enabled.
+    _TROCR_RESERVED_GB = 10.0  # total non-activation overhead (weights + grads + optimizer)
+    _TROCR_PER_ITEM_GB = 0.5  # activation cost per batch item with AMP
     trocr_batch = TROCR_BATCH
     grad_accum = GRAD_ACCUM
     if torch.cuda.is_available():
         free_bytes, total_bytes = torch.cuda.mem_get_info()
         free_gb = free_bytes / (1024**3)
         total_gb = total_bytes / (1024**3)
-        usable_gb = max(free_gb - 3.0, 1.0)
-        max_safe_batch = max(1, int(usable_gb / 0.3))
+        usable_gb = max(free_gb - _TROCR_RESERVED_GB, 1.0)
+        max_safe_batch = max(1, int(usable_gb / _TROCR_PER_ITEM_GB))
         if max_safe_batch < trocr_batch:
             old_batch = trocr_batch
             trocr_batch = max(1, max_safe_batch)
@@ -368,14 +393,17 @@ def train_trocr(output_dir: Path | None = None) -> dict:
             pixel_values = batch["pixel_values"].to(DEVICE)
             labels = batch["labels"].to(DEVICE)
 
-            outputs = model(pixel_values=pixel_values, labels=labels)
+            with torch.amp.autocast(device_type="cuda", dtype=_amp_dtype, enabled=_use_amp):
+                outputs = model(pixel_values=pixel_values, labels=labels)
             loss = outputs.loss / grad_accum
-            loss.backward()
-            epoch_loss += loss.item() * grad_accum
+            scaler.scale(loss).backward()
+            epoch_loss += outputs.loss.item()  # use unscaled loss for logging
 
             if (step + 1) % grad_accum == 0:
+                scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                optimizer.step()
+                scaler.step(optimizer)
+                scaler.update()
                 scheduler.step()
                 optimizer.zero_grad()
 
@@ -418,7 +446,7 @@ def train_trocr(output_dir: Path | None = None) -> dict:
     # FIX: GPU cleanup after TrOCR training — delete local references first so
     # the underlying GPU tensors are freed; passing objects to _gpu_cleanup()
     # would only remove the parameter binding inside that function.
-    del model, optimizer, scheduler, train_ds, val_ds, train_loader, val_loader
+    del model, optimizer, scheduler, scaler, train_ds, val_ds, train_loader, val_loader
     _gpu_cleanup()
 
     return history
