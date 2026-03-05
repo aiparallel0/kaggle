@@ -137,6 +137,10 @@ def train_yolo(output_dir: Path | None = None) -> Path:
 
     Returns the path to the best weights file.
     """
+    # Defensive GPU cleanup — free any leaked memory from prior stages
+    # (e.g. DONUT experiments that may not have fully released VRAM).
+    _gpu_cleanup()
+
     from ultralytics import YOLO
 
     if output_dir is None:
@@ -197,6 +201,11 @@ def train_trocr(output_dir: Path | None = None) -> dict:
 
     Returns the training history dict.
     """
+    # Defensive GPU cleanup — free any leaked memory from prior stages
+    # (DONUT experiments, YOLO training, etc.) before loading the 558M-param
+    # TrOCR-large model.
+    _gpu_cleanup()
+
     if output_dir is None:
         output_dir = WORKSPACE / "models" / "trocr_finetuned"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -231,6 +240,33 @@ def train_trocr(output_dir: Path | None = None) -> dict:
             if buf is not None and buf.device.type == "meta":
                 module._buffers[buf_name] = torch.zeros_like(buf, device=DEVICE)
 
+    # VRAM-aware batch size auto-scaling — reduce batch when free VRAM is tight.
+    # TrOCR-large uses ~2.4 GiB for weights; each batch item needs ~0.3 GiB for
+    # activations + gradients.  We reserve 3 GiB for model + overhead and scale
+    # down if the remainder is insufficient for the default batch size.
+    trocr_batch = TROCR_BATCH
+    grad_accum = GRAD_ACCUM
+    if torch.cuda.is_available():
+        free_bytes, total_bytes = torch.cuda.mem_get_info()
+        free_gb = free_bytes / (1024**3)
+        total_gb = total_bytes / (1024**3)
+        usable_gb = max(free_gb - 3.0, 1.0)
+        max_safe_batch = max(1, int(usable_gb / 0.3))
+        if max_safe_batch < trocr_batch:
+            old_batch = trocr_batch
+            trocr_batch = max(1, max_safe_batch)
+            # Adjust gradient accumulation to maintain the same effective batch size.
+            effective_batch_size = old_batch * GRAD_ACCUM
+            grad_accum = max(1, effective_batch_size // trocr_batch)
+            print(
+                f"  [TrOCR] VRAM-aware batch scaling: {old_batch} → {trocr_batch} "
+                f"(free={free_gb:.1f} GiB / {total_gb:.1f} GiB, grad_accum={grad_accum})"
+            )
+        else:
+            print(
+                f"  [TrOCR] VRAM OK: batch_size={trocr_batch}, free={free_gb:.1f} GiB"
+            )
+
     train_dir = TROCR_DATA_DIR / "train"
     val_dir = TROCR_DATA_DIR / "val"
 
@@ -247,18 +283,18 @@ def train_trocr(output_dir: Path | None = None) -> dict:
         raise ValueError("TrOCR training dataset is empty — check data paths.")
 
     train_loader = DataLoader(
-        train_ds, batch_size=TROCR_BATCH, shuffle=True, num_workers=_optimal_num_workers()
+        train_ds, batch_size=trocr_batch, shuffle=True, num_workers=_optimal_num_workers()
     )
     val_loader = (
         DataLoader(
-            val_ds, batch_size=TROCR_BATCH, shuffle=False, num_workers=_optimal_num_workers()
+            val_ds, batch_size=trocr_batch, shuffle=False, num_workers=_optimal_num_workers()
         )
         if len(val_ds) > 0
         else None
     )
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=TROCR_LR)
-    total_steps = (len(train_loader) // GRAD_ACCUM) * TROCR_EPOCHS
+    total_steps = (len(train_loader) // grad_accum) * TROCR_EPOCHS
     warmup_steps = int(total_steps * 0.1)
     scheduler = get_scheduler(
         "linear",
@@ -283,11 +319,11 @@ def train_trocr(output_dir: Path | None = None) -> dict:
             labels = batch["labels"].to(DEVICE)
 
             outputs = model(pixel_values=pixel_values, labels=labels)
-            loss = outputs.loss / GRAD_ACCUM
+            loss = outputs.loss / grad_accum
             loss.backward()
-            epoch_loss += loss.item() * GRAD_ACCUM
+            epoch_loss += loss.item() * grad_accum
 
-            if (step + 1) % GRAD_ACCUM == 0:
+            if (step + 1) % grad_accum == 0:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                 optimizer.step()
                 scheduler.step()
