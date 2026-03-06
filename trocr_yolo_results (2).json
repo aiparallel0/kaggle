@@ -1,0 +1,162 @@
+{
+  "1": {
+    "name": "TrOCR+YOLO Exp 1",
+    "metrics": {
+      "global_precision": 0.4476,
+      "global_recall": 0.4422,
+      "global_f1": 0.4449,
+      "overall_exact_match": 0.0159,
+      "company_f1": 0.3651,
+      "company_ned": 0.3602,
+      "date_f1": 0.9106,
+      "date_ned": 0.0901,
+      "address_f1": 0.16,
+      "address_ned": 0.3479,
+      "total_f1": 0.352,
+      "total_ned": 0.3565,
+      "num_samples": 63,
+      "mean_latency_ms": 11345.7
+    },
+    "num_train_samples": 15273
+  },
+  "2": {
+    "name": "TrOCR+YOLO Exp 2",
+    "metrics": {
+      "global_precision": 0.4476,
+      "global_recall": 0.4422,
+      "global_f1": 0.4449,
+      "overall_exact_match": 0.0159,
+      "company_f1": 0.3651,
+      "company_ned": 0.3602,
+      "date_f1": 0.9106,
+      "date_ned": 0.0901,
+      "address_f1": 0.16,
+      "address_ned": 0.3479,
+      "total_f1": 0.352,
+      "total_ned": 0.3565,
+      "num_samples": 63,
+      "mean_latency_ms": 11345.7
+    },
+    "num_train_samples": 15273
+  },
+  "3": {
+    "name": "TrOCR+YOLO Exp 3",
+    "metrics": {
+      "global_precision": 0.4476,
+      "global_recall": 0.4422,
+      "global_f1": 0.4449,
+      "overall_exact_match": 0.0159,
+      "company_f1": 0.3651,
+      "company_ned": 0.3602,
+      "date_f1": 0.9106,
+      "date_ned": 0.0901,
+      "address_f1": 0.16,
+      "address_ned": 0.3479,
+      "total_f1": 0.352,
+      "total_ned": 0.3565,
+      "num_samples": 63,
+      "mean_latency_ms": 11345.7
+    },
+    "num_train_samples": 15273
+  },
+  "4": {
+    "name": "TrOCR+YOLO Exp 4",
+    "metrics": {
+      "global_precision": 0.4476,
+      "global_recall": 0.4422,
+      "global_f1": 0.4449,
+      "overall_exact_match": 0.0159,
+      "company_f1": 0.3651,
+      "company_ned": 0.3602,
+      "date_f1": 0.9106,
+      "date_ned": 0.0901,
+      "address_f1": 0.16,
+      "address_ned": 0.3479,
+      "total_f1": 0.352,
+      "total_ned": 0.3565,
+      "num_samples": 63,
+      "mean_latency_ms": 11345.7
+    },
+    "num_train_samples": 15273
+  },
+  "5": {
+    "name": "TrOCR+YOLO Exp 5",
+    "metrics": {
+      "global_precision": 0.4476,
+      "global_recall": 0.4422,
+      "global_f1": 0.4449,
+      "overall_exact_match": 0.0159,
+      "company_f1": 0.3651,
+      "company_ned": 0.3602,
+      "date_f1": 0.9106,
+      "date_ned": 0.0901,
+      "address_f1": 0.16,
+      "address_ned": 0.3479,
+      "total_f1": 0.352,
+      "total_ned": 0.3565,
+      "num_samples": 63,
+      "mean_latency_ms": 11345.7
+    },
+    "num_train_samples": 15273
+  },
+  "6": {
+    "name": "TrOCR+YOLO Exp 6",
+    "metrics": {
+      "global_precision": 0.4476,
+      "global_recall": 0.4422,
+      "global_f1": 0.4449,
+      "overall_exact_match": 0.0159,
+      "company_f1": 0.3651,
+      "company_ned": 0.3602,
+      "date_f1": 0.9106,
+      "date_ned": 0.0901,
+      "address_f1": 0.16,
+      "address_ned": 0.3479,
+      "total_f1": 0.352,
+      "total_ned": 0.3565,
+      "num_samples": 63,
+      "mean_latency_ms": 11345.7
+    },
+    "num_train_samples": 15273
+  },
+  "7": {
+    "name": "TrOCR+YOLO Exp 7",
+    "metrics": {
+      "global_precision": 0.4476,
+      "global_recall": 0.4422,
+      "global_f1": 0.4449,
+      "overall_exact_match": 0.0159,
+      "company_f1": 0.3651,
+      "company_ned": 0.3602,
+      "date_f1": 0.9106,
+      "date_ned": 0.0901,
+      "address_f1": 0.16,
+      "address_ned": 0.3479,
+      "total_f1": 0.352,
+      "total_ned": 0.3565,
+      "num_samples": 63,
+      "mean_latency_ms": 11345.7
+    },
+    "num_train_samples": 15273
+  },
+  "8": {
+    "name": "TrOCR+YOLO Exp 8",
+    "metrics": {
+      "global_precision": 0.4476,
+      "global_recall": 0.4422,
+      "global_f1": 0.4449,
+      "overall_exact_match": 0.0159,
+      "company_f1": 0.3651,
+      "company_ned": 0.3602,
+      "date_f1": 0.9106,
+      "date_ned": 0.0901,
+      "address_f1": 0.16,
+      "address_ned": 0.3479,
+      "total_f1": 0.352,
+      "total_ned": 0.3565,
+      "num_samples": 63,
+      "mean_latency_ms": 11345.7
+    },
+    "num_train_samples": 15273
+  }
+}
