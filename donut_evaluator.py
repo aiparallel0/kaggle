@@ -551,7 +551,7 @@ class DonutEvaluator:
         key wins) so callers always receive a flat dict.
         """
         # For SROIE output, use the custom parser that understands SROIE tags
-        if self.task_prompt.startswith("<s_sroie"):
+        if getattr(self, "task_prompt", "").startswith("<s_sroie"):
             try:
                 result = _parse_sroie_output(tokens)
                 if result and any(v for v in result.values()):  # At least one non-empty field
