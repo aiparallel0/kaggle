@@ -595,3 +595,49 @@ donut-kie                            # CLI alias (if installed via setup.py)
 ---
 
 **For help with Claude Code features and hooks, see `/help` or report issues at https://github.com/anthropics/claude-code/issues**
+
+---
+
+## Roadmap
+
+> *Consolidated from the former ROADMAP.md (2026-03).*
+
+### Completed ✅
+
+- Multi-dataset DONUT fine-tuning pipeline (8 experiments)
+- TrOCR + YOLOv8 two-stage pipeline for receipt KIE
+- Unified SROIE Task-3 evaluation metrics (global F1, per-field F1, NED, exact-match)
+- LaTeX paper auto-generation from results (`inject_results.py` + `paper.tex`)
+- Constants centralisation (`constants.py` — single source of truth)
+- Automated preflight validation (`preflight_checks.py` + `validators/`)
+- Cloud pipeline orchestrator (`cloud_pipeline.py`) with mode routing
+- `LmHeadCloneCallback` + safetensors weight-tying fix (prevents F1 ≈ 0.42 bug)
+- `token2json` list-output handling (prevents F1 ≈ 0.008 bug)
+- Val/test data split separation (prevents data leakage)
+- Module consolidation: satellite modules merged to reduce source file count (36 → 29)
+
+### In Progress 🔧
+
+- **Cloud GPU training automation** — `MLTrainingOrchestrator` uses subprocess stubs; Vast.ai integration not yet wired
+- **Ollama-based code repair** — `CodeRepairOrchestrator` has the structure but Ollama fix-application is a stub
+- **Hyperparameter sweep runner** — `PARAM_GRIDS_DEFAULT` (in `resource_optimizer.py`) defines grids but there is no sweep orchestrator that loops over them
+
+### Fragile / Known Gaps ⚠️
+
+- **`run_all.py` is a 67 KB monolith** — needs decomposition into `stages/` modules
+- **No integration tests** — unit + smoke tests exist, but no end-to-end single-epoch test
+- **Hardcoded paths** — several files hardcode `/workspace/`; should be env-var-driven throughout
+- **No type checking / mypy** — type hints are present but `mypy` is not in CI
+
+### Future 🚀
+
+1. Decompose `run_all.py` into `stages/` modules
+2. Complete Ollama integration in `CodeRepairOrchestrator`
+3. Add end-to-end integration test (1 train sample, 1 val sample, 1 epoch)
+4. Implement hyperparameter sweep runner
+5. Add Weights & Biases / MLflow experiment tracking
+6. Support additional datasets (CORD v2, RVL-CDIP, SROIE 2019 full set)
+7. Docker / devcontainer setup for reproducible environments
+8. CI improvements: `mypy` strict, `ruff format --check`, coverage reporting
+9. FastAPI model-serving endpoint
+10. Multi-GPU training via `accelerate launch`

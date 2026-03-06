@@ -39,6 +39,8 @@ __all__ = [
     "print_table2_experiments",
     "print_table3_perfield",
     "print_table4_leaderboard",
+    # Absorbed from results_aggregator.py
+    "ResultsAggregator",
 ]
 
 # Pre-compiled regex for \VAR{...} template placeholders — compiled once at
@@ -838,3 +840,154 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+# ---------------------------------------------------------------------------
+# ResultsAggregator
+# Absorbed from results_aggregator.py — loads per-experiment JSON files and
+# builds an AggregatedResults object consumed by MLTrainingOrchestrator and
+# the paper generator.  Kept here because both modules operate on result JSON
+# files and share the build_var_map() function defined above.
+# ---------------------------------------------------------------------------
+
+
+import json as _json  # noqa: E402
+import logging as _logging  # noqa: E402
+from datetime import datetime as _datetime  # noqa: E402
+
+from pipeline_types import AggregatedResults, ExperimentMetrics, ExperimentResult  # noqa: E402
+
+
+class ResultsAggregator:
+    """Aggregate experiment results for paper generation.
+
+    Reads all ``experiment_N.json`` files from *results_dir* and assembles an
+    :class:`AggregatedResults` dataclass that identifies the best experiment,
+    the baseline F1, and the overall improvement.
+    """
+
+    _logger = _logging.getLogger(__name__)
+
+    def __init__(self, results_dir: Path = Path("results")):
+        self.results_dir = results_dir
+        self.results_dir.mkdir(parents=True, exist_ok=True)
+
+    def aggregate_experiments(self) -> AggregatedResults | None:
+        """Load and aggregate all experiment results.
+
+        Returns:
+            AggregatedResults, or None if no experiment files exist.
+        """
+        self._logger.info("Aggregating experiment results...")
+        experiment_files = sorted(self.results_dir.glob("experiment_*.json"))
+
+        if not experiment_files:
+            self._logger.warning("No experiment results found")
+            return None
+
+        experiments: list[ExperimentResult] = []
+        for exp_file in experiment_files:
+            try:
+                data = _json.loads(exp_file.read_text())
+                if isinstance(data, dict):
+                    metrics = ExperimentMetrics(**data.get("metrics", {}))
+                    exp = ExperimentResult(
+                        experiment_id=data["experiment_id"],
+                        name=data["name"],
+                        datasets=data["datasets"],
+                        num_train_samples=data["num_train_samples"],
+                        metrics=metrics,
+                    )
+                    experiments.append(exp)
+            except Exception as e:
+                self._logger.warning(f"Could not load {exp_file}: {e}")
+
+        if not experiments:
+            self._logger.warning("No valid experiments loaded")
+            return None
+
+        best_exp = max(experiments, key=lambda e: e.metrics.global_f1)
+        baseline_exp = next((e for e in experiments if e.experiment_id == 1), None)
+        baseline_f1 = baseline_exp.metrics.global_f1 if baseline_exp else 0.0
+        improvement = best_exp.metrics.global_f1 - baseline_f1
+
+        agg = AggregatedResults(
+            experiments=experiments,
+            best_experiment=best_exp,
+            baseline_f1=baseline_f1,
+            improvement=improvement,
+            generated_timestamp=_datetime.utcnow(),
+        )
+
+        self._logger.info(
+            f"✓ Aggregated {len(experiments)} experiments. "
+            f"Best: Exp {best_exp.experiment_id} F1={best_exp.metrics.global_f1:.4f}"
+        )
+        return agg
+
+    def build_paper_metrics(self, agg: AggregatedResults) -> dict[str, str]:
+        r"""Build \VAR{} key→value map for LaTeX template.
+
+        Delegates to :func:`build_var_map` — single source of truth.
+        """
+        all_exp = {str(e.experiment_id): e.__dict__ for e in agg.experiments}
+        return build_var_map(all_exp)
+
+    def save_aggregated_results(
+        self, agg: AggregatedResults, output_file: Path | None = None
+    ) -> bool:
+        """Save aggregated results to JSON.
+
+        NOTE: ``all_experiments.json`` is owned by ``run_experiments.save_summary()``.
+        This method writes to ``aggregated_summary.json`` instead.
+        """
+        if output_file is None:
+            output_file = self.results_dir / "aggregated_summary.json"
+
+        try:
+            data = {
+                "generated_timestamp": agg.generated_timestamp.isoformat(),
+                "num_experiments": len(agg.experiments),
+                "best_experiment": (
+                    {
+                        "experiment_id": agg.best_experiment.experiment_id,
+                        "name": agg.best_experiment.name,
+                        "f1": agg.best_experiment.metrics.global_f1,
+                    }
+                    if agg.best_experiment
+                    else None
+                ),
+                "baseline_f1": agg.baseline_f1,
+                "improvement": agg.improvement,
+                "experiments": [e.to_dict() for e in agg.experiments],
+            }
+            output_file.write_text(_json.dumps(data, indent=2))
+            self._logger.info(f"✓ Saved aggregated results to {output_file}")
+            return True
+        except Exception as e:
+            self._logger.error(f"Could not save aggregated results: {e}")
+            return False
+
+    @staticmethod
+    def load_all_experiments(results_dir: Path) -> list[ExperimentResult]:
+        """Load all experiment JSON files from *results_dir*.
+
+        Returns:
+            List of ExperimentResult objects (empty list on error).
+        """
+        experiments: list[ExperimentResult] = []
+        for exp_file in sorted(results_dir.glob("experiment_*.json")):
+            try:
+                data = _json.loads(exp_file.read_text())
+                metrics = ExperimentMetrics(**data.get("metrics", {}))
+                exp = ExperimentResult(
+                    experiment_id=data["experiment_id"],
+                    name=data["name"],
+                    datasets=data["datasets"],
+                    num_train_samples=data["num_train_samples"],
+                    metrics=metrics,
+                )
+                experiments.append(exp)
+            except Exception as e:
+                _logging.getLogger(__name__).warning(f"Could not load {exp_file}: {e}")
+        return experiments

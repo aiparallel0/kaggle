@@ -53,9 +53,9 @@ except Exception:
 
 # FIX: Import shared constants from single source of truth (constants.py)
 # instead of defining EMPTY_GT and IMAGE_EXTS independently here.
-from address_extractor import extract_address_from_seller
 from constants import EMPTY_GT, SEED, _get_sroie_dir
 from constants import IMAGE_EXTS as _IMAGE_EXTS_SET
+from dataset_normalizer import extract_address_from_seller
 
 # ── Type alias ────────────────────────────────────────────────────────
 Sample = tuple[Path, dict[str, str]]
