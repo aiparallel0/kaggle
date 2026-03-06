@@ -28,7 +28,7 @@ jobs:
           # Install torch CPU-only (no CUDA needed for logic tests)
           pip install torch --index-url https://download.pytorch.org/whl/cpu
           # Install remaining project deps that are importable on CPU
-          pip install transformers sentencepiece psutil Pillow
+          pip install transformers sentencepiece psutil Pillow editdistance
 
       - name: Run resource optimizer guardrail tests
         run: pytest tests/test_resource_optimizer.py -v --tb=short
