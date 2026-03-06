@@ -27,6 +27,7 @@ __all__ = [
     "SystemResources",
     "detect_system_resources",
     "optimize_hyperparams",
+    "validate_training_config",
     "TrainingAuditLogger",
 ]
 
@@ -262,6 +263,56 @@ def optimize_hyperparams(
         detected_vram_gb=vram_gb,
         detected_ram_gb=ram_gb,
         detected_cpu_cores=resources.cpu_cores,
+    )
+
+
+def validate_training_config(
+    batch_size: int,
+    gradient_accumulation_steps: int,
+    num_train_samples: int,
+    epochs: int,
+    min_optimizer_steps: int = 200,
+) -> None:
+    """Validate that a training configuration produces enough optimizer steps.
+
+    Raises ValueError if the effective number of optimizer steps is below
+    *min_optimizer_steps* (default 200 — DONUT's empirical minimum to exit
+    the XML scaffolding phase and learn field content).
+
+    This catches the 'step starvation' bug where a large batch size on a
+    high-VRAM GPU leaves too few gradient updates for the model to converge.
+
+    Args:
+        batch_size: Per-device batch size.
+        gradient_accumulation_steps: Number of accumulation steps.
+        num_train_samples: Total training samples.
+        epochs: Number of training epochs.
+        min_optimizer_steps: Minimum acceptable total optimizer steps.
+
+    Raises:
+        ValueError: If total optimizer steps < min_optimizer_steps.
+    """
+    import math
+
+    steps_per_epoch = math.ceil(num_train_samples / (batch_size * gradient_accumulation_steps))
+    total_steps = steps_per_epoch * epochs
+    effective_batch = batch_size * gradient_accumulation_steps
+    if total_steps < min_optimizer_steps:
+        raise ValueError(
+            f"Training config produces only {total_steps} optimizer steps "
+            f"({num_train_samples} samples / effective_batch={effective_batch} × {epochs} epochs). "
+            f"Minimum required: {min_optimizer_steps}. "
+            f"Reduce batch_size or increase gradient_accumulation_steps. "
+            f"Current: batch_size={batch_size}, grad_accum={gradient_accumulation_steps}."
+        )
+    logger.info(
+        "[validate_training_config] OK: %d optimizer steps "
+        "(batch=%d, accum=%d, samples=%d, epochs=%d)",
+        total_steps,
+        batch_size,
+        gradient_accumulation_steps,
+        num_train_samples,
+        epochs,
     )
 
 

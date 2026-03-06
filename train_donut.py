@@ -81,6 +81,15 @@ def train():
     model.config.pad_token_id = processor.tokenizer.pad_token_id
     model.config.eos_token_id = processor.tokenizer.eos_token_id
     model.config.max_length = MAX_LENGTH
+    # ── Guardrail: verify decoder_start_token_id decodes back to the task token ──
+    _decoded = processor.tokenizer.decode([model.config.decoder_start_token_id])
+    if _decoded != TASK_TOKEN:
+        raise RuntimeError(
+            f"decoder_start_token_id={model.config.decoder_start_token_id} decodes to "
+            f"'{_decoded}', not '{TASK_TOKEN}'. Token was not added to vocab before "
+            f"convert_tokens_to_ids was called, or the list-wrapping syntax is missing. "
+            f"Use: tokenizer.convert_tokens_to_ids(['{TASK_TOKEN}'])[0]"
+        )
 
     # Partially freeze encoder (freeze bottom 2 Swin stages)
     for name, param in model.encoder.named_parameters():

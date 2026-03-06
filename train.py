@@ -617,6 +617,15 @@ def main():
     model.decoder.config.decoder_start_token_id = processor.tokenizer.convert_tokens_to_ids(
         ["<s_sroie>"]
     )[0]
+    # ── Guardrail: verify decoder_start_token_id decodes back to the task token ──
+    _decoded = processor.tokenizer.decode([model.config.decoder_start_token_id])
+    if _decoded != "<s_sroie>":
+        raise RuntimeError(
+            f"decoder_start_token_id={model.config.decoder_start_token_id} decodes to "
+            f"'{_decoded}', not '<s_sroie>'. Token was not added to vocab before "
+            f"convert_tokens_to_ids was called, or the list-wrapping syntax is missing. "
+            f"Use: tokenizer.convert_tokens_to_ids(['<s_sroie>'])[0]"
+        )
     model.config.use_cache = False  # Required with gradient_checkpointing
     model.decoder.config.use_cache = False
     model.gradient_checkpointing_enable()
