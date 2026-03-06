@@ -720,6 +720,15 @@ def run_inference(model, processor, image_path, task_prompt, max_length=512, pre
             sequence[:200] + ("..." if len(sequence) > 200 else ""),
         )
 
+    # Check for task prompt mismatch (model outputting CORD schema for SROIE task)
+    if task_prompt.startswith("<s_sroie") and sequence.startswith("<s_cord-v2>"):
+        logger.warning(
+            "Task prompt mismatch for %s: asked for <s_sroie> but model output starts with "
+            "<s_cord-v2>. Model has not learned SROIE task format (CORD pretraining dominates). "
+            "This indicates insufficient training or a corrupted checkpoint.",
+            image_path,
+        )
+
     # For SROIE output, use custom parser; for CORD, use token2json
     if task_prompt.startswith("<s_sroie"):
         try:
