@@ -77,7 +77,7 @@ def train():
     # checkpoint produces garbage output (F1=0).
     model.decoder.config.tie_word_embeddings = False
 
-    model.config.decoder_start_token_id = processor.tokenizer.convert_tokens_to_ids(TASK_TOKEN)
+    model.config.decoder_start_token_id = processor.tokenizer.convert_tokens_to_ids([TASK_TOKEN])[0]
     model.config.pad_token_id = processor.tokenizer.pad_token_id
     model.config.eos_token_id = processor.tokenizer.eos_token_id
     model.config.max_length = MAX_LENGTH

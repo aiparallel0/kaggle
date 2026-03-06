@@ -438,7 +438,9 @@ class DonutTrainer:
             num_train_epochs=self.config.max_epochs,
             per_device_train_batch_size=self.config.per_device_train_batch_size,
             gradient_accumulation_steps=_grad_accum,
-            learning_rate=self.config.learning_rate,
+            # Set to encoder_lr for HF logging purposes only — the custom
+            # layerwise optimizer passed via optimizers= takes precedence.
+            learning_rate=getattr(self.config, "encoder_lr", self.config.learning_rate),
             warmup_steps=_eff_warmup,
             weight_decay=getattr(self.config, "weight_decay", 0.01),
             save_strategy="epoch",
@@ -458,6 +460,27 @@ class DonutTrainer:
             dataloader_persistent_workers=optimal_workers > 0,
             remove_unused_columns=False,
             seed=getattr(self.config, "seed", SEED),
+        )
+
+        # Build layerwise AdamW optimizer: encoder at encoder_lr, decoder at decoder_lr.
+        # Falls back to a single learning_rate if encoder_lr/decoder_lr are absent.
+        encoder_lr = getattr(self.config, "encoder_lr", self.config.learning_rate)
+        decoder_lr = getattr(self.config, "decoder_lr", self.config.learning_rate)
+        _weight_decay = getattr(self.config, "weight_decay", 0.01)
+        encoder_params = [
+            p for n, p in self.model.named_parameters() if n.startswith("encoder.") and p.requires_grad
+        ]
+        decoder_params = [
+            p
+            for n, p in self.model.named_parameters()
+            if not n.startswith("encoder.") and p.requires_grad
+        ]
+        optimizer = torch.optim.AdamW(
+            [
+                {"params": encoder_params, "lr": encoder_lr},
+                {"params": decoder_params, "lr": decoder_lr},
+            ],
+            weight_decay=_weight_decay,
         )
 
         # LmHeadCloneCallback MUST be registered before EarlyStoppingCallback
@@ -482,6 +505,7 @@ class DonutTrainer:
             train_dataset=self.train_dataset,
             eval_dataset=self.val_dataset,
             callbacks=callbacks or None,
+            optimizers=(optimizer, None),
         )
 
         trainer.train()

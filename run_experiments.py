@@ -130,6 +130,8 @@ class ExperimentConfig:
     weight_decay: float = 0.01
     max_length: int = MAX_LENGTH
     gradient_accumulation_steps: int = 2
+    encoder_lr: float = 5e-5
+    decoder_lr: float = 1e-4
     description: str = ""
     experiment_id: int = 0
     sroie_oversample: int = 1  # Number of times to duplicate SROIE training samples (1–3 typical)
@@ -413,7 +415,8 @@ def train_experiment(
             break
         except torch.cuda.OutOfMemoryError as e:
             if config.batch_size > 2:
-                config.batch_size = config.batch_size // 2
+                new_batch = config.batch_size // 2
+                config = dataclasses.replace(config, batch_size=new_batch)
                 print(
                     f"[Exp {exp_id}] CUDA OOM — reducing batch_size to "
                     f"{config.batch_size} and retrying"
@@ -616,6 +619,8 @@ def run_experiment(exp_id: int, base_processor=None, base_model=None) -> dict:
         EXPERIMENTS[exp_id],
         batch_size=optimized_config.batch_size,
         gradient_accumulation_steps=optimized_config.gradient_accumulation_steps,
+        encoder_lr=optimized_config.encoder_lr,
+        decoder_lr=optimized_config.decoder_lr,
     )
     print(
         f"[Exp {exp_id}] Resource optimization applied: "
@@ -651,13 +656,15 @@ def run_experiment(exp_id: int, base_processor=None, base_model=None) -> dict:
         baseline_f1=None,  # Could set to pretrained F1 for comparison
     )
 
-    # Save result — record the *actual* (resource-optimized) config so future
-    # cache checks correctly detect if the training parameters have changed.
+    # Save result — use the *original* (unoptimized) experiment config dict for cache
+    # staleness comparison so future runs can correctly detect stale results.
+    # The resource-optimized values (batch_size, encoder_lr, etc.) are hardware-dependent
+    # and would cause spurious cache misses on different hardware.
     result = {
         "experiment_id": exp_id,
         "name": config.name,
         "datasets": config.datasets,
-        "config": _config_to_dict(config),
+        "config": original_config_dict,
         "num_train_samples": len(train_samples),
         "metrics": metrics,
         "training_log": log_history,
