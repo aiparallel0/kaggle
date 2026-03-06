@@ -93,7 +93,7 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 # Suppress verbose third-party HTTP loggers to keep output clean
-for pkg in ["httpx", "urllib3", "datasets", "transformers", "huggingface_hub"]:
+for pkg in ["httpx", "httpcore", "urllib3", "datasets", "transformers", "huggingface_hub"]:
     logging.getLogger(pkg).setLevel(logging.WARNING)
 
 # ---------------------------------------------------------------------------
