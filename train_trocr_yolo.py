@@ -39,6 +39,8 @@ __all__ = [
     "train_trocr",
     "run_trocr_yolo_inference",
     "_materialize_meta_buffers",
+    "_EXPECTED_MISSING_TROCR",
+    "_print_trocr_load_report",
 ]
 
 # ── Config ──────────────────────────────────────────────────────────────────
@@ -248,6 +250,50 @@ def train_yolo(output_dir: Path | None = None) -> Path:
 # ════════════════════════════════════════════════════════════════════════════
 # STAGE 2: TrOCR Training
 # ════════════════════════════════════════════════════════════════════════════
+
+# Keys that are structurally absent in TrOCR's BEiT vision encoder — the
+# generic VisionEncoderDecoderModel wrapper declares an optional
+# encoder.pooler submodule, but BEiT (and ViT) checkpoints never include it.
+# These two keys will always appear in missing_keys for trocr-base-printed
+# and are completely harmless (unused at train AND inference time).
+# Filtering them before printing the LOAD REPORT ensures the table shows
+# zero unexpected MISSING rows for a clean trocr-base-printed load.
+_EXPECTED_MISSING_TROCR: frozenset[str] = frozenset(
+    {
+        "encoder.pooler.dense.weight",
+        "encoder.pooler.dense.bias",
+    }
+)
+
+
+def _print_trocr_load_report(model_id: str, loading_info: dict) -> None:
+    """Print a LOAD REPORT table for TrOCR, filtering known-benign missing keys.
+
+    encoder.pooler.dense.{weight,bias} are always absent for BEiT-based TrOCR
+    models (the pooler is optional in the generic wrapper and unused by BEiT).
+    They are excluded before printing so the table shows 0 MISSING for a clean
+    trocr-base-printed load.
+    """
+    raw_missing = loading_info.get("missing_keys", [])
+    unexpected = loading_info.get("unexpected_keys", [])
+
+    # Filter out structurally-absent BEiT pooler keys before reporting.
+    missing = [k for k in raw_missing if k not in _EXPECTED_MISSING_TROCR]
+
+    col_width = max((len(k) for k in missing + unexpected), default=30) + 2
+    header = f"{'Key':<{col_width}}| {'Status':<8}|"
+    sep = "-" * col_width + "+---------+"
+
+    print(f"\nVisionEncoderDecoderModel LOAD REPORT from: {model_id}")
+    print(header)
+    print(sep)
+    for key in missing:
+        print(f"{key:<{col_width}}| {'MISSING':<8}|")
+    if not missing and not unexpected:
+        print(f"{'(all weights loaded cleanly)':<{col_width}}| {'OK':<8}|")
+    print()
+
+
 def train_trocr(output_dir: Path | None = None) -> dict:
     """Fine-tune TrOCR on line crops from receipts.
 
@@ -271,7 +317,10 @@ def train_trocr(output_dir: Path | None = None) -> dict:
     # immediately instead of deferred loading via the meta device.
     # FIX 2: After .to(DEVICE), non-persistent buffers (e.g. embed_positions._float_tensor)
     # may still be on the meta device — see buffer sweep below.
-    model = VisionEncoderDecoderModel.from_pretrained(TROCR_MODEL_ID, low_cpu_mem_usage=False)
+    model, loading_info = VisionEncoderDecoderModel.from_pretrained(
+        TROCR_MODEL_ID, low_cpu_mem_usage=False, output_loading_info=True
+    )
+    _print_trocr_load_report(TROCR_MODEL_ID, loading_info)
 
     model.config.decoder_start_token_id = processor.tokenizer.cls_token_id
     model.config.pad_token_id = processor.tokenizer.pad_token_id

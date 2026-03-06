@@ -28,7 +28,9 @@ pytest.importorskip("transformers", reason="transformers required by train_trocr
 from train_trocr_yolo import (  # noqa: E402, I001
     TROCR_MODEL_ID,
     TrOCRReceiptDataset,
+    _EXPECTED_MISSING_TROCR,
     _materialize_meta_buffers,
+    _print_trocr_load_report,
 )
 
 
@@ -372,3 +374,107 @@ class TestTrOCRReceiptDataset:
         processor = self._make_processor_stub(max_length=max_length)
         dataset = TrOCRReceiptDataset(data_dir=tmp_path, processor=processor, max_length=max_length)
         assert len(dataset) == 0
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# 6.  LOAD REPORT pooler key filtering — Bug (a) fix
+# ════════════════════════════════════════════════════════════════════════════
+
+
+class TestTrOCRLoadReport:
+    """_print_trocr_load_report must filter encoder.pooler.dense.* from MISSING list.
+
+    microsoft/trocr-base-printed uses a BEiT vision encoder that never includes
+    a pooler layer.  The generic VisionEncoderDecoderModel wrapper declares an
+    optional encoder.pooler submodule, so HuggingFace always reports these two
+    keys as MISSING even though they are structurally absent and unused.
+
+    The LOAD REPORT must show 0 MISSING rows for a clean trocr-base-printed load.
+    """
+
+    def test_expected_missing_trocr_contains_pooler_keys(self):
+        """_EXPECTED_MISSING_TROCR must include both encoder.pooler.dense.* keys."""
+        assert "encoder.pooler.dense.weight" in _EXPECTED_MISSING_TROCR, (
+            "encoder.pooler.dense.weight must be in _EXPECTED_MISSING_TROCR — "
+            "it is structurally absent in BEiT-based TrOCR models."
+        )
+        assert "encoder.pooler.dense.bias" in _EXPECTED_MISSING_TROCR, (
+            "encoder.pooler.dense.bias must be in _EXPECTED_MISSING_TROCR — "
+            "it is structurally absent in BEiT-based TrOCR models."
+        )
+
+    def test_expected_missing_is_frozenset(self):
+        """_EXPECTED_MISSING_TROCR must be a frozenset (immutable, no accidental mutation)."""
+        assert isinstance(_EXPECTED_MISSING_TROCR, frozenset), (
+            f"_EXPECTED_MISSING_TROCR is a {type(_EXPECTED_MISSING_TROCR).__name__}, not frozenset. "
+            "Use frozenset to prevent accidental mutation."
+        )
+
+    def test_pooler_keys_filtered_from_missing_output(self, capsys):
+        """_print_trocr_load_report must not print encoder.pooler.dense.* as MISSING."""
+        loading_info = {
+            "missing_keys": [
+                "encoder.pooler.dense.weight",
+                "encoder.pooler.dense.bias",
+            ],
+            "unexpected_keys": [],
+        }
+        _print_trocr_load_report("microsoft/trocr-base-printed", loading_info)
+        captured = capsys.readouterr()
+        assert "encoder.pooler.dense.weight" not in captured.out, (
+            "encoder.pooler.dense.weight must NOT appear in LOAD REPORT output — "
+            "it is a known-benign structural absence for BEiT-based TrOCR."
+        )
+        assert "encoder.pooler.dense.bias" not in captured.out, (
+            "encoder.pooler.dense.bias must NOT appear in LOAD REPORT output — "
+            "it is a known-benign structural absence for BEiT-based TrOCR."
+        )
+
+    def test_clean_load_shows_ok_not_missing(self, capsys):
+        """When only pooler keys are missing, LOAD REPORT must show OK (0 MISSING)."""
+        loading_info = {
+            "missing_keys": [
+                "encoder.pooler.dense.weight",
+                "encoder.pooler.dense.bias",
+            ],
+            "unexpected_keys": [],
+        }
+        _print_trocr_load_report("microsoft/trocr-base-printed", loading_info)
+        captured = capsys.readouterr()
+        # Should show OK, not MISSING
+        assert "MISSING" not in captured.out, (
+            "LOAD REPORT must show 0 MISSING rows when only pooler keys are absent "
+            "(those are filtered). Got output:\n" + captured.out
+        )
+        assert "OK" in captured.out, (
+            "LOAD REPORT must show 'OK' for a clean trocr-base-printed load. "
+            "Got output:\n" + captured.out
+        )
+
+    def test_non_pooler_missing_key_still_reported(self, capsys):
+        """Non-pooler missing keys must still appear as MISSING in the report."""
+        loading_info = {
+            "missing_keys": [
+                "encoder.pooler.dense.weight",
+                "encoder.pooler.dense.bias",
+                "decoder.some_other_weight",  # This should NOT be filtered
+            ],
+            "unexpected_keys": [],
+        }
+        _print_trocr_load_report("microsoft/trocr-base-printed", loading_info)
+        captured = capsys.readouterr()
+        assert "decoder.some_other_weight" in captured.out, (
+            "Non-pooler missing keys must still appear in LOAD REPORT output."
+        )
+        assert "MISSING" in captured.out, (
+            "LOAD REPORT must show MISSING for non-pooler missing keys."
+        )
+
+    def test_model_id_in_report_header(self, capsys):
+        """LOAD REPORT header must include the model ID for traceability."""
+        loading_info = {"missing_keys": [], "unexpected_keys": []}
+        _print_trocr_load_report("microsoft/trocr-base-printed", loading_info)
+        captured = capsys.readouterr()
+        assert "microsoft/trocr-base-printed" in captured.out, (
+            "LOAD REPORT header must include the model ID for traceability."
+        )

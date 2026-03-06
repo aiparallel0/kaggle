@@ -164,6 +164,58 @@ class TestOptimizeHyperparamsLowVRAM:
         )
         assert cfg.batch_size == 4
 
+    def test_rtx4090_small_dataset_validates_with_5_epochs(self):
+        """RTX 4090 (24 GB) + 500 samples: returned config must pass validate_training_config at 5 epochs.
+
+        Regression test for the mini-mode ValueError:
+          'Training config produces only 160 optimizer steps (500 samples /
+           effective_batch=16 × 5 epochs). Minimum required: 200.'
+        Root cause: 24 GB path used accum=8 (effective batch=16) for ALL datasets,
+        giving ceil(500/16) × 5 = 160 steps — below the 200-step minimum when
+        mini-mode (epochs=5) overrides the default 10-epoch config.
+        Fix: small datasets (< 2000 samples) on ≤ 24 GB use accum=4 (effective batch=8),
+        giving ceil(500/8) × 5 = 315 steps ≥ 200 ✓
+        """
+        cfg = optimize_hyperparams(
+            num_train_samples=500,
+            available_vram_gb=24.0,
+            available_ram_gb=32.0,
+        )
+        # Must not raise — previously raised ValueError with accum=8
+        validate_training_config(
+            batch_size=cfg.batch_size,
+            gradient_accumulation_steps=cfg.gradient_accumulation_steps,
+            num_train_samples=500,
+            epochs=5,
+        )
+
+    def test_rtx4090_small_dataset_step_count_with_5_epochs(self):
+        """ceil(500 / (bs × accum)) × 5 must be ≥ 200 on 24 GB GPU with 500 samples."""
+        cfg = optimize_hyperparams(
+            num_train_samples=500,
+            available_vram_gb=24.0,
+            available_ram_gb=32.0,
+        )
+        steps = math.ceil(500 / (cfg.batch_size * cfg.gradient_accumulation_steps)) * 5
+        assert steps >= 200, (
+            f"RTX 4090 + 500 samples: only {steps} optimizer steps with 5 epochs "
+            f"(batch={cfg.batch_size}, accum={cfg.gradient_accumulation_steps}). "
+            "Mini-mode uses epochs=5 — config must tolerate it."
+        )
+
+    def test_rtx4090_large_dataset_uses_higher_accum(self):
+        """Large dataset (≥ 2000 samples) on 24 GB may use accum=8 (enough steps even at 5 epochs)."""
+        cfg = optimize_hyperparams(
+            num_train_samples=2000,
+            available_vram_gb=24.0,
+            available_ram_gb=32.0,
+        )
+        # 2000 samples with accum=8 at 5 epochs: ceil(2000/16)*5 = 625 ≥ 200 ✓
+        steps = math.ceil(2000 / (cfg.batch_size * cfg.gradient_accumulation_steps)) * 5
+        assert steps >= 200, (
+            f"Large dataset path still too few steps: {steps} with 5 epochs"
+        )
+
 
 class TestExperimentConfigImmutability:
     """Tests that ExperimentConfig global state is never mutated."""
