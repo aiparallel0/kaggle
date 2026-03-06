@@ -485,8 +485,9 @@ def _assign_fields_heuristic(ocr_lines: list[dict]) -> dict[str, str]:
     # Find date — scan all lines (date can appear anywhere on receipt)
     for i, line in enumerate(sorted_lines):
         text = line.get("text", "")
-        if _DATE_RE.search(text):
-            result["date"] = text.strip()
+        m = _DATE_RE.search(text)
+        if m:
+            result["date"] = m.group(0).strip()
             used.add(i)
             break
 
@@ -527,7 +528,8 @@ def _assign_fields_heuristic(ocr_lines: list[dict]) -> dict[str, str]:
                     break
     result["company"] = " ".join(company_parts)
 
-    # Address: prefer lines with road/postcode keywords; fall back to remaining
+    # Address: prefer lines with road/postcode keywords; cap at 3 keyword lines
+    # or 2 fallback lines (mirrors real receipt address format of 1-3 lines).
     addr_keyword_parts = []
     addr_other_parts = []
     for i, line in enumerate(sorted_lines):
@@ -536,9 +538,11 @@ def _assign_fields_heuristic(ocr_lines: list[dict]) -> dict[str, str]:
             if not text or _MONEY_RE.match(text):
                 continue
             if _ADDRESS_RE.search(text):
-                addr_keyword_parts.append(text)
+                if len(addr_keyword_parts) < 3:
+                    addr_keyword_parts.append(text)
             else:
-                addr_other_parts.append(text)
+                if len(addr_other_parts) < 2:
+                    addr_other_parts.append(text)
     addr_parts = addr_keyword_parts if addr_keyword_parts else addr_other_parts
     result["address"] = " ".join(addr_parts)
 

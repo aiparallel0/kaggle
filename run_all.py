@@ -1028,6 +1028,21 @@ def stage_benchmark(args) -> StageResult:
     else:
         print(f"  YOLO model   : {yolo_weights}")
 
+    # --- Find fine-tuned TrOCR model (for fair comparison vs base pretrained) ---
+    trocr_finetuned_dir = workspace / "models" / "trocr_finetuned" / "best"
+    if _is_valid_model_dir(trocr_finetuned_dir):
+        trocr_model_id = str(trocr_finetuned_dir)
+        print(f"  TrOCR model  : {trocr_model_id} (fine-tuned)")
+    else:
+        trocr_model_id = "microsoft/trocr-base-printed"
+        w = (
+            f"Fine-tuned TrOCR model not found at {trocr_finetuned_dir} "
+            "— falling back to pretrained base model for benchmark."
+        )
+        print(f"  WARNING: {w}")
+        warnings.append(w)
+        print(f"  TrOCR model  : {trocr_model_id} (pretrained base)")
+
     print(f"  Test images  : {test_img_dir}")
     print(f"  Test labels  : {test_key_dir}")
 
@@ -1062,6 +1077,7 @@ def stage_benchmark(args) -> StageResult:
             print("\n  Running YOLOv8+TrOCR+Regex inference ...")
             yolo_pipe = bench_mod.TrOCRYOLOPipeline(
                 yolo_model_path=str(yolo_weights),
+                trocr_model_id=trocr_model_id,
             )
             yolo_result = yolo_pipe.run_benchmark(pairs, desc="YOLO+TrOCR benchmark")
             yolo_result = bench_mod.compute_metrics(yolo_result)
