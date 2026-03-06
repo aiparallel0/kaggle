@@ -468,7 +468,9 @@ class DonutTrainer:
         decoder_lr = getattr(self.config, "decoder_lr", self.config.learning_rate)
         _weight_decay = getattr(self.config, "weight_decay", 0.01)
         encoder_params = [
-            p for n, p in self.model.named_parameters() if n.startswith("encoder.") and p.requires_grad
+            p
+            for n, p in self.model.named_parameters()
+            if n.startswith("encoder.") and p.requires_grad
         ]
         decoder_params = [
             p

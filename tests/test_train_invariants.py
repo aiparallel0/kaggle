@@ -94,9 +94,7 @@ class TestExperimentConfigPropertyAliases:
 
         from run_experiments import ExperimentConfig
 
-        original = ExperimentConfig(
-            name="t", datasets=["sroie"], batch_size=8, epochs=10, lr=5e-5
-        )
+        original = ExperimentConfig(name="t", datasets=["sroie"], batch_size=8, epochs=10, lr=5e-5)
         new = dataclasses.replace(original, batch_size=2, epochs=5, lr=1e-4)
         assert new.per_device_train_batch_size == 2
         assert new.max_epochs == 5
@@ -113,9 +111,7 @@ class TestExperimentConfigPropertyAliases:
             assert cfg.epochs > 0, f"Exp {exp_id}: epochs must be > 0"
             assert cfg.batch_size > 0, f"Exp {exp_id}: batch_size must be > 0"
             assert cfg.lr > 0, f"Exp {exp_id}: lr must be > 0"
-            assert cfg.gradient_accumulation_steps > 0, (
-                f"Exp {exp_id}: grad_accum must be > 0"
-            )
+            assert cfg.gradient_accumulation_steps > 0, f"Exp {exp_id}: grad_accum must be > 0"
             assert cfg.max_epochs == cfg.epochs, f"Exp {exp_id}: max_epochs alias broken"
             assert cfg.learning_rate == cfg.lr, f"Exp {exp_id}: learning_rate alias broken"
             assert cfg.per_device_train_batch_size == cfg.batch_size, (
