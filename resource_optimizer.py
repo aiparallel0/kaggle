@@ -17,6 +17,7 @@ CLAUDE.md Reference:
 """
 
 import logging
+import math
 import os
 from dataclasses import dataclass
 from datetime import datetime
@@ -45,6 +46,19 @@ except ImportError:
     torch = None
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Module-level constants
+# ---------------------------------------------------------------------------
+
+# Minimum total optimizer steps for DONUT convergence (empirical, per CLAUDE.md § 3).
+# Fewer than this produces well-structured XML output but empty field content.
+_MIN_OPTIMIZER_STEPS = 200
+
+# Dataset size threshold below which small-dataset optimisations kick in.
+# Above this threshold, effective-batch-16 configs produce sufficient steps
+# even at 5 epochs (mini-mode): ceil(2000/16)*5 = 625 ≥ 200.
+_SMALL_DATASET_THRESHOLD = 2000
 
 # ---------------------------------------------------------------------------
 # Data Classes
@@ -185,7 +199,7 @@ def optimize_hyperparams(
         )
     else:
         # >24 GB: Still cap at 16 for safety (Exp 8 uses ~3940 samples; batch=32 overfits)
-        if num_train_samples < 2000:
+        if num_train_samples < _SMALL_DATASET_THRESHOLD:
             # Small dataset: use batch=4 + accum=4 (same as ≤24 GB path).
             # batch=8 + accum=2 yields too few optimizer steps (~160 total) for
             # DONUT to converge on experiments with ~500 samples (Exp 1-4).
@@ -208,7 +222,18 @@ def optimize_hyperparams(
     # Heuristic: Effective batch = batch_size * accumulation_steps
     # If physical batch is small, accumulate more steps to reach effective batch~16
 
-    if batch_size <= 2:
+    if batch_size <= 2 and num_train_samples < _SMALL_DATASET_THRESHOLD and vram_gb <= 24.0:
+        # Small dataset on 24 GB card: use accum=4 instead of accum=8.
+        # With accum=8 (effective batch=16), mini-mode (epochs=5) produces only
+        # ceil(500/16) × 5 = 160 optimizer steps — below _MIN_OPTIMIZER_STEPS.
+        # Reducing to accum=4 (effective batch=8): ceil(500/8) × 5 = 315 ≥ 200 ✓
+        # Memory is safe: DONUT at 960×1280 with batch=2 uses ~6 GB on 24 GB cards.
+        accumulation_steps = 4
+        explanation_parts.append(
+            f"accumulation_steps=4: physical batch=2, small dataset ({num_train_samples} samples) "
+            "on ≤24 GB card — effective batch=8 ensures ≥200 optimizer steps even at 5 epochs"
+        )
+    elif batch_size <= 2:
         accumulation_steps = 8
         explanation_parts.append(
             "accumulation_steps=8: physical batch=2, reaching effective batch=16"
@@ -225,6 +250,34 @@ def optimize_hyperparams(
         )
 
     # ───────────────────────────────────────────────────────────────────
+    # Self-healing: ensure ≥ _MIN_OPTIMIZER_STEPS for DONUT convergence
+    # ───────────────────────────────────────────────────────────────────
+    #
+    # Acts as a general backstop for any VRAM tier / dataset size combination
+    # not already handled by the branches above.  Halves accumulation_steps
+    # until total_steps ≥ _MIN_OPTIMIZER_STEPS or accum reaches 1.
+
+    # epochs is the default fixed value (per CLAUDE.md § 3).  The self-healing
+    # loop uses this as its reference epoch count — callers such as mini-mode
+    # that override epochs at training time are protected by the explicit
+    # small-dataset condition above (accum=4 on ≤24 GB cards).
+    epochs = 10
+
+    while accumulation_steps > 1:
+        steps_per_epoch = math.ceil(
+            num_train_samples / (batch_size * accumulation_steps)
+        )
+        total_steps = steps_per_epoch * epochs
+        if total_steps >= _MIN_OPTIMIZER_STEPS:
+            break
+        old_accum = accumulation_steps
+        accumulation_steps //= 2
+        explanation_parts.append(
+            f"accumulation_steps reduced {old_accum}→{accumulation_steps} "
+            f"(self-heal: {total_steps} steps < {_MIN_OPTIMIZER_STEPS} minimum with accum={old_accum})"
+        )
+
+    # ───────────────────────────────────────────────────────────────────
     # Fixed Hyperparameters (per CLAUDE.md § 3)
     # ───────────────────────────────────────────────────────────────────
 
@@ -232,7 +285,6 @@ def optimize_hyperparams(
     decoder_lr = 1e-4
     explanation_parts.append("encoder_lr=5e-5, decoder_lr=1e-4 (fixed per CLAUDE.md)")
 
-    epochs = 10
     explanation_parts.append("epochs=10 (fixed per CLAUDE.md § 3 convergence analysis)")
 
     warmup_steps = 40
