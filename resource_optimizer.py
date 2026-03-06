@@ -171,20 +171,25 @@ def optimize_hyperparams(
     elif vram_gb <= 24.0:
         # 16-24 GB: DONUT at 960×1280 uses ~22.78 GB with batch=8, leaving
         # essentially zero headroom on 24 GB cards (e.g. RTX 4090).  Use
-        # batch=4 with accumulation=4 to reach effective batch=16 safely.
-        batch_size = 4
+        # batch=2 with accumulation=8 to reach effective batch=16 safely
+        # and prevent OOM kills observed at 40% through epoch 2.
+        batch_size = 2
         explanation_parts.append(
-            f"batch_size=4: VRAM {vram_gb:.1f}GB (≤24 GB); DONUT at 960×1280 "
-            "requires ~22.78 GB at batch=8 — using batch=4 with "
-            "accumulation_steps=4 (effective batch=16) to avoid OOM"
+            f"batch_size=2: VRAM {vram_gb:.1f}GB (≤24 GB); DONUT at 960×1280 "
+            "requires ~22.78 GB at batch=8 — using batch=2 with "
+            "accumulation_steps=8 (effective batch=16) to avoid OOM"
         )
     else:
         # >24 GB: Still cap at 16 for safety (Exp 8 uses ~3940 samples; batch=32 overfits)
         if num_train_samples < 2000:
-            batch_size = 8
+            # Small dataset: use batch=4 + accum=4 (same as ≤24 GB path).
+            # batch=8 + accum=2 yields too few optimizer steps (~160 total) for
+            # DONUT to converge on experiments with ~500 samples (Exp 1-4).
+            batch_size = 4
             explanation_parts.append(
-                f"batch_size=8: VRAM {vram_gb:.1f}GB but small dataset ({num_train_samples} samples, "
-                "avoiding overfitting per CLAUDE.md § 3)"
+                f"batch_size=4: VRAM {vram_gb:.1f}GB but small dataset "
+                f"({num_train_samples} samples); using batch=4+accum=4 "
+                "(same as ≤24GB path) to ensure sufficient optimizer steps"
             )
         else:
             batch_size = 16
@@ -199,7 +204,12 @@ def optimize_hyperparams(
     # Heuristic: Effective batch = batch_size * accumulation_steps
     # If physical batch is small, accumulate more steps to reach effective batch~16
 
-    if batch_size <= 4:
+    if batch_size <= 2:
+        accumulation_steps = 8
+        explanation_parts.append(
+            "accumulation_steps=8: physical batch=2, reaching effective batch=16"
+        )
+    elif batch_size <= 4:
         accumulation_steps = 4
         explanation_parts.append(
             "accumulation_steps=4: physical batch=4, reaching effective batch=16"

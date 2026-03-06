@@ -643,7 +643,25 @@ def run_experiment(exp_id: int, base_processor=None, base_model=None) -> dict:
     )
 
     # Evaluate
-    metrics = evaluate_experiment(exp_id, model_dir)
+    try:
+        metrics = evaluate_experiment(exp_id, model_dir)
+    except RuntimeError as exc:
+        if "Self-test FAILED" in str(exc):
+            print(
+                f"[Exp {exp_id}] WARNING: evaluation self-test failed — "
+                f"saving zero-metric result. Error: {exc}"
+            )
+            metrics = {f: 0.0 for f in ["global_f1", "global_precision", "global_recall"]}
+            # Include per-field zeros so downstream paper-generation code doesn't KeyError
+            from constants import FIELDS as _FIELDS
+
+            for _field in _FIELDS:
+                metrics[f"{_field}_f1"] = 0.0
+                metrics[f"{_field}_ned"] = 1.0  # NED=1.0 means maximum edit distance
+            metrics["error"] = str(exc)
+            metrics["self_test_failed"] = True
+        else:
+            raise
 
     # Phase 5: Log training result to audit trail
     global_f1 = metrics.get("global_f1", 0.0)
