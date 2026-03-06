@@ -25,6 +25,7 @@ whitespace.  No key is ever None or absent.
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 
 from constants import FIELDS
@@ -172,3 +173,72 @@ def normalise_samples(
         strip_currency=strip_currency,
         source_name=source_name,
     ).normalise(samples)
+
+
+# ---------------------------------------------------------------------------
+# extract_address_from_seller
+# Absorbed from address_extractor.py — regex-based heuristic that splits the
+# combined ``seller`` string in the Invoices-DONUT dataset into a
+# (company_name, address) pair.  Lives here because it is a dataset
+# normalisation utility consumed by InvoicesDonutLoader in dataset_loaders.py.
+# ---------------------------------------------------------------------------
+
+# Matches a leading street number followed by a space and at least one letter:
+# e.g. "123 Main", "4500 Oak".
+_STREET_NUMBER_RE = re.compile(r"\b\d+\s+[A-Za-z]")
+
+# P.O. Box variants
+_PO_BOX_RE = re.compile(r"\bP\.?\s*O\.?\s*Box\b", re.IGNORECASE)
+
+# Common street-type suffixes that follow a street name.
+_STREET_SUFFIX_RE = re.compile(
+    r"\b(?:Street|St|Avenue|Ave|Boulevard|Blvd|Road|Rd|Drive|Dr|"
+    r"Way|Lane|Ln|Court|Ct|Place|Pl|Terrace|Ter|Circle|Cir|"
+    r"Highway|Hwy|Parkway|Pkwy|Trail|Trl|Run|Loop|Row)\b",
+    re.IGNORECASE,
+)
+
+# US-style state abbreviation + ZIP: e.g. "MA 46228" or "CA 90210-1234".
+_STATE_ZIP_RE = re.compile(r"\b[A-Z]{2}\s+\d{5}(?:-\d{4})?\b")
+
+# Patterns ordered by decreasing specificity so the earliest match wins.
+_ADDRESS_PATTERNS: list[re.Pattern[str]] = [
+    _PO_BOX_RE,
+    _STREET_NUMBER_RE,
+    _STREET_SUFFIX_RE,
+    _STATE_ZIP_RE,
+]
+
+
+def extract_address_from_seller(seller_str: str) -> tuple[str, str]:
+    """Split a combined Invoices-DONUT seller string into (company_name, address).
+
+    Parameters
+    ----------
+    seller_str:
+        Raw seller string, e.g.
+        ``"Patel, Thompson and Montgomery 356 Kyle Vista New James, MA 46228"``
+
+    Returns
+    -------
+    tuple[str, str]
+        ``(company_name, address)`` — *address* is an empty string when no
+        address pattern is detected in *seller_str*.
+    """
+    seller_str = seller_str.strip()
+    if not seller_str:
+        return ("", "")
+
+    # Find the earliest position where any address pattern matches.
+    earliest_start: int | None = None
+    for pattern in _ADDRESS_PATTERNS:
+        m = pattern.search(seller_str)
+        if m and (earliest_start is None or m.start() < earliest_start):
+            earliest_start = m.start()
+
+    if earliest_start is None:
+        return (seller_str, "")
+
+    company_name = seller_str[:earliest_start].strip().rstrip(",").strip()
+    address = seller_str[earliest_start:].strip()
+    return (company_name, address)

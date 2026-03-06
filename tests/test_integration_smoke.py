@@ -22,7 +22,8 @@ class TestImportChain:
         assert SEED == 42
 
     def test_address_extractor_importable(self):
-        from address_extractor import extract_address_from_seller
+        # extract_address_from_seller moved to dataset_normalizer.py
+        from dataset_normalizer import extract_address_from_seller
 
         assert callable(extract_address_from_seller)
 
@@ -32,7 +33,8 @@ class TestImportChain:
         assert len(LEADERBOARD) > 0
 
     def test_training_config_importable(self):
-        from training_config import TrainingConfig
+        # TrainingConfig moved to resource_optimizer.py
+        from resource_optimizer import TrainingConfig
 
         cfg = TrainingConfig()
         cfg.validate()
@@ -44,7 +46,8 @@ class TestImportChain:
         assert PipelineMode.AUTO.value == "auto"
 
     def test_retro_ui_importable(self):
-        from retro_ui import RetroUIFormatter
+        # RetroUIFormatter moved to cloud_pipeline.py
+        from cloud_pipeline import RetroUIFormatter
 
         assert RetroUIFormatter.bold("x")
 
@@ -54,19 +57,22 @@ class TestImportChain:
         assert hasattr(TestRunner, "run_all_checks")
 
     def test_results_aggregator_importable(self):
-        from results_aggregator import ResultsAggregator
+        # ResultsAggregator moved to inject_results.py
+        from inject_results import ResultsAggregator
 
         agg = ResultsAggregator(results_dir=Path("/tmp"))
         assert agg is not None
 
     def test_storage_manager_importable(self):
-        from storage_manager import StorageManager
+        # StorageManager moved to cloud_utils.py
+        from cloud_utils import StorageManager
 
         sm = StorageManager(results_dir=Path("/tmp"))
         assert sm is not None
 
     def test_git_controller_importable(self):
-        from git_controller import GitController
+        # GitController moved to cloud_utils.py
+        from cloud_utils import GitController
 
         assert hasattr(GitController, "get_current_branch")
 

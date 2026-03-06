@@ -6,7 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
-from address_extractor import extract_address_from_seller
+from dataset_normalizer import extract_address_from_seller
 
 # ---------------------------------------------------------------------------
 # extract_address_from_seller
