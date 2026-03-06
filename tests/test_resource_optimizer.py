@@ -172,7 +172,8 @@ class TestExperimentConfigImmutability:
         """dataclasses.replace() must not change the original config."""
         import dataclasses
 
-        from run_experiments import EXPERIMENTS
+        pytest.importorskip("torch", reason="torch required by run_experiments.py")
+        from run_experiments import EXPERIMENTS  # noqa: E402, I001
 
         original_exp1 = EXPERIMENTS[1]
         original_batch = original_exp1.batch_size
@@ -189,9 +190,8 @@ class TestExperimentConfigImmutability:
 
     def test_direct_mutation_is_possible_without_replace(self):
         """Confirm Python allows direct mutation (so the guardrail is necessary)."""
-        import dataclasses
-
-        from run_experiments import ExperimentConfig
+        pytest.importorskip("torch", reason="torch required by run_experiments.py")
+        from run_experiments import ExperimentConfig  # noqa: E402, I001
 
         cfg = ExperimentConfig(name="test", datasets=["sroie"], batch_size=8)
         cfg.batch_size = 99  # This is allowed by Python — the guardrail prevents it in practice
