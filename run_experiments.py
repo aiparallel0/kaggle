@@ -370,6 +370,15 @@ def train_experiment(
         _mdl.decoder.config.decoder_start_token_id = _proc.tokenizer.convert_tokens_to_ids(
             ["<s_sroie>"]
         )[0]
+        # ── Guardrail: verify decoder_start_token_id decodes back to the task token ──
+        _decoded = _proc.tokenizer.decode([_mdl.config.decoder_start_token_id])
+        if _decoded != "<s_sroie>":
+            raise RuntimeError(
+                f"decoder_start_token_id={_mdl.config.decoder_start_token_id} decodes to "
+                f"'{_decoded}', not '<s_sroie>'. Token was not added to vocab before "
+                f"convert_tokens_to_ids was called, or the list-wrapping syntax is missing. "
+                f"Use: tokenizer.convert_tokens_to_ids(['<s_sroie>'])[0]"
+            )
         _mdl.config.use_cache = False  # Required with gradient_checkpointing
         _mdl.decoder.config.use_cache = False
         _mdl.gradient_checkpointing_enable()
@@ -627,6 +636,27 @@ def run_experiment(exp_id: int, base_processor=None, base_model=None) -> dict:
         f"batch_size {old_batch} → {config.batch_size}, "
         f"grad_accum {old_accum} → {config.gradient_accumulation_steps} "
         f"({optimized_config.config_explanation})"
+    )
+
+    # ── Guardrail: verify global EXPERIMENTS dict was NOT mutated ──────────
+    if (
+        config.batch_size != EXPERIMENTS[exp_id].batch_size
+        or config.gradient_accumulation_steps != EXPERIMENTS[exp_id].gradient_accumulation_steps
+    ):
+        assert config is not EXPERIMENTS[exp_id], (
+            "INVARIANT VIOLATION: config is the same object as EXPERIMENTS[exp_id] "
+            "after the dataclasses.replace() call. This indicates a logic error in the "
+            "override block — the replace() result was not assigned back to config."
+        )
+
+    # ── Guardrail: validate optimizer step count ───────────────────────────
+    from resource_optimizer import validate_training_config
+
+    validate_training_config(
+        batch_size=config.batch_size,
+        gradient_accumulation_steps=config.gradient_accumulation_steps,
+        num_train_samples=len(train_samples),
+        epochs=config.epochs,
     )
 
     # Train — pass config explicitly so train_experiment uses the optimized values

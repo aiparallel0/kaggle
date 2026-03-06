@@ -674,3 +674,69 @@ Both must exit with code `0`. If either fails, fix the import chain before runni
 ---
 
 *This file is the authoritative guide for AI agents and developers working on this codebase. When in doubt: fix imports first, validate constants second, run experiments third.*
+
+---
+
+## 19. Guardrail Principles — What Must Never Be Done
+
+> These rules exist because each one corresponds to a real silent failure that was hard to diagnose. They are not style suggestions.
+
+### GP-1 — Never Mutate `EXPERIMENTS` Global State
+
+```python
+# ❌ WRONG — mutates the global singleton
+config = EXPERIMENTS[exp_id]
+config.batch_size = 4  # silently corrupts all future experiments in the same process
+
+# ✅ CORRECT — creates an isolated copy
+import dataclasses
+config = dataclasses.replace(EXPERIMENTS[exp_id], batch_size=4)
+```
+
+**Why:** Python dataclasses are mutable. `config = EXPERIMENTS[exp_id]` is a reference, not a copy. Any field assignment propagates back to the global dict and corrupts the cache-validity check for all subsequent experiments.
+
+### GP-2 — Always Validate Optimizer Step Count Before Training
+
+After any resource-optimizer override, call `validate_training_config()` from `resource_optimizer.py`:
+
+```python
+from resource_optimizer import validate_training_config
+validate_training_config(
+    batch_size=config.batch_size,
+    gradient_accumulation_steps=config.gradient_accumulation_steps,
+    num_train_samples=len(train_samples),
+    epochs=config.epochs,
+)
+```
+
+**Why:** A large batch on a high-VRAM GPU can reduce total optimizer steps below DONUT's convergence threshold (~200 steps). The model will learn XML scaffolding but not field content, producing perfectly structured but completely empty predictions. This never raises an exception — it is a silent failure.
+
+**Minimum safe steps:** 200. DONUT typically converges at ~250–300 steps for SROIE-sized datasets.
+
+### GP-3 — Always Use List Form for `convert_tokens_to_ids`
+
+```python
+# ❌ WRONG — returns ID of '<' character, not the full token
+token_id = tokenizer.convert_tokens_to_ids("<s_sroie>")
+
+# ✅ CORRECT — returns ID of the whole special token
+token_id = tokenizer.convert_tokens_to_ids(["<s_sroie>"])[0]
+```
+
+**Why:** The string form of `convert_tokens_to_ids` iterates over characters, returning the ID for `<` — not the full `<s_sroie>` token. This causes the decoder to start from the wrong token, producing garbage output. Always wrap the token string in a list.
+
+### GP-4 — Always Verify `decoder_start_token_id` Roundtrips Correctly
+
+After setting `model.config.decoder_start_token_id`, verify the ID decodes back to the expected token:
+
+```python
+_decoded = tokenizer.decode([model.config.decoder_start_token_id])
+if _decoded != "<s_sroie>":
+    raise RuntimeError(
+        f"decoder_start_token_id={model.config.decoder_start_token_id} decodes to "
+        f"'{_decoded}', not '<s_sroie>'. "
+        f"Use: tokenizer.convert_tokens_to_ids(['<s_sroie>'])[0]"
+    )
+```
+
+**Why:** Silent wrong token IDs produce models that generate valid XML structure but wrong content. The roundtrip check catches misconfiguration immediately at setup time.
