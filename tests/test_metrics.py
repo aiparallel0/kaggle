@@ -389,7 +389,12 @@ class TestAllowHighParseFailures:
         evaluator.test_dataset = [
             (
                 Path("/fake/img.jpg"),
-                {"company": "MYDIN MALL", "date": "25/12/2023", "address": "123 ST", "total": "9.90"},
+                {
+                    "company": "MYDIN MALL",
+                    "date": "25/12/2023",
+                    "address": "123 ST",
+                    "total": "9.90",
+                },
             )
         ] * n_samples
 

@@ -273,13 +273,13 @@ class TestOOMRecovery:
 
         # Old code: batch_size > 2 was False → raised immediately.
         # New code: batch_size > 1 is True → one more recovery is possible.
-        assert cfg.batch_size > 1, (
-            "batch_size=2 must be > 1 so OOM recovery can halve it to 1"
-        )
+        assert cfg.batch_size > 1, "batch_size=2 must be > 1 so OOM recovery can halve it to 1"
 
         new_batch = max(1, cfg.batch_size // 2)
         new_accum = cfg.gradient_accumulation_steps * 2
-        recovered = dataclasses.replace(cfg, batch_size=new_batch, gradient_accumulation_steps=new_accum)
+        recovered = dataclasses.replace(
+            cfg, batch_size=new_batch, gradient_accumulation_steps=new_accum
+        )
 
         assert recovered.batch_size == 1, (
             f"Expected batch_size=1 after final recovery step, got {recovered.batch_size}"

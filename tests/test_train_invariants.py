@@ -135,9 +135,10 @@ class TestLabelTokenizationNoSpecialTokens:
 
     def test_getitem_label_uses_add_special_tokens_false(self):
         """MultiDataset.__getitem__ must call tokenizer with add_special_tokens=False."""
-        import torch
         from pathlib import Path
         from unittest.mock import MagicMock
+
+        import torch
 
         import train
 
@@ -168,7 +169,9 @@ class TestLabelTokenizationNoSpecialTokens:
         ]
 
         # cache_in_ram=False → skip __init__ precomputation; test __getitem__ path only
-        ds = train.MultiDataset(samples, processor=fake_processor, max_length=32, cache_in_ram=False)
+        ds = train.MultiDataset(
+            samples, processor=fake_processor, max_length=32, cache_in_ram=False
+        )
 
         # Provide pre-cached pixel tensor so no image disk read is needed
         ds._pixel_cache[0] = torch.zeros(3, 1, 1)
