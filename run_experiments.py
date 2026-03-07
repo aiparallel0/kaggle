@@ -716,6 +716,7 @@ def run_experiment(exp_id: int, base_processor=None, base_model=None) -> dict:
     # Train — pass config explicitly so train_experiment uses the optimized values
     model_dir = WORKSPACE / "models" / f"experiment_{exp_id}"
     model_dir.mkdir(parents=True, exist_ok=True)
+    _t_train_start = time.monotonic()
     log_history = train_experiment(
         exp_id,
         train_samples,
@@ -725,10 +726,12 @@ def run_experiment(exp_id: int, base_processor=None, base_model=None) -> dict:
         base_model=base_model,
         config=config,
     )
+    _train_duration_sec = time.monotonic() - _t_train_start
 
     # Evaluate
     try:
         metrics = evaluate_experiment(exp_id, model_dir)
+        metrics["training_time_sec"] = _train_duration_sec
     except RuntimeError as exc:
         if "Self-test FAILED" in str(exc):
             print(
@@ -744,6 +747,7 @@ def run_experiment(exp_id: int, base_processor=None, base_model=None) -> dict:
                 metrics[f"{_field}_ned"] = 1.0  # NED=1.0 means maximum edit distance
             metrics["error"] = str(exc)
             metrics["self_test_failed"] = True
+            metrics["training_time_sec"] = _train_duration_sec
         else:
             raise
 
