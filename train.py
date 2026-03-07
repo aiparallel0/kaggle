@@ -495,13 +495,47 @@ class DonutTrainer:
             for n, p in self.model.named_parameters()
             if not n.startswith("encoder.") and p.requires_grad
         ]
-        optimizer = torch.optim.AdamW(
-            [
-                {"params": encoder_params, "lr": encoder_lr},
-                {"params": decoder_params, "lr": decoder_lr},
-            ],
-            weight_decay=_weight_decay,
-        )
+        _optimizer_type = getattr(self.config, "optimizer_type", "adamw")
+        if _optimizer_type == "sgd":
+            # SGD + Nesterov: faster per-step, sufficient for near-converged transformers
+            # used in micro mode where adaptive moments aren't needed for short runs
+            optimizer = torch.optim.SGD(
+                [
+                    {"params": encoder_params, "lr": encoder_lr},
+                    {"params": decoder_params, "lr": decoder_lr},
+                ],
+                momentum=0.9,
+                nesterov=True,
+                weight_decay=_weight_decay,
+            )
+            logger.info("Optimizer: SGD + Nesterov (micro/mini mode)")
+        else:
+            optimizer = torch.optim.AdamW(
+                [
+                    {"params": encoder_params, "lr": encoder_lr},
+                    {"params": decoder_params, "lr": decoder_lr},
+                ],
+                weight_decay=_weight_decay,
+            )
+
+        # OneCycleLR: aggressive warmup + cosine decay, reaches peak LR immediately
+        # — much faster convergence than cosine+warmup for short (2–3 epoch) micro runs
+        _lr_schedule = getattr(self.config, "lr_schedule", "cosine")
+        custom_scheduler = None
+        if _lr_schedule == "one_cycle" and _total_opt_steps > 0:
+            custom_scheduler = torch.optim.lr_scheduler.OneCycleLR(
+                optimizer,
+                max_lr=[encoder_lr, decoder_lr],
+                total_steps=_total_opt_steps,
+                pct_start=0.1,          # 10% warmup, 90% cosine decay
+                anneal_strategy="cos",
+                div_factor=10.0,        # start lr = max_lr / 10
+                final_div_factor=100.0, # end lr = start_lr / 100
+            )
+            logger.info(
+                "OneCycleLR: max_lr=[%.2e, %.2e], total_steps=%d",
+                encoder_lr, decoder_lr, _total_opt_steps,
+            )
 
         # LmHeadCloneCallback MUST be registered before EarlyStoppingCallback
         # so the clone happens before every checkpoint write (including the
@@ -525,7 +559,7 @@ class DonutTrainer:
             train_dataset=self.train_dataset,
             eval_dataset=self.val_dataset,
             callbacks=callbacks or None,
-            optimizers=(optimizer, None),
+            optimizers=(optimizer, custom_scheduler),
         )
 
         trainer.train()

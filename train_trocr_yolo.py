@@ -41,6 +41,17 @@ __all__ = [
     "_materialize_meta_buffers",
     "_EXPECTED_MISSING_TROCR",
     "_print_trocr_load_report",
+    # Patchable constants (micro mode sets these before calling train_yolo/train_trocr)
+    "YOLO_BASE",
+    "YOLO_EPOCHS",
+    "YOLO_IMG_SIZE",
+    "YOLO_BATCH",
+    "YOLO_OPTIMIZER",
+    "YOLO_MOMENTUM",
+    "TROCR_EPOCHS",
+    "TROCR_BATCH",
+    "TROCR_MAX_LEN",
+    "TROCR_MINI_MODE",
 ]
 
 # ── Config ──────────────────────────────────────────────────────────────────
@@ -50,11 +61,14 @@ YOLO_EPOCHS = 50
 YOLO_IMG_SIZE = 512  # reduced from 640 to lower VRAM usage
 YOLO_BATCH = 8  # reduced from 32 to prevent CUDA OOM in TaskAlignedAssigner
 YOLO_AMP = True  # mixed precision — halves activation memory
+YOLO_OPTIMIZER = "AdamW"    # micro mode patches to "SGD" for faster detection convergence
+YOLO_MOMENTUM = 0.9         # used when YOLO_OPTIMIZER == "SGD"
 TROCR_EPOCHS = 10
 TROCR_BATCH = 16
 TROCR_LR = 5e-5
 TROCR_MAX_LEN = 128
 GRAD_ACCUM = 4
+TROCR_MINI_MODE = False     # True → SGD+Nesterov+CosineAnnealingLR instead of AdamW+linear
 
 RESULTS_DIR = Path("results")
 YOLO_DATA_YAML = WORKSPACE / "data" / "yolo" / "dataset.yaml"
@@ -227,7 +241,8 @@ def train_yolo(output_dir: Path | None = None) -> Path:
         fliplr=0.0,
         flipud=0.0,
         mosaic=0.5,
-        optimizer="AdamW",
+        optimizer=YOLO_OPTIMIZER,   # "AdamW" default; micro patches to "SGD" for speed
+        momentum=YOLO_MOMENTUM,     # used when optimizer="SGD"
         lr0=1e-3,
         lrf=0.01,
         patience=15,
@@ -417,15 +432,35 @@ def train_trocr(output_dir: Path | None = None) -> dict:
         else None
     )
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=TROCR_LR)
     total_steps = (len(train_loader) // grad_accum) * TROCR_EPOCHS
-    warmup_steps = int(total_steps * 0.1)
-    scheduler = get_scheduler(
-        "linear",
-        optimizer,
-        num_warmup_steps=warmup_steps,
-        num_training_steps=total_steps,
-    )
+    if TROCR_MINI_MODE:
+        # SGD + Nesterov + CosineAnnealingLR — faster convergence for short micro runs.
+        # LR 200× higher than AdamW default: SGD needs larger LR since it lacks adaptive scaling.
+        # CosineAnnealingLR decays from TROCR_LR to eta_min over all steps without warmup,
+        # reaching useful weights immediately (unlike the linear warmup that barely finishes
+        # in 1-epoch micro runs).
+        optimizer = torch.optim.SGD(
+            model.parameters(),
+            lr=TROCR_LR * 200,  # e.g. 5e-5 * 200 = 1e-2
+            momentum=0.9,
+            nesterov=True,
+            weight_decay=1e-4,
+        )
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=max(total_steps, 1),
+            eta_min=TROCR_LR * 2,  # floor ≈ 1/100 of initial SGD LR
+        )
+        print(f"  [TrOCR] Micro mode: SGD+Nesterov+CosineAnnealingLR, lr={TROCR_LR * 200:.2e}")
+    else:
+        optimizer = torch.optim.AdamW(model.parameters(), lr=TROCR_LR)
+        warmup_steps = int(total_steps * 0.1)
+        scheduler = get_scheduler(
+            "linear",
+            optimizer,
+            num_warmup_steps=warmup_steps,
+            num_training_steps=total_steps,
+        )
 
     best_val_loss = float("inf")
     history = {"train_loss": [], "val_loss": [], "num_train_samples": 0}
