@@ -228,11 +228,15 @@ class PaperInjector:
         try:
             exp1_f1 = all_exp.get("1", {}).get("metrics", {}).get("global_f1", 0.0)
             exp4_f1 = all_exp.get("4", {}).get("metrics", {}).get("global_f1", 0.0)
+            # gain_1_4: Exp 4 vs Exp 1 (WR+Inv combined vs baseline)
             var_map["gain_1_4"] = f"{(exp4_f1 - exp1_f1):+.4f}"
             var_map["gain_over_published"] = f"{(best_f1 - DONUT_PUBLISHED_F1):+.4f}"
+            # gain_best_over_baseline: best experiment vs our own SROIE-only baseline
+            var_map["gain_best_over_baseline"] = f"{(best_f1 - exp1_f1):+.4f}"
         except Exception:
             var_map["gain_1_4"] = "N/A"
             var_map["gain_over_published"] = "N/A"
+            var_map["gain_best_over_baseline"] = "N/A"
 
         # FIX: TrOCR+YOLO results — inject variables for dual-architecture
         # comparison table in paper.tex.  Reads from trocr_yolo_results.json.
@@ -242,6 +246,8 @@ class PaperInjector:
                 with open(trocr_path) as fh:
                     trocr_all = json.load(fh)
                 for exp_id_str, res in trocr_all.items():
+                    if not isinstance(res, dict):  # skip _note and other metadata
+                        continue
                     m = res.get("metrics", {})
                     n = res.get("num_train_samples", 0)
                     eid = exp_id_str
@@ -258,6 +264,8 @@ class PaperInjector:
                 trocr_best_f1 = 0.0
                 trocr_best_exp = "1"
                 for exp_id_str, res in trocr_all.items():
+                    if not isinstance(res, dict):
+                        continue
                     f1 = res.get("metrics", {}).get("global_f1", 0.0)
                     if f1 > trocr_best_f1:
                         trocr_best_f1 = f1

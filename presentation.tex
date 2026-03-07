@@ -581,23 +581,25 @@
 \end{frame}
 
 % ------------------------------------------------------------------
-\begin{frame}{Finding 2: Diminishing Returns from Data Volume}
+\begin{frame}{Finding 2: SROIE Oversampling is Critical}
   \begin{block}{Observation}
     \begin{itemize}
-      \item Experiment 1 $\to$ 4: \textbf{Substantial} F1 gain
-            ($\VAR{gain_1_4}$ points)
-      \item Experiment 4 $\to$ 8: \textbf{Marginal} additional gain
-      \item CORD is the primary driver; further diversity has
-            diminishing returns when the target domain is well-covered
+      \item \textbf{Without oversampling} (Exp 2--4): auxiliary data
+            \redbf{decreases} F1 relative to SROIE-only baseline (\VAR{exp1_f1})
+      \item \textbf{With 2$\times$ SROIE oversample}: auxiliary data
+            \greenbf{improves} F1 --- Exp~6 achieves \hlnum{\VAR{best_f1}}
+            (\VAR{gain_best_over_baseline} over baseline)
+      \item Exp~7 (all data, 2$\times$) matches baseline exactly:
+            competing signals cancel at equal weight
     \end{itemize}
   \end{block}
 
   \vspace{0.3cm}
 
   \begin{exampleblock}{Practical Implication}
-    You don't need massive multi-dataset combinations.
-    \textbf{One high-quality, domain-proximate dataset} provides most
-    of the benefit.
+    Do \textbf{not} naively combine auxiliary data.
+    \textbf{SROIE oversampling} (2$\times$) is the critical factor ---
+    without it, more data can hurt.
   \end{exampleblock}
 \end{frame}
 

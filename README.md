@@ -265,18 +265,18 @@ python -m run_all
 
 | Exp | Training Data | Samples | Global F1 | Notes |
 |---|---|---|---|---|
-| 1 | SROIE only (baseline) | 500 | 0.0000 | Known parse failure — see below |
-| 2 | SROIE + WildReceipt | 1,386 | **0.8257** | WR adds strong receipt-domain signal |
-| 3 | SROIE + Invoices-DONUT | 832 | 0.2867 | Invoice cross-domain hurts without rebalancing |
-| 4 | SROIE + WR + Invoices | 1,718 | 0.8224 | Combined but unbalanced |
-| 5 | SROIE + WR (2× SROIE oversample) | 1,886 | 0.8514 | Oversampling helps |
+| 1 | SROIE only (baseline) | 500 | **0.8503** | 5-epoch quick run (early stopping); post-bug-fix |
+| 2 | SROIE + WildReceipt | 1,386 | 0.8257 | WR alone (no oversample) slightly hurts |
+| 3 | SROIE + Invoices-DONUT | 832 | 0.2867 | Invoice cross-domain hurts severely without rebalancing |
+| 4 | SROIE + WR + Invoices | 1,718 | 0.8224 | Combined but unbalanced — still below baseline |
+| 5 | SROIE + WR (2× SROIE oversample) | 1,886 | 0.8514 | Marginal gain with oversampling |
 | **6** | **SROIE + Invoices (2× SROIE)** | **1,332** | **0.8982 ← BEST** | Invoices + SROIE oversampling, early stop ep.8 |
-| 7 | SROIE + All (2× SROIE) | 2,218 | 0.8503 | All datasets, 2× oversample |
+| 7 | SROIE + All (2× SROIE) | 2,218 | 0.8503 | All datasets 2×; matches baseline (signals cancel) |
 | 8 | SROIE + WR + Invoices (3× SROIE) | ~3,940 | OOM | OOM-killed at 2560×1920 resolution |
 
-> **Exp 1 F1=0.0 note:** Experiment 1 (SROIE-only baseline) showed 100% parse failures due to the `token2json` list-output bug (CORD `<sep/>` tokens causing list instead of dict output). The fix is in `donut_evaluator.py` — `_parse_prediction()` now merges page-lists. For reproducibility, the measured 0.0 result is kept as-is in `results/all_experiments.json`. The DONUT architecture itself is sound; experiments 2-7 use the same code and achieve 0.82–0.90. The Exp 1 issue does not affect the conclusions since the best result (Exp 6) doesn't use SROIE-only.
+> **Key finding:** SROIE oversampling (2×) is a prerequisite for auxiliary data to help. Without it (Exps 2–4), adding more data hurts. With it (Exps 5–7), performance meets or exceeds the baseline. The best config (Exp 6) gains **+0.0479** over Exp 1 and **+0.0571** over the published DONUT result.
 
-**Best result: Experiment 6 — Global F1 = 0.8982** (vs. published DONUT 0.8411, +5.71 pts)
+**Best result: Experiment 6 — Global F1 = 0.8982** (vs. published DONUT 0.8411, +5.71 pts; vs. own baseline 0.8503, +4.79 pts)
 
 **Best per-field (Exp 6):** company=0.905, date=0.984, address=0.790, total=0.912 · exact_match=0.667 · training_time=39.6 min
 

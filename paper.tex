@@ -563,7 +563,7 @@ due to the high variability in address formatting across receipts.
 
 \subsection{Training Convergence}
 
-Fig.~\ref{fig:convergence} shows the training and validation loss curves
+Fig.~\ref{fig:loss_curves} shows the training and validation loss curves
 for all eight experiments.  Experiments with larger combined training sets
 (Exp.~5--8) generally converge to lower training loss but may exhibit higher
 validation loss due to domain mismatch between auxiliary data and the SROIE
@@ -641,31 +641,33 @@ SROIE Task-3 scores.
 
 \subsection{Effect of Auxiliary Datasets}
 
-The results in Table~\ref{tab:experiments} reveal a clear hierarchy among
-auxiliary data sources.  WildReceipt, sharing the receipt domain with SROIE,
-consistently provides the largest receipt-domain gain.  Invoices-DONUT
-provides complementary cross-domain diversity through invoice-specific
-vocabulary and layout patterns, including seller address fields absent in
-some competing datasets.  Experiments~5--8 demonstrate that SROIE
-oversampling (2$\times$ or 3$\times$) effectively counteracts field-coverage
-dilution when combining with large auxiliary datasets.
+The results in Table~\ref{tab:experiments} reveal that the benefit of
+auxiliary data depends critically on SROIE oversampling.  Without
+oversampling, Experiments~2--4 all score at or below the SROIE-only
+baseline (Experiment~1, \VAR{exp1_f1} F1), suggesting that naive data
+mixing dilutes the SROIE target distribution.  Experiment~3
+(Invoices-DONUT without oversampling, \VAR{exp3_f1}) shows a particularly
+large drop, confirming that cross-domain data without careful rebalancing
+can be highly detrimental.  With 2$\times$ SROIE oversampling,
+Experiments~5 and~6 recover and improve over the baseline: Experiment~6
+(Invoices-DONUT with 2$\times$ SROIE oversampling) achieves the best
+overall result (\VAR{exp6_f1} F1), a gain of \VAR{gain_best_over_baseline}
+over the SROIE-only baseline and \VAR{gain_over_published} over the
+published \donut result.
 
-\subsection{Domain Proximity Hypothesis}
+\subsection{Role of SROIE Oversampling}
 
-We observe a positive correlation between domain proximity (receipts $>$
-generic documents) and downstream F1 gain.  This confirms that the \donut
-encoder already captures strong image-level document features; the
-fine-tuning stage benefits most from data that closely matches the
-\emph{output schema} rather than just the visual appearance.
-
-\subsection{Diminishing Returns}
-
-The jump from Experiment~1 to Experiment~2 is substantial
-($\VAR{gain_1_4}$ F1 points from WildReceipt alone), and the further
-combination of all datasets (Experiment~8) yields only marginal gains over
-the best two-dataset configuration.  This suggests that receipt-domain
-similarity is the primary driver and that further cross-domain diversity
-provides diminishing returns when the target domain is already well-covered.
+The most consistent pattern is the critical role of SROIE
+target-domain oversampling.  A 2$\times$ SROIE oversample transforms an
+otherwise harmful auxiliary corpus (Invoices-DONUT without oversampling:
+Experiment~3, \VAR{exp3_f1}) into the strongest-performing configuration
+(Experiment~6: \VAR{exp6_f1}).  The effect for WildReceipt is smaller
+in magnitude: without oversampling (Experiment~2: \VAR{exp2_f1}), adding
+WildReceipt slightly decreases performance; with 2$\times$ oversampling
+(Experiment~5: \VAR{exp5_f1}), it provides a marginal improvement.
+Combining all datasets at 2$\times$ oversampling (Experiment~7:
+\VAR{exp7_f1}) matches the baseline, suggesting competing signals from
+the two auxiliary domains cancel at equal weighting.
 
 \subsection{Cross-Architecture Analysis}
 
@@ -682,12 +684,13 @@ regardless of explicit detection.
 
 The published \donut result of 84.11\% was obtained by fine-tuning the
 CORD-pretrained checkpoint on the full SROIE training set.  Our
-Experiment~1 replicates this setup with an 80/10/10 split (500 train images)
-and achieves \VAR{exp1_f1}.  The best configuration
-(Experiment~\VAR{best_exp}) achieves \VAR{best_f1}, a gain of
-\VAR{gain_over_published} F1 points over the published result,
-demonstrating that multi-dataset fine-tuning provides meaningful
-improvements beyond single-dataset training.
+Experiment~1 replicates this setup with an 80/10/10 split (500 train
+images) using a 5-epoch abbreviated run and achieves \VAR{exp1_f1}.
+The best configuration (Experiment~\VAR{best_exp}) achieves
+\VAR{best_f1}, a gain of \VAR{gain_over_published} F1 points over the
+published result, demonstrating that multi-dataset fine-tuning with
+SROIE oversampling provides meaningful improvements beyond single-dataset
+training.
 
 % ==================================================================
 % SECTION 6 --- Conclusion & Future Work
@@ -699,17 +702,21 @@ We conducted a systematic comparison of end-to-end (\donut) and pipeline
 (\trocr\,+\,\yolo) architectures for receipt information extraction on the
 SROIE benchmark.  Our findings show that:
 \begin{enumerate}[leftmargin=*,nosep]
-  \item Receipt-domain auxiliary data (WildReceipt) provides the largest
-        improvements; invoice-domain data (Invoices-DONUT) adds complementary gains.
+  \item SROIE target-domain oversampling is a prerequisite for auxiliary
+        data to be beneficial.  Without oversampling, both WildReceipt and
+        Invoices-DONUT decrease performance relative to the SROIE-only baseline.
+  \item With 2$\times$ SROIE oversampling, Invoices-DONUT provides the
+        largest gain: Experiment~\VAR{best_exp} achieves \VAR{best_f1}
+        global F1, a gain of \VAR{gain_best_over_baseline} over the
+        SROIE-only baseline and \VAR{gain_over_published} over the
+        published \donut result.
   \item The end-to-end \donut architecture outperforms the
         \trocr\,+\,\yolo pipeline, achieving \VAR{best_f1} vs.\
         \VAR{trocr_best_f1} global F1, due to the absence of cascading
         error propagation.
-  \item Cross-domain data (Invoices-DONUT) provides complementary
-        augmentation through diverse layouts and shared KIE fields.
-  \item The best \donut configuration (Experiment~\VAR{best_exp}) achieves
-        \VAR{best_f1} global F1, a gain of \VAR{gain_over_published} over
-        the published \donut result.
+  \item Cross-domain invoice data (Invoices-DONUT) provides complementary
+        augmentation through diverse layouts and shared KIE fields, but
+        only when the SROIE target distribution is preserved via oversampling.
 \end{enumerate}
 
 \paragraph{Limitations.}
