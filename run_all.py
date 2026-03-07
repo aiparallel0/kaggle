@@ -1729,7 +1729,9 @@ def _micro_mode_handler(args, logger: logging.Logger) -> int:
         epochs=5,
         early_stopping_patience=1,
         # Dataset subsampling
-        subsample_train=400,    # ~500 → 400 samples (sufficient to learn SROIE XML schema)
+        subsample_train=400,    # 400 of 500 SROIE samples → ~250 optimizer steps over 5 epochs
+                                # (minimum empirically needed to override CORD base-model prior
+                                # and learn SROIE XML schema; 150/2ep = 76 steps → F1=0)
         subsample_eval=63,      # full test set for a meaningful F1 number
         # Step-count guard bypass (intentionally below 200-step threshold)
         skip_step_validation=True,

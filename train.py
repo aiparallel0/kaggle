@@ -330,6 +330,7 @@ class MultiDataset(Dataset):
                     _target += "</s_sroie>"
                     _lbl = processor.tokenizer(
                         _target,
+                        add_special_tokens=False,  # match inference: no BOS/EOS wrappers
                         max_length=max_length,
                         padding="max_length",
                         truncation=True,
@@ -383,6 +384,7 @@ class MultiDataset(Dataset):
             target += "</s_sroie>"
             labels = self.processor.tokenizer(
                 target,
+                add_special_tokens=False,  # match inference: no BOS/EOS wrappers
                 max_length=self.max_length,
                 padding="max_length",
                 truncation=True,

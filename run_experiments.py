@@ -400,9 +400,11 @@ def train_experiment(
                 f"Use: tokenizer.convert_tokens_to_ids(['<s_sroie>'])[0]"
             )
         # Only enable gradient checkpointing when VRAM is constrained (< 24 GB).
-        # On high-VRAM cards (RTX PRO 6000 = 95.6 GB, A100 = 80 GB, etc.) it adds
-        # ~30-40% backward-pass overhead for zero memory benefit — the model uses
-        # only ~3.5 GB of activation memory even at batch_size=8.
+        # 24 GB covers RTX 3090/4090 (24 GB) and below, where activation memory
+        # during DONUT's backward pass (~3.5 GB at batch_size=8) is a real constraint.
+        # On high-VRAM cards (RTX PRO 6000 = 95.6 GB, A100 = 80 GB, RTX 4090 = 24 GB
+        # boundary) gradient checkpointing adds ~30-40% backward-pass overhead for
+        # zero memory benefit — so disable it there.
         _GRAD_CKPT_VRAM_THRESHOLD_GB = 24.0
         _enable_grad_ckpt = True  # default: enable for safety on unknown hardware
         if torch.cuda.is_available():
