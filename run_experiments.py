@@ -470,6 +470,23 @@ def train_experiment(
     # Save model with tied weights
     trainer.save(output_dir)
 
+    # Post-save spot-check: verify <s_sroie> token survives processor serialization
+    _spot_proc = DonutProcessor.from_pretrained(str(output_dir))
+    _spot_id = _spot_proc.tokenizer.convert_tokens_to_ids(["<s_sroie>"])[0]
+    _spot_decoded = _spot_proc.tokenizer.decode([_spot_id])
+    if _spot_decoded == "<s_sroie>":
+        print(
+            f"[Exp {exp_id}] Processor spot-check PASS: "
+            f"<s_sroie> → id={_spot_id} → '{_spot_decoded}'"
+        )
+    else:
+        print(
+            f"[Exp {exp_id}] Processor spot-check FAIL: "
+            f"<s_sroie> → id={_spot_id} → '{_spot_decoded}' "
+            f"(unk_token_id={_spot_proc.tokenizer.unk_token_id}) — "
+            "processor is corrupt, evaluation will produce F1=0.0"
+        )
+
     print(
         f"[Exp {exp_id}] Training complete "
         f"(duration={result.duration_seconds:.1f}s, "

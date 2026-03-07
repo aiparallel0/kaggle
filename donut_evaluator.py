@@ -162,7 +162,7 @@ class EvaluationResult:
 # ---------------------------------------------------------------------------
 
 
-def load_model_with_tied_weights(model_path: str, device: str = DEVICE):
+def load_model_with_tied_weights(model_path: str, device: str = DEVICE, processor=None):
     # Use output_loading_info=True to detect missing keys at load time.
     # This is how we distinguish "trained lm_head loaded correctly" from
     # "lm_head randomly re-initialized because it was missing from the shard".
@@ -189,6 +189,28 @@ def load_model_with_tied_weights(model_path: str, device: str = DEVICE):
 
     model = model.to(device)
     model.eval()
+
+    # ── Guard: verify SROIE tokens are present in processor vocab ───────────
+    if processor is not None:
+        _unk_id = processor.tokenizer.unk_token_id
+        _sroie_id = processor.tokenizer.convert_tokens_to_ids(["<s_sroie>"])[0]
+        if _sroie_id == _unk_id:
+            raise RuntimeError(
+                f"Loaded processor from {model_path!r} has no SROIE special tokens: "
+                f"'<s_sroie>' maps to unk_token_id ({_unk_id}). "
+                "The checkpoint is unusable — re-run training so the processor "
+                "is saved with add_special_tokens() applied."
+            )
+        # Fix decoder_start_token_id if it doesn't match <s_sroie>
+        if model.config.decoder_start_token_id != _sroie_id:
+            logger.warning(
+                "decoder_start_token_id=%d does not match <s_sroie> id=%d — overriding.",
+                model.config.decoder_start_token_id,
+                _sroie_id,
+            )
+            model.config.decoder_start_token_id = _sroie_id
+            model.decoder.config.decoder_start_token_id = _sroie_id
+
     return model
 
 
@@ -318,7 +340,9 @@ class DonutEvaluator:
 
         # Load model with weight re-tying fix
         logger.info("Loading model from %s", self.model_path)
-        self.model = load_model_with_tied_weights(str(self.model_path), device=self.device)
+        self.model = load_model_with_tied_weights(
+            str(self.model_path), device=self.device, processor=self.processor
+        )
 
     # ------------------------------------------------------------------
     # Public API
@@ -415,6 +439,17 @@ class DonutEvaluator:
                 bad_words_ids=[[self.processor.tokenizer.unk_token_id]],
                 return_dict_in_generate=True,
             )
+        # Diagnostic: log first 20 token IDs and decoder seed token for actionable failure analysis
+        logger.info(
+            "Self-test raw token IDs (first 20): %s",
+            outputs.sequences[0].tolist()[:20],
+        )
+        logger.info(
+            "Self-test decoder_input_ids=%s → decoded=%r",
+            decoder_input_ids[0].tolist(),
+            self.processor.tokenizer.decode(decoder_input_ids[0].tolist()),
+        )
+
         raw_tokens = self.processor.batch_decode(outputs.sequences)[0]
         cleaned = raw_tokens.replace(self.processor.tokenizer.eos_token, "")
         cleaned = cleaned.replace(self.processor.tokenizer.pad_token, "").strip()

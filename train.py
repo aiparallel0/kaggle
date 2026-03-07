@@ -604,6 +604,26 @@ class DonutTrainer:
         self.processor.save_pretrained(str(save_dir))
         logger.info("Model + processor saved → %s", save_dir)
 
+        # ── Post-save verification: confirm all SROIE tokens survived serialization ──
+        _verify_proc = DonutProcessor.from_pretrained(str(save_dir))
+        _unk_id = _verify_proc.tokenizer.unk_token_id
+        _missing = [
+            tok for tok in NEW_TOKENS
+            if _verify_proc.tokenizer.convert_tokens_to_ids([tok])[0] == _unk_id
+        ]
+        if _missing:
+            raise RuntimeError(
+                f"Processor saved to {str(save_dir)!r} is CORRUPT: the following SROIE "
+                f"special tokens map to unk_token_id ({_unk_id}): {_missing}. "
+                "Ensure processor.save_pretrained() was called after "
+                "add_special_tokens() and before this save()."
+            )
+        logger.info(
+            "Post-save verification PASSED: all %d SROIE tokens present in %s",
+            len(NEW_TOKENS),
+            save_dir,
+        )
+
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
