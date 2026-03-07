@@ -55,6 +55,7 @@ import random
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -84,6 +85,11 @@ __all__ = [
 # Auto-Install Dependencies (Phase 1)
 # ---------------------------------------------------------------------------
 
+# Packages that must be importable for the pipeline to function correctly.
+# 'torch' is checked during install; the remaining are verified post-install.
+_CRITICAL_INSTALL_PACKAGES = ["torch", "transformers", "datasets", "accelerate", "editdistance", "pandas"]
+_CRITICAL_VERIFY_PACKAGES = ["transformers", "datasets", "accelerate", "editdistance", "pandas"]
+
 
 def _is_package_missing(package_name: str) -> bool:
     """Check if a package can be imported.
@@ -96,6 +102,10 @@ def _is_package_missing(package_name: str) -> bool:
     """
     try:
         __import__(package_name)
+        # Extra check for datasets: verify load_dataset is actually accessible.
+        # A partial/broken install can import the namespace but lack load_dataset.
+        if package_name == "datasets":
+            from datasets import load_dataset  # noqa: F401
         return False
     except ImportError:
         return True
@@ -108,10 +118,13 @@ def _install_dependencies() -> None:
     in fresh environments. Uses -q flag to minimize console spam.
 
     Strategy:
-    1. Check if critical packages (torch, transformers, datasets, accelerate) are
-       all importable
-    2. If any are missing, run pip install -r requirements.txt
-    3. Gracefully continue even if pip fails (may already have packages)
+    1. Check if critical packages (torch, transformers, datasets, accelerate,
+       editdistance, pandas) are all importable
+    2. If any are missing, run pip install -r requirements.txt — but with
+       flash-attn filtered out (it requires torch to be importable during its
+       own build step, which pip's isolated subprocess cannot satisfy)
+    3. Attempt flash-attn separately with --no-build-isolation; swallow errors
+    4. Gracefully continue even if pip fails (may already have packages)
 
     FIX: Changed from checking only torch (which caused false-negatives when torch
     was pre-installed but other packages missing) to checking a subset of critical
@@ -124,34 +137,63 @@ def _install_dependencies() -> None:
 
         # Quick check: are all critical packages already installed?
         # Check a representative subset to avoid false negatives
-        critical_packages = ["torch", "transformers", "datasets", "accelerate"]
-        missing_packages = [pkg for pkg in critical_packages if _is_package_missing(pkg)]
+        missing_packages = [pkg for pkg in _CRITICAL_INSTALL_PACKAGES if _is_package_missing(pkg)]
 
         if not missing_packages:
             # All critical packages present, assume full installation is complete
             return
 
-        # At least one critical package is missing — install all requirements
-        if missing_packages:
-            print(f"[setup] Missing packages: {', '.join(missing_packages)}")
+        print(f"[setup] Missing packages: {', '.join(missing_packages)}")
 
-        # Install requirements.txt
+        # Build a filtered requirements list — exclude flash-attn because its
+        # build step imports torch inside an isolated subprocess where torch is
+        # not visible, causing the entire pip run to fail.
+        req_lines = [
+            stripped
+            for line in req_file.read_text().splitlines()
+            if (stripped := line.strip()) and not stripped.startswith("#") and "flash-attn" not in stripped.lower()
+        ]
+
         print("[setup] Installing dependencies from requirements.txt...")
-        result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "-q", "-r", str(req_file)],
-            check=False,  # Graceful degradation: continue even if pip fails
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as tmp:
+            tmp.write("\n".join(req_lines))
+            tmp_path = tmp.name
+        try:
+            result = subprocess.run(
+                [sys.executable, "-m", "pip", "install", "-q", "-r", tmp_path],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode == 0:
+                print("[setup] Dependencies installed successfully")
+            else:
+                if result.stderr:
+                    print(f"[setup] pip warning: {result.stderr[:200]}")
+        finally:
+            os.unlink(tmp_path)
+
+        # Now try flash-attn separately with --no-build-isolation so that the
+        # already-installed torch is visible during the build step.
+        fa_result = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "-q", "--no-build-isolation", "flash-attn>=2.0.0"],
+            check=False,
             capture_output=True,
             text=True,
         )
-        if result.returncode == 0:
-            print("[setup] Dependencies installed successfully")
-        else:
-            # Log warning but continue
-            if result.stderr:
-                print(f"[setup] pip warning: {result.stderr[:200]}")
+        if fa_result.returncode != 0:
+            print(
+                "[setup] flash-attn optional install skipped "
+                "(install manually: pip install flash-attn --no-build-isolation)"
+            )
     except Exception:
         # Silently ignore all errors - pipeline may still work if packages are present
         pass
+
+
+def _verify_critical_packages() -> list:
+    """Return list of still-missing critical packages after install attempt."""
+    return [pkg for pkg in _CRITICAL_VERIFY_PACKAGES if _is_package_missing(pkg)]
 
 
 # ---------------------------------------------------------------------------
@@ -2066,6 +2108,14 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     # Phase 0: Install dependencies (before any other imports)
     _install_dependencies()
+    still_missing = _verify_critical_packages()
+    if still_missing:
+        print(
+            f"[setup] FATAL: The following packages could not be installed: {', '.join(still_missing)}\n"
+            f"[setup] Run manually: pip install {' '.join(still_missing)}\n"
+            f"[setup] For flash-attn: pip install flash-attn --no-build-isolation"
+        )
+        sys.exit(2)
 
     t_start = time.monotonic()
     parser = build_parser()
