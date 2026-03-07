@@ -21,3 +21,4 @@ accelerate>=0.24.0
 sentencepiece>=0.1.99
 editdistance>=0.6.0      # NED computation in evaluate.py
 psutil>=5.9.0            # RAM-aware caching in run_experiments.py
+flash-attn>=2.0.0        # optional: Flash Attention 2 for decoder speedup; falls back gracefully if absent

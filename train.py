@@ -243,6 +243,8 @@ class MultiDataset(Dataset):
         self.processor = processor
         self.max_length = max_length
         self._image_cache: dict[int, Image.Image] = {}
+        self._pixel_cache: dict[int, Any] = {}  # precomputed pixel_values tensors
+        self._label_cache: dict[int, Any] = {}  # precomputed label token tensors
 
         if cache_in_ram and len(samples) > 0:
             # Estimate memory: ~3MB per receipt image × num_samples
@@ -291,6 +293,53 @@ class MultiDataset(Dataset):
                         available_mb,
                     )
 
+            # Precompute pixel_values tensors to eliminate per-step DonutImageProcessor
+            # overhead. Each float32 tensor is 3×1280×960×4 bytes ≈ 14.2 MB.
+            # Only attempt if: images are cached AND RAM allows the extra footprint.
+            _pix_mb = len(self._image_cache) * 14.2
+            if len(self._image_cache) > 0 and available_mb > 0 and _pix_mb < available_mb * ram_threshold:
+                _log = logging.getLogger(__name__)
+                _log.info(
+                    "[Tensor Cache] Precomputing pixel_values for %d images (~%.0f MB) ...",
+                    len(self._image_cache),
+                    _pix_mb,
+                )
+                for _idx, _img in self._image_cache.items():
+                    try:
+                        self._pixel_cache[_idx] = processor(
+                            _img, return_tensors="pt"
+                        ).pixel_values.squeeze()
+                    except Exception:
+                        pass
+                _log.info(
+                    "[Tensor Cache] Precomputed %d/%d pixel_values tensors",
+                    len(self._pixel_cache),
+                    len(samples),
+                )
+
+            # Precompute label token tensors — each is 768 ints (≈3 KB), always fits in RAM.
+            # Amortises tokeniser overhead (sentencepiece BPE encode + pad to max_length)
+            # across all training steps that revisit each sample.
+            if len(self._image_cache) > 0:
+                _log = logging.getLogger(__name__)
+                for _idx, (_, _gt) in enumerate(samples):
+                    _target = "<s_sroie>"
+                    for _f in FIELDS:
+                        _v = _gt.get(_f, "")
+                        _target += f"<s_{_f}>{_v}</s_{_f}>"
+                    _target += "</s_sroie>"
+                    _lbl = processor.tokenizer(
+                        _target,
+                        max_length=max_length,
+                        padding="max_length",
+                        truncation=True,
+                        return_tensors="pt",
+                    ).input_ids.squeeze()
+                    _lbl[_lbl == processor.tokenizer.pad_token_id] = -100
+                    _lbl = _mask_empty_field_labels(_lbl, _gt, processor.tokenizer)
+                    self._label_cache[_idx] = _lbl
+                _log.info("[Label Cache] Precomputed %d label tensors", len(self._label_cache))
+
         # Log per-field masking statistics so empty-field dilution is visible.
         if samples:
             _log = logging.getLogger(__name__)
@@ -311,29 +360,37 @@ class MultiDataset(Dataset):
     def __getitem__(self, idx: int) -> dict:
         img_path, gt = self.samples[idx]
 
-        # Use cached image if available, otherwise load from disk
-        if idx in self._image_cache:
-            image = self._image_cache[idx]
+        # Use precomputed pixel_values tensor if available (eliminates per-step
+        # DonutImageProcessor overhead that was causing 88s/step starvation).
+        if idx in self._pixel_cache:
+            pixel_values = self._pixel_cache[idx]
         else:
-            image = Image.open(img_path).convert("RGB")
+            # Fall back: use cached PIL image or load from disk, then process.
+            if idx in self._image_cache:
+                image = self._image_cache[idx]
+            else:
+                image = Image.open(img_path).convert("RGB")
+            pixel_values = self.processor(image, return_tensors="pt").pixel_values.squeeze()
 
-        target = "<s_sroie>"
-        for f in FIELDS:
-            v = gt.get(f, "")
-            target += f"<s_{f}>{v}</s_{f}>"
-        target += "</s_sroie>"
+        # Use precomputed label tensor if available (eliminates per-step tokenisation).
+        if idx in self._label_cache:
+            labels = self._label_cache[idx]
+        else:
+            target = "<s_sroie>"
+            for f in FIELDS:
+                v = gt.get(f, "")
+                target += f"<s_{f}>{v}</s_{f}>"
+            target += "</s_sroie>"
+            labels = self.processor.tokenizer(
+                target,
+                max_length=self.max_length,
+                padding="max_length",
+                truncation=True,
+                return_tensors="pt",
+            ).input_ids.squeeze()
+            labels[labels == self.processor.tokenizer.pad_token_id] = -100
+            labels = _mask_empty_field_labels(labels, gt, self.processor.tokenizer)
 
-        pixel_values = self.processor(image, return_tensors="pt").pixel_values.squeeze()
-        labels = self.processor.tokenizer(
-            target,
-            max_length=self.max_length,
-            padding="max_length",
-            truncation=True,
-            return_tensors="pt",
-        ).input_ids.squeeze()
-        labels[labels == self.processor.tokenizer.pad_token_id] = -100
-        # Mask empty-field spans so they contribute no gradient to the loss.
-        labels = _mask_empty_field_labels(labels, gt, self.processor.tokenizer)
         return {"pixel_values": pixel_values, "labels": labels}
 
 
@@ -411,12 +468,11 @@ class DonutTrainer:
         do_eval = self.val_dataset is not None and len(self.val_dataset) > 0
         optimal_workers = _optimal_num_workers()
 
-        # FIX: GPU starvation at small batch sizes — DataLoader worker processes
-        # add fork+IPC overhead that causes 88s/step when batch_size=2.
-        # DONUT's 960×1280 image preprocessing is CPU-bound; with num_workers≥4
-        # the GPU sits idle waiting for batches. Use main-process loading (workers=0)
-        # when batch_size≤2 and the RAM image cache is populated — this reduces
-        # step time from ~88s to ~1–3s (expected ~30–60 min/experiment vs 15 hrs).
+        # Keep num_workers=0 when batch_size≤2 and the RAM/tensor cache is
+        # populated. The primary bottleneck causing ~88s/step is the
+        # DonutImageProcessor running on every __getitem__ call (eliminated by
+        # precomputing pixel_values in MultiDataset.__init__). Forking workers
+        # adds IPC overhead on top, so stay with workers=0 when we have caches.
         _batch_size = self.config.per_device_train_batch_size
         _cache_populated = (
             hasattr(self.train_dataset, "_image_cache") and len(self.train_dataset._image_cache) > 0

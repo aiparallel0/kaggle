@@ -331,7 +331,20 @@ def train_experiment(
             _mdl = copy.deepcopy(base_model)
         else:
             _proc = DonutProcessor.from_pretrained(config.base_model)
-            _mdl = VisionEncoderDecoderModel.from_pretrained(config.base_model)
+            # Attempt Flash Attention 2 (requires flash-attn package; speeds up
+            # decoder attention and reduces VRAM, enabling larger batch sizes).
+            # Falls back silently to eager attention if unavailable or unsupported.
+            try:
+                _mdl = VisionEncoderDecoderModel.from_pretrained(
+                    config.base_model, attn_implementation="flash_attention_2"
+                )
+                logger.info("[Model] Flash Attention 2 enabled for decoder")
+            except (ImportError, ValueError, NotImplementedError) as _fa2_err:
+                logger.info(
+                    "[Model] Flash Attention 2 unavailable (%s), using default attention",
+                    _fa2_err,
+                )
+                _mdl = VisionEncoderDecoderModel.from_pretrained(config.base_model)
 
         # Add SROIE special tokens with diagnostic logging (Phase 0a)
         logger.debug("[Pre-resize] Tokenizer vocab size: %d", len(_proc.tokenizer))
@@ -421,6 +434,25 @@ def train_experiment(
         train_dataset=train_ds,
         val_dataset=val_ds,
     )
+
+    # Warn early if another GPU process is consuming VRAM — this can cause OOM
+    # mid-epoch, wasting all setup time. Firing the warning before training
+    # allows the user to kill the rogue process before the experiment starts.
+    if torch.cuda.is_available():
+        try:
+            _free_vram, _total_vram = torch.cuda.mem_get_info()
+            _used_by_others = _total_vram - _free_vram - torch.cuda.memory_allocated()
+            if _used_by_others > 1 * 1024 ** 3:  # > 1 GB held by external processes
+                logger.warning(
+                    "[VRAM] External process(es) occupying ~%.1f GB of GPU memory "
+                    "(%s free of %s total). Risk of OOM during training. "
+                    "Run `nvidia-smi` and kill any unnecessary GPU processes.",
+                    _used_by_others / 1024 ** 3,
+                    f"{_free_vram / 1024**3:.1f} GB",
+                    f"{_total_vram / 1024**3:.1f} GB",
+                )
+        except Exception:
+            pass
 
     # Train with progressive OOM recovery: halve batch_size (8→4→2→1) on each
     # CUDA OOM, doubling gradient_accumulation_steps to keep the effective batch
