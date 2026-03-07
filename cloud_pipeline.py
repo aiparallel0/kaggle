@@ -126,16 +126,14 @@ class CodeRepairOrchestrator:
                 return result
 
             self.logger.warning(
-                f"Found {bug_report.total_critical} critical, "
-                f"{bug_report.total_warnings} warnings"
+                f"Found {bug_report.total_critical} critical, {bug_report.total_warnings} warnings"
             )
 
             # Step 2: Connect to Ollama (stub)
             self.logger.info("\n[2] Connecting to Ollama...")
             if not self.config.ollama_auto_start:
                 self.logger.info(
-                    f"Ollama URL: {self.config.ollama_base_url} "
-                    f"(Model: {self.config.ollama_model})"
+                    f"Ollama URL: {self.config.ollama_base_url} (Model: {self.config.ollama_model})"
                 )
             else:
                 self.logger.info("Ollama auto-start: enabled (stub)")
@@ -332,9 +330,7 @@ class MLTrainingOrchestrator:
                 self.logger.info("\nSyncing results...")
                 sync_report = await self.storage_manager.sync_results_directory()
                 result.cloud_sync_report = sync_report
-                self.logger.info(
-                    f"✓ Results ready to commit ({sync_report.total_files} files)"
-                )
+                self.logger.info(f"✓ Results ready to commit ({sync_report.total_files} files)")
 
                 # Commit results
                 if self.config.auto_commit:

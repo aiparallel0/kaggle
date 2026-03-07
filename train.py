@@ -419,8 +419,7 @@ class DonutTrainer:
         # step time from ~88s to ~1–3s (expected ~30–60 min/experiment vs 15 hrs).
         _batch_size = self.config.per_device_train_batch_size
         _cache_populated = (
-            hasattr(self.train_dataset, "_image_cache")
-            and len(self.train_dataset._image_cache) > 0
+            hasattr(self.train_dataset, "_image_cache") and len(self.train_dataset._image_cache) > 0
         )
         if _batch_size <= 2 and _cache_populated:
             logger.info(

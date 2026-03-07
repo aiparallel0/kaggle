@@ -240,7 +240,15 @@ def _setup_logging(log_file: Path = Path("terminal.txt")) -> logging.Logger:
     root.setLevel(logging.DEBUG)
 
     # Suppress verbose third-party loggers (including httpx/httpcore for clean output)
-    for pkg in ["httpx", "httpcore", "transformers", "torch", "urllib3", "datasets", "huggingface_hub"]:
+    for pkg in [
+        "httpx",
+        "httpcore",
+        "transformers",
+        "torch",
+        "urllib3",
+        "datasets",
+        "huggingface_hub",
+    ]:
         logging.getLogger(pkg).setLevel(logging.WARNING)
 
     return root
