@@ -1,15 +1,11 @@
 % paper.tex — "End-to-End vs. Pipeline Architectures for Receipt Information
 % Extraction: A Systematic Comparison of DONUT and TrOCR+YOLO with
-% Multi-Dataset Fine-Tuning"
+% Multi-Dataset Fine-Tuning" (mini/conference version)
 %
-% Placeholder values use the convention VAR{key} and are replaced
-% automatically by inject_results.py.
+% Placeholder values use the convention \textbackslash VAR{name} and are
+% replaced automatically by inject_results.py.
 %
-% Compile with:
-%   pdflatex paper.tex
-%   bibtex paper
-%   pdflatex paper.tex
-%   pdflatex paper.tex
+% Overleaf: upload paper_mini.tex AND references.bib together.
 
 \documentclass[conference]{IEEEtran}
 \IEEEoverridecommandlockouts
@@ -32,19 +28,12 @@
 % ------------------------------------------------------------------
 \usepackage{booktabs}
 \usepackage{multirow}
-\usepackage{siunitx}
-\sisetup{
-  round-mode      = places,
-  round-precision = 4,
-  table-format    = 1.4,
-}
 
 % ------------------------------------------------------------------
 % Packages — Figures & Plots
 % ------------------------------------------------------------------
 \usepackage{graphicx}
 \usepackage{pgfplots}
-\usepackage{subcaption}
 \usepackage{tikz}
 \usetikzlibrary{shapes.geometric,arrows.meta,positioning,fit,backgrounds,calc}
 \pgfplotsset{compat=1.18}
@@ -65,9 +54,17 @@
 % ------------------------------------------------------------------
 \usepackage{xcolor}
 \usepackage{url}
-\usepackage[hidelinks,bookmarks=true,pdfusetitle]{hyperref}
 \usepackage{xspace}
-\usepackage{balance}
+% NOTE: hyperref must be loaded LAST.
+% pdfusetitle is avoided because IEEEtran titles may contain \\ which
+% corrupts PDF metadata — use an explicit pdftitle instead.
+\usepackage[hidelinks,bookmarks=true,%
+  pdftitle={End-to-End vs. Pipeline Architectures for Receipt Information Extraction},%
+  pdfauthor={Anonymous}%
+]{hyperref}
+% NOTE: the balance package is intentionally NOT loaded.
+% IEEEtran has its own two-column balancing mechanism; loading balance
+% causes "Command \@outputdblcol already defined" errors on Overleaf.
 
 % ------------------------------------------------------------------
 % Convenience macros
@@ -331,15 +328,17 @@ validation loss) to prevent both overfitting and underfitting.
     \toprule
     \textbf{Hyperparameter} & \textbf{Value} \\
     \midrule
-    Maximum epochs            & 30 \\
-    Early stopping patience   & 5 (on validation loss) \\
-    Batch size (per GPU)      & 4 \\
+    Maximum epochs            & 10--15 \\
+    Early stopping patience   & 3 (on validation loss) \\
+    Batch size (per GPU)      & 8 \\
+    Gradient accumulation     & 2 (effective batch 16) \\
     Learning rate             & $5 \times 10^{-5}$ \\
-    Warm-up steps             & 100 \\
+    Warm-up steps             & 40 \\
     Weight decay              & 0.01 \\
     Precision                 & FP16 (mixed-precision) \\
     Decoder max length        & 768 tokens \\
-    Hardware                  & NVIDIA RTX 4090 (24\,GB) \\
+    Hardware                  & Vast.ai RTX 6000 Blackwell (96\,GB) \\
+    Training date             & 2026-03-07 \\
     Random seed               & 42 \\
     \bottomrule
   \end{tabular}
@@ -710,9 +709,11 @@ SROIE benchmark.  Our findings show that:
 Our results use an 80/10/10 split of 626 SROIE training images and are
 \emph{not} directly comparable to leaderboard scores obtained on the
 official 347-image test set.  All experiments use a single random seed~(42),
-a single GPU (RTX~4090), and limited hyperparameter search.  The
-\trocr\,+\,\yolo pipeline uses hand-crafted heuristics for field
-assignment, which may not generalise to other receipt formats.
+a single GPU (Vast.ai RTX~6000 Blackwell, 96\,GB, March 2026), and limited
+hyperparameter search.  The \trocr\,+\,\yolo pipeline uses hand-crafted
+heuristics for field assignment, which may not generalise to other receipt
+formats.  Experiment~8 was aborted due to GPU out-of-memory at the chosen
+image resolution; results for Exp.~8 are therefore not available.
 
 \paragraph{Future work.}
 Promising directions include: (i)~evaluation on the official SROIE test set
@@ -723,7 +724,8 @@ testing; and (iv)~extending to multilingual receipt corpora.
 % ==================================================================
 % References
 % ==================================================================
-\balance
+% \balance intentionally omitted — IEEEtran handles two-column balancing
+% internally; the balance package causes conflicts on Overleaf.
 \bibliographystyle{IEEEtran}
 \bibliography{references}
 
