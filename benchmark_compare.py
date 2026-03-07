@@ -340,19 +340,61 @@ class DonutPipeline:
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
         return self._parse_output(token_str), elapsed_ms
 
-    def run_benchmark(self, pairs: list[tuple[Path, dict]], desc: str = "DONUT") -> BenchmarkResult:
+    def run_benchmark(
+        self, pairs: list[tuple[Path, dict]], desc: str = "DONUT", batch_size: int = 8
+    ) -> BenchmarkResult:
         result = BenchmarkResult(method="DONUT")
-        for img_path, gt in tqdm(pairs, desc=desc, unit="img"):
-            img = Image.open(img_path).convert("RGB")
-            pred, ms = self.predict(img)
-            result.samples.append(
-                SampleResult(
-                    image_name=img_path.name,
-                    ground_truth=gt,
-                    prediction=pred,
-                    inference_time_ms=ms,
+        # Tokenize the task prompt once — it is constant across all batches.
+        _prompt_ids = self.processor.tokenizer(
+            self.task_prompt,
+            add_special_tokens=False,
+            return_tensors="pt",
+        ).input_ids.to(self.device)
+        # Process in batches to improve GPU utilisation.
+        # DONUT generation is still autoregressive per-token, but the image encoder
+        # runs in parallel across the batch — improving throughput on high-VRAM cards.
+        for i in tqdm(range(0, len(pairs), batch_size), desc=desc, unit="batch"):
+            batch_pairs = pairs[i : i + batch_size]
+            images = [Image.open(p).convert("RGB") for p, _ in batch_pairs]
+
+            # Batch pixel_values encoding
+            pixel_values = torch.stack(
+                [
+                    self.processor(img, return_tensors="pt").pixel_values.squeeze(0)
+                    for img in images
+                ]
+            ).to(self.device)
+
+            # Repeat decoder_input_ids for the whole batch
+            decoder_input_ids = _prompt_ids.expand(len(images), -1)
+
+            t0 = time.perf_counter()
+            with torch.no_grad():
+                outputs = self.model.generate(
+                    pixel_values,
+                    decoder_input_ids=decoder_input_ids,
+                    max_length=MAX_LENGTH,
+                    pad_token_id=self.processor.tokenizer.pad_token_id,
+                    eos_token_id=self.processor.tokenizer.eos_token_id,
+                    use_cache=True,
+                    num_beams=1,
+                    bad_words_ids=[[self.processor.tokenizer.unk_token_id]],
+                    return_dict_in_generate=True,
                 )
-            )
+            elapsed_ms = (time.perf_counter() - t0) * 1000.0
+            per_img_ms = elapsed_ms / len(images)
+
+            token_strs = self.processor.batch_decode(outputs.sequences)
+            for (img_path, gt), token_str in zip(batch_pairs, token_strs):
+                pred = self._parse_output(token_str)
+                result.samples.append(
+                    SampleResult(
+                        image_name=img_path.name,
+                        ground_truth=gt,
+                        prediction=pred,
+                        inference_time_ms=per_img_ms,
+                    )
+                )
         return result
 
 
@@ -496,6 +538,23 @@ class TrOCRYOLOPipeline:
         text = self.trocr_processor.batch_decode(generated, skip_special_tokens=True)[0]
         return text.strip()
 
+    def _read_crops_batch(self, crops: list[Image.Image]) -> list[str]:
+        """Run TrOCR on a batch of cropped PIL images. Returns list of decoded strings."""
+        if not crops:
+            return []
+        pixel_values = torch.stack(
+            [
+                self.trocr_processor(crop.convert("RGB"), return_tensors="pt").pixel_values.squeeze(0)
+                for crop in crops
+            ]
+        ).to(self.device)
+        with torch.no_grad():
+            generated = self.trocr_model.generate(
+                pixel_values,
+                max_new_tokens=128,
+            )
+        return [t.strip() for t in self.trocr_processor.batch_decode(generated, skip_special_tokens=True)]
+
     # ── Regex: assign lines to fields ──────────────────────────────────────
     def _assign_fields(self, lines: list[str]) -> dict[str, str]:
         """
@@ -614,9 +673,9 @@ class TrOCRYOLOPipeline:
         # Stage 1: detect text boxes
         boxes = self._detect_boxes(image)
 
-        # Stage 2: read text from each crop
-        lines = []
+        # Stage 2: read text from each crop (batched — one GPU call for all boxes)
         img_arr = image.convert("RGB")
+        crops = []
         for x1, y1, x2, y2 in boxes:
             # Add a small padding to each crop
             pad = 4
@@ -624,10 +683,8 @@ class TrOCRYOLOPipeline:
             y1p = max(0, y1 - pad)
             x2p = min(img_arr.width, x2 + pad)
             y2p = min(img_arr.height, y2 + pad)
-            crop = img_arr.crop((x1p, y1p, x2p, y2p))
-            text = self._read_crop(crop)
-            if text:
-                lines.append(text)
+            crops.append(img_arr.crop((x1p, y1p, x2p, y2p)))
+        lines = [t for t in self._read_crops_batch(crops) if t]
 
         # Stage 3: regex field assignment
         pred = self._assign_fields(lines)

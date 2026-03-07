@@ -475,7 +475,9 @@ class DonutTrainer:
         # adds IPC overhead on top, so stay with workers=0 when we have caches.
         _batch_size = self.config.per_device_train_batch_size
         _cache_populated = (
-            hasattr(self.train_dataset, "_image_cache") and len(self.train_dataset._image_cache) > 0
+            (hasattr(self.train_dataset, "_pixel_cache") and len(self.train_dataset._pixel_cache) > 0)
+            or (hasattr(self.train_dataset, "_label_cache") and len(self.train_dataset._label_cache) > 0)
+            or (hasattr(self.train_dataset, "_image_cache") and len(self.train_dataset._image_cache) > 0)
         )
         if _batch_size <= 2 and _cache_populated:
             logger.info(
