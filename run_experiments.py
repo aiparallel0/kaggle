@@ -671,20 +671,32 @@ def run_experiment(exp_id: int, base_processor=None, base_model=None) -> dict:
     # dataclasses.replace() so the global EXPERIMENTS dict is never mutated.
     # Only batch_size and gradient_accumulation_steps are overridden; epochs and
     # warmup_steps remain fixed per CLAUDE.md experiment design.
+    #
+    # Bug #2 fix: micro/mini mode sets gradient_accumulation_steps deliberately
+    # (e.g. accum=1 for OneCycleLR "every batch → immediate optimizer step").
+    # The resource optimizer must NOT override it — doing so cuts optimizer steps
+    # in half (76 instead of 150 for micro), preventing any structural learning.
+    # skip_step_validation=True is the canonical micro/mini mode signal.
+    _is_micro = getattr(config, "skip_step_validation", False)
     old_batch = config.batch_size
     old_accum = config.gradient_accumulation_steps
     config = dataclasses.replace(
         EXPERIMENTS[exp_id],
         batch_size=optimized_config.batch_size,
-        gradient_accumulation_steps=optimized_config.gradient_accumulation_steps,
+        gradient_accumulation_steps=(
+            EXPERIMENTS[exp_id].gradient_accumulation_steps  # preserve micro/mini accum
+            if _is_micro
+            else optimized_config.gradient_accumulation_steps
+        ),
         encoder_lr=optimized_config.encoder_lr,
         decoder_lr=optimized_config.decoder_lr,
     )
     print(
         f"[Exp {exp_id}] Resource optimization applied: "
         f"batch_size {old_batch} → {config.batch_size}, "
-        f"grad_accum {old_accum} → {config.gradient_accumulation_steps} "
-        f"({optimized_config.config_explanation})"
+        f"grad_accum {old_accum} → {config.gradient_accumulation_steps}"
+        + (" (grad_accum preserved: micro/mini mode)" if _is_micro
+           else f" ({optimized_config.config_explanation})")
     )
 
     # ── Guardrail: verify global EXPERIMENTS dict was NOT mutated ──────────
@@ -733,9 +745,16 @@ def run_experiment(exp_id: int, base_processor=None, base_model=None) -> dict:
         metrics = evaluate_experiment(exp_id, model_dir)
         metrics["training_time_sec"] = _train_duration_sec
     except RuntimeError as exc:
-        if "Self-test FAILED" in str(exc):
+        # Bug #1 fix: micro/mini mode models are intentionally undertrained and
+        # may produce 100% parse failures. The "Parse failure threshold exceeded"
+        # error is expected for smoke-test runs (skip_step_validation=True).
+        # Treat it the same as a self-test failure: save zero metrics and continue.
+        _is_undertrained = getattr(config, "skip_step_validation", False)
+        if "Self-test FAILED" in str(exc) or (
+            _is_undertrained and "Parse failure threshold exceeded" in str(exc)
+        ):
             print(
-                f"[Exp {exp_id}] WARNING: evaluation self-test failed — "
+                f"[Exp {exp_id}] WARNING: evaluation failed (undertrained model) — "
                 f"saving zero-metric result. Error: {exc}"
             )
             metrics = {f: 0.0 for f in ["global_f1", "global_precision", "global_recall"]}
