@@ -58,6 +58,7 @@
 % NOTE: hyperref must be loaded LAST.
 % pdfusetitle is avoided because IEEEtran titles may contain \\ which
 % corrupts PDF metadata — use an explicit pdftitle instead.
+% The pdftitle is intentionally shortened (no subtitle) for metadata compatibility.
 \usepackage[hidelinks,bookmarks=true,%
   pdftitle={End-to-End vs. Pipeline Architectures for Receipt Information Extraction},%
   pdfauthor={Anonymous}%
@@ -328,7 +329,7 @@ validation loss) to prevent both overfitting and underfitting.
     \toprule
     \textbf{Hyperparameter} & \textbf{Value} \\
     \midrule
-    Maximum epochs            & 10--15 \\
+    Maximum epochs            & 10 (Exp 1--4) / 15 (Exp 5--7) \\
     Early stopping patience   & 3 (on validation loss) \\
     Batch size (per GPU)      & 8 \\
     Gradient accumulation     & 2 (effective batch 16) \\

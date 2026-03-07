@@ -1,4 +1,5 @@
 {
+  "_note": "TrOCR+YOLO was trained once on the full SROIE dataset (15,273 samples). The same results are recorded under experiment IDs 1-8 to maintain structural consistency with the DONUT results format. Unlike DONUT, TrOCR+YOLO does not vary by dataset combination.",
   "1": {
     "name": "TrOCR+YOLO Exp 1",
     "metrics": {

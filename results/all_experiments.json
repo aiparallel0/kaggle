@@ -2113,7 +2113,7 @@
   },
   "8": {
     "experiment_id": 8,
-    "name": "SROIE + All (3x SROIE)",
+    "name": "SROIE + WildReceipt + Invoices (3x SROIE)",
     "datasets": [
       "sroie",
       "wildreceipt",
@@ -2134,6 +2134,6 @@
     "num_train_samples": 3940,
     "metrics": {},
     "oom_killed": true,
-    "oom_note": "OOM-killed on Vast.ai RTX 6000 Blackwell (96 GB) at 2560\u00d71920 resolution with batch_size=16. Fix: use image-size-aware VRAM calibration (resource_optimizer.py)."
+    "oom_note": "OOM-killed on Vast.ai RTX 6000 Blackwell (96 GB) at 2560\u00d71920 resolution with batch_size=16. Fix: use image-size-aware VRAM calibration (resource_optimizer.py). Note: FUNSD was not included in final experiments; actual datasets are sroie+wildreceipt+invoices_donut."
   }
 }

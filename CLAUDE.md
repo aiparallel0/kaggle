@@ -316,14 +316,14 @@ from constants import FIELDS, IMAGE_EXTS, MAX_LENGTH, BASE_MODEL, SEED, NEW_TOKE
 
 | Exp | Training Data | Samples | **Actual F1** | Notes |
 |---|---|---|---|---|
-| 1 | SROIE only (baseline) | 500 | **0.0000** | Parse failure (token2json list bug on SROIE-only) |
+| 1 | SROIE only (baseline) | 500 | **0.0000** | Parse failure — `token2json` list bug (see Section 16, BUG C, Pattern 5). Fix is in `donut_evaluator.py`. Does not affect Exps 2-7 conclusions. |
 | 2 | SROIE + WildReceipt | 1,386 | **0.8257** | Strong receipt-domain gain |
 | 3 | SROIE + Invoices-DONUT | 832 | **0.2867** | Cross-domain hurts without rebalancing |
 | 4 | SROIE + WR + Invoices | 1,718 | **0.8224** | Combined unbalanced |
 | 5 | SROIE + WR (2× SROIE) | 1,886 | **0.8514** | Oversampling helps |
 | **6** | **SROIE + Invoices (2× SROIE)** | **1,332** | **0.8982 ← BEST** | Early stop ep.8, 39.6 min |
 | 7 | SROIE + All (2× SROIE) | 2,218 | **0.8503** | All datasets, 2× oversample |
-| 8 | SROIE + All (3× SROIE) | ~3,940 | **OOM** | OOM at 2560×1920; fixed in resource_optimizer.py |
+| 8 | SROIE + WR + Invoices (3× SROIE) | ~3,940 | **OOM** | OOM at 2560×1920; fixed in resource_optimizer.py |
 
 **Exp 6 per-field:** company=0.9048, date=0.9841, address=0.7903, total=0.9120, exact_match=0.6667
 
