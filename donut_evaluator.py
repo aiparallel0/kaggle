@@ -348,12 +348,22 @@ class DonutEvaluator:
     # Public API
     # ------------------------------------------------------------------
 
-    def evaluate(self) -> EvaluationResult:
+    def evaluate(self, allow_high_parse_failures: bool = False) -> EvaluationResult:
         """Run full evaluation: self-test first, then inference on all samples.
+
+        Args:
+            allow_high_parse_failures: When True, a >50% parse failure rate
+                logs a warning and returns a zero-metric result instead of
+                raising RuntimeError.  Use this for undertrained models where
+                training completed successfully but the model hasn't yet
+                converged to the expected tag format.  Default False keeps the
+                existing behaviour (raises) so callers that want to detect
+                truly broken models still get an exception.
 
         Raises:
             RuntimeError: If self-test fails (model produces no parseable output).
-            RuntimeError: If >50% of samples fail to parse (model is broken).
+            RuntimeError: If >50% of samples fail to parse and
+                allow_high_parse_failures is False (model is likely broken).
         """
         self._self_test()
 
@@ -371,10 +381,22 @@ class DonutEvaluator:
         # Parse failure threshold check
         n = len(self.test_dataset)
         if n > 0 and self.parse_failure_count > n * 0.5:
-            raise RuntimeError(
+            msg = (
                 f"Parse failure threshold exceeded: {self.parse_failure_count}/{n} "
                 f"({self.parse_failure_count / n:.1%}) samples failed to parse. "
                 f"The model is likely broken — check token2json compatibility."
+            )
+            if not allow_high_parse_failures:
+                raise RuntimeError(msg)
+            logger.warning("%s — returning zero-metric result", msg)
+            return EvaluationResult(
+                global_precision=0.0,
+                global_recall=0.0,
+                global_f1=0.0,
+                overall_exact_match=0.0,
+                per_field={f: {"f1": 0.0, "ned": 1.0} for f in FIELDS},
+                num_samples=n,
+                parse_failures=self.parse_failure_count,
             )
 
         metrics_dict = self.compute_all_metrics(predictions, ground_truths)
