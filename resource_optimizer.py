@@ -264,9 +264,7 @@ def optimize_hyperparams(
     epochs = 10
 
     while accumulation_steps > 1:
-        steps_per_epoch = math.ceil(
-            num_train_samples / (batch_size * accumulation_steps)
-        )
+        steps_per_epoch = math.ceil(num_train_samples / (batch_size * accumulation_steps))
         total_steps = steps_per_epoch * epochs
         if total_steps >= _MIN_OPTIMIZER_STEPS:
             break

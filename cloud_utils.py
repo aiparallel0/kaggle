@@ -154,7 +154,11 @@ class GitController:
     def tag_commit(tag_name: str, message: str = "") -> bool:
         """Create a git tag for the current commit.  Returns True on success."""
         try:
-            cmd = ["git", "tag", "-a", tag_name, "-m", message] if message else ["git", "tag", tag_name]
+            cmd = (
+                ["git", "tag", "-a", tag_name, "-m", message]
+                if message
+                else ["git", "tag", tag_name]
+            )
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
             if result.returncode == 0:
                 logger.info(f"✓ Created tag: {tag_name}")

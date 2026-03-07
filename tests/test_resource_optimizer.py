@@ -212,9 +212,7 @@ class TestOptimizeHyperparamsLowVRAM:
         )
         # 2000 samples with accum=8 at 5 epochs: ceil(2000/16)*5 = 625 ≥ 200 ✓
         steps = math.ceil(2000 / (cfg.batch_size * cfg.gradient_accumulation_steps)) * 5
-        assert steps >= 200, (
-            f"Large dataset path still too few steps: {steps} with 5 epochs"
-        )
+        assert steps >= 200, f"Large dataset path still too few steps: {steps} with 5 epochs"
 
 
 class TestExperimentConfigImmutability:
