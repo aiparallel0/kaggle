@@ -626,8 +626,10 @@ def evaluate_experiment(
         device=DEVICE,
     )
 
-    # Run evaluation (includes self-test + parse failure threshold)
-    eval_result = evaluator.evaluate()
+    # Run evaluation (includes self-test + parse failure threshold).
+    # allow_high_parse_failures=True so undertrained models that haven't
+    # converged to the SROIE tag format record F1=0.0 instead of crashing.
+    eval_result = evaluator.evaluate(allow_high_parse_failures=True)
     metrics = eval_result.to_dict()
 
     if eval_result.parse_failures > 0:
@@ -810,14 +812,11 @@ def run_experiment(exp_id: int, base_processor=None, base_model=None) -> dict:
         metrics = evaluate_experiment(exp_id, model_dir)
         metrics["training_time_sec"] = _train_duration_sec
     except RuntimeError as exc:
-        # Bug #1 fix: micro/mini mode models are intentionally undertrained and
-        # may produce 100% parse failures. The "Parse failure threshold exceeded"
-        # error is expected for smoke-test runs (skip_step_validation=True).
-        # Treat it the same as a self-test failure: save zero metrics and continue.
-        _is_undertrained = getattr(config, "skip_step_validation", False)
-        if "Self-test FAILED" in str(exc) or (
-            _is_undertrained and "Parse failure threshold exceeded" in str(exc)
-        ):
+        # Catch self-test failures and parse-failure-threshold errors for any
+        # run type (not just micro/mini).  An undertrained full-run model that
+        # hasn't converged to the SROIE tag format should record F1=0.0 and
+        # let the remaining experiments continue, not crash the pipeline.
+        if "Self-test FAILED" in str(exc) or "Parse failure threshold exceeded" in str(exc):
             print(
                 f"[Exp {exp_id}] WARNING: evaluation failed (undertrained model) — "
                 f"saving zero-metric result. Error: {exc}"

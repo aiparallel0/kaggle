@@ -351,3 +351,208 @@ class TestLoadModelWithTiedWeights:
         ):
             # Should not raise — legacy tied checkpoint, _retie_decoder_head handles it
             load_model_with_tied_weights("/fake/checkpoint")
+
+
+# ---------------------------------------------------------------------------
+# DonutEvaluator.evaluate() — allow_high_parse_failures parameter
+# ---------------------------------------------------------------------------
+
+
+class TestAllowHighParseFailures:
+    """Regression tests for the allow_high_parse_failures fix.
+
+    Root cause of the pipeline crash: an undertrained full-run model (not
+    mini/micro) that produces 100% parse failures raised RuntimeError from
+    evaluate().  The _is_undertrained guard in run_experiment() only caught
+    this error for skip_step_validation=True (mini/micro) runs, so the
+    exception propagated all the way up and killed Experiments 2–8.
+
+    Fix: evaluate(allow_high_parse_failures=True) returns a zero-metric
+    EvaluationResult instead of raising, and run_experiments.py passes
+    allow_high_parse_failures=True unconditionally.
+    """
+
+    def _make_evaluator_with_all_failures(self, n_samples: int = 10):
+        """Return a DonutEvaluator stub that simulates 100% parse failures."""
+        pytest.importorskip("torch")
+        pytest.importorskip("transformers")
+        from donut_evaluator import DonutEvaluator, EvaluationResult
+
+        evaluator = object.__new__(DonutEvaluator)
+        evaluator.parse_failure_count = 0
+        evaluator._inference_call_count = 0
+        evaluator.max_length = 768
+        evaluator.task_prompt = "<s_sroie>"
+        evaluator.device = "cpu"
+        # Use non-empty ground truth for all fields so failures produce F1=0.0
+        # even when the model could theoretically have predicted correctly.
+        evaluator.test_dataset = [
+            (
+                Path("/fake/img.jpg"),
+                {"company": "MYDIN MALL", "date": "25/12/2023", "address": "123 ST", "total": "9.90"},
+            )
+        ] * n_samples
+
+        class _FakeProcessor:
+            def token2json(self, tokens):
+                return {}
+
+        evaluator.processor = _FakeProcessor()
+
+        # Patch _self_test to be a no-op.
+        evaluator._self_test = lambda: None
+
+        # Patch _run_inference to return {} AND increment parse_failure_count,
+        # mimicking what the real _parse_prediction does on a bad token sequence.
+        def _failing_inference(img_path, task_prompt, preloaded_image=None):
+            evaluator.parse_failure_count += 1
+            return {}
+
+        evaluator._run_inference = _failing_inference
+
+        return evaluator, EvaluationResult
+
+    def test_raises_by_default_when_threshold_exceeded(self):
+        """evaluate() raises RuntimeError when >50% parse failures and flag is False."""
+        evaluator, _ = self._make_evaluator_with_all_failures(n_samples=10)
+        with pytest.raises(RuntimeError, match="Parse failure threshold exceeded"):
+            evaluator.evaluate(allow_high_parse_failures=False)
+
+    def test_returns_zero_metrics_when_flag_true(self):
+        """evaluate(allow_high_parse_failures=True) returns zero-metric EvaluationResult."""
+        evaluator, EvaluationResult = self._make_evaluator_with_all_failures(n_samples=10)
+        result = evaluator.evaluate(allow_high_parse_failures=True)
+        assert result.global_f1 == 0.0
+        assert result.global_precision == 0.0
+        assert result.global_recall == 0.0
+        assert result.overall_exact_match == 0.0
+        assert result.parse_failures == 10
+
+    def test_per_field_zeros_when_flag_true(self):
+        """Per-field metrics are all zero / NED=1.0 when flag is True."""
+        evaluator, _ = self._make_evaluator_with_all_failures(n_samples=4)
+        result = evaluator.evaluate(allow_high_parse_failures=True)
+        for field_name in ["company", "date", "address", "total"]:
+            assert result.per_field[field_name]["f1"] == 0.0, (
+                f"Expected {field_name}_f1=0.0 but got {result.per_field[field_name]['f1']}"
+            )
+            assert result.per_field[field_name]["ned"] == 1.0, (
+                f"Expected {field_name}_ned=1.0 but got {result.per_field[field_name]['ned']}"
+            )
+
+    def test_default_false_keeps_existing_behaviour(self):
+        """Calling evaluate() without the argument still raises (backward compat)."""
+        evaluator, _ = self._make_evaluator_with_all_failures(n_samples=6)
+        with pytest.raises(RuntimeError, match="Parse failure threshold exceeded"):
+            evaluator.evaluate()
+
+    def test_no_raise_below_threshold(self):
+        """evaluate(allow_high_parse_failures=True) does not change low-failure behaviour."""
+        pytest.importorskip("torch")
+        pytest.importorskip("transformers")
+        from donut_evaluator import DonutEvaluator
+
+        evaluator = object.__new__(DonutEvaluator)
+        evaluator.parse_failure_count = 0  # zero failures
+        evaluator._inference_call_count = 0
+        evaluator.max_length = 768
+        evaluator.task_prompt = "<s_sroie>"
+        evaluator.device = "cpu"
+        evaluator.test_dataset = [
+            (
+                Path("/fake/img.jpg"),
+                {"company": "ACME", "date": "01/01", "address": "123 St", "total": "10"},
+            )
+        ]
+
+        class _FakeProcessor:
+            def token2json(self, tokens):
+                return {"company": "ACME", "date": "01/01", "address": "123 St", "total": "10"}
+
+        evaluator.processor = _FakeProcessor()
+        evaluator._self_test = lambda: None
+        evaluator._run_inference = lambda *a, **kw: {
+            "company": "ACME",
+            "date": "01/01",
+            "address": "123 St",
+            "total": "10",
+        }
+
+        # Should return normal (non-zero) metrics — flag has no effect below threshold
+        result = evaluator.evaluate(allow_high_parse_failures=True)
+        assert result.global_f1 == 1.0
+
+
+# ---------------------------------------------------------------------------
+# run_experiments.py — parse failure catch block covers full (non-mini) runs
+# ---------------------------------------------------------------------------
+
+
+class TestRunExperimentsParseFailureCatch:
+    """Regression test: 'Parse failure threshold exceeded' must be caught for
+    full (non-mini/micro) runs, not just skip_step_validation=True runs.
+
+    Before the fix, the _is_undertrained guard meant that a full-run Exp 1
+    crashing with 100% parse failures would re-raise and kill Experiments 2–8.
+    """
+
+    def test_evaluate_experiment_passes_allow_high_parse_failures(self):
+        """evaluate_experiment() must call evaluator.evaluate(allow_high_parse_failures=True).
+
+        Uses AST inspection so the check is immune to code reformatting: we
+        look for a keyword node `allow_high_parse_failures=True` inside any
+        Call node within the function body.
+        """
+        import ast
+        import inspect
+
+        # Guard torch/transformers per Pattern 7
+        pytest.importorskip("torch")
+        pytest.importorskip("transformers")
+        from run_experiments import evaluate_experiment  # noqa: E402
+
+        assert callable(evaluate_experiment), "evaluate_experiment must be callable"
+
+        src = inspect.getsource(evaluate_experiment)
+        tree = ast.parse(src)
+
+        # Collect all keyword arguments named 'allow_high_parse_failures' that
+        # are set to the constant True anywhere inside the function.
+        found = any(
+            isinstance(node, ast.keyword)
+            and node.arg == "allow_high_parse_failures"
+            and isinstance(node.value, ast.Constant)
+            and node.value.value is True
+            for node in ast.walk(tree)
+        )
+        assert found, (
+            "evaluate_experiment() must pass allow_high_parse_failures=True to "
+            "evaluator.evaluate(). Without this, undertrained full-run models "
+            "that produce 100% parse failures will crash the entire pipeline."
+        )
+
+    def test_run_experiment_catch_block_covers_full_runs(self):
+        """The except RuntimeError block in run_experiment() must not use
+        _is_undertrained to gate 'Parse failure threshold exceeded' handling.
+
+        Uses AST inspection to check for Name nodes (variable references), so
+        the check is not confused by comments or docstrings.
+        """
+        import ast
+        import inspect
+
+        pytest.importorskip("torch")
+        pytest.importorskip("transformers")
+        from run_experiments import run_experiment  # noqa: E402
+
+        src = inspect.getsource(run_experiment)
+        tree = ast.parse(src)
+
+        # Check that no Name node in the AST refers to the removed _is_undertrained
+        # variable.  ast.Name nodes are variable references, not comments/strings.
+        names = [node.id for node in ast.walk(tree) if isinstance(node, ast.Name)]
+        assert "_is_undertrained" not in names, (
+            "run_experiment() still references _is_undertrained. "
+            "Remove this guard so 'Parse failure threshold exceeded' is caught "
+            "for all run types (full, mini, micro)."
+        )
