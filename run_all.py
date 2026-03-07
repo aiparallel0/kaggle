@@ -1687,6 +1687,134 @@ def _mini_mode_handler(args, logger: logging.Logger) -> int:
     return _generate_mini_paper(args_paper, logger)
 
 
+def _micro_mode_handler(args, logger: logging.Logger) -> int:
+    """Micro mode: ultra-fast smoke-test targeting < 10 minutes.
+
+    Optimisation levers vs mini mode:
+      DONUT  — 2 epochs, 150 train samples, max_length=256, grad_accum=1,
+               10× higher LR (5e-4 / 1e-3), OneCycleLR, eval on 20 samples
+      YOLO   — yolov8n (3.2M params), 3 epochs, 256 px, SGD+Nesterov
+      TrOCR  — 1 epoch, max_len=64, batch=8, SGD+Nesterov+CosineAnnealingLR
+
+    Produces paper_micro.tex with all \\VAR{} placeholders resolved.
+    """
+    import copy
+    import dataclasses
+
+    import run_experiments as re_mod
+    import train_trocr_yolo as tty
+
+    # ── Stage 0: SROIE install ────────────────────────────────────────────
+    if not args.skip_install:
+        logger.info("[Micro Stage 0] SROIE data install...")
+        r = stage_install(args)
+        if r.exit_status > 1:
+            logger.error("SROIE install failed")
+            return 2
+
+    # ── Stage 1: Dataset verify ───────────────────────────────────────────
+    if not args.skip_download:
+        logger.info("[Micro Stage 1] Dataset verification...")
+        r = stage_download(args)
+        if r.exit_status > 1:
+            logger.error("Dataset download failed")
+            return 2
+
+    # ── Stage 2: DONUT Exp 1 — aggressively reduced ───────────────────────
+    logger.info("[Micro Stage 2] DONUT Experiment 1 (micro: 2 epochs, 150 samples)...")
+    original_config = re_mod.EXPERIMENTS[1]
+    micro_config = dataclasses.replace(
+        original_config,
+        # Training budget
+        epochs=2,
+        early_stopping_patience=1,
+        # Dataset subsampling
+        subsample_train=150,    # ~500 → 150 samples (70% reduction)
+        subsample_eval=20,      # 63 → 20 test samples
+        # Step-count guard bypass (intentionally below 200-step threshold)
+        skip_step_validation=True,
+        # Faster descent: 10× higher LR hits useful weights in 2 epochs
+        lr=5e-4,
+        encoder_lr=5e-4,
+        decoder_lr=1e-3,
+        # OneCycleLR: aggressive warmup in first 10% of steps, no separate warmup phase
+        warmup_steps=0,
+        lr_schedule="one_cycle",
+        optimizer_type="adamw",
+        # Reduce token budget: 256 vs 768 → 3× fewer decoder steps
+        max_length=256,
+        # No grad accumulation overhead: every batch → immediate optimizer step
+        gradient_accumulation_steps=1,
+    )
+    re_mod.EXPERIMENTS[1] = micro_config
+    args_copy = copy.copy(args)
+    args_copy.experiment = 1
+    # Force re-run: micro config doesn't match cached experiment_1.json
+    args_copy.force = True
+    try:
+        r = stage_experiments(args_copy)
+    finally:
+        re_mod.EXPERIMENTS[1] = original_config  # always restore global
+    if r.exit_status > 1:
+        logger.error("DONUT micro training failed")
+        return 2
+
+    # ── Stage 3: TrOCR+YOLO data prep ────────────────────────────────────
+    logger.info("[Micro Stage 3] TrOCR+YOLO data prep...")
+    r = stage_trocr_data_prep(args)
+    if r.exit_status > 1:
+        logger.error("TrOCR data prep failed")
+        return 2
+
+    # ── Stage 4: YOLO (yolov8n, 3 ep, 256 px, SGD) + TrOCR (1 ep, SGD) ──
+    logger.info(
+        "[Micro Stage 4] YOLO (yolov8n 3 ep 256px SGD) + TrOCR (1 ep SGD)..."
+    )
+    _saved = {
+        "YOLO_BASE": tty.YOLO_BASE,
+        "YOLO_EPOCHS": tty.YOLO_EPOCHS,
+        "YOLO_IMG_SIZE": tty.YOLO_IMG_SIZE,
+        "YOLO_OPTIMIZER": tty.YOLO_OPTIMIZER,
+        "YOLO_MOMENTUM": tty.YOLO_MOMENTUM,
+        "TROCR_EPOCHS": tty.TROCR_EPOCHS,
+        "TROCR_MAX_LEN": tty.TROCR_MAX_LEN,
+        "TROCR_BATCH": tty.TROCR_BATCH,
+        "TROCR_MINI_MODE": tty.TROCR_MINI_MODE,
+    }
+    try:
+        tty.YOLO_BASE = "yolov8n.pt"   # 3.2M vs 68M params → 3–5× speedup
+        tty.YOLO_EPOCHS = 3             # 50 → 3
+        tty.YOLO_IMG_SIZE = 256         # 512 → 256 (4× fewer pixels)
+        tty.YOLO_OPTIMIZER = "SGD"      # SGD+Nesterov: faster convergence for detection
+        tty.YOLO_MOMENTUM = 0.937       # standard Ultralytics default for SGD
+        tty.TROCR_EPOCHS = 1            # unchanged
+        tty.TROCR_MAX_LEN = 64          # 128 → 64 (2× faster decoding)
+        tty.TROCR_BATCH = 8             # 16 → 8 (safer after DONUT VRAM use)
+        tty.TROCR_MINI_MODE = True      # switches TrOCR to SGD+CosineAnnealingLR
+        r = stage_trocr_experiments(args)
+    finally:
+        for k, v in _saved.items():
+            setattr(tty, k, v)  # always restore all constants
+
+    if r.exit_status > 1:
+        logger.warning("TrOCR+YOLO micro training failed (continuing to paper gen)")
+
+    # ── Stage 5: Benchmark ────────────────────────────────────────────────
+    logger.info("[Micro Stage 5] Benchmark...")
+    stage_benchmark(args)
+
+    # ── Stage 6: Comparison ───────────────────────────────────────────────
+    logger.info("[Micro Stage 6] Comparison plots...")
+    stage_comparison(args)
+
+    # ── Stage 7: Paper generation → paper_micro.tex ───────────────────────
+    logger.info("[Micro Stage 7] Generating paper_micro.tex...")
+    args_paper = copy.copy(args)
+    args_paper.paper_template = "paper.tex"
+    args_paper.output = "paper_micro.tex"
+    return _generate_mini_paper(args_paper, logger)
+
+
 def _generate_mini_paper(args, logger: logging.Logger) -> int:
     """Generate paper_mini.tex, guaranteed to have zero unresolved \\VAR{} placeholders.
 
@@ -1915,6 +2043,17 @@ def build_parser() -> argparse.ArgumentParser:
             "Finishes in ~20 min. Generates paper_mini.tex with all metrics filled."
         ),
     )
+    p.add_argument(
+        "--micro",
+        action="store_true",
+        help=(
+            "Micro mode: ultra-fast smoke-test (<10 min). "
+            "DONUT: 2 epochs, 150 train samples, max_length=256, OneCycleLR. "
+            "YOLO: yolov8n, 3 epochs, 256 px, SGD+Nesterov. "
+            "TrOCR: 1 epoch, max_len=64, SGD+Nesterov+CosineAnnealingLR. "
+            "Generates paper_micro.tex."
+        ),
+    )
     return p
 
 
@@ -1967,6 +2106,13 @@ def main() -> None:
         exit_code = _mini_mode_handler(args, logger)
         total_elapsed = time.monotonic() - t_start
         logger.info(f"Mini mode complete in {total_elapsed / 60:.1f} min (exit code {exit_code})")
+        sys.exit(exit_code)
+
+    if getattr(args, "micro", False):
+        logger.info("Micro mode detected (--micro flag)")
+        exit_code = _micro_mode_handler(args, logger)
+        total_elapsed = time.monotonic() - t_start
+        logger.info(f"Micro mode complete in {total_elapsed / 60:.1f} min (exit code {exit_code})")
         sys.exit(exit_code)
 
     if getattr(args, "yolo", False):

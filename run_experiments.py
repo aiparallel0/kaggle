@@ -136,6 +136,13 @@ class ExperimentConfig:
     experiment_id: int = 0
     sroie_oversample: int = 1  # Number of times to duplicate SROIE training samples (1–3 typical)
 
+    # -- Mini-mode accelerators (all default to off so normal runs are unaffected) --
+    subsample_train: int = 0           # >0: cap training set to this many samples (mini only)
+    subsample_eval: int = 0            # >0: cap test set to this many samples (mini only)
+    skip_step_validation: bool = False  # bypass 200-step minimum guard (mini only)
+    lr_schedule: str = "cosine"        # "cosine" | "one_cycle" | "linear"
+    optimizer_type: str = "adamw"      # "adamw" | "sgd" (sgd = SGD + Nesterov)
+
     # -- Duck-typed aliases for DonutTrainer compatibility ----------------
     # DonutTrainer reads config.max_epochs, config.learning_rate, etc.
     # These properties ensure a single source of truth (no duplication).
@@ -514,7 +521,15 @@ def evaluate_experiment(
     if config is None:
         config = EXPERIMENTS[exp_id]
     test_samples = dataset_loaders.load_sroie_test()
-    print(f"[Exp {exp_id}] Evaluating on {len(test_samples)} SROIE test images")
+
+    # Micro subsample evaluation — reduce test-set size for fast smoke tests
+    if getattr(config, "subsample_eval", 0) > 0 and len(test_samples) > config.subsample_eval:
+        import random as _rnd
+        _rng = _rnd.Random(getattr(config, "seed", SEED))
+        test_samples = _rng.sample(test_samples, config.subsample_eval)
+        print(f"[Exp {exp_id}] subsample_eval: evaluating on {len(test_samples)} test samples")
+    else:
+        print(f"[Exp {exp_id}] Evaluating on {len(test_samples)} SROIE test images")
 
     # Load processor from the fine-tuned model directory
     processor = DonutProcessor.from_pretrained(str(model_dir))
@@ -600,6 +615,14 @@ def run_experiment(exp_id: int, base_processor=None, base_model=None) -> dict:
     train_samples, val_samples = dataset_loaders.get_combined_dataset(
         config.datasets, sroie_oversample=config.sroie_oversample
     )
+
+    # Micro/mini subsample — deterministic RNG so repeated runs give the same split
+    if getattr(config, "subsample_train", 0) > 0 and len(train_samples) > config.subsample_train:
+        import random as _rnd
+        _rng = _rnd.Random(config.seed)
+        train_samples = _rng.sample(train_samples, config.subsample_train)
+        print(f"[Exp {exp_id}] subsample_train: using {len(train_samples)} samples")
+
     if len(train_samples) == 0:
         print(f"[Exp {exp_id}] WARNING: No samples loaded - saving empty result.")
         result = {
@@ -659,14 +682,19 @@ def run_experiment(exp_id: int, base_processor=None, base_model=None) -> dict:
         )
 
     # ── Guardrail: validate optimizer step count ───────────────────────────
+    # skip_step_validation=True is set only by micro/mini modes where a small
+    # dataset + few epochs is intentional (smoke-test, not full convergence).
     from resource_optimizer import validate_training_config
 
-    validate_training_config(
-        batch_size=config.batch_size,
-        gradient_accumulation_steps=config.gradient_accumulation_steps,
-        num_train_samples=len(train_samples),
-        epochs=config.epochs,
-    )
+    if not getattr(config, "skip_step_validation", False):
+        validate_training_config(
+            batch_size=config.batch_size,
+            gradient_accumulation_steps=config.gradient_accumulation_steps,
+            num_train_samples=len(train_samples),
+            epochs=config.epochs,
+        )
+    else:
+        print(f"[Exp {exp_id}] step-count validation skipped (micro/mini mode)")
 
     # Train — pass config explicitly so train_experiment uses the optimized values
     model_dir = WORKSPACE / "models" / f"experiment_{exp_id}"
