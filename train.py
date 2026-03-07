@@ -62,6 +62,7 @@ from constants import (
     MAX_LENGTH,
     NEW_TOKENS,
     SEED,
+    WORKSPACE,
     _mask_empty_field_labels,
     _optimal_num_workers,
 )
@@ -707,7 +708,7 @@ class DonutTrainer:
     @property
     def _output_dir(self) -> Path:
         """Resolve the output directory from config."""
-        return Path(getattr(self.config, "output_dir", "/workspace/donut-sroie-finetuned"))
+        return Path(getattr(self.config, "output_dir", str(WORKSPACE / "donut-sroie-finetuned")))
 
 
 # ---------------------------------------------------------------------------

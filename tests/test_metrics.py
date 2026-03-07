@@ -561,3 +561,86 @@ class TestRunExperimentsParseFailureCatch:
             "Remove this guard so 'Parse failure threshold exceeded' is caught "
             "for all run types (full, mini, micro)."
         )
+
+
+# ---------------------------------------------------------------------------
+# Required named tests from CLAUDE.md §16
+# ---------------------------------------------------------------------------
+
+
+def test_lm_head_not_missing_after_reload():
+    """Checkpoint reload must not drop lm_head.weight (safetensors dedup guard).
+
+    Root cause of F1~0.42: safetensors deduplicates lm_head.weight when it
+    shares a data pointer with embed_tokens.weight after resize_token_embeddings().
+    LmHeadCloneCallback breaks the aliasing before each save so the weight is
+    written to the shard.  load_model_with_tied_weights() raises immediately if
+    lm_head is still absent (tie_word_embeddings=False checkpoints only).
+
+    This test asserts the success path: when lm_head IS present in the
+    checkpoint, load_model_with_tied_weights returns the model without raising.
+    """
+    pytest.importorskip("torch")
+    pytest.importorskip("transformers")
+
+    import unittest.mock as _mock
+
+    from donut_evaluator import load_model_with_tied_weights  # noqa: E402
+
+    decoder_config = _mock.MagicMock()
+    decoder_config.tie_word_embeddings = False
+    decoder = _mock.MagicMock()
+    decoder.config = decoder_config
+    mock_model = _mock.MagicMock()
+    mock_model.decoder = decoder
+    mock_model.to = _mock.MagicMock(return_value=mock_model)
+    mock_model.eval = _mock.MagicMock(return_value=None)
+
+    # lm_head is present — missing_keys is empty
+    loading_info = {"missing_keys": [], "unexpected_keys": []}
+
+    with _mock.patch(
+        "donut_evaluator.VisionEncoderDecoderModel.from_pretrained",
+        return_value=(mock_model, loading_info),
+    ):
+        result = load_model_with_tied_weights("/fake/checkpoint")
+
+    assert result is mock_model, (
+        "load_model_with_tied_weights must return the model when lm_head is present"
+    )
+
+
+def test_token2json_list_output_merged():
+    """token2json list output (CORD <sep/> pages) must be merged into a flat dict.
+
+    Root cause of F1=0.0078: _parse_prediction() returned {} when token2json()
+    returned a list (CORD multi-page format), collapsing all predictions to
+    empty dicts.  Fix: merge list pages into a single flat dict (first value wins).
+    """
+    pytest.importorskip("torch")
+    pytest.importorskip("transformers")
+
+    from donut_evaluator import DonutEvaluator  # noqa: E402
+
+    evaluator = object.__new__(DonutEvaluator)
+    evaluator.parse_failure_count = 0
+    evaluator._inference_call_count = 0
+
+    class _FakeProcessor:
+        def token2json(self, tokens):
+            # Simulate multi-page list (CORD <sep/> behaviour leaking into SROIE)
+            return [
+                {"company": "MYDIN MALL", "date": "25/12/2023"},
+                {"address": "NO 1 JALAN PUCHONG", "total": "47.80"},
+            ]
+
+    evaluator.processor = _FakeProcessor()
+
+    result = evaluator._parse_prediction("<irrelevant tokens>")
+
+    assert isinstance(result, dict), f"Expected dict after merge, got {type(result)}"
+    assert result.get("company") == "MYDIN MALL"
+    assert result.get("date") == "25/12/2023"
+    assert result.get("address") == "NO 1 JALAN PUCHONG"
+    assert result.get("total") == "47.80"
+    assert evaluator.parse_failure_count == 0, "List merge must NOT count as a parse failure"

@@ -58,6 +58,23 @@ class TestDecoderStartTokenId:
         decoded_correct = tokenizer.decode([correct_id])
         assert decoded_correct == "<s_sroie>"
 
+    def test_decoder_start_token_roundtrip(self):
+        """decode(convert_tokens_to_ids(['<s_sroie>'])[0]) must round-trip to '<s_sroie>'.
+
+        Guards against GP-3 / GP-4 (CLAUDE.md §19): using the string form of
+        convert_tokens_to_ids returns the ID for '<', not the full token.
+        The correct list-wrapping form is always used in train.py and
+        run_experiments.py; this test asserts the roundtrip property that
+        catches any regression.
+        """
+        tokenizer = self._make_tokenizer_with_sroie_token()
+        token_id = tokenizer.convert_tokens_to_ids(["<s_sroie>"])[0]
+        decoded = tokenizer.decode([token_id])
+        assert decoded == "<s_sroie>", (
+            f"decoder_start_token_id={token_id} decodes to '{decoded}', not '<s_sroie>'. "
+            f"Use: tokenizer.convert_tokens_to_ids(['<s_sroie>'])[0]"
+        )
+
 
 class TestExperimentConfigPropertyAliases:
     """Tests that ExperimentConfig property aliases are consistent.

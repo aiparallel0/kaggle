@@ -25,7 +25,7 @@ from pathlib import Path
 # Constants — imported from shared module to avoid duplication
 # ---------------------------------------------------------------------------
 # FIX: FIELDS was duplicated independently here and in 4 other files.
-from constants import FIELDS
+from constants import FIELDS, WORKSPACE
 
 __all__ = [
     "PaperInjector",
@@ -322,7 +322,7 @@ class PaperInjector:
 # ---------------------------------------------------------------------------
 
 
-def legacy_output(results_path: str = "/workspace/evaluation_results.json") -> None:
+def legacy_output(results_path: str = str(WORKSPACE / "evaluation_results.json")) -> None:
     """Print LaTeX rows from a single evaluation output file."""
     with open(results_path) as f:
         results = json.load(f)
