@@ -455,6 +455,7 @@ class DonutTrainer:
             output_dir=str(self._output_dir),
             num_train_epochs=self.config.max_epochs,
             per_device_train_batch_size=self.config.per_device_train_batch_size,
+            per_device_eval_batch_size=self.config.per_device_train_batch_size,
             gradient_accumulation_steps=_grad_accum,
             # Set to encoder_lr for HF logging purposes only — the custom
             # layerwise optimizer passed via optimizers= takes precedence.

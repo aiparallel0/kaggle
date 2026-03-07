@@ -290,7 +290,7 @@ def _print_trocr_load_report(model_id: str, loading_info: dict) -> None:
     trocr-base-printed load.
     """
     raw_missing = loading_info.get("missing_keys", [])
-    unexpected = loading_info.get("unexpected_keys", [])
+    unexpected = list(loading_info.get("unexpected_keys", []))
 
     # Filter out structurally-absent BEiT pooler keys before reporting.
     missing = [k for k in raw_missing if k not in _EXPECTED_MISSING_TROCR]
@@ -467,71 +467,77 @@ def train_trocr(output_dir: Path | None = None) -> dict:
     history["num_train_samples"] = len(train_ds)
     start = time.time()
 
-    for epoch in range(TROCR_EPOCHS):
-        model.train()
-        epoch_loss = 0.0
-        optimizer.zero_grad()
+    try:
+        for epoch in range(TROCR_EPOCHS):
+            model.train()
+            epoch_loss = 0.0
+            optimizer.zero_grad()
 
-        pbar = tqdm(train_loader, desc=f"TrOCR Epoch {epoch + 1}/{TROCR_EPOCHS}")
-        for step, batch in enumerate(pbar):
-            pixel_values = batch["pixel_values"].to(DEVICE)
-            labels = batch["labels"].to(DEVICE)
+            pbar = tqdm(train_loader, desc=f"TrOCR Epoch {epoch + 1}/{TROCR_EPOCHS}")
+            for step, batch in enumerate(pbar):
+                pixel_values = batch["pixel_values"].to(DEVICE)
+                labels = batch["labels"].to(DEVICE)
 
-            with torch.amp.autocast(device_type="cuda", dtype=_amp_dtype, enabled=_use_amp):
-                outputs = model(pixel_values=pixel_values, labels=labels)
-            loss = outputs.loss / grad_accum
-            scaler.scale(loss).backward()
-            epoch_loss += outputs.loss.item()  # use unscaled loss for logging
+                with torch.amp.autocast(device_type="cuda", dtype=_amp_dtype, enabled=_use_amp):
+                    outputs = model(pixel_values=pixel_values, labels=labels)
+                loss = outputs.loss / grad_accum
+                scaler.scale(loss).backward()
+                epoch_loss += outputs.loss.item()  # use unscaled loss for logging
 
-            if (step + 1) % grad_accum == 0:
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                scaler.step(optimizer)
-                scaler.update()
-                scheduler.step()
-                optimizer.zero_grad()
+                if (step + 1) % grad_accum == 0:
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                    scaler.step(optimizer)
+                    scaler.update()
+                    scheduler.step()
+                    optimizer.zero_grad()
 
-            pbar.set_postfix(loss=f"{epoch_loss / (step + 1):.4f}")
+                pbar.set_postfix(loss=f"{epoch_loss / (step + 1):.4f}")
 
-        avg_train = epoch_loss / len(train_loader)
+            avg_train = epoch_loss / len(train_loader)
 
-        # Validation
-        avg_val = float("inf")
+            # Validation
+            avg_val = float("inf")
+            if val_loader is not None:
+                model.eval()
+                val_loss = 0.0
+                with torch.no_grad():
+                    for batch in val_loader:
+                        outputs = model(
+                            pixel_values=batch["pixel_values"].to(DEVICE),
+                            labels=batch["labels"].to(DEVICE),
+                        )
+                        val_loss += outputs.loss.item()
+                avg_val = val_loss / len(val_loader)
+
+            history["train_loss"].append(avg_train)
+            history["val_loss"].append(avg_val)
+            print(f"Epoch {epoch + 1}: train={avg_train:.4f}  val={avg_val:.4f}")
+
+            if avg_val < best_val_loss:
+                best_val_loss = avg_val
+                model.save_pretrained(output_dir / "best")
+                processor.save_pretrained(output_dir / "best")
+                print(f"  Best TrOCR saved (val_loss={best_val_loss:.4f})")
+
+        model.save_pretrained(output_dir / "final")
+        processor.save_pretrained(output_dir / "final")
+        with open(output_dir / "training_history.json", "w") as f:
+            json.dump(history, f, indent=2)
+
+        elapsed = time.time() - start
+        print(f"\nTrOCR training complete in {elapsed:.1f}s. Best val_loss={best_val_loss:.4f}")
+    finally:
+        # Always free GPU memory even if training raised an exception.
+        # Without this, a mid-training crash leaves TrOCR (246M params) on the
+        # GPU and causes CUDA OOM when the next stage (DONUT) loads its model.
+        del model, optimizer, scheduler
+        if scaler is not None:
+            del scaler
+        del train_ds, val_ds, train_loader
         if val_loader is not None:
-            model.eval()
-            val_loss = 0.0
-            with torch.no_grad():
-                for batch in val_loader:
-                    outputs = model(
-                        pixel_values=batch["pixel_values"].to(DEVICE),
-                        labels=batch["labels"].to(DEVICE),
-                    )
-                    val_loss += outputs.loss.item()
-            avg_val = val_loss / len(val_loader)
-
-        history["train_loss"].append(avg_train)
-        history["val_loss"].append(avg_val)
-        print(f"Epoch {epoch + 1}: train={avg_train:.4f}  val={avg_val:.4f}")
-
-        if avg_val < best_val_loss:
-            best_val_loss = avg_val
-            model.save_pretrained(output_dir / "best")
-            processor.save_pretrained(output_dir / "best")
-            print(f"  Best TrOCR saved (val_loss={best_val_loss:.4f})")
-
-    model.save_pretrained(output_dir / "final")
-    processor.save_pretrained(output_dir / "final")
-    with open(output_dir / "training_history.json", "w") as f:
-        json.dump(history, f, indent=2)
-
-    elapsed = time.time() - start
-    print(f"\nTrOCR training complete in {elapsed:.1f}s. Best val_loss={best_val_loss:.4f}")
-
-    # FIX: GPU cleanup after TrOCR training — delete local references first so
-    # the underlying GPU tensors are freed; passing objects to _gpu_cleanup()
-    # would only remove the parameter binding inside that function.
-    del model, optimizer, scheduler, scaler, train_ds, val_ds, train_loader, val_loader
-    _gpu_cleanup()
+            del val_loader
+        _gpu_cleanup()
 
     return history
 
