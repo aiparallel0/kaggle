@@ -14,6 +14,13 @@ on system capabilities and dataset size.
 Also provides TrainingAuditLogger to log configuration decisions and results to
 a persistent terminal.txt file, enabling data-driven refactoring decisions.
 
+Key public functions:
+  get_image_size_from_processor_config() — reads (height, width) from processor_config.json
+      with a safe fallback to the reference resolution (1280, 960).  Used by
+      optimize_hyperparams() to scale VRAM estimates for non-reference image sizes.
+  optimize_hyperparams()     — returns ResourceOptimizedConfig for given VRAM/dataset
+  validate_training_config() — raises ValueError if total optimizer steps < minimum
+
 CLAUDE.md Reference:
   - Optimal batch size: 8 (from testing); fallback 4 (low VRAM) or 16 (high VRAM)
   - Epochs: 10 (fixed per CLAUDE.md convergence analysis, NOT 30)
@@ -161,8 +168,9 @@ def get_image_size_from_processor_config(
     """Read image (height, width) from processor_config.json.
 
     Falls back to the reference resolution (1280, 960) if the file is absent
-    or cannot be parsed.  Pass an explicit path when calling from a working
-    directory other than the project root.
+    or cannot be parsed.  A warning is logged when the fallback is triggered so
+    that misconfigured paths are visible in the audit log.  Pass an explicit
+    path when calling from a working directory other than the project root.
 
     Args:
         config_path: Path to processor_config.json (default: "processor_config.json").
@@ -170,15 +178,22 @@ def get_image_size_from_processor_config(
     Returns:
         (height, width) tuple, e.g. (2560, 1920) for the current config.
     """
-    try:
-        import json
+    import json
 
+    try:
         cfg = json.loads(Path(config_path).read_text(encoding="utf-8"))
         size = cfg.get("image_processor", {}).get("size", {})
         h = size.get("height", _REF_IMAGE_SIZE[0])
         w = size.get("width", _REF_IMAGE_SIZE[1])
         return (int(h), int(w))
-    except Exception:
+    except (FileNotFoundError, json.JSONDecodeError, OSError) as exc:
+        logger.warning(
+            "get_image_size_from_processor_config: could not read %s (%s). "
+            "Falling back to reference resolution %s.",
+            config_path,
+            exc,
+            _REF_IMAGE_SIZE,
+        )
         return _REF_IMAGE_SIZE
 
 

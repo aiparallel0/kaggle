@@ -244,6 +244,19 @@ class TestImageSizeAwareVRAM:
         result = get_image_size_from_processor_config("/nonexistent/path/processor_config.json")
         assert result == (1280, 960), f"Expected fallback (1280, 960), got {result}"
 
+    def test_get_image_size_parses_valid_config(self, tmp_path):
+        """get_image_size_from_processor_config correctly parses a valid config file."""
+        import json
+
+        from resource_optimizer import get_image_size_from_processor_config
+
+        cfg = {"image_processor": {"size": {"height": 2560, "width": 1920}}}
+        config_file = tmp_path / "processor_config.json"
+        config_file.write_text(json.dumps(cfg), encoding="utf-8")
+
+        result = get_image_size_from_processor_config(str(config_file))
+        assert result == (2560, 1920), f"Expected (2560, 1920), got {result}"
+
     def test_96gb_blackwell_4x_pixels_batch_is_safe(self):
         """96 GB GPU + 2560×1920 images must not assign batch_size=16 (Exp 8 OOM fix).
 
