@@ -62,6 +62,7 @@ from constants import (
     MAX_LENGTH,
     NEW_TOKENS,
     SEED,
+    WORKSPACE,
     _mask_empty_field_labels,
     _optimal_num_workers,
 )
@@ -297,7 +298,11 @@ class MultiDataset(Dataset):
             # overhead. Each float32 tensor is 3×1280×960×4 bytes ≈ 14.2 MB.
             # Only attempt if: images are cached AND RAM allows the extra footprint.
             _pix_mb = len(self._image_cache) * 14.2
-            if len(self._image_cache) > 0 and available_mb > 0 and _pix_mb < available_mb * ram_threshold:
+            if (
+                len(self._image_cache) > 0
+                and available_mb > 0
+                and _pix_mb < available_mb * ram_threshold
+            ):
                 _log = logging.getLogger(__name__)
                 _log.info(
                     "[Tensor Cache] Precomputing pixel_values for %d images (~%.0f MB) ...",
@@ -477,9 +482,18 @@ class DonutTrainer:
         # adds IPC overhead on top, so stay with workers=0 when we have caches.
         _batch_size = self.config.per_device_train_batch_size
         _cache_populated = (
-            (hasattr(self.train_dataset, "_pixel_cache") and len(self.train_dataset._pixel_cache) > 0)
-            or (hasattr(self.train_dataset, "_label_cache") and len(self.train_dataset._label_cache) > 0)
-            or (hasattr(self.train_dataset, "_image_cache") and len(self.train_dataset._image_cache) > 0)
+            (
+                hasattr(self.train_dataset, "_pixel_cache")
+                and len(self.train_dataset._pixel_cache) > 0
+            )
+            or (
+                hasattr(self.train_dataset, "_label_cache")
+                and len(self.train_dataset._label_cache) > 0
+            )
+            or (
+                hasattr(self.train_dataset, "_image_cache")
+                and len(self.train_dataset._image_cache) > 0
+            )
         )
         if _batch_size <= 2 and _cache_populated:
             logger.info(
@@ -588,14 +602,16 @@ class DonutTrainer:
                 optimizer,
                 max_lr=[encoder_lr, decoder_lr],
                 total_steps=_total_opt_steps,
-                pct_start=0.1,          # 10% warmup, 90% cosine decay
+                pct_start=0.1,  # 10% warmup, 90% cosine decay
                 anneal_strategy="cos",
-                div_factor=10.0,        # start lr = max_lr / 10
-                final_div_factor=100.0, # end lr = start_lr / 100
+                div_factor=10.0,  # start lr = max_lr / 10
+                final_div_factor=100.0,  # end lr = start_lr / 100
             )
             logger.info(
                 "OneCycleLR: max_lr=[%.2e, %.2e], total_steps=%d",
-                encoder_lr, decoder_lr, _total_opt_steps,
+                encoder_lr,
+                decoder_lr,
+                _total_opt_steps,
             )
 
         # LmHeadCloneCallback MUST be registered before EarlyStoppingCallback
@@ -668,7 +684,8 @@ class DonutTrainer:
         _verify_proc = DonutProcessor.from_pretrained(str(save_dir))
         _unk_id = _verify_proc.tokenizer.unk_token_id
         _missing = [
-            tok for tok in NEW_TOKENS
+            tok
+            for tok in NEW_TOKENS
             if _verify_proc.tokenizer.convert_tokens_to_ids([tok])[0] == _unk_id
         ]
         if _missing:
@@ -691,7 +708,7 @@ class DonutTrainer:
     @property
     def _output_dir(self) -> Path:
         """Resolve the output directory from config."""
-        return Path(getattr(self.config, "output_dir", "/workspace/donut-sroie-finetuned"))
+        return Path(getattr(self.config, "output_dir", str(WORKSPACE / "donut-sroie-finetuned")))
 
 
 # ---------------------------------------------------------------------------

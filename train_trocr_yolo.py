@@ -61,14 +61,14 @@ YOLO_EPOCHS = 50
 YOLO_IMG_SIZE = 512  # reduced from 640 to lower VRAM usage
 YOLO_BATCH = 8  # reduced from 32 to prevent CUDA OOM in TaskAlignedAssigner
 YOLO_AMP = True  # mixed precision — halves activation memory
-YOLO_OPTIMIZER = "AdamW"    # micro mode patches to "SGD" for faster detection convergence
-YOLO_MOMENTUM = 0.9         # used when YOLO_OPTIMIZER == "SGD"
+YOLO_OPTIMIZER = "AdamW"  # micro mode patches to "SGD" for faster detection convergence
+YOLO_MOMENTUM = 0.9  # used when YOLO_OPTIMIZER == "SGD"
 TROCR_EPOCHS = 10
 TROCR_BATCH = 16
 TROCR_LR = 5e-5
 TROCR_MAX_LEN = 128
 GRAD_ACCUM = 4
-TROCR_MINI_MODE = False     # True → SGD+Nesterov+CosineAnnealingLR instead of AdamW+linear
+TROCR_MINI_MODE = False  # True → SGD+Nesterov+CosineAnnealingLR instead of AdamW+linear
 
 RESULTS_DIR = Path("results")
 YOLO_DATA_YAML = WORKSPACE / "data" / "yolo" / "dataset.yaml"
@@ -241,8 +241,8 @@ def train_yolo(output_dir: Path | None = None) -> Path:
         fliplr=0.0,
         flipud=0.0,
         mosaic=0.5,
-        optimizer=YOLO_OPTIMIZER,   # "AdamW" default; micro patches to "SGD" for speed
-        momentum=YOLO_MOMENTUM,     # used when optimizer="SGD"
+        optimizer=YOLO_OPTIMIZER,  # "AdamW" default; micro patches to "SGD" for speed
+        momentum=YOLO_MOMENTUM,  # used when optimizer="SGD"
         lr0=1e-3,
         lrf=0.01,
         patience=15,

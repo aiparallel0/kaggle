@@ -11,6 +11,7 @@ import asyncio
 import logging
 from pathlib import Path
 
+from constants import _get_sroie_dir
 from pipeline_types import CheckResult, CheckStatus, PreflightReport
 from validators import (
     DataSplitValidator,
@@ -27,7 +28,7 @@ class PreflightChecker:
     """Run comprehensive preflight validation before pipeline execution."""
 
     def __init__(self, sroie_dir: Path | None = None):
-        self.sroie_dir = sroie_dir or Path("/workspace/ICDAR-2019-SROIE/data")
+        self.sroie_dir = sroie_dir or _get_sroie_dir()
 
     async def check_import_chain(self) -> CheckResult:
         """Check if constants.py import works (CRITICAL)."""

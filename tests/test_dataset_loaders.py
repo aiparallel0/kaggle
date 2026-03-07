@@ -276,3 +276,42 @@ class TestSellerSplitCache:
         result = InvoicesDonutLoader._invoices_donut_remap(gt_str)
         assert result["company"] == expected["company"]
         assert result["address"] == expected["address"]
+
+
+# ---------------------------------------------------------------------------
+# Required named test from CLAUDE.md §16
+# ---------------------------------------------------------------------------
+
+
+def test_val_test_no_overlap():
+    """Val and test splits must never overlap (no data leakage into early stopping).
+
+    Verifies that:
+    1. SROIELoader._SPLIT_DIRS['val'] != SROIELoader._SPLIT_DIRS['test']  (structural)
+    2. load_sroie_val() and load_sroie_test() use distinct directory paths
+       so the same image cannot appear in both splits.
+
+    Root cause: if val_img/ == test_img/, early stopping optimises for test
+    performance, inflating reported F1 by ~5–8 pp.  stage_install() creates
+    physically separate val_img/ and test_img/ directories to prevent this.
+    """
+    from dataset_loaders import SROIELoader
+
+    loader = SROIELoader()
+
+    val_img_dir, val_key_dir = loader._SPLIT_DIRS["val"]
+    test_img_dir, test_key_dir = loader._SPLIT_DIRS["test"]
+
+    assert val_img_dir != test_img_dir, (
+        f"val and test use the same img dir '{val_img_dir}' — "
+        "early stopping would optimise for test performance (data leakage). "
+        "Fix: ensure stage_install() creates val_img/ and test_img/ as distinct dirs."
+    )
+    assert val_key_dir != test_key_dir, (
+        f"val and test use the same key dir '{val_key_dir}' — "
+        "key files would be shared between early stopping and final evaluation."
+    )
+
+    # Verify the canonical directory names match the expected values from CLAUDE.md
+    assert val_img_dir == "val_img", f"Expected val_img_dir='val_img', got '{val_img_dir}'"
+    assert test_img_dir == "test_img", f"Expected test_img_dir='test_img', got '{test_img_dir}'"

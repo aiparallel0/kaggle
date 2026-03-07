@@ -518,7 +518,10 @@ class DonutEvaluator:
                 "  Cleaned:    %r\n"
                 "  Parsed:     %r\n"
                 "  Model path: %s",
-                raw_tokens, cleaned, parsed, self.model_path,
+                raw_tokens,
+                cleaned,
+                parsed,
+                self.model_path,
             )
             return
 
@@ -539,7 +542,10 @@ class DonutEvaluator:
                 "  Cleaned:    %r\n"
                 "  Parsed:     %r\n"
                 "  Model path: %s",
-                raw_tokens, cleaned, parsed, self.model_path,
+                raw_tokens,
+                cleaned,
+                parsed,
+                self.model_path,
             )
             return
 

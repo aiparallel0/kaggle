@@ -1729,10 +1729,10 @@ def _micro_mode_handler(args, logger: logging.Logger) -> int:
         epochs=5,
         early_stopping_patience=1,
         # Dataset subsampling
-        subsample_train=400,    # 400 of 500 SROIE samples → ~250 optimizer steps over 5 epochs
-                                # (minimum empirically needed to override CORD base-model prior
-                                # and learn SROIE XML schema; 150/2ep = 76 steps → F1=0)
-        subsample_eval=63,      # full test set for a meaningful F1 number
+        subsample_train=400,  # 400 of 500 SROIE samples → ~250 optimizer steps over 5 epochs
+        # (minimum empirically needed to override CORD base-model prior
+        # and learn SROIE XML schema; 150/2ep = 76 steps → F1=0)
+        subsample_eval=63,  # full test set for a meaningful F1 number
         # Step-count guard bypass (intentionally below 200-step threshold)
         skip_step_validation=True,
         # Faster descent: 10× higher LR hits useful weights in 2 epochs
@@ -1769,9 +1769,7 @@ def _micro_mode_handler(args, logger: logging.Logger) -> int:
         return 2
 
     # ── Stage 4: YOLO (yolov8n, 3 ep, 256 px, SGD) + TrOCR (1 ep, SGD) ──
-    logger.info(
-        "[Micro Stage 4] YOLO (yolov8n 3 ep 256px SGD) + TrOCR (1 ep SGD)..."
-    )
+    logger.info("[Micro Stage 4] YOLO (yolov8n 3 ep 256px SGD) + TrOCR (1 ep SGD)...")
     _saved = {
         "YOLO_BASE": tty.YOLO_BASE,
         "YOLO_EPOCHS": tty.YOLO_EPOCHS,
@@ -1784,15 +1782,15 @@ def _micro_mode_handler(args, logger: logging.Logger) -> int:
         "TROCR_MINI_MODE": tty.TROCR_MINI_MODE,
     }
     try:
-        tty.YOLO_BASE = "yolov8n.pt"   # 3.2M vs 68M params → 3–5× speedup
-        tty.YOLO_EPOCHS = 3             # 50 → 3
-        tty.YOLO_IMG_SIZE = 256         # 512 → 256 (4× fewer pixels)
-        tty.YOLO_OPTIMIZER = "SGD"      # SGD+Nesterov: faster convergence for detection
-        tty.YOLO_MOMENTUM = 0.937       # standard Ultralytics default for SGD
-        tty.TROCR_EPOCHS = 1            # unchanged
-        tty.TROCR_MAX_LEN = 64          # 128 → 64 (2× faster decoding)
-        tty.TROCR_BATCH = 8             # 16 → 8 (safer after DONUT VRAM use)
-        tty.TROCR_MINI_MODE = True      # switches TrOCR to SGD+CosineAnnealingLR
+        tty.YOLO_BASE = "yolov8n.pt"  # 3.2M vs 68M params → 3–5× speedup
+        tty.YOLO_EPOCHS = 3  # 50 → 3
+        tty.YOLO_IMG_SIZE = 256  # 512 → 256 (4× fewer pixels)
+        tty.YOLO_OPTIMIZER = "SGD"  # SGD+Nesterov: faster convergence for detection
+        tty.YOLO_MOMENTUM = 0.937  # standard Ultralytics default for SGD
+        tty.TROCR_EPOCHS = 1  # unchanged
+        tty.TROCR_MAX_LEN = 64  # 128 → 64 (2× faster decoding)
+        tty.TROCR_BATCH = 8  # 16 → 8 (safer after DONUT VRAM use)
+        tty.TROCR_MINI_MODE = True  # switches TrOCR to SGD+CosineAnnealingLR
         r = stage_trocr_experiments(args)
     finally:
         for k, v in _saved.items():

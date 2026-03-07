@@ -359,10 +359,7 @@ class DonutPipeline:
 
             # Batch pixel_values encoding
             pixel_values = torch.stack(
-                [
-                    self.processor(img, return_tensors="pt").pixel_values.squeeze(0)
-                    for img in images
-                ]
+                [self.processor(img, return_tensors="pt").pixel_values.squeeze(0) for img in images]
             ).to(self.device)
 
             # Repeat decoder_input_ids for the whole batch
@@ -544,7 +541,9 @@ class TrOCRYOLOPipeline:
             return []
         pixel_values = torch.stack(
             [
-                self.trocr_processor(crop.convert("RGB"), return_tensors="pt").pixel_values.squeeze(0)
+                self.trocr_processor(crop.convert("RGB"), return_tensors="pt").pixel_values.squeeze(
+                    0
+                )
                 for crop in crops
             ]
         ).to(self.device)
@@ -553,7 +552,10 @@ class TrOCRYOLOPipeline:
                 pixel_values,
                 max_new_tokens=128,
             )
-        return [t.strip() for t in self.trocr_processor.batch_decode(generated, skip_special_tokens=True)]
+        return [
+            t.strip()
+            for t in self.trocr_processor.batch_decode(generated, skip_special_tokens=True)
+        ]
 
     # ── Regex: assign lines to fields ──────────────────────────────────────
     def _assign_fields(self, lines: list[str]) -> dict[str, str]:

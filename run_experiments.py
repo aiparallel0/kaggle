@@ -137,11 +137,11 @@ class ExperimentConfig:
     sroie_oversample: int = 1  # Number of times to duplicate SROIE training samples (1–3 typical)
 
     # -- Mini-mode accelerators (all default to off so normal runs are unaffected) --
-    subsample_train: int = 0           # >0: cap training set to this many samples (mini only)
-    subsample_eval: int = 0            # >0: cap test set to this many samples (mini only)
+    subsample_train: int = 0  # >0: cap training set to this many samples (mini only)
+    subsample_eval: int = 0  # >0: cap test set to this many samples (mini only)
     skip_step_validation: bool = False  # bypass 200-step minimum guard (mini only)
-    lr_schedule: str = "cosine"        # "cosine" | "one_cycle" | "linear"
-    optimizer_type: str = "adamw"      # "adamw" | "sgd" (sgd = SGD + Nesterov)
+    lr_schedule: str = "cosine"  # "cosine" | "one_cycle" | "linear"
+    optimizer_type: str = "adamw"  # "adamw" | "sgd" (sgd = SGD + Nesterov)
 
     # -- Duck-typed aliases for DonutTrainer compatibility ----------------
     # DonutTrainer reads config.max_epochs, config.learning_rate, etc.
@@ -475,12 +475,12 @@ def train_experiment(
         try:
             _free_vram, _total_vram = torch.cuda.mem_get_info()
             _used_by_others = _total_vram - _free_vram - torch.cuda.memory_allocated()
-            if _used_by_others > 1 * 1024 ** 3:  # > 1 GB held by external processes
+            if _used_by_others > 1 * 1024**3:  # > 1 GB held by external processes
                 logger.warning(
                     "[VRAM] External process(es) occupying ~%.1f GB of GPU memory "
                     "(%s free of %s total). Risk of OOM during training. "
                     "Run `nvidia-smi` and kill any unnecessary GPU processes.",
-                    _used_by_others / 1024 ** 3,
+                    _used_by_others / 1024**3,
                     f"{_free_vram / 1024**3:.1f} GB",
                     f"{_total_vram / 1024**3:.1f} GB",
                 )
@@ -607,6 +607,7 @@ def evaluate_experiment(
     # Micro subsample evaluation — reduce test-set size for fast smoke tests
     if getattr(config, "subsample_eval", 0) > 0 and len(test_samples) > config.subsample_eval:
         import random as _rnd
+
         _rng = _rnd.Random(getattr(config, "seed", SEED))
         test_samples = _rng.sample(test_samples, config.subsample_eval)
         print(f"[Exp {exp_id}] subsample_eval: evaluating on {len(test_samples)} test samples")
@@ -703,6 +704,7 @@ def run_experiment(exp_id: int, base_processor=None, base_model=None) -> dict:
     # Micro/mini subsample — deterministic RNG so repeated runs give the same split
     if getattr(config, "subsample_train", 0) > 0 and len(train_samples) > config.subsample_train:
         import random as _rnd
+
         _rng = _rnd.Random(config.seed)
         train_samples = _rng.sample(train_samples, config.subsample_train)
         print(f"[Exp {exp_id}] subsample_train: using {len(train_samples)} samples")
@@ -762,8 +764,11 @@ def run_experiment(exp_id: int, base_processor=None, base_model=None) -> dict:
         f"[Exp {exp_id}] Resource optimization applied: "
         f"batch_size {old_batch} → {config.batch_size}, "
         f"grad_accum {old_accum} → {config.gradient_accumulation_steps}"
-        + (" (grad_accum preserved: micro/mini mode)" if _is_micro
-           else f" ({optimized_config.config_explanation})")
+        + (
+            " (grad_accum preserved: micro/mini mode)"
+            if _is_micro
+            else f" ({optimized_config.config_explanation})"
+        )
     )
 
     # ── Guardrail: verify global EXPERIMENTS dict was NOT mutated ──────────
