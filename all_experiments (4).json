@@ -1,0 +1,86 @@
+{
+  "1": {
+    "experiment_id": 1,
+    "name": "SROIE only (baseline)",
+    "datasets": [
+      "sroie"
+    ],
+    "config": {
+      "max_epochs": 2,
+      "learning_rate": 0.0005,
+      "per_device_train_batch_size": 8,
+      "early_stopping_patience": 1,
+      "base_model": "naver-clova-ix/donut-base",
+      "warmup_steps": 0,
+      "weight_decay": 0.01,
+      "max_length": 256,
+      "seed": 42,
+      "gradient_accumulation_steps": 1
+    },
+    "num_train_samples": 150,
+    "metrics": {
+      "global_f1": 0.0,
+      "global_precision": 0.0,
+      "global_recall": 0.0,
+      "company_f1": 0.0,
+      "company_ned": 1.0,
+      "date_f1": 0.0,
+      "date_ned": 1.0,
+      "address_f1": 0.0,
+      "address_ned": 1.0,
+      "total_f1": 0.0,
+      "total_ned": 1.0,
+      "error": "Parse failure threshold exceeded: 20/20 (100.0%) samples failed to parse. The model is likely broken \u2014 check token2json compatibility.",
+      "self_test_failed": true,
+      "training_time_sec": 89.4698699049768
+    },
+    "training_log": [
+      {
+        "loss": 4.122111511230469,
+        "grad_norm": 11.3455228805542,
+        "learning_rate": 4.605782916663946e-05,
+        "epoch": 0.5263157894736842,
+        "step": 20
+      },
+      {
+        "eval_loss": 1.8228150606155396,
+        "eval_runtime": 5.2907,
+        "eval_samples_per_second": 11.908,
+        "eval_steps_per_second": 3.024,
+        "epoch": 1.0,
+        "step": 38
+      },
+      {
+        "loss": 2.1363840103149414,
+        "grad_norm": 5.2887797355651855,
+        "learning_rate": 2.7087419153171512e-05,
+        "epoch": 1.0526315789473684,
+        "step": 40
+      },
+      {
+        "loss": 1.718776321411133,
+        "grad_norm": 3.687107563018799,
+        "learning_rate": 6.495691535438846e-06,
+        "epoch": 1.5789473684210527,
+        "step": 60
+      },
+      {
+        "eval_loss": 1.617851972579956,
+        "eval_runtime": 5.588,
+        "eval_samples_per_second": 11.274,
+        "eval_steps_per_second": 2.863,
+        "epoch": 2.0,
+        "step": 76
+      },
+      {
+        "train_runtime": 81.375,
+        "train_samples_per_second": 3.687,
+        "train_steps_per_second": 0.934,
+        "total_flos": 4.53416845049856e+18,
+        "train_loss": 2.4423753085889315,
+        "epoch": 2.0,
+        "step": 76
+      }
+    ]
+  }
+}
