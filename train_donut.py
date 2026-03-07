@@ -1,3 +1,9 @@
+# =============================================================================
+# train_donut.py
+# Purpose: Standalone DONUT fine-tuning script for ad-hoc single-run use
+# Project: DONUT Receipt KIE — SROIE Fine-tuning & Benchmarking
+# Updated: 2026-03-07
+# =============================================================================
 """
 train_donut.py — Standalone DONUT fine-tuning (reference implementation).
 

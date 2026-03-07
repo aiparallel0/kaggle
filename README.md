@@ -2,7 +2,9 @@
 
 A systematic study of multi-dataset fine-tuning for receipt key information extraction (KIE) using the DONUT (Document Understanding Transformer) model and TrOCR+YOLO comparison.
 
-**Quick fact:** Starting from a CORD-pretrained DONUT checkpoint, this pipeline trains on the SROIE benchmark combined with three auxiliary datasets (WildReceipt, CORD, Invoices-DONUT) across 8 experiment configurations, evaluates each model on the SROIE test set, and generates a complete LaTeX paper with real results.
+**Best result:** DONUT Experiment 6 (SROIE + Invoices-DONUT, 2× SROIE oversampling) achieves **global F1 = 0.8982** on the SROIE Task-3 test set — a gain of +5.71 percentage points over the published DONUT baseline (0.8411). Training: 39.6 minutes on Vast.ai RTX 6000 Blackwell (96 GB), 2026-03-07. TrOCR+YOLO achieves F1 = 0.2035 (−69.5% vs. best DONUT).
+
+**Pipeline:** Starting from `naver-clova-ix/donut-base`, trains on SROIE combined with two auxiliary datasets (WildReceipt, Invoices-DONUT) across 8 experiment configurations, evaluates each model on the 63-image SROIE test split, and generates a complete LaTeX research paper with all real metrics.
 
 ---
 
@@ -24,7 +26,7 @@ This runs the full end-to-end pipeline:
 6. Generates comparison tables and plots
 7. Fills `paper.tex` with all real metrics → `paper_filled.tex`
 
-**Time:** ~12+ hours on A100 GPU
+**Time:** ~6–10 hours on a 96 GB GPU (RTX 6000 Blackwell). Exp 6 alone takes ~40 min; full 8-experiment suite with TrOCR+YOLO ~8–12 h.
 
 ### Quick Test Mode (30 minutes)
 
@@ -257,20 +259,29 @@ python -m run_all
 
 ---
 
-## 📊 Experiment Definitions
+## 📊 Experiment Definitions & Actual Results
 
-8 DONUT fine-tuning experiments with different dataset combinations. All use 80/10/10 SROIE split: **500 train / 63 val / 63 test**.
+8 DONUT fine-tuning experiments with different dataset combinations. All use 80/10/10 SROIE split: **500 train / 63 val / 63 test**. Trained on Vast.ai RTX 6000 Blackwell (96 GB), 2026-03-07.
 
-| Exp | Training Data | Approx. Samples | Expected F1 |
-|---|---|---|---|
-| 1 | SROIE only (baseline) | ~500 | 0.83–0.84 |
-| 2 | SROIE + WildReceipt | ~2,240 | 0.85–0.86 |
-| 3 | SROIE + Invoices-DONUT | ~1,300 | 0.84–0.85 |
-| 4 | SROIE + FUNSD | ~1,400 | 0.86–0.87 |
-| 5 | SROIE + WildReceipt + FUNSD | ~3,140 | 0.87–0.88 |
-| 6 | SROIE + WildReceipt + Invoices | ~3,040 | 0.87–0.88 |
-| 7 | SROIE + FUNSD + Invoices | ~2,200 | 0.86–0.87 |
-| 8 | SROIE + All datasets | ~3,940 | 0.88–0.90 |
+| Exp | Training Data | Samples | Global F1 | Notes |
+|---|---|---|---|---|
+| 1 | SROIE only (baseline) | 500 | **0.8503** | 5-epoch quick run (early stopping); post-bug-fix |
+| 2 | SROIE + WildReceipt | 1,386 | 0.8257 | WR alone (no oversample) slightly hurts |
+| 3 | SROIE + Invoices-DONUT | 832 | 0.2867 | Invoice cross-domain hurts severely without rebalancing |
+| 4 | SROIE + WR + Invoices | 1,718 | 0.8224 | Combined but unbalanced — still below baseline |
+| 5 | SROIE + WR (2× SROIE oversample) | 1,886 | 0.8514 | Marginal gain with oversampling |
+| **6** | **SROIE + Invoices (2× SROIE)** | **1,332** | **0.8982 ← BEST** | Invoices + SROIE oversampling, early stop ep.8 |
+| 7 | SROIE + All (2× SROIE) | 2,218 | 0.8503 | All datasets 2×; matches baseline (signals cancel) |
+| 8 | SROIE + WR + Invoices (3× SROIE) | ~3,940 | OOM | OOM-killed at 2560×1920 resolution |
+
+> **Key finding:** SROIE oversampling (2×) is a prerequisite for auxiliary data to help. Without it (Exps 2–4), adding more data hurts. With it (Exps 5–7), performance meets or exceeds the baseline. The best config (Exp 6) gains **+0.0479** over Exp 1 and **+0.0571** over the published DONUT result.
+
+**Best result: Experiment 6 — Global F1 = 0.8982** (vs. published DONUT 0.8411, +5.71 pts; vs. own baseline 0.8503, +4.79 pts)
+
+**Best per-field (Exp 6):** company=0.905, date=0.984, address=0.790, total=0.912 · exact_match=0.667 · training_time=39.6 min
+
+**TrOCR+YOLO comparison:** global_f1=0.2035 (company=0.176, date=0.460, address=0.000, total=0.231) — DONUT wins by **+69.5% absolute**.
+> TrOCR+YOLO was trained once; all 8 experiment slots show identical metrics (single training run, not varied by dataset combination).
 
 ---
 
@@ -280,7 +291,6 @@ python -m run_all
 |---|---|---|
 | **SROIE** | Auto-downloaded from `https://github.com/zzzDavid/ICDAR-2019-SROIE.git` | 80/10/10 split applied (500 train / 63 val / 63 test) |
 | **WildReceipt** | `https://download.openmmlab.com/mmocr/data/wildreceipt.tar` | OpenMMLab tar download |
-| **FUNSD** | HuggingFace `nielsr/funsd` | No token required |
 | **Invoices-DONUT** | HuggingFace `katanaml-org/invoices-donut-data-v1` | HF token recommended for 5–10× faster download |
 
 **HuggingFace Token:** Place your token in `hf_token.txt` (single line, gitignored). Enables faster downloads.
@@ -302,26 +312,28 @@ kaggle/
 ├── train.py                 # DonutTrainer class
 ├── donut_evaluator.py       # Evaluation & metrics computation
 ├── inject_results.py        # LaTeX paper generation
-├── paper.tex                # LaTeX paper template
+├── resource_optimizer.py    # VRAM-aware hyperparameter tuning
+├── paper.tex                # LaTeX paper template (IEEEtran)
+├── paper_mini.tex           # Conference version of paper template
+├── presentation.tex         # Beamer slide deck template
+├── references.bib           # Bibliography (BibTeX)
 ├── requirements.txt         # Python dependencies
 │
 ├── [Standalone/Educational Scripts]
-├── dataset_preparation.py     # Data prep with validation CLI
-├── train_donut.py             # DONUT training with sweep support
-├── train_trocr_yolo.py        # TrOCR+YOLO pipeline
-├── evaluate_models.py         # Unified evaluation + HTML reporting
+├── dataset_preparation.py   # Data prep with validation CLI
+├── train_donut.py           # DONUT training with sweep support
+├── train_trocr_yolo.py      # TrOCR+YOLO pipeline
+├── evaluate_models.py       # Unified evaluation + HTML reporting
 │
-├── [Configuration & Templates]
-├── paper.tex                # LaTeX research paper template
-├── references.bib           # Bibliography
-├── training_config.py       # Hyperparameter grids
-├── requirements.txt         # Python dependencies
+├── [Runtime Artifacts — results/ NOT gitignored for reference data]
+├── results/
+│   ├── all_experiments.json       # Authoritative final-run DONUT results
+│   └── trocr_yolo_results.json    # Authoritative final-run TrOCR+YOLO results
 │
 └── [Runtime Artifacts (gitignored)]
     ├── data/                # Cached datasets
     ├── models/              # Checkpoints & fine-tuned weights
-    ├── results/             # Experiment JSON outputs & plots
-    └── paper_filled.tex     # Generated paper (auto-produced)
+    └── paper_filled.tex     # Generated paper (auto-produced by inject_results.py)
 ```
 
 ---

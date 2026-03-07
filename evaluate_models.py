@@ -1,3 +1,9 @@
+# =============================================================================
+# evaluate_models.py
+# Purpose: CLI wrapper for batch evaluation of saved DONUT experiment checkpoints
+# Project: DONUT Receipt KIE — SROIE Fine-tuning & Benchmarking
+# Updated: 2026-03-07
+# =============================================================================
 """
 evaluate_models.py — Unified evaluation for DONUT and TrOCR+YOLO architectures.
 

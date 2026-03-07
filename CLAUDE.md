@@ -139,15 +139,24 @@ Use `benchmark_compare.py` to regenerate loss curves and F1 comparison plots.
 
 ---
 
-## 4. Training Time Estimates
+## 4. Training Time Estimates (Measured 2026-03-07 on Vast.ai RTX 6000 Blackwell 96 GB)
 
-| Experiment | Samples | A100 GPU | V100 GPU | CPU (est.) |
-|---|---|---|---|---|
-| Exp 1 (SROIE only) | ~500 | ~25 min | ~45 min | ~5–6 h |
-| Exp 4 (+ CORD) | ~1,400 | ~65 min | ~2 h | ~13–15 h |
-| Exp 8 (all datasets) | ~3,940 | ~3 h | ~5.5 h | ~40+ h |
-| TrOCR + YOLO (equiv. Exp 1) | ~500 | ~45 min | ~80 min | ~8 h |
-| Full 8-experiment suite | ~15,720 total | ~12 h | ~22 h | days |
+| Experiment | Samples | Measured Time | Notes |
+|---|---|---|---|
+| Exp 2 (+ WildReceipt) | 1,386 | ~42 min (2511 s) | Actual training_time_sec from JSON |
+| Exp 3 (+ Invoices) | 832 | — | Not measured (parse failure run) |
+| Exp 4 (+ WR+Inv) | 1,718 | — | Not measured |
+| Exp 5 (+ WR 2×) | 1,886 | — | Not measured |
+| **Exp 6 (+ Inv 2×)** | **1,332** | **~39.6 min (2374 s)** | **BEST** |
+| Exp 7 (+ All 2×) | 2,218 | ~84 min (5061 s) | Actual |
+| Exp 8 (All 3×) | ~3,940 | OOM | OOM at 2560×1920 image resolution |
+
+**Reference GPU estimates (other hardware):**
+| GPU | Exp 6 est. | Full 7-exp suite est. |
+|---|---|---|
+| A100 (80 GB) | ~25 min | ~4–5 h |
+| RTX 4090 (24 GB) | ~60 min | ~10–12 h |
+| V100 (16 GB) | ~90 min | ~15–20 h |
 
 GPU memory is explicitly freed between stages: `torch.cuda.empty_cache()` + `gc.collect()`.
 
@@ -303,18 +312,28 @@ from constants import FIELDS, IMAGE_EXTS, MAX_LENGTH, BASE_MODEL, SEED, NEW_TOKE
 
 ## 8. Experiment Definitions
 
-8 DONUT fine-tuning experiments with different dataset combinations. All use 80/10/10 SROIE split: **500 train / 63 val / 63 test**.
+8 DONUT fine-tuning experiments with different dataset combinations. All use 80/10/10 SROIE split: **500 train / 63 val / 63 test**. Final runs completed 2026-03-07 on Vast.ai RTX 6000 Blackwell (96 GB).
 
-| Exp | Training Data | Approx. Samples | Expected F1 Range |
-|---|---|---|---|
-| 1 | SROIE only (baseline) | ~500 | 0.83–0.84 |
-| 2 | SROIE + WildReceipt | ~2,240 | 0.85–0.86 |
-| 3 | SROIE + Invoices-DONUT | ~1,300 | 0.84–0.85 |
-| 4 | SROIE + FUNSD | ~1,400 | 0.86–0.87 |
-| 5 | SROIE + WildReceipt + FUNSD | ~3,140 | 0.87–0.88 |
-| 6 | SROIE + WildReceipt + Invoices | ~3,040 | 0.87–0.88 |
-| 7 | SROIE + FUNSD + Invoices | ~2,200 | 0.86–0.87 |
-| 8 | SROIE + All datasets | ~3,940 | 0.88–0.90 |
+| Exp | Training Data | Samples | **Actual F1** | Notes |
+|---|---|---|---|---|
+| 1 | SROIE only (baseline) | 500 | **0.8503** | 5-epoch quick run (post-bug-fix). company=0.841, date=0.984, address=0.790, total=0.784 |
+| 2 | SROIE + WildReceipt | 1,386 | **0.8257** | WR alone (no oversample) slightly hurts vs baseline |
+| 3 | SROIE + Invoices-DONUT | 832 | **0.2867** | Cross-domain hurts severely without rebalancing |
+| 4 | SROIE + WR + Invoices | 1,718 | **0.8224** | Combined unbalanced — still below baseline |
+| 5 | SROIE + WR (2× SROIE) | 1,886 | **0.8514** | Marginal gain with oversampling |
+| **6** | **SROIE + Invoices (2× SROIE)** | **1,332** | **0.8982 ← BEST** | Early stop ep.8, 39.6 min |
+| 7 | SROIE + All (2× SROIE) | 2,218 | **0.8503** | Matches baseline (competing signals cancel) |
+| 8 | SROIE + WR + Invoices (3× SROIE) | ~3,940 | **OOM** | OOM at 2560×1920; fixed in resource_optimizer.py |
+
+**Key insight:** SROIE oversampling (2×) is a prerequisite for auxiliary data to help. Without it, Exps 2–4 all score at or below the baseline.
+
+**Exp 6 per-field:** company=0.9048, date=0.9841, address=0.7903, total=0.9120, exact_match=0.6667
+
+**Gain over baseline:** Exp 6 (0.8982) − Exp 1 (0.8503) = **+0.0479**; vs published DONUT (0.8411) = **+0.0571**
+
+**TrOCR+YOLO (trained):** global_f1=0.2035, company=0.176, date=0.460, address=0.000, total=0.231
+
+**Gap:** DONUT best (0.8982) vs TrOCR+YOLO (0.2035) = **+69.5% absolute**
 
 `ExperimentConfig` is the single source of truth for all hyperparameters. `DonutTrainer` reads all values via duck-typed attribute access — no magic numbers anywhere else.
 
@@ -326,7 +345,6 @@ from constants import FIELDS, IMAGE_EXTS, MAX_LENGTH, BASE_MODEL, SEED, NEW_TOKE
 |---|---|---|
 | SROIE | `https://github.com/zzzDavid/ICDAR-2019-SROIE.git` | Auto-cloned; 80/10/10 split applied |
 | WildReceipt | `https://download.openmmlab.com/mmocr/data/wildreceipt.tar` | OpenMMLab tar |
-| FUNSD | HuggingFace `nielsr/funsd` | No HF token required |
 | Invoices-DONUT | HuggingFace `katanaml-org/invoices-donut-data-v1` | HF token for 5–10× faster download |
 
 **HF Token:** Place your token in `hf_token.txt` (single line). Gitignored — never commit. Enables parallel accelerated downloads.

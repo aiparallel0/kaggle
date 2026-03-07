@@ -1,3 +1,9 @@
+# =============================================================================
+# resource_optimizer.py
+# Purpose: Hardware-adaptive batch-size and epoch optimizer for GPU VRAM constraints
+# Project: DONUT Receipt KIE — SROIE Fine-tuning & Benchmarking
+# Updated: 2026-03-07
+# =============================================================================
 """
 resource_optimizer.py — Dynamic hardware detection and hyperparameter optimization.
 
@@ -7,6 +13,13 @@ on system capabilities and dataset size.
 
 Also provides TrainingAuditLogger to log configuration decisions and results to
 a persistent terminal.txt file, enabling data-driven refactoring decisions.
+
+Key public functions:
+  get_image_size_from_processor_config() — reads (height, width) from processor_config.json
+      with a safe fallback to the reference resolution (1280, 960).  Used by
+      optimize_hyperparams() to scale VRAM estimates for non-reference image sizes.
+  optimize_hyperparams()     — returns ResourceOptimizedConfig for given VRAM/dataset
+  validate_training_config() — raises ValueError if total optimizer steps < minimum
 
 CLAUDE.md Reference:
   - Optimal batch size: 8 (from testing); fallback 4 (low VRAM) or 16 (high VRAM)
@@ -27,6 +40,7 @@ __all__ = [
     "ResourceOptimizedConfig",
     "SystemResources",
     "detect_system_resources",
+    "get_image_size_from_processor_config",
     "optimize_hyperparams",
     "validate_training_config",
     "TrainingAuditLogger",
@@ -59,6 +73,16 @@ _MIN_OPTIMIZER_STEPS = 200
 # Above this threshold, effective-batch-16 configs produce sufficient steps
 # even at 5 epochs (mini-mode): ceil(2000/16)*5 = 625 ≥ 200.
 _SMALL_DATASET_THRESHOLD = 2000
+
+# VRAM consumed per training sample at the reference image resolution (1280×960),
+# measured empirically on a 24 GB RTX 4090: 22.78 GB / 8 samples = 2.8475 GB/sample.
+# This constant is used to scale safe batch-size estimates when the actual image
+# resolution differs from the reference (e.g. processor_config.json 2560×1920 = 4× pixels).
+_VRAM_PER_SAMPLE_AT_REF_GB = 2.848
+
+# Reference image size (height, width) for VRAM calibration.  DONUT canonical input
+# per CLAUDE.md § 2.  All VRAM estimates are anchored to this resolution.
+_REF_IMAGE_SIZE = (1280, 960)
 
 # ---------------------------------------------------------------------------
 # Data Classes
@@ -138,6 +162,41 @@ def detect_system_resources() -> SystemResources:
     )
 
 
+def get_image_size_from_processor_config(
+    config_path: str = "processor_config.json",
+) -> tuple[int, int]:
+    """Read image (height, width) from processor_config.json.
+
+    Falls back to the reference resolution (1280, 960) if the file is absent
+    or cannot be parsed.  A warning is logged when the fallback is triggered so
+    that misconfigured paths are visible in the audit log.  Pass an explicit
+    path when calling from a working directory other than the project root.
+
+    Args:
+        config_path: Path to processor_config.json (default: "processor_config.json").
+
+    Returns:
+        (height, width) tuple, e.g. (2560, 1920) for the current config.
+    """
+    import json
+
+    try:
+        cfg = json.loads(Path(config_path).read_text(encoding="utf-8"))
+        size = cfg.get("image_processor", {}).get("size", {})
+        h = size.get("height", _REF_IMAGE_SIZE[0])
+        w = size.get("width", _REF_IMAGE_SIZE[1])
+        return (int(h), int(w))
+    except (FileNotFoundError, json.JSONDecodeError, OSError) as exc:
+        logger.warning(
+            "get_image_size_from_processor_config: could not read %s (%s). "
+            "Falling back to reference resolution %s.",
+            config_path,
+            exc,
+            _REF_IMAGE_SIZE,
+        )
+        return _REF_IMAGE_SIZE
+
+
 # ---------------------------------------------------------------------------
 # Hyperparameter Optimization
 # ---------------------------------------------------------------------------
@@ -147,6 +206,7 @@ def optimize_hyperparams(
     num_train_samples: int,
     available_vram_gb: float | None = None,
     available_ram_gb: float | None = None,
+    image_size: tuple[int, int] | None = None,
 ) -> ResourceOptimizedConfig:
     """Recommend optimal training hyperparameters based on system resources.
 
@@ -154,6 +214,9 @@ def optimize_hyperparams(
         num_train_samples: Total number of training samples across all datasets
         available_vram_gb: GPU VRAM (GB). If None, auto-detect.
         available_ram_gb: System RAM (GB). If None, auto-detect.
+        image_size: (height, width) of training images.  If None, reads from
+            processor_config.json in the current working directory, falling
+            back to the reference resolution (1280, 960) if absent.
 
     Returns:
         ResourceOptimizedConfig with all recommended hyperparameters and explanation.
@@ -170,6 +233,10 @@ def optimize_hyperparams(
     # Use provided values or detected ones
     vram_gb = available_vram_gb if available_vram_gb is not None else resources.vram_gb
     ram_gb = available_ram_gb if available_ram_gb is not None else resources.ram_gb
+
+    # Resolve actual image dimensions for VRAM scaling
+    img_h, img_w = image_size if image_size is not None else get_image_size_from_processor_config()
+    pixels_scale = (img_h * img_w) / (_REF_IMAGE_SIZE[0] * _REF_IMAGE_SIZE[1])
 
     explanation_parts = []
 
@@ -198,21 +265,38 @@ def optimize_hyperparams(
             "accumulation_steps=8 (effective batch=16) to avoid OOM"
         )
     else:
-        # >24 GB: Still cap at 16 for safety (Exp 8 uses ~3940 samples; batch=32 overfits)
+        # >24 GB: Image-size-aware safe batch calculation.
+        #
+        # Root cause of Exp 8 OOM: processor_config.json specifies 2560×1920
+        # (4× reference pixels), so hardcoded batch=16 required ~182 GB — far
+        # beyond the 96 GB Blackwell card's capacity.
+        #
+        # Formula: vram_needed = _VRAM_PER_SAMPLE_AT_REF_GB × batch × pixels_scale
+        # We require vram_needed ≤ vram_gb × 0.90 (10 % safety headroom).
+        max_safe_batch = 1
+        for b in (16, 8, 4, 2, 1):
+            if _VRAM_PER_SAMPLE_AT_REF_GB * b * pixels_scale <= vram_gb * 0.90:
+                max_safe_batch = b
+                break
+
         if num_train_samples < _SMALL_DATASET_THRESHOLD:
-            # Small dataset: use batch=4 + accum=4 (same as ≤24 GB path).
+            # Small dataset: cap at 4 to ensure enough optimizer steps.
             # batch=8 + accum=2 yields too few optimizer steps (~160 total) for
             # DONUT to converge on experiments with ~500 samples (Exp 1-4).
-            batch_size = 4
+            batch_size = min(4, max_safe_batch)
             explanation_parts.append(
-                f"batch_size=4: VRAM {vram_gb:.1f}GB but small dataset "
-                f"({num_train_samples} samples); using batch=4+accum=4 "
-                "(same as ≤24GB path) to ensure sufficient optimizer steps"
+                f"batch_size={batch_size}: VRAM {vram_gb:.1f} GB, "
+                f"image {img_h}×{img_w} (scale={pixels_scale:.2f}×), "
+                f"small dataset ({num_train_samples} samples); "
+                f"max_safe_batch={max_safe_batch} — capped at 4 for step count"
             )
         else:
-            batch_size = 16
+            batch_size = min(16, max_safe_batch)
             explanation_parts.append(
-                f"batch_size=16: VRAM {vram_gb:.1f}GB with large dataset ({num_train_samples} samples)"
+                f"batch_size={batch_size}: VRAM {vram_gb:.1f} GB, "
+                f"image {img_h}×{img_w} (scale={pixels_scale:.2f}×), "
+                f"large dataset ({num_train_samples} samples); "
+                f"max_safe_batch={max_safe_batch}"
             )
 
     # ───────────────────────────────────────────────────────────────────

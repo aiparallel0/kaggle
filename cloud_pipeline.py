@@ -1,3 +1,9 @@
+# =============================================================================
+# cloud_pipeline.py
+# Purpose: Vast.ai cloud GPU pipeline orchestration (SSH, rsync, job dispatch)
+# Project: DONUT Receipt KIE — SROIE Fine-tuning & Benchmarking
+# Updated: 2026-03-07
+# =============================================================================
 """cloud_pipeline.py — Unified orchestrator for code repair and ML training.
 
 Main entry point for the entire cloud pipeline system.  Two execution modes:

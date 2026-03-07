@@ -1,3 +1,9 @@
+# =============================================================================
+# dataset_loaders.py
+# Purpose: Dataset loaders for SROIE, WildReceipt, and Invoices-DONUT with field-coverage reporting
+# Project: DONUT Receipt KIE — SROIE Fine-tuning & Benchmarking
+# Updated: 2026-03-07
+# =============================================================================
 """
 dataset_loaders.py — Multi-dataset download & normalization module.
 

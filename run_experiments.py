@@ -1,3 +1,9 @@
+# =============================================================================
+# run_experiments.py
+# Purpose: 8-experiment DONUT fine-tuning loop with OOM recovery and JSON result serialization
+# Project: DONUT Receipt KIE — SROIE Fine-tuning & Benchmarking
+# Updated: 2026-03-07
+# =============================================================================
 """
 run_experiments.py — Experiment orchestrator for 8 DONUT fine-tuning experiments.
 

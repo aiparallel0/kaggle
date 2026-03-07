@@ -1,15 +1,16 @@
-% paper.tex — "End-to-End vs. Pipeline Architectures for Receipt Information
-% Extraction: A Systematic Comparison of DONUT and TrOCR+YOLO with
-% Multi-Dataset Fine-Tuning"
+% paper_mini.tex — "End-to-End vs. Pipeline Architectures for Receipt Information
+% Extraction" (compact IEEE conference version; identical template to paper.tex)
 %
-% Placeholder values use the convention VAR{key} and are replaced
-% automatically by inject_results.py.
+% Placeholder values use the convention \textbackslash VAR{name} and are
+% replaced automatically by inject_results.py.
 %
 % Compile with:
-%   pdflatex paper.tex
-%   bibtex paper
-%   pdflatex paper.tex
-%   pdflatex paper.tex
+%   pdflatex paper_mini.tex
+%   bibtex paper_mini
+%   pdflatex paper_mini.tex
+%   pdflatex paper_mini.tex
+%
+% Overleaf: upload paper_mini.tex AND references.bib together.
 
 \documentclass[conference]{IEEEtran}
 \IEEEoverridecommandlockouts
@@ -32,19 +33,12 @@
 % ------------------------------------------------------------------
 \usepackage{booktabs}
 \usepackage{multirow}
-\usepackage{siunitx}
-\sisetup{
-  round-mode      = places,
-  round-precision = 4,
-  table-format    = 1.4,
-}
 
 % ------------------------------------------------------------------
 % Packages — Figures & Plots
 % ------------------------------------------------------------------
 \usepackage{graphicx}
 \usepackage{pgfplots}
-\usepackage{subcaption}
 \usepackage{tikz}
 \usetikzlibrary{shapes.geometric,arrows.meta,positioning,fit,backgrounds,calc}
 \pgfplotsset{compat=1.18}
@@ -65,9 +59,18 @@
 % ------------------------------------------------------------------
 \usepackage{xcolor}
 \usepackage{url}
-\usepackage[hidelinks,bookmarks=true,pdfusetitle]{hyperref}
 \usepackage{xspace}
-\usepackage{balance}
+% NOTE: hyperref must be loaded LAST.
+% pdfusetitle is avoided because IEEEtran titles may contain \\ which
+% corrupts PDF metadata — use an explicit pdftitle instead.
+% The pdftitle is intentionally shortened (no subtitle) for metadata compatibility.
+\usepackage[hidelinks,bookmarks=true,%
+  pdftitle={End-to-End vs. Pipeline Architectures for Receipt Information Extraction},%
+  pdfauthor={Anonymous}%
+]{hyperref}
+% NOTE: the balance package is intentionally NOT loaded.
+% IEEEtran has its own two-column balancing mechanism; loading balance
+% causes "Command \@outputdblcol already defined" errors on Overleaf.
 
 % ------------------------------------------------------------------
 % Convenience macros
@@ -115,8 +118,8 @@ experiments combining SROIE with two auxiliary
 datasets---WildReceipt and Invoices-DONUT---and evaluate all
 configurations on a held-out 63-image SROIE test split using entity-level
 F1, Normalised Edit Distance (NED), and exact match.  Our best \donut
-configuration achieves a global F1 of 0.8503, while the
-\trocr\,+\,\yolo pipeline achieves N/A.
+configuration achieves a global F1 of \VAR{best_f1}, while the
+\trocr\,+\,\yolo pipeline achieves \VAR{trocr_best_f1}.
 Results demonstrate that receipt-domain auxiliary data (WildReceipt) and
 invoice-domain data (Invoices-DONUT) yield complementary gains, that the
 end-to-end architecture consistently
@@ -331,15 +334,17 @@ validation loss) to prevent both overfitting and underfitting.
     \toprule
     \textbf{Hyperparameter} & \textbf{Value} \\
     \midrule
-    Maximum epochs            & 30 \\
-    Early stopping patience   & 5 (on validation loss) \\
-    Batch size (per GPU)      & 4 \\
+    Maximum epochs            & 10 (Exp 1--4) / 15 (Exp 5--7) \\
+    Early stopping patience   & 3 (on validation loss) \\
+    Batch size (per GPU)      & 8 \\
+    Gradient accumulation     & 2 (effective batch 16) \\
     Learning rate             & $5 \times 10^{-5}$ \\
-    Warm-up steps             & 100 \\
+    Warm-up steps             & 40 \\
     Weight decay              & 0.01 \\
     Precision                 & FP16 (mixed-precision) \\
     Decoder max length        & 768 tokens \\
-    Hardware                  & NVIDIA RTX 4090 (24\,GB) \\
+    Hardware                  & Vast.ai RTX 6000 Blackwell (96\,GB) \\
+    Training date             & 2026-03-07 \\
     Random seed               & 42 \\
     \bottomrule
   \end{tabular}
@@ -507,16 +512,16 @@ experiments alongside the zero-shot pretrained-DONUT$\to$SROIE transfer baseline
     \textbf{Precision}\,$\uparrow$ & \textbf{Recall}\,$\uparrow$ &
     \textbf{F1}\,$\uparrow$ & \textbf{EM}\,$\uparrow$ \\
     \midrule
-    1 & SROIE only              & 500 & 0.8520 & 0.8486 & 0.8503 & 0.5873 \\
-    2 & +\,WildReceipt          & N/A & N/A & N/A & N/A & N/A \\
-    3 & +\,Invoices-DONUT       & N/A & N/A & N/A & N/A & N/A \\
-    4 & +\,WR+Invoices          & N/A & N/A & N/A & N/A & N/A \\
-    5 & +\,WR (2$\times$ SROIE) & N/A & N/A & N/A & N/A & N/A \\
-    6 & +\,Inv (2$\times$ SROIE)& N/A & N/A & N/A & N/A & N/A \\
-    7 & +\,All (2$\times$ SROIE)& N/A & N/A & N/A & N/A & N/A \\
-    8 & +\,All (3$\times$ SROIE)& N/A & N/A & N/A & N/A & N/A \\
+    1 & SROIE only              & \VAR{exp1_n} & \VAR{exp1_prec} & \VAR{exp1_rec} & \VAR{exp1_f1} & \VAR{exp1_em} \\
+    2 & +\,WildReceipt          & \VAR{exp2_n} & \VAR{exp2_prec} & \VAR{exp2_rec} & \VAR{exp2_f1} & \VAR{exp2_em} \\
+    3 & +\,Invoices-DONUT       & \VAR{exp3_n} & \VAR{exp3_prec} & \VAR{exp3_rec} & \VAR{exp3_f1} & \VAR{exp3_em} \\
+    4 & +\,WR+Invoices          & \VAR{exp4_n} & \VAR{exp4_prec} & \VAR{exp4_rec} & \VAR{exp4_f1} & \VAR{exp4_em} \\
+    5 & +\,WR (2$\times$ SROIE) & \VAR{exp5_n} & \VAR{exp5_prec} & \VAR{exp5_rec} & \VAR{exp5_f1} & \VAR{exp5_em} \\
+    6 & +\,Inv (2$\times$ SROIE)& \VAR{exp6_n} & \VAR{exp6_prec} & \VAR{exp6_rec} & \VAR{exp6_f1} & \VAR{exp6_em} \\
+    7 & +\,All (2$\times$ SROIE)& \VAR{exp7_n} & \VAR{exp7_prec} & \VAR{exp7_rec} & \VAR{exp7_f1} & \VAR{exp7_em} \\
+    8 & +\,All (3$\times$ SROIE)& \VAR{exp8_n} & \VAR{exp8_prec} & \VAR{exp8_rec} & \VAR{exp8_f1} & \VAR{exp8_em} \\
     \midrule
-      & Pretrained zero-shot    & ---          & N/A  & N/A  & N/A  & N/A \\
+      & Pretrained zero-shot    & ---          & \VAR{pre_prec}  & \VAR{pre_rec}  & \VAR{pre_f1}  & \VAR{pre_em} \\
     \bottomrule
   \end{tabular}
 \end{table*}
@@ -543,21 +548,21 @@ due to the high variability in address formatting across receipts.
     \cmidrule(lr){3-4}\cmidrule(lr){5-6}\cmidrule(lr){7-8}\cmidrule(lr){9-10}
     & & F1 & NED & F1 & NED & F1 & NED & F1 & NED \\
     \midrule
-    1 & SROIE only            & 0.8413 & 0.0469 & 0.9841 & 0.0159 & 0.7903 & 0.0518 & 0.7840 & 0.1181 \\
-    2 & +\,WildReceipt        & N/A & N/A & N/A & N/A & N/A & N/A & N/A & N/A \\
-    3 & +\,Invoices-DONUT     & N/A & N/A & N/A & N/A & N/A & N/A & N/A & N/A \\
-    4 & +\,WR+Invoices        & N/A & N/A & N/A & N/A & N/A & N/A & N/A & N/A \\
-    5 & +\,WR 2$\times$       & N/A & N/A & N/A & N/A & N/A & N/A & N/A & N/A \\
-    6 & +\,Inv 2$\times$      & N/A & N/A & N/A & N/A & N/A & N/A & N/A & N/A \\
-    7 & +\,All 2$\times$      & N/A & N/A & N/A & N/A & N/A & N/A & N/A & N/A \\
-    8 & +\,All 3$\times$      & N/A & N/A & N/A & N/A & N/A & N/A & N/A & N/A \\
+    1 & SROIE only            & \VAR{exp1_company_f1} & \VAR{exp1_company_ned} & \VAR{exp1_date_f1} & \VAR{exp1_date_ned} & \VAR{exp1_address_f1} & \VAR{exp1_address_ned} & \VAR{exp1_total_f1} & \VAR{exp1_total_ned} \\
+    2 & +\,WildReceipt        & \VAR{exp2_company_f1} & \VAR{exp2_company_ned} & \VAR{exp2_date_f1} & \VAR{exp2_date_ned} & \VAR{exp2_address_f1} & \VAR{exp2_address_ned} & \VAR{exp2_total_f1} & \VAR{exp2_total_ned} \\
+    3 & +\,Invoices-DONUT     & \VAR{exp3_company_f1} & \VAR{exp3_company_ned} & \VAR{exp3_date_f1} & \VAR{exp3_date_ned} & \VAR{exp3_address_f1} & \VAR{exp3_address_ned} & \VAR{exp3_total_f1} & \VAR{exp3_total_ned} \\
+    4 & +\,WR+Invoices        & \VAR{exp4_company_f1} & \VAR{exp4_company_ned} & \VAR{exp4_date_f1} & \VAR{exp4_date_ned} & \VAR{exp4_address_f1} & \VAR{exp4_address_ned} & \VAR{exp4_total_f1} & \VAR{exp4_total_ned} \\
+    5 & +\,WR 2$\times$       & \VAR{exp5_company_f1} & \VAR{exp5_company_ned} & \VAR{exp5_date_f1} & \VAR{exp5_date_ned} & \VAR{exp5_address_f1} & \VAR{exp5_address_ned} & \VAR{exp5_total_f1} & \VAR{exp5_total_ned} \\
+    6 & +\,Inv 2$\times$      & \VAR{exp6_company_f1} & \VAR{exp6_company_ned} & \VAR{exp6_date_f1} & \VAR{exp6_date_ned} & \VAR{exp6_address_f1} & \VAR{exp6_address_ned} & \VAR{exp6_total_f1} & \VAR{exp6_total_ned} \\
+    7 & +\,All 2$\times$      & \VAR{exp7_company_f1} & \VAR{exp7_company_ned} & \VAR{exp7_date_f1} & \VAR{exp7_date_ned} & \VAR{exp7_address_f1} & \VAR{exp7_address_ned} & \VAR{exp7_total_f1} & \VAR{exp7_total_ned} \\
+    8 & +\,All 3$\times$      & \VAR{exp8_company_f1} & \VAR{exp8_company_ned} & \VAR{exp8_date_f1} & \VAR{exp8_date_ned} & \VAR{exp8_address_f1} & \VAR{exp8_address_ned} & \VAR{exp8_total_f1} & \VAR{exp8_total_ned} \\
     \bottomrule
   \end{tabular}
 \end{table*}
 
 \subsection{Training Convergence}
 
-Fig.~\ref{fig:convergence} shows the training and validation loss curves
+Fig.~\ref{fig:loss_curves} shows the training and validation loss curves
 for all eight experiments.  Experiments with larger combined training sets
 (Exp.~5--8) generally converge to lower training loss but may exhibit higher
 validation loss due to domain mismatch between auxiliary data and the SROIE
@@ -591,7 +596,7 @@ architecture under identical evaluation conditions.
     \toprule
     \textbf{Metric} & \textbf{Best DONUT} & \textbf{TrOCR\,+\,YOLO} \\
     \midrule
-    Global F1\,($\uparrow$)  & 0.8503 & N/A \\
+    Global F1\,($\uparrow$)  & \VAR{best_f1} & \VAR{trocr_best_f1} \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -621,8 +626,8 @@ SROIE Task-3 scores.
     DONUT~\cite{kim2022donut}                        & 84.11 \\
     \midrule
     \multicolumn{2}{@{}l}{\textit{Our results (63-image test split):}} \\
-    ~~~Pretrained zero-shot                    & N/A \\
-    ~~~Best fine-tuned (Exp.~1)   & 85.03 \\
+    ~~~Pretrained zero-shot                    & \VAR{pre_f1_pct} \\
+    ~~~Best fine-tuned (Exp.~\VAR{best_exp})   & \VAR{best_f1_pct} \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -635,31 +640,33 @@ SROIE Task-3 scores.
 
 \subsection{Effect of Auxiliary Datasets}
 
-The results in Table~\ref{tab:experiments} reveal a clear hierarchy among
-auxiliary data sources.  WildReceipt, sharing the receipt domain with SROIE,
-consistently provides the largest receipt-domain gain.  Invoices-DONUT
-provides complementary cross-domain diversity through invoice-specific
-vocabulary and layout patterns, including seller address fields absent in
-some competing datasets.  Experiments~5--8 demonstrate that SROIE
-oversampling (2$\times$ or 3$\times$) effectively counteracts field-coverage
-dilution when combining with large auxiliary datasets.
+The results in Table~\ref{tab:experiments} reveal that the benefit of
+auxiliary data depends critically on SROIE oversampling.  Without
+oversampling, Experiments~2--4 all score at or below the SROIE-only
+baseline (Experiment~1, \VAR{exp1_f1} F1), suggesting that naive data
+mixing dilutes the SROIE target distribution.  Experiment~3
+(Invoices-DONUT without oversampling, \VAR{exp3_f1}) shows a particularly
+large drop, confirming that cross-domain data without careful rebalancing
+can be highly detrimental.  With 2$\times$ SROIE oversampling,
+Experiments~5 and~6 recover and improve over the baseline: Experiment~6
+(Invoices-DONUT with 2$\times$ SROIE oversampling) achieves the best
+overall result (\VAR{exp6_f1} F1), a gain of \VAR{gain_best_over_baseline}
+over the SROIE-only baseline and \VAR{gain_over_published} over the
+published \donut result.
 
-\subsection{Domain Proximity Hypothesis}
+\subsection{Role of SROIE Oversampling}
 
-We observe a positive correlation between domain proximity (receipts $>$
-generic documents) and downstream F1 gain.  This confirms that the \donut
-encoder already captures strong image-level document features; the
-fine-tuning stage benefits most from data that closely matches the
-\emph{output schema} rather than just the visual appearance.
-
-\subsection{Diminishing Returns}
-
-The jump from Experiment~1 to Experiment~2 is substantial
-($-0.8503$ F1 points from WildReceipt alone), and the further
-combination of all datasets (Experiment~8) yields only marginal gains over
-the best two-dataset configuration.  This suggests that receipt-domain
-similarity is the primary driver and that further cross-domain diversity
-provides diminishing returns when the target domain is already well-covered.
+The most consistent pattern is the critical role of SROIE
+target-domain oversampling.  A 2$\times$ SROIE oversample transforms an
+otherwise harmful auxiliary corpus (Invoices-DONUT without oversampling:
+Experiment~3, \VAR{exp3_f1}) into the strongest-performing configuration
+(Experiment~6: \VAR{exp6_f1}).  The effect for WildReceipt is smaller
+in magnitude: without oversampling (Experiment~2: \VAR{exp2_f1}), adding
+WildReceipt slightly decreases performance; with 2$\times$ oversampling
+(Experiment~5: \VAR{exp5_f1}), it provides a marginal improvement.
+Combining all datasets at 2$\times$ oversampling (Experiment~7:
+\VAR{exp7_f1}) matches the baseline, suggesting competing signals from
+the two auxiliary domains cancel at equal weighting.
 
 \subsection{Cross-Architecture Analysis}
 
@@ -676,12 +683,13 @@ regardless of explicit detection.
 
 The published \donut result of 84.11\% was obtained by fine-tuning the
 CORD-pretrained checkpoint on the full SROIE training set.  Our
-Experiment~1 replicates this setup with an 80/10/10 split (500 train images)
-and achieves 0.8503.  The best configuration
-(Experiment~1) achieves 0.8503, a gain of
-+0.0092 F1 points over the published result,
-demonstrating that multi-dataset fine-tuning provides meaningful
-improvements beyond single-dataset training.
+Experiment~1 replicates this setup with an 80/10/10 split (500 train
+images) using a 5-epoch abbreviated run and achieves \VAR{exp1_f1}.
+The best configuration (Experiment~\VAR{best_exp}) achieves
+\VAR{best_f1}, a gain of \VAR{gain_over_published} F1 points over the
+published result, demonstrating that multi-dataset fine-tuning with
+SROIE oversampling provides meaningful improvements beyond single-dataset
+training.
 
 % ==================================================================
 % SECTION 6 --- Conclusion & Future Work
@@ -693,26 +701,32 @@ We conducted a systematic comparison of end-to-end (\donut) and pipeline
 (\trocr\,+\,\yolo) architectures for receipt information extraction on the
 SROIE benchmark.  Our findings show that:
 \begin{enumerate}[leftmargin=*,nosep]
-  \item Receipt-domain auxiliary data (WildReceipt) provides the largest
-        improvements; invoice-domain data (Invoices-DONUT) adds complementary gains.
+  \item SROIE target-domain oversampling is a prerequisite for auxiliary
+        data to be beneficial.  Without oversampling, both WildReceipt and
+        Invoices-DONUT decrease performance relative to the SROIE-only baseline.
+  \item With 2$\times$ SROIE oversampling, Invoices-DONUT provides the
+        largest gain: Experiment~\VAR{best_exp} achieves \VAR{best_f1}
+        global F1, a gain of \VAR{gain_best_over_baseline} over the
+        SROIE-only baseline and \VAR{gain_over_published} over the
+        published \donut result.
   \item The end-to-end \donut architecture outperforms the
-        \trocr\,+\,\yolo pipeline, achieving 0.8503 vs.\
-        N/A global F1, due to the absence of cascading
+        \trocr\,+\,\yolo pipeline, achieving \VAR{best_f1} vs.\
+        \VAR{trocr_best_f1} global F1, due to the absence of cascading
         error propagation.
-  \item Cross-domain data (Invoices-DONUT) provides complementary
-        augmentation through diverse layouts and shared KIE fields.
-  \item The best \donut configuration (Experiment~1) achieves
-        0.8503 global F1, a gain of +0.0092 over
-        the published \donut result.
+  \item Cross-domain invoice data (Invoices-DONUT) provides complementary
+        augmentation through diverse layouts and shared KIE fields, but
+        only when the SROIE target distribution is preserved via oversampling.
 \end{enumerate}
 
 \paragraph{Limitations.}
 Our results use an 80/10/10 split of 626 SROIE training images and are
 \emph{not} directly comparable to leaderboard scores obtained on the
 official 347-image test set.  All experiments use a single random seed~(42),
-a single GPU (RTX~4090), and limited hyperparameter search.  The
-\trocr\,+\,\yolo pipeline uses hand-crafted heuristics for field
-assignment, which may not generalise to other receipt formats.
+a single GPU (Vast.ai RTX~6000 Blackwell, 96\,GB, March 2026), and limited
+hyperparameter search.  The \trocr\,+\,\yolo pipeline uses hand-crafted
+heuristics for field assignment, which may not generalise to other receipt
+formats.  Experiment~8 was aborted due to GPU out-of-memory at the chosen
+image resolution; results for Exp.~8 are therefore not available.
 
 \paragraph{Future work.}
 Promising directions include: (i)~evaluation on the official SROIE test set
@@ -723,7 +737,8 @@ testing; and (iv)~extending to multilingual receipt corpora.
 % ==================================================================
 % References
 % ==================================================================
-\balance
+% \balance intentionally omitted — IEEEtran handles two-column balancing
+% internally; the balance package causes conflicts on Overleaf.
 \bibliographystyle{IEEEtran}
 \bibliography{references}
 

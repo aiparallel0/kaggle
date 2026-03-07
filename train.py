@@ -1,3 +1,9 @@
+# =============================================================================
+# train.py
+# Purpose: DonutTrainer class + SROIEDataset + MultiDataset — core DONUT training infrastructure
+# Project: DONUT Receipt KIE — SROIE Fine-tuning & Benchmarking
+# Updated: 2026-03-07
+# =============================================================================
 """
 train.py — DONUT SROIE training with OOP interface and legacy compat.
 

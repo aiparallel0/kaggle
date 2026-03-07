@@ -1,3 +1,9 @@
+# =============================================================================
+# preflight_checks.py
+# Purpose: Pre-flight environment validation (GPU, disk space, datasets, Python dependencies)
+# Project: DONUT Receipt KIE — SROIE Fine-tuning & Benchmarking
+# Updated: 2026-03-07
+# =============================================================================
 """Orchestrator for all pre-flight validation checks.
 
 From CLAUDE.md Section 5:

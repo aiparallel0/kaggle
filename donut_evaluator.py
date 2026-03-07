@@ -1,3 +1,9 @@
+# =============================================================================
+# donut_evaluator.py
+# Purpose: SROIE F1 and NED evaluator for saved DONUT model checkpoints
+# Project: DONUT Receipt KIE — SROIE Fine-tuning & Benchmarking
+# Updated: 2026-03-07
+# =============================================================================
 """
 donut_evaluator.py — DONUT SROIE evaluation with OOP interface and legacy compat.
 

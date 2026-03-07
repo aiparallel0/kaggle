@@ -1,3 +1,9 @@
+# =============================================================================
+# quick_results_generator.py
+# Purpose: Generates summary result tables from saved experiment JSON files
+# Project: DONUT Receipt KIE — SROIE Fine-tuning & Benchmarking
+# Updated: 2026-03-07
+# =============================================================================
 """
 quick_results_generator.py — Generate LaTeX results.tex from quick mode and sweeps.
 

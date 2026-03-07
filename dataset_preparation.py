@@ -1,3 +1,9 @@
+# =============================================================================
+# dataset_preparation.py
+# Purpose: Data preparation utilities — train/val splits, metadata.jsonl, YOLO annotations
+# Project: DONUT Receipt KIE — SROIE Fine-tuning & Benchmarking
+# Updated: 2026-03-07
+# =============================================================================
 """
 dataset_preparation.py — Prepare YOLO bbox labels + TrOCR line crops.
 

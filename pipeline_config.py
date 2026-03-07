@@ -1,3 +1,9 @@
+# =============================================================================
+# pipeline_config.py
+# Purpose: Pipeline configuration dataclasses and defaults
+# Project: DONUT Receipt KIE — SROIE Fine-tuning & Benchmarking
+# Updated: 2026-03-07
+# =============================================================================
 """Cloud pipeline configuration management.
 
 See also: training_config.py — TrainingConfig for model hyperparameters

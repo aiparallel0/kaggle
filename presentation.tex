@@ -393,15 +393,17 @@
     \toprule
     \textbf{Hyperparameter} & \textbf{Value} \\
     \midrule
-    Max epochs              & 30 \\
-    Early stopping          & Patience 5 (val loss) \\
-    Batch size              & 4 per GPU \\
+    Max epochs              & 10 (Exp 1--4) / 15 (Exp 5--7) \\
+    Early stopping          & Patience 3 (val loss) \\
+    Batch size              & 8 per GPU \\
+    Gradient accumulation   & $\times$2 (effective batch 16) \\
     Learning rate           & $5 \times 10^{-5}$ \\
-    Warm-up steps           & 100 \\
+    Warm-up steps           & 40 \\
     Weight decay            & 0.01 \\
     Precision               & FP16 (mixed) \\
-    Decoder max tokens      & 512 \\
-    Hardware                & NVIDIA RTX 4090 \\
+    Decoder max tokens      & 768 \\
+    Hardware                & Vast.ai RTX 6000 Blackwell (96\,GB) \\
+    Training date           & 2026-03-07 \\
     \bottomrule
   \end{tabular}
 
@@ -579,23 +581,25 @@
 \end{frame}
 
 % ------------------------------------------------------------------
-\begin{frame}{Finding 2: Diminishing Returns from Data Volume}
+\begin{frame}{Finding 2: SROIE Oversampling is Critical}
   \begin{block}{Observation}
     \begin{itemize}
-      \item Experiment 1 $\to$ 4: \textbf{Substantial} F1 gain
-            ($\VAR{gain_1_4}$ points)
-      \item Experiment 4 $\to$ 8: \textbf{Marginal} additional gain
-      \item CORD is the primary driver; further diversity has
-            diminishing returns when the target domain is well-covered
+      \item \textbf{Without oversampling} (Exp 2--4): auxiliary data
+            \redbf{decreases} F1 relative to SROIE-only baseline (\VAR{exp1_f1})
+      \item \textbf{With 2$\times$ SROIE oversample}: auxiliary data
+            \greenbf{improves} F1 --- Exp~6 achieves \hlnum{\VAR{best_f1}}
+            (\VAR{gain_best_over_baseline} over baseline)
+      \item Exp~7 (all data, 2$\times$) matches baseline exactly:
+            competing signals cancel at equal weight
     \end{itemize}
   \end{block}
 
   \vspace{0.3cm}
 
   \begin{exampleblock}{Practical Implication}
-    You don't need massive multi-dataset combinations.
-    \textbf{One high-quality, domain-proximate dataset} provides most
-    of the benefit.
+    Do \textbf{not} naively combine auxiliary data.
+    \textbf{SROIE oversampling} (2$\times$) is the critical factor ---
+    without it, more data can hurt.
   \end{exampleblock}
 \end{frame}
 
