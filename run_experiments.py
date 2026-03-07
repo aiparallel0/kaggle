@@ -399,9 +399,42 @@ def train_experiment(
                 f"convert_tokens_to_ids was called, or the list-wrapping syntax is missing. "
                 f"Use: tokenizer.convert_tokens_to_ids(['<s_sroie>'])[0]"
             )
-        _mdl.config.use_cache = False  # Required with gradient_checkpointing
-        _mdl.decoder.config.use_cache = False
-        _mdl.gradient_checkpointing_enable()
+        # Only enable gradient checkpointing when VRAM is constrained (< 24 GB).
+        # 24 GB covers RTX 3090/4090 (24 GB) and below, where activation memory
+        # during DONUT's backward pass (~3.5 GB at batch_size=8) is a real constraint.
+        # On high-VRAM cards (RTX PRO 6000 = 95.6 GB, A100 = 80 GB, RTX 4090 = 24 GB
+        # boundary) gradient checkpointing adds ~30-40% backward-pass overhead for
+        # zero memory benefit — so disable it there.
+        _GRAD_CKPT_VRAM_THRESHOLD_GB = 24.0
+        _enable_grad_ckpt = True  # default: enable for safety on unknown hardware
+        if torch.cuda.is_available():
+            try:
+                _vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+                if _vram_gb >= _GRAD_CKPT_VRAM_THRESHOLD_GB:
+                    _enable_grad_ckpt = False
+                    logger.info(
+                        "[GradCkpt] Disabled — VRAM=%.1f GB >= %.0f GB threshold "
+                        "(saves ~35%% backward time at no memory cost)",
+                        _vram_gb,
+                        _GRAD_CKPT_VRAM_THRESHOLD_GB,
+                    )
+                else:
+                    logger.info(
+                        "[GradCkpt] Enabled — VRAM=%.1f GB < %.0f GB threshold",
+                        _vram_gb,
+                        _GRAD_CKPT_VRAM_THRESHOLD_GB,
+                    )
+            except Exception as exc:
+                logger.warning("[GradCkpt] VRAM detection failed (%s) — defaulting to enabled", exc)
+
+        if _enable_grad_ckpt:
+            _mdl.config.use_cache = False  # Required with gradient_checkpointing
+            _mdl.decoder.config.use_cache = False
+            _mdl.gradient_checkpointing_enable()
+        else:
+            # use_cache=True is the default and correct when not using grad checkpointing
+            _mdl.config.use_cache = True
+            _mdl.decoder.config.use_cache = True
 
         # Build PyTorch datasets
         _train_ds = MultiDataset(samples, _proc, max_length=config.max_length)

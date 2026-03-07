@@ -117,3 +117,72 @@ class TestExperimentConfigPropertyAliases:
             assert cfg.per_device_train_batch_size == cfg.batch_size, (
                 f"Exp {exp_id}: batch alias broken"
             )
+
+
+class TestLabelTokenizationNoSpecialTokens:
+    """MultiDataset must tokenize labels with add_special_tokens=False.
+
+    Root cause of high training loss: without add_special_tokens=False the
+    tokenizer prepends BOS (ID=0) to every label sequence.
+    VisionEncoderDecoderModel.forward() calls shift_tokens_right, placing
+    decoder_start_token_id at position 0 of decoder_input_ids.  The model
+    at position 0 must then predict labels[0] = BOS — a meaningless target
+    that is never present during inference (which uses add_special_tokens=False
+    for decoder_input_ids).  This train/inference mismatch inflates training
+    loss and wastes 2 generation slots per sequence.
+    The official DONUT fine-tuning code always uses add_special_tokens=False.
+    """
+
+    def test_getitem_label_uses_add_special_tokens_false(self):
+        """MultiDataset.__getitem__ must call tokenizer with add_special_tokens=False."""
+        import torch
+        from pathlib import Path
+        from unittest.mock import MagicMock
+
+        import train
+
+        recorded_kwargs: list[dict] = []
+
+        fake_result = MagicMock()
+        fake_result.input_ids = torch.tensor([[100, 200, 300, 1, 1]])  # shape (1, 5)
+
+        def _capture_call(text, **kwargs):
+            recorded_kwargs.append(kwargs)
+            return fake_result
+
+        fake_tokenizer = MagicMock()
+        fake_tokenizer.side_effect = _capture_call
+        fake_tokenizer.pad_token_id = 1
+        fake_tokenizer.unk_token_id = 3
+        # unk == unk → _mask_empty_field_labels skips masking (no-op)
+        fake_tokenizer.convert_tokens_to_ids.return_value = 3
+
+        fake_processor = MagicMock()
+        fake_processor.tokenizer = fake_tokenizer
+
+        samples = [
+            (
+                Path("/fake/img.jpg"),
+                {"company": "ACME", "date": "2024", "address": "ST", "total": "1.00"},
+            )
+        ]
+
+        # cache_in_ram=False → skip __init__ precomputation; test __getitem__ path only
+        ds = train.MultiDataset(samples, processor=fake_processor, max_length=32, cache_in_ram=False)
+
+        # Provide pre-cached pixel tensor so no image disk read is needed
+        ds._pixel_cache[0] = torch.zeros(3, 1, 1)
+        assert 0 not in ds._label_cache, "label cache must be empty for this test"
+
+        recorded_kwargs.clear()
+        _ = ds[0]
+
+        assert recorded_kwargs, "tokenizer was never called during __getitem__"
+        for call_kwargs in recorded_kwargs:
+            assert call_kwargs.get("add_special_tokens") is False, (
+                "MultiDataset.__getitem__ called tokenizer WITHOUT add_special_tokens=False. "
+                "This creates a train/inference mismatch: the tokenizer prepends BOS (ID=0) "
+                "to labels, so the model learns to predict BOS at position 0 — never seen "
+                "in inference (which uses add_special_tokens=False for decoder_input_ids). "
+                "Fix: add add_special_tokens=False to the tokenizer call in train.py."
+            )

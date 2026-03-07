@@ -1691,8 +1691,8 @@ def _micro_mode_handler(args, logger: logging.Logger) -> int:
     """Micro mode: ultra-fast smoke-test targeting < 10 minutes.
 
     Optimisation levers vs mini mode:
-      DONUT  — 2 epochs, 150 train samples, max_length=256, grad_accum=1,
-               10× higher LR (5e-4 / 1e-3), OneCycleLR, eval on 20 samples
+      DONUT  — 5 epochs, 400 train samples, max_length=256, grad_accum=1,
+               10× higher LR (5e-4 / 1e-3), OneCycleLR, eval on 63 samples
       YOLO   — yolov8n (3.2M params), 3 epochs, 256 px, SGD+Nesterov
       TrOCR  — 1 epoch, max_len=64, batch=8, SGD+Nesterov+CosineAnnealingLR
 
@@ -1721,16 +1721,18 @@ def _micro_mode_handler(args, logger: logging.Logger) -> int:
             return 2
 
     # ── Stage 2: DONUT Exp 1 — aggressively reduced ───────────────────────
-    logger.info("[Micro Stage 2] DONUT Experiment 1 (micro: 2 epochs, 150 samples)...")
+    logger.info("[Micro Stage 2] DONUT Experiment 1 (micro: 5 epochs, 400 samples)...")
     original_config = re_mod.EXPERIMENTS[1]
     micro_config = dataclasses.replace(
         original_config,
         # Training budget
-        epochs=2,
+        epochs=5,
         early_stopping_patience=1,
         # Dataset subsampling
-        subsample_train=150,    # ~500 → 150 samples (70% reduction)
-        subsample_eval=20,      # 63 → 20 test samples
+        subsample_train=400,    # 400 of 500 SROIE samples → ~250 optimizer steps over 5 epochs
+                                # (minimum empirically needed to override CORD base-model prior
+                                # and learn SROIE XML schema; 150/2ep = 76 steps → F1=0)
+        subsample_eval=63,      # full test set for a meaningful F1 number
         # Step-count guard bypass (intentionally below 200-step threshold)
         skip_step_validation=True,
         # Faster descent: 10× higher LR hits useful weights in 2 epochs
@@ -2048,7 +2050,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "Micro mode: ultra-fast smoke-test (<10 min). "
-            "DONUT: 2 epochs, 150 train samples, max_length=256, OneCycleLR. "
+            "DONUT: 5 epochs, 400 train samples, max_length=256, OneCycleLR. "
             "YOLO: yolov8n, 3 epochs, 256 px, SGD+Nesterov. "
             "TrOCR: 1 epoch, max_len=64, SGD+Nesterov+CosineAnnealingLR. "
             "Generates paper_micro.tex."
