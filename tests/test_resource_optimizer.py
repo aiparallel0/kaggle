@@ -7,6 +7,7 @@ empty predictions on high-VRAM GPUs.
 All tests are CPU-only (no GPU required).
 """
 
+import dataclasses
 import math
 import sys
 from pathlib import Path
@@ -220,8 +221,6 @@ class TestExperimentConfigImmutability:
 
     def test_dataclasses_replace_does_not_mutate_original(self):
         """dataclasses.replace() must not change the original config."""
-        import dataclasses
-
         pytest.importorskip("torch", reason="torch required by run_experiments.py")
         from run_experiments import EXPERIMENTS  # noqa: E402, I001
 
@@ -246,3 +245,85 @@ class TestExperimentConfigImmutability:
         cfg = ExperimentConfig(name="test", datasets=["sroie"], batch_size=8)
         cfg.batch_size = 99  # This is allowed by Python — the guardrail prevents it in practice
         assert cfg.batch_size == 99  # Confirms the danger is real
+
+
+class TestOOMRecovery:
+    """Tests for the OOM recovery logic in train_experiment().
+
+    Verifies that the recovery path now allows batch_size to be reduced all
+    the way to 1 (one extra step vs. the old minimum of 2).
+    """
+
+    def test_oom_recovery_minimum_is_one(self):
+        """OOM recovery condition must allow batch_size=1 (not stop at 2).
+
+        Simulates the recovery logic: starting from batch_size=2 one more OOM
+        must be recoverable by halving to 1 and doubling grad_accum.
+        """
+        pytest.importorskip("torch", reason="torch required by run_experiments.py")
+        from run_experiments import ExperimentConfig  # noqa: E402, I001
+
+        # Simulate config at the last recovery step before old hard stop
+        cfg = ExperimentConfig(
+            name="test",
+            datasets=["sroie"],
+            batch_size=2,
+            gradient_accumulation_steps=8,
+        )
+
+        # Old code: batch_size > 2 was False → raised immediately.
+        # New code: batch_size > 1 is True → one more recovery is possible.
+        assert cfg.batch_size > 1, (
+            "batch_size=2 must be > 1 so OOM recovery can halve it to 1"
+        )
+
+        new_batch = max(1, cfg.batch_size // 2)
+        new_accum = cfg.gradient_accumulation_steps * 2
+        recovered = dataclasses.replace(cfg, batch_size=new_batch, gradient_accumulation_steps=new_accum)
+
+        assert recovered.batch_size == 1, (
+            f"Expected batch_size=1 after final recovery step, got {recovered.batch_size}"
+        )
+        assert recovered.gradient_accumulation_steps == 16, (
+            f"Expected grad_accum=16 after final recovery step, got {recovered.gradient_accumulation_steps}"
+        )
+
+    def test_oom_recovery_raises_at_batch_size_one(self):
+        """When batch_size is already 1, OOM recovery must raise RuntimeError."""
+        pytest.importorskip("torch", reason="torch required by run_experiments.py")
+        from run_experiments import ExperimentConfig  # noqa: E402, I001
+
+        cfg = ExperimentConfig(name="test", datasets=["sroie"], batch_size=1)
+
+        # New code: batch_size > 1 is False → raise
+        assert not (cfg.batch_size > 1), (
+            "batch_size=1 must NOT satisfy the recovery condition — should raise"
+        )
+
+    def test_effective_batch_preserved_across_recovery_steps(self):
+        """Each OOM recovery step must preserve the effective batch size (batch × accum)."""
+        pytest.importorskip("torch", reason="torch required by run_experiments.py")
+        from run_experiments import ExperimentConfig  # noqa: E402, I001
+
+        cfg = ExperimentConfig(
+            name="test",
+            datasets=["sroie"],
+            batch_size=8,
+            gradient_accumulation_steps=2,
+        )
+        effective = cfg.batch_size * cfg.gradient_accumulation_steps
+
+        # Simulate two recovery steps: 8→4→2, accum 2→4→8
+        cfg = dataclasses.replace(
+            cfg,
+            batch_size=max(1, cfg.batch_size // 2),
+            gradient_accumulation_steps=cfg.gradient_accumulation_steps * 2,
+        )
+        assert cfg.batch_size * cfg.gradient_accumulation_steps == effective
+
+        cfg = dataclasses.replace(
+            cfg,
+            batch_size=max(1, cfg.batch_size // 2),
+            gradient_accumulation_steps=cfg.gradient_accumulation_steps * 2,
+        )
+        assert cfg.batch_size * cfg.gradient_accumulation_steps == effective

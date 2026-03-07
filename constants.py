@@ -129,6 +129,7 @@ def _gpu_cleanup(*objects) -> None:
 
     gc.collect()
     if torch.cuda.is_available():
+        torch.cuda.synchronize()  # Ensure all CUDA ops complete before freeing
         torch.cuda.empty_cache()
 
 

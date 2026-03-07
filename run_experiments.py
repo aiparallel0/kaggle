@@ -415,20 +415,25 @@ def train_experiment(
         val_dataset=val_ds,
     )
 
-    # Train with progressive OOM recovery: halve batch_size (8→4→2) on each
-    # CUDA OOM, fully rebuilding the model and datasets from scratch each time
-    # so the retry starts on a clean, defragmented GPU.
+    # Train with progressive OOM recovery: halve batch_size (8→4→2→1) on each
+    # CUDA OOM, doubling gradient_accumulation_steps to keep the effective batch
+    # the same, then fully rebuilding the model and datasets from scratch each
+    # time so the retry starts on a clean, defragmented GPU.
     while True:
         try:
             result = trainer.train()
             break
         except torch.cuda.OutOfMemoryError as e:
-            if config.batch_size > 2:
-                new_batch = config.batch_size // 2
-                config = dataclasses.replace(config, batch_size=new_batch)
+            if config.batch_size > 1:
+                new_batch = max(1, config.batch_size // 2)
+                new_accum = config.gradient_accumulation_steps * 2
+                config = dataclasses.replace(
+                    config, batch_size=new_batch, gradient_accumulation_steps=new_accum
+                )
                 print(
                     f"[Exp {exp_id}] CUDA OOM — reducing batch_size to "
-                    f"{config.batch_size} and retrying"
+                    f"{config.batch_size}, increasing grad_accum to "
+                    f"{config.gradient_accumulation_steps} and retrying"
                 )
                 # Delete ALL GPU-resident objects so the retry starts on a
                 # clean, defragmented GPU — not just the trainer wrapper.
@@ -436,6 +441,8 @@ def train_experiment(
                 if val_ds is not None:
                     del val_ds
                 gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()  # Ensure all CUDA ops complete before freeing
                 torch.cuda.empty_cache()
                 # Re-create everything from the base model to avoid inheriting
                 # any gradient state from the failed attempt.
@@ -449,7 +456,7 @@ def train_experiment(
                 )
             else:
                 raise RuntimeError(
-                    f"[Exp {exp_id}] CUDA OOM: batch_size already at minimum (2); "
+                    f"[Exp {exp_id}] CUDA OOM: batch_size already at minimum (1); "
                     "cannot recover without further hardware constraints"
                 ) from e
 
@@ -474,6 +481,8 @@ def train_experiment(
     if val_ds is not None:
         del val_ds
     gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()  # Ensure all CUDA ops complete before freeing
     torch.cuda.empty_cache()
     print(f"[Exp {exp_id}] GPU memory released")
 
