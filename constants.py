@@ -1,3 +1,9 @@
+# =============================================================================
+# constants.py
+# Purpose: Shared project constants (BASE_MODEL, NEW_TOKENS, IMAGE_EXTS, MAX_LENGTH, SEED)
+# Project: DONUT Receipt KIE — SROIE Fine-tuning & Benchmarking
+# Updated: 2026-03-07
+# =============================================================================
 # constants.py — Single source of truth for all shared constants.
 #
 # Previously, FIELDS, IMAGE_EXTS, MAX_LENGTH, BASE_MODEL, SEED, and NEW_TOKENS

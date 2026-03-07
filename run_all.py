@@ -1,3 +1,9 @@
+# =============================================================================
+# run_all.py
+# Purpose: Master orchestrator — dataset prep, DONUT training, TrOCR+YOLO, benchmark (run this)
+# Project: DONUT Receipt KIE — SROIE Fine-tuning & Benchmarking
+# Updated: 2026-03-07
+# =============================================================================
 """
 run_all.py — Single entry point for the complete dual-architecture pipeline.
 

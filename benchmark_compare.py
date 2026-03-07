@@ -1,3 +1,9 @@
+# =============================================================================
+# benchmark_compare.py
+# Purpose: DONUT vs TrOCR+YOLO head-to-head benchmark with F1 scoring and visualization
+# Project: DONUT Receipt KIE — SROIE Fine-tuning & Benchmarking
+# Updated: 2026-03-07
+# =============================================================================
 """
 benchmark_compare.py
 ====================

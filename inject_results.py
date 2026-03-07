@@ -1,3 +1,9 @@
+# =============================================================================
+# inject_results.py
+# Purpose: Injects real experiment metrics into LaTeX templates to produce final paper and slides
+# Project: DONUT Receipt KIE — SROIE Fine-tuning & Benchmarking
+# Updated: 2026-03-07
+# =============================================================================
 """
 inject_results.py — Generate LaTeX table content and a filled paper.tex.
 

@@ -1,3 +1,9 @@
+# =============================================================================
+# dataset_normalizer.py
+# Purpose: Field-value normalization (dates, totals, company names) for F1/NED scoring
+# Project: DONUT Receipt KIE — SROIE Fine-tuning & Benchmarking
+# Updated: 2026-03-07
+# =============================================================================
 """
 dataset_normalizer.py — Canonical intermediate schema enforcer.
 

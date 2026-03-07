@@ -1,3 +1,9 @@
+# =============================================================================
+# preprocess_seller_split.py
+# Purpose: Seller-stratified train/val split to prevent data leakage across sellers
+# Project: DONUT Receipt KIE — SROIE Fine-tuning & Benchmarking
+# Updated: 2026-03-07
+# =============================================================================
 """preprocess_seller_split.py — Split Invoices-DONUT seller strings into
 (company, address) using spaCy NER, with heuristic fallback.
 

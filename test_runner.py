@@ -1,3 +1,9 @@
+# =============================================================================
+# test_runner.py
+# Purpose: Test runner for unit and integration tests
+# Project: DONUT Receipt KIE — SROIE Fine-tuning & Benchmarking
+# Updated: 2026-03-07
+# =============================================================================
 """Test runner orchestration - ruff checks and pytest execution."""
 
 import asyncio

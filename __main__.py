@@ -1,3 +1,9 @@
+# =============================================================================
+# __main__.py
+# Purpose: Package entry point — delegates to run_all.py
+# Project: DONUT Receipt KIE — SROIE Fine-tuning & Benchmarking
+# Updated: 2026-03-07
+# =============================================================================
 """
 __main__.py — Entry point for package execution
 

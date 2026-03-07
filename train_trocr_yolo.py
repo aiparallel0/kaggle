@@ -1,3 +1,9 @@
+# =============================================================================
+# train_trocr_yolo.py
+# Purpose: YOLO text-region detection + TrOCR OCR pipeline — training and inference
+# Project: DONUT Receipt KIE — SROIE Fine-tuning & Benchmarking
+# Updated: 2026-03-07
+# =============================================================================
 """
 train_trocr_yolo.py — TrOCR+YOLO two-stage training pipeline.
 

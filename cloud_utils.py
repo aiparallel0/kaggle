@@ -1,3 +1,9 @@
+# =============================================================================
+# cloud_utils.py
+# Purpose: Cloud utility helpers (SSH, port-forwarding, GPU checks, rsync wrappers)
+# Project: DONUT Receipt KIE — SROIE Fine-tuning & Benchmarking
+# Updated: 2026-03-07
+# =============================================================================
 """cloud_utils.py — Cloud infrastructure helpers: git operations and result storage.
 
 Consolidates GitController and StorageManager into one module.  Both classes

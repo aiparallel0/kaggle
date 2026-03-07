@@ -85,6 +85,8 @@ class TestOptimizeHyperparamsHighVRAM:
     """Tests for optimize_hyperparams() on high-VRAM GPUs (>24 GB).
 
     This pins the fix for the step starvation bug on A100/H100 class GPUs.
+    All tests use the reference image size (1280×960) to exercise the
+    calibrated tier thresholds independently of the active processor_config.json.
     """
 
     def _call(self, num_train_samples: int, vram_gb: float = 40.0) -> ResourceOptimizedConfig:
@@ -92,6 +94,7 @@ class TestOptimizeHyperparamsHighVRAM:
             num_train_samples=num_train_samples,
             available_vram_gb=vram_gb,
             available_ram_gb=64.0,
+            image_size=(1280, 960),  # reference resolution — keep tests config-independent
         )
 
     def _optimizer_steps(
@@ -143,7 +146,12 @@ class TestOptimizeHyperparamsHighVRAM:
 
 
 class TestOptimizeHyperparamsLowVRAM:
-    """Tests for low-VRAM paths (RTX 4090 and below)."""
+    """Tests for low-VRAM paths (RTX 4090 and below).
+
+    All tests pass image_size=(1280, 960) to keep them independent of the
+    active processor_config.json, since the low-VRAM tier thresholds were
+    calibrated at the reference resolution.
+    """
 
     def test_rtx4090_batch_is_2(self):
         """RTX 4090 (24 GB) must use batch_size=2 to prevent OOM."""
@@ -151,6 +159,7 @@ class TestOptimizeHyperparamsLowVRAM:
             num_train_samples=500,
             available_vram_gb=24.0,
             available_ram_gb=32.0,
+            image_size=(1280, 960),
         )
         assert cfg.batch_size == 2, (
             f"RTX 4090 path returned batch_size={cfg.batch_size}, expected 2"
@@ -162,6 +171,7 @@ class TestOptimizeHyperparamsLowVRAM:
             num_train_samples=500,
             available_vram_gb=7.0,
             available_ram_gb=16.0,
+            image_size=(1280, 960),
         )
         assert cfg.batch_size == 4
 
@@ -181,6 +191,7 @@ class TestOptimizeHyperparamsLowVRAM:
             num_train_samples=500,
             available_vram_gb=24.0,
             available_ram_gb=32.0,
+            image_size=(1280, 960),
         )
         # Must not raise — previously raised ValueError with accum=8
         validate_training_config(
@@ -196,6 +207,7 @@ class TestOptimizeHyperparamsLowVRAM:
             num_train_samples=500,
             available_vram_gb=24.0,
             available_ram_gb=32.0,
+            image_size=(1280, 960),
         )
         steps = math.ceil(500 / (cfg.batch_size * cfg.gradient_accumulation_steps)) * 5
         assert steps >= 200, (
@@ -210,10 +222,76 @@ class TestOptimizeHyperparamsLowVRAM:
             num_train_samples=2000,
             available_vram_gb=24.0,
             available_ram_gb=32.0,
+            image_size=(1280, 960),
         )
         # 2000 samples with accum=8 at 5 epochs: ceil(2000/16)*5 = 625 ≥ 200 ✓
         steps = math.ceil(2000 / (cfg.batch_size * cfg.gradient_accumulation_steps)) * 5
         assert steps >= 200, f"Large dataset path still too few steps: {steps} with 5 epochs"
+
+
+class TestImageSizeAwareVRAM:
+    """Tests for the image-size-aware VRAM calibration (Task 2 OOM fix).
+
+    Pins the fix for Experiment 8 OOM on the Vast.ai RTX 6000 Blackwell 96 GB:
+    processor_config.json uses 2560×1920 (4× reference pixels), causing the old
+    hardcoded batch=16 to require ~182 GB — far beyond 96 GB capacity.
+    """
+
+    def test_get_image_size_fallback_on_missing_file(self):
+        """get_image_size_from_processor_config falls back to (1280, 960) when file absent."""
+        from resource_optimizer import get_image_size_from_processor_config
+
+        result = get_image_size_from_processor_config("/nonexistent/path/processor_config.json")
+        assert result == (1280, 960), f"Expected fallback (1280, 960), got {result}"
+
+    def test_96gb_blackwell_4x_pixels_batch_is_safe(self):
+        """96 GB GPU + 2560×1920 images must not assign batch_size=16 (Exp 8 OOM fix).
+
+        With 4× reference pixels: vram_needed(batch=16) = 2.848×16×4 = 182 GB > 96 GB.
+        Safe maximum is batch=4 (2.848×4×4 = 45.6 GB < 86.4 GB = 96×0.90).
+        """
+        cfg = optimize_hyperparams(
+            num_train_samples=3940,
+            available_vram_gb=96.0,
+            available_ram_gb=256.0,
+            image_size=(2560, 1920),
+        )
+        assert cfg.batch_size <= 4, (
+            f"96 GB GPU with 2560×1920 images returned batch_size={cfg.batch_size}; "
+            "max safe is 4 (batch=8 requires ~91 GB which exceeds 90% of 96 GB). "
+            "This is the Exp 8 OOM regression."
+        )
+        assert cfg.batch_size >= 1, "batch_size must be at least 1"
+
+    def test_96gb_blackwell_4x_pixels_enough_optimizer_steps(self):
+        """96 GB + 2560×1920 + large dataset must still yield ≥ 200 optimizer steps."""
+        cfg = optimize_hyperparams(
+            num_train_samples=3940,
+            available_vram_gb=96.0,
+            available_ram_gb=256.0,
+            image_size=(2560, 1920),
+        )
+        steps = math.ceil(3940 / (cfg.batch_size * cfg.gradient_accumulation_steps)) * 10
+        assert steps >= 200, (
+            f"96 GB Blackwell + Exp 8: only {steps} optimizer steps "
+            f"(batch={cfg.batch_size}, accum={cfg.gradient_accumulation_steps})"
+        )
+
+    def test_pixels_scale_1x_matches_reference_behavior(self):
+        """At reference resolution (1280×960), >24 GB path behaves as before the fix.
+
+        Verifies that image-size-aware formula does not regress reference-resolution paths.
+        """
+        # 40 GB + 1280×960: max_safe_batch = 8 (22.8 GB < 36 GB); small dataset → 4
+        cfg = optimize_hyperparams(
+            num_train_samples=500,
+            available_vram_gb=40.0,
+            available_ram_gb=64.0,
+            image_size=(1280, 960),
+        )
+        steps = math.ceil(500 / (cfg.batch_size * cfg.gradient_accumulation_steps)) * 10
+        assert steps >= 200, f"Reference resolution regression: only {steps} steps"
+        assert cfg.batch_size >= 1
 
 
 class TestExperimentConfigImmutability:
