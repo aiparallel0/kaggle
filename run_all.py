@@ -672,10 +672,17 @@ def stage_download(args) -> StageResult:
     try:
         from transformers import DonutProcessor, VisionEncoderDecoderModel
 
+        from constants import _gpu_cleanup
+
         model_id = BASE_MODEL
-        DonutProcessor.from_pretrained(model_id)
-        VisionEncoderDecoderModel.from_pretrained(model_id)
+        _preload_proc = DonutProcessor.from_pretrained(model_id)
+        _preload_model = VisionEncoderDecoderModel.from_pretrained(model_id)
         logging.getLogger(__name__).info("Base model cached")
+        # FIX: explicitly free model weights before stage 1.5 loads the CORD model.
+        # Without this, both models (~1.6 GB combined) are simultaneously resident
+        # in RAM when the pixel-tensor cache is allocated, causing OOM kill.
+        del _preload_proc, _preload_model
+        _gpu_cleanup()
     except Exception as e:
         w = f"Model pre-download failed: {e}"
         logging.getLogger(__name__).warning(w)
