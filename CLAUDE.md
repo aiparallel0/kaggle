@@ -814,6 +814,38 @@ The model was pretrained at 1280×960. Higher resolutions:
 
 If you want to experiment with resolution: update `_REF_IMAGE_SIZE` and `_VRAM_PER_SAMPLE_AT_REF_GB` in `resource_optimizer.py` to match, so all threshold arithmetic stays correct.
 
+### Val Dataset Rule (2026-03-08 fix)
+
+**Always construct the val `MultiDataset` with `precompute_tensors=False`.**
+
+Pixel tensor precompute on the val set is never worth the RAM cost:
+- Val runs once per epoch; the per-step overhead is negligible vs training (which visits each sample many times)
+- With 1332 train images already cached (Exp 6), the remaining ~4.9 GB RAM cannot absorb an additional 1902 MB val tensor cache → kernel SIGKILL
+- The label tensor cache is also skipped when `precompute_tensors=False` (safe: val tokenisation runs once per epoch)
+
+```python
+# ✅ CORRECT — val dataset never precomputes tensors
+val_ds = MultiDataset(
+    val_samples,
+    processor,
+    max_length=config.max_length,
+    precompute_tensors=False,   # val set never needs pixel tensor precompute
+)
+
+# ❌ WRONG — default precompute_tensors=True causes ~1902 MB val tensor allocation
+val_ds = MultiDataset(val_samples, processor, max_length=config.max_length)
+```
+
+### `_RAM_SAFETY_FRACTION` Rule (2026-03-08 fix)
+
+`_RAM_SAFETY_FRACTION` in `memory_manager.py` is **0.06** (6%), not 0.15.
+
+The previous 15% was calibrated for a single allocation. Across sequential train→val allocations within the same experiment, the effective headroom needed is much higher. At 6%:
+- Exp 6 train PIL check: 4683 MB vs 6% × 37637 MB = **2258 MB threshold → SKIP** (belt+suspenders catch that blocks the drain before the val check runs)
+- 500-sample baseline: 1758 MB vs 6% × 65536 MB = 3932 MB → still ALLOW on 64 GB RAM
+
+**Never raise `_RAM_SAFETY_FRACTION` above 0.10.** The regression test in `tests/test_memory_manager.py` enforces this.
+
 ### Adding a New Dataset
 
 1. Drop images and annotations into `/workspace/datasets/<your_dataset>/`

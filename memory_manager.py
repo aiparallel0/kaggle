@@ -55,6 +55,7 @@ import logging
 __all__ = [
     "compute_pil_mb_per_sample",
     "ram_cache_is_safe",
+    "ram_headroom_mb",
     "release_hf_dataset",
     "flush_hf_arrow_cache",
     "shutdown_dataloader_workers",
@@ -71,9 +72,12 @@ _REF_H: int = 1280
 _REF_W: int = 960
 
 # Safety fraction of available RAM that the PIL image cache is allowed to use.
-# 0.15 = 15%: conservative enough to leave room for model weights, optimizer
-# states, DataLoader prefetch buffers, and OS overhead across 8 experiments.
-_RAM_SAFETY_FRACTION: float = 0.15
+# 0.06 = 6%: tighter than the previous 15% to account for sequential train→val
+# allocations within the same experiment. With 15%, a 4.6 GB train cache could
+# consume most of the RAM before the val PIL check ran, causing SIGKILL at Exp 6.
+# At 6%, the Exp 6 train PIL check (4683 MB vs 6% × 37 GB = 2258 MB) is blocked
+# before it can drain the available RAM for the val dataset init.
+_RAM_SAFETY_FRACTION: float = 0.06
 
 
 def compute_pil_mb_per_sample(height: int, width: int) -> float:
@@ -155,6 +159,23 @@ def ram_cache_is_safe(
         "ALLOW" if is_safe else "SKIP",
     )
     return is_safe
+
+
+def ram_headroom_mb() -> float:
+    """Return the current available system RAM in MB.
+
+    This is a live reading (not cached) suitable for point-in-time checks
+    immediately before an allocation, e.g., the dual-budget guard in
+    MultiDataset pixel tensor precompute.
+
+    Returns a conservative 0.0 on any error so callers treat an unknown
+    RAM state as "no headroom available".
+    """
+    try:
+        import psutil
+        return psutil.virtual_memory().available / (1024 * 1024)
+    except Exception:
+        return 0.0
 
 
 def release_hf_dataset(ds) -> None:

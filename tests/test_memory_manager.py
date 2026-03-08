@@ -89,13 +89,17 @@ class TestRamCacheIsSafe:
         )
 
     def test_large_dataset_at_ref_resolution_is_allowed(self):
-        """3940 samples x 3.516 MB = 13,853 MB < 192 GB x 15% = 28,800 MB -> SAFE."""
+        """3940 samples x 3.516 MB = 13,853 MB < 256 GB x 6% = 15,729 MB -> SAFE.
+
+        Uses 256 GB RAM to ensure the correct resolution (1280x960) is allowed
+        even with the conservative 6% safety fraction.
+        """
         import unittest.mock as mock
-        mock_psutil = _make_psutil_mock(192 * 1024 * 1024 * 1024)  # 192 GB
+        mock_psutil = _make_psutil_mock(256 * 1024 * 1024 * 1024)  # 256 GB
         with mock.patch.dict("sys.modules", {"psutil": mock_psutil}):
             result = mm.ram_cache_is_safe(3940, 1280, 960)
         assert result is True, (
-            "3940 samples x 3.516 MB = 13.8 GB should be allowed at 15% of 192 GB (28.8 GB threshold)."
+            "3940 samples x 3.516 MB = 13.8 GB should be allowed at 6% of 256 GB (15.7 GB threshold)."
         )
 
     def test_psutil_import_error_returns_false(self):
@@ -182,3 +186,63 @@ class TestShutdownDataloaderWorkers:
         mock_trainer.get_eval_dataloader = mock.Mock(return_value=None)
         mm.shutdown_dataloader_workers(mock_trainer)
         mock_iter._shutdown_workers.assert_called_once()
+
+
+class TestRamHeadroomMb:
+    """Tests for the new ram_headroom_mb() function."""
+
+    def test_returns_positive_float_on_real_system(self):
+        """ram_headroom_mb() must return a positive float on any machine with psutil."""
+        result = mm.ram_headroom_mb()
+        assert isinstance(result, float), f"Expected float, got {type(result).__name__}"
+        assert result >= 0.0, f"Expected non-negative value, got {result}"
+
+    def test_returns_float_with_mock_psutil(self):
+        """ram_headroom_mb() returns available / 1024**2 from psutil.virtual_memory()."""
+        import unittest.mock as mock
+        mock_psutil = _make_psutil_mock(8 * 1024 * 1024 * 1024)  # 8 GB
+        with mock.patch.dict("sys.modules", {"psutil": mock_psutil}):
+            result = mm.ram_headroom_mb()
+        expected = 8 * 1024  # 8 GB in MB = 8192
+        assert abs(result - expected) < 1.0, (
+            f"Expected ~{expected} MB, got {result:.1f} MB"
+        )
+
+    def test_returns_zero_on_psutil_error(self):
+        """ram_headroom_mb() returns 0.0 when psutil is unavailable."""
+        import unittest.mock as mock
+        with mock.patch.dict("sys.modules", {"psutil": None}):
+            result = mm.ram_headroom_mb()
+        assert result == 0.0, f"Expected 0.0 on psutil error, got {result}"
+
+    def test_exported_in_all(self):
+        """ram_headroom_mb must be listed in memory_manager.__all__."""
+        assert "ram_headroom_mb" in mm.__all__, (
+            "ram_headroom_mb must be exported in __all__ so callers can do "
+            "`from memory_manager import ram_headroom_mb`"
+        )
+
+
+class TestRamSafetyFractionRegressionGuard:
+    """Regression guard: _RAM_SAFETY_FRACTION must never be raised back to 0.15."""
+
+    def test_safety_fraction_is_at_most_0_10(self):
+        """_RAM_SAFETY_FRACTION must be <= 0.10.
+
+        The OOM crash at Experiment 6 was caused by the old 15% (0.15) value.
+        The fix lowers it to 6% (0.06). This test prevents future PRs from
+        raising it back above 10% without explicit acknowledgement.
+        """
+        fraction = mm._RAM_SAFETY_FRACTION
+        assert fraction <= 0.10, (
+            f"_RAM_SAFETY_FRACTION = {fraction} is too high (must be <= 0.10). "
+            "Raising it above 0.10 risks the Exp 6 three-layer OOM failure: "
+            "train PIL cache drains RAM before the val init runs."
+        )
+
+    def test_safety_fraction_is_positive(self):
+        """_RAM_SAFETY_FRACTION must be strictly positive."""
+        assert mm._RAM_SAFETY_FRACTION > 0.0, (
+            "_RAM_SAFETY_FRACTION must be > 0 to avoid dividing by zero or "
+            "always rejecting the cache."
+        )

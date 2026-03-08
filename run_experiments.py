@@ -457,7 +457,14 @@ def train_experiment(
         # Build PyTorch datasets
         _train_ds = MultiDataset(samples, _proc, max_length=config.max_length)
         _val_ds = (
-            MultiDataset(val_samples, _proc, max_length=config.max_length) if val_samples else None
+            MultiDataset(
+                val_samples,
+                _proc,
+                max_length=config.max_length,
+                precompute_tensors=False,  # val set never needs pixel tensor precompute
+            )
+            if val_samples
+            else None
         )
 
         return _proc, _mdl, _train_ds, _val_ds
