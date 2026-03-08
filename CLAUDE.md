@@ -761,3 +761,75 @@ if _decoded != "<s_sroie>":
 ```
 
 **Why:** Silent wrong token IDs produce models that generate valid XML structure but wrong content. The roundtrip check catches misconfiguration immediately at setup time.
+
+---
+
+## § 9. Memory Management Rules (Added 2026-03-08)
+
+### The Authority Module
+All memory budget decisions go through `memory_manager.py`. Do not hardcode per-sample MB estimates anywhere else. Do not add `* 3` or `* 14.2` or `* 56.6` constants to any file.
+
+### RAM Memory Map (at 1280×960 — the correct DONUT native resolution)
+
+| What | Where | Size | When freed |
+|---|---|---|---|
+| DONUT model weights | GPU VRAM | ~800 MB | After `del model` + `torch.cuda.empty_cache()` |
+| AdamW optimizer (m+v moments) | GPU VRAM | ~1,600 MB | After `del trainer` |
+| Gradient activations | GPU VRAM | ~4,000 MB at batch=8 | After each backward pass |
+| DataLoader prefetch buffers | System RAM (worker procs) | ~230 MB × n_workers | After `memory_manager.shutdown_dataloader_workers(trainer)` |
+| PIL image cache (`_image_cache`) | System RAM | 3.516 MB × n_samples | After `train_ds.clear_caches()` |
+| Float32 pixel cache (`_pixel_cache`) | System RAM | 14.064 MB × n_samples | After `train_ds.clear_caches()` |
+| Label tensor cache (`_label_cache`) | System RAM | ~0.003 MB × n_samples | After `train_ds.clear_caches()` |
+| HF Arrow mmaps (FUNSD/InvoicesDonut) | System RAM | 50–200 MB | After `memory_manager.release_hf_dataset(ds)` + `flush_hf_arrow_cache()` |
+| Processor (tokenizer + image processor) | System RAM | ~100 MB | After `del processor` |
+| Base model pre-load copy | System RAM | ~800 MB | After all experiments + `del _base_model` |
+
+### The Correct Cleanup Order (per experiment)
+
+```python
+# 1. Shutdown DataLoader workers FIRST (before del trainer)
+memory_manager.shutdown_dataloader_workers(trainer)
+# 2. Capture log history (plain list, safe to keep)
+log_history = result.log_history
+# 3. Clear dataset caches in-place (empties dicts without waiting for GC)
+train_ds.clear_caches()
+if val_ds is not None:
+    val_ds.clear_caches()
+# 4. Delete all references
+del trainer, model, processor, train_ds
+if val_ds is not None:
+    del val_ds
+# 5. GPU VRAM flush
+_gpu_cleanup()   # gc.collect() + torch.cuda.empty_cache()
+```
+
+### The `processor_config.json` Rule
+
+**NEVER set `height` above 1280 or `width` above 960** for `naver-clova-ix/donut-base`.
+
+The model was pretrained at 1280×960. Higher resolutions:
+- Do NOT improve quality (out-of-distribution for pretrained weights)
+- Multiply RAM per sample by `(H × W) / (1280 × 960)` — at 2560×1920 this is 4×
+- All threshold constants in `resource_optimizer.py` (`_REF_IMAGE_SIZE`, `_VRAM_PER_SAMPLE_AT_REF_GB`) are calibrated to 1280×960
+
+If you want to experiment with resolution: update `_REF_IMAGE_SIZE` and `_VRAM_PER_SAMPLE_AT_REF_GB` in `resource_optimizer.py` to match, so all threshold arithmetic stays correct.
+
+### Adding a New Dataset
+
+1. Drop images and annotations into `/workspace/datasets/<your_dataset>/`
+2. Normalize annotations to SROIE schema: `{"company": "", "date": "", "address": "", "total": ""}`
+3. Add entry to `datasets_registry.json` in repository root
+4. Add loader class to `dataset_loaders.py` following `BaseDatasetLoader` ABC
+5. If loader uses `load_from_disk()` or `load_dataset()`: call `memory_manager.release_hf_dataset(ds)` + `memory_manager.flush_hf_arrow_cache()` after sample extraction
+6. Add dataset name to relevant `ExperimentConfig.datasets` lists in `run_experiments.py`
+7. No changes to `memory_manager.py`, `train.py`, `constants.py`, or `resource_optimizer.py`
+
+### Why 20 Previous PRs Failed
+
+Every OOM PR from #80 to #109 fixed GPU VRAM symptoms. The actual 192 GB RAM explosion was:
+- A RAM problem (not GPU), caused by `processor_config.json` at 4× resolution (`2560×1920` instead of `1280×960`)
+- Compounded by a wrong `* 3 MB/sample` constant in `train.py` (should be `3 × H × W / 1_048_576`)
+- Compounded by HF Arrow cache never being released between experiments in `dataset_loaders.py`
+- Compounded by DataLoader worker processes staying alive across experiments (`persistent_workers=True` + `prefetch_factor=4`)
+
+The fix is in commit adding this section. Do not revert `processor_config.json` to `2560×1920`.

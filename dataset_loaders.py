@@ -62,6 +62,7 @@ except Exception:
 from constants import EMPTY_GT, SEED, _get_sroie_dir
 from constants import IMAGE_EXTS as _IMAGE_EXTS_SET
 from dataset_normalizer import extract_address_from_seller
+import memory_manager as _mm
 
 # ── Type alias ────────────────────────────────────────────────────────
 Sample = tuple[Path, dict[str, str]]
@@ -896,8 +897,15 @@ class FUNSDLoader(BaseDatasetLoader):
 
         if not samples:
             self._warn("FUNSD returned 0 samples — check HF cache.")
+            _mm.release_hf_dataset(ds)
+            _mm.flush_hf_arrow_cache()
             return []
         _log_field_coverage(samples, self.name)
+        # Release the HuggingFace Arrow dataset from memory now that we have
+        # extracted all samples. Without this, the datasets library keeps the
+        # Arrow mmap alive in its module-level cache across all 8 experiments.
+        _mm.release_hf_dataset(ds)
+        _mm.flush_hf_arrow_cache()
         return samples
 
     def validate_cache(self) -> bool:
@@ -1074,6 +1082,10 @@ class InvoicesDonutLoader(BaseDatasetLoader):
                     samples.append((img_path, gt))
 
         _log_field_coverage(samples, self.name)
+        # Release the HuggingFace Arrow dataset from memory now that we have
+        # extracted all samples.
+        _mm.release_hf_dataset(ds)
+        _mm.flush_hf_arrow_cache()
         return _validate_samples_nonempty(samples, self.name)
 
     def validate_cache(self) -> bool:

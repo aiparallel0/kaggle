@@ -797,6 +797,28 @@ def stage_experiments(args) -> StageResult:
     succeeded = 0
     failed_experiments: list[int] = []
 
+    # Pre-load the base DONUT model and processor ONCE, then deep-copy into
+    # each experiment. This replaces 8 × from_pretrained() disk reads (each
+    # ~4–6 s, 800 MB) with 8 fast in-RAM deep copies.
+    # This mirrors the pattern already used correctly in run_experiments.py main().
+    _base_processor = None
+    _base_model = None
+    if not args.experiment:
+        # Only pre-load when running all experiments; single-experiment runs
+        # load directly in train_experiment() via from_pretrained().
+        try:
+            from transformers import DonutProcessor, VisionEncoderDecoderModel
+            _cfg0 = re_mod.EXPERIMENTS[1]
+            print(f"  [stage_experiments] Pre-loading base model: {_cfg0.base_model}")
+            _base_processor = DonutProcessor.from_pretrained(_cfg0.base_model)
+            _base_model = VisionEncoderDecoderModel.from_pretrained(_cfg0.base_model)
+            print("  [stage_experiments] Base model pre-loaded (will deep-copy per experiment).")
+        except Exception as _preload_exc:
+            print(f"  [stage_experiments] Base model pre-load failed ({_preload_exc}); "
+                  "each experiment will load from disk.")
+            _base_processor = None
+            _base_model = None
+
     for i, exp_id in enumerate(exp_ids, 1):
         _step(i, total, f"Experiment {exp_id}: {re_mod.EXPERIMENTS[exp_id].name}")
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -804,7 +826,11 @@ def stage_experiments(args) -> StageResult:
         print(f"    Datasets: {re_mod.EXPERIMENTS[exp_id].datasets}")
         t0 = time.monotonic()
         try:
-            result = re_mod.run_experiment(exp_id)
+            result = re_mod.run_experiment(
+                exp_id,
+                base_processor=_base_processor,
+                base_model=_base_model,
+            )
         except Exception as exc:
             import traceback
 
@@ -847,6 +873,15 @@ def stage_experiments(args) -> StageResult:
             succeeded += 1
 
     re_mod.save_summary()
+
+    # Clean up pre-loaded base model now that all experiments are done.
+    if _base_model is not None or _base_processor is not None:
+        try:
+            from constants import _gpu_cleanup
+            del _base_model, _base_processor
+            _gpu_cleanup()
+        except Exception:
+            pass
 
     exit_status = 1 if had_empty else 0
     return StageResult(
