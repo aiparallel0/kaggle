@@ -2144,10 +2144,40 @@ def build_parser() -> argparse.ArgumentParser:
             "Generates paper_micro.tex."
         ),
     )
+    p.add_argument(
+        "--startup-log",
+        default="startup.log",
+        metavar="FILE",
+        help="Path for the startup diagnostics log (default: startup.log)",
+    )
+    p.add_argument(
+        "--skip-startup-check",
+        action="store_true",
+        help="Bypass startup diagnostics (useful for CI/automated runs)",
+    )
     return p
 
 
 def main() -> None:
+    # Phase -1: Startup diagnostics (before anything else, stdlib-only)
+    # Scan sys.argv directly so we can honour --startup-log / --skip-startup-check
+    # before the full argparse run (which requires heavy imports to have succeeded).
+    _startup_log_file = "startup.log"
+    _skip_startup = False
+    _argv = sys.argv[1:]
+    for _i, _arg in enumerate(_argv):
+        if _arg == "--skip-startup-check":
+            _skip_startup = True
+        elif _arg.startswith("--startup-log="):
+            _startup_log_file = _arg.split("=", 1)[1]
+        elif _arg == "--startup-log" and _i + 1 < len(_argv):
+            _startup_log_file = _argv[_i + 1]
+        elif _i > 0 and _argv[_i - 1] == "--startup-log":
+            # This token was already consumed as the value for --startup-log; skip.
+            continue
+    import startup_diagnostics  # noqa: E402, I001  (uses stdlib only — safe before heavy imports)
+    startup_diagnostics.run(log_file=_startup_log_file, skip=_skip_startup)
+
     # Phase 0: Install dependencies (before any other imports)
     _install_dependencies()
     still_missing = _verify_critical_packages()
