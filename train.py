@@ -303,30 +303,59 @@ class MultiDataset(Dataset):
             # Precompute pixel_values tensors to eliminate per-step DonutImageProcessor
             # overhead. Each float32 tensor is 3×1280×960×4 bytes ≈ 14.2 MB.
             # Only attempt if: images are cached AND RAM allows the extra footprint.
+            # Hard cap: never allocate more than 4 GB of pixel tensors regardless of
+            # available RAM, because background model downloads and GPU activations
+            # consume headroom that psutil.virtual_memory() may not reflect yet.
+            _PIXEL_TENSOR_MAX_MB = 4096
             _pix_mb = len(self._image_cache) * 14.2
-            if (
-                len(self._image_cache) > 0
-                and available_mb > 0
-                and _pix_mb < available_mb * ram_threshold
-            ):
-                _log = logging.getLogger(__name__)
-                _log.info(
-                    "[Tensor Cache] Precomputing pixel_values for %d images (~%.0f MB) ...",
-                    len(self._image_cache),
-                    _pix_mb,
-                )
-                for _idx, _img in self._image_cache.items():
-                    try:
-                        self._pixel_cache[_idx] = processor(
-                            _img, return_tensors="pt"
-                        ).pixel_values.squeeze()
-                    except Exception:
-                        pass
-                _log.info(
-                    "[Tensor Cache] Precomputed %d/%d pixel_values tensors",
-                    len(self._pixel_cache),
-                    len(samples),
-                )
+            _log = logging.getLogger(__name__)
+            if len(self._image_cache) > 0:
+                if _pix_mb > _PIXEL_TENSOR_MAX_MB:
+                    _log.info(
+                        "[Tensor Cache] Skipped (estimated %.0f MB exceeds hard cap %d MB)",
+                        _pix_mb,
+                        _PIXEL_TENSOR_MAX_MB,
+                    )
+                else:
+                    # Re-read available RAM right now — the earlier reading may be stale
+                    # by hundreds of MB due to concurrent HF downloads and model loading.
+                    # Reuse the already-imported psutil if it was available (available_mb > 0).
+                    _fresh_available_mb = (
+                        psutil.virtual_memory().available // (1024 * 1024)
+                        if available_mb > 0
+                        else 0
+                    )
+                    # Use a tighter threshold for pixel tensors (14.2 MB each) than for PIL
+                    # images (3 MB each).  On low-VRAM systems the GPU already consumes most
+                    # of the RAM headroom, so cap at 15 % of fresh available RAM.
+                    _pix_threshold = 0.15 if torch.cuda.is_available() else 0.25
+                    if _fresh_available_mb > 0 and _pix_mb < _fresh_available_mb * _pix_threshold:
+                        _log.info(
+                            "[Tensor Cache] Precomputing pixel_values for %d images"
+                            " (~%.0f MB) ...",
+                            len(self._image_cache),
+                            _pix_mb,
+                        )
+                        for _idx, _img in self._image_cache.items():
+                            try:
+                                self._pixel_cache[_idx] = processor(
+                                    _img, return_tensors="pt"
+                                ).pixel_values.squeeze()
+                            except Exception:
+                                pass
+                        _log.info(
+                            "[Tensor Cache] Precomputed %d/%d pixel_values tensors",
+                            len(self._pixel_cache),
+                            len(samples),
+                        )
+                    else:
+                        _log.info(
+                            "[Tensor Cache] Skipped (need ~%d MB, fresh available %d MB,"
+                            " threshold %.0f%%)",
+                            int(_pix_mb),
+                            _fresh_available_mb,
+                            _pix_threshold * 100,
+                        )
 
             # Precompute label token tensors — each is 768 ints (≈3 KB), always fits in RAM.
             # Amortises tokeniser overhead (sentencepiece BPE encode + pad to max_length)

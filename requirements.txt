@@ -21,5 +21,7 @@ accelerate>=0.24.0
 sentencepiece>=0.1.99
 editdistance>=0.6.0      # NED computation in evaluate.py
 psutil>=5.9.0            # RAM-aware caching in run_experiments.py
+# Dev / test tools
+pytest>=7.0              # required to run: pytest tests/
 # flash-attn must be installed separately after torch is installed:
 # pip install flash-attn --no-build-isolation
