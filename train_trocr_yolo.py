@@ -38,6 +38,7 @@ from transformers import (
 )
 
 from constants import DEVICE, FIELDS, SEED, WORKSPACE, _gpu_cleanup, _optimal_num_workers
+from control_suite import CONTROL_SUITE
 
 __all__ = [
     "TrOCRReceiptDataset",
@@ -233,6 +234,7 @@ def train_yolo(output_dir: Path | None = None) -> Path:
     model = YOLO(YOLO_BASE)
     start = time.time()
 
+    _yolo = CONTROL_SUITE.yolo
     model.train(
         data=str(YOLO_DATA_YAML),
         epochs=YOLO_EPOCHS,
@@ -241,19 +243,46 @@ def train_yolo(output_dir: Path | None = None) -> Path:
         project=str(output_dir),
         name="run",
         exist_ok=True,
-        degrees=5,
-        translate=0.1,
-        scale=0.3,
-        fliplr=0.0,
-        flipud=0.0,
-        mosaic=0.5,
-        optimizer=YOLO_OPTIMIZER,  # "AdamW" default; micro patches to "SGD" for speed
-        momentum=YOLO_MOMENTUM,  # used when optimizer="SGD"
-        lr0=1e-3,
-        lrf=0.01,
-        patience=15,
+        # ── Augmentation (receipt-domain tuned) ──────────────────────────
+        degrees=_yolo.degrees,      # 5° rotation tolerance for tilted receipts
+        translate=_yolo.translate,  # 0.1 spatial shift
+        scale=_yolo.scale,          # 0.3 zoom range
+        fliplr=_yolo.fliplr,        # 0.0 — text direction matters; no horizontal flip
+        flipud=_yolo.flipud,        # 0.0 — receipts are always upright
+        mosaic=_yolo.mosaic,        # 0.5 — reduced from default 1.0 for document domain
+        close_mosaic=_yolo.close_mosaic,  # 10 — disable mosaic for final N epochs (⚠️ critical for mAP)
+        mixup=_yolo.mixup,          # 0.0 — disabled (blending receipts confuses layout)
+        copy_paste=_yolo.copy_paste,  # 0.0 — disabled; can enable for rare-class boost
+        hsv_h=_yolo.hsv_h,
+        hsv_s=_yolo.hsv_s,
+        hsv_v=_yolo.hsv_v,
+        # ── Optimizer ────────────────────────────────────────────────────
+        optimizer=YOLO_OPTIMIZER,   # "AdamW" default; micro patches to "SGD" for speed
+        momentum=YOLO_MOMENTUM,     # used when optimizer="SGD"
+        lr0=_yolo.lr0,              # 1e-3 peak LR
+        lrf=_yolo.lrf,              # 0.01 final LR fraction
+        weight_decay=_yolo.weight_decay,  # 0.0005 L2 regularisation (⚠️ was missing)
+        cos_lr=_yolo.cos_lr,        # False — linear decay (⚠️ was missing)
+        warmup_epochs=_yolo.warmup_epochs,    # 3.0 (⚠️ was missing)
+        warmup_momentum=_yolo.warmup_momentum,  # 0.8 (⚠️ was missing)
+        warmup_bias_lr=_yolo.warmup_bias_lr,    # 0.1 (⚠️ was missing)
+        # ── Finetuning ───────────────────────────────────────────────────
+        freeze=_yolo.freeze,        # None — no frozen layers (⚠️ CRITICAL: was missing entirely)
+        # ── Loss weights ─────────────────────────────────────────────────
+        box=_yolo.box,              # 7.5 bbox regression weight (⚠️ was missing)
+        cls=_yolo.cls,              # 0.5 classification weight (⚠️ was missing)
+        dfl=_yolo.dfl,              # 1.5 focal loss weight (⚠️ was missing)
+        # ── Performance ──────────────────────────────────────────────────
+        cache=_yolo.cache,          # False — set "ram" to speed up with sufficient memory
+        workers=_yolo.workers,      # 8 DataLoader threads (⚠️ was missing)
+        fraction=_yolo.fraction,    # 1.0 use full dataset (⚠️ was missing)
+        # ── Regularisation ────────────────────────────────────────────────
+        dropout=_yolo.dropout,      # 0.0 (⚠️ was missing)
+        # ── Other ─────────────────────────────────────────────────────────
+        patience=_yolo.patience,    # 15 early stopping
         seed=SEED,
         amp=YOLO_AMP,
+        deterministic=_yolo.deterministic,  # True (⚠️ was missing)
     )
 
     elapsed = time.time() - start
@@ -459,10 +488,17 @@ def train_trocr(output_dir: Path | None = None) -> dict:
         )
         print(f"  [TrOCR] Micro mode: SGD+Nesterov+CosineAnnealingLR, lr={TROCR_LR * 200:.2e}")
     else:
-        optimizer = torch.optim.AdamW(model.parameters(), lr=TROCR_LR)
-        warmup_steps = int(total_steps * 0.1)
+        _trocr = CONTROL_SUITE.trocr
+        optimizer = torch.optim.AdamW(
+            model.parameters(),
+            lr=TROCR_LR,
+            weight_decay=_trocr.weight_decay,  # 1e-4 (⚠️ was missing — AdamW default is 0)
+            betas=(_trocr.adam_beta1, _trocr.adam_beta2),
+            eps=_trocr.adam_epsilon,
+        )
+        warmup_steps = int(total_steps * _trocr.warmup_ratio)
         scheduler = get_scheduler(
-            "linear",
+            _trocr.lr_scheduler,  # "linear" (was hardcoded, now from control_suite)
             optimizer,
             num_warmup_steps=warmup_steps,
             num_training_steps=total_steps,
