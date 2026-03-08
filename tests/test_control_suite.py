@@ -182,6 +182,25 @@ def test_trocr_use_cache_disabled():
     assert CONTROL_SUITE.trocr.use_cache is False
 
 
+def test_trocr_grad_ckpt_vram_threshold_gb_is_24():
+    """grad_ckpt_vram_threshold_gb must be 24.0 to mirror the DONUT path.
+
+    Cards with VRAM > 24 GB have enough headroom to skip gradient checkpointing;
+    cards at or below 24 GB (e.g. RTX 4090 reporting exactly 24.0 GB) must keep
+    it enabled.  The strictly-greater-than comparison is intentional.
+    """
+    assert CONTROL_SUITE.trocr.grad_ckpt_vram_threshold_gb == 24.0
+
+
+def test_trocr_grad_ckpt_vram_threshold_registered():
+    """grad_ckpt_vram_threshold_gb is registered in the control registry."""
+    params = CONTROL_SUITE.to_dict()
+    assert "grad_ckpt_vram_threshold_gb" in params.get("trocr", {}), (
+        "grad_ckpt_vram_threshold_gb must be a field on TrOCRControlConfig "
+        "so that CONTROL_SUITE.to_dict() and print_summary() include it."
+    )
+
+
 def test_trocr_lr_scheduler_is_string():
     """lr_scheduler must be a string (was hardcoded 'linear' before control_suite)."""
     assert isinstance(CONTROL_SUITE.trocr.lr_scheduler, str)

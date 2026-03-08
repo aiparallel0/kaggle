@@ -297,6 +297,7 @@ _register("trocr.adam_beta2", "LOW")
 _register("trocr.adam_epsilon", "LOW")
 _register("trocr.gradient_clip_val", "MEDIUM")
 _register("trocr.gradient_checkpointing", "HIGH")
+_register("trocr.grad_ckpt_vram_threshold_gb", "HIGH")
 _register("trocr.use_cache", "MEDIUM")
 _register("trocr.predict_with_generate", "MEDIUM")
 _register("trocr.num_beams", "MEDIUM")
@@ -426,6 +427,13 @@ class TrOCRControlConfig:
     # Required for TrOCR-base (246M params) to fit on lower-VRAM GPUs during backward.
     # use_cache MUST be False when gradient_checkpointing is True (incompatible).
     gradient_checkpointing: bool = True
+
+    # impact: HIGH — VRAM threshold (GB) above which gradient checkpointing is
+    # disabled.  Cards with VRAM > threshold have enough headroom that the
+    # ~30-40% backward overhead is wasted.  Uses strict greater-than so that a
+    # card reporting exactly 24.0 GB (e.g. RTX 4090) keeps checkpointing ON.
+    # Mirrors DonutControlConfig / run_experiments._GRAD_CKPT_VRAM_THRESHOLD_GB.
+    grad_ckpt_vram_threshold_gb: float = 24.0
 
     # impact: MEDIUM — must be False when gradient_checkpointing is True
     use_cache: bool = False

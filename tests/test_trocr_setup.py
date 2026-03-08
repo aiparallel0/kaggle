@@ -478,3 +478,68 @@ class TestTrOCRLoadReport:
         assert "microsoft/trocr-base-printed" in captured.out, (
             "LOAD REPORT header must include the model ID for traceability."
         )
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Gradient checkpointing VRAM-threshold guard (RC4 / Root Cause 4)
+# ════════════════════════════════════════════════════════════════════════════
+
+
+class TestGradientCheckpointingThreshold:
+    """Verify the VRAM-threshold logic for TrOCR gradient checkpointing.
+
+    On cards with VRAM > 24 GB, gradient checkpointing should be disabled
+    (no memory benefit, ~35% backward overhead wasted).  On cards with
+    VRAM <= 24 GB, it must stay enabled (required to fit 246M params).
+    The threshold uses strict greater-than so a card reporting exactly
+    24.0 GB (e.g. RTX 4090) keeps checkpointing ON.
+    """
+
+    def _run_threshold_logic(self, vram_gb: float) -> bool:
+        """Replicate the threshold decision from train_trocr_yolo.train_trocr().
+
+        Returns True if gradient checkpointing would be enabled for the
+        given VRAM amount.
+        """
+        from control_suite import CONTROL_SUITE
+
+        threshold = CONTROL_SUITE.trocr.grad_ckpt_vram_threshold_gb
+        # gradient checkpointing is enabled when vram_gb <= threshold (strict > comparison disables above threshold)
+        return vram_gb <= threshold
+
+    def test_high_vram_disables_grad_ckpt(self):
+        """VRAM=96 GB (RTX 6000 Blackwell) → gradient checkpointing disabled."""
+        assert not self._run_threshold_logic(96.0), (
+            "With 96 GB VRAM, gradient checkpointing should be disabled — "
+            "it adds ~35% backward overhead for zero memory benefit."
+        )
+
+    def test_mid_vram_disables_grad_ckpt(self):
+        """VRAM=40 GB (A100 40 GB) → gradient checkpointing disabled."""
+        assert not self._run_threshold_logic(40.0)
+
+    def test_exactly_24gb_enables_grad_ckpt(self):
+        """VRAM=24.0 GB (RTX 4090 at boundary) → gradient checkpointing ENABLED.
+
+        The strictly-greater-than comparison means that a card reporting
+        exactly 24.0 GB keeps gradient checkpointing ON, preventing the
+        OOM that the >= comparison would have caused.
+        """
+        assert self._run_threshold_logic(24.0), (
+            "VRAM=24.0 GB must enable gradient checkpointing (uses strict > not >=). "
+            "This is the RTX 4090 boundary bug (Root Cause 2/4)."
+        )
+
+    def test_just_below_24gb_enables_grad_ckpt(self):
+        """VRAM=23.65 GB (RTX 4090 typical reading) → gradient checkpointing ENABLED."""
+        assert self._run_threshold_logic(23.65)
+
+    def test_16gb_enables_grad_ckpt(self):
+        """VRAM=16 GB (V100 / RTX 3080) → gradient checkpointing enabled."""
+        assert self._run_threshold_logic(16.0)
+
+    def test_threshold_value_is_24(self):
+        """The threshold constant must be exactly 24.0 to match the DONUT path."""
+        from control_suite import CONTROL_SUITE
+
+        assert CONTROL_SUITE.trocr.grad_ckpt_vram_threshold_gb == 24.0

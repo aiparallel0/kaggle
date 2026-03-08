@@ -417,17 +417,17 @@ def train_experiment(
         if torch.cuda.is_available():
             try:
                 _vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-                if _vram_gb >= _GRAD_CKPT_VRAM_THRESHOLD_GB:
+                if _vram_gb > _GRAD_CKPT_VRAM_THRESHOLD_GB:
                     _enable_grad_ckpt = False
                     logger.info(
-                        "[GradCkpt] Disabled — VRAM=%.1f GB >= %.0f GB threshold "
+                        "[GradCkpt] Disabled — VRAM=%.1f GB > %.0f GB threshold "
                         "(saves ~35%% backward time at no memory cost)",
                         _vram_gb,
                         _GRAD_CKPT_VRAM_THRESHOLD_GB,
                     )
                 else:
                     logger.info(
-                        "[GradCkpt] Enabled — VRAM=%.1f GB < %.0f GB threshold",
+                        "[GradCkpt] Enabled — VRAM=%.1f GB <= %.0f GB threshold",
                         _vram_gb,
                         _GRAD_CKPT_VRAM_THRESHOLD_GB,
                     )
@@ -516,6 +516,10 @@ def train_experiment(
                 )
                 # Delete ALL GPU-resident objects so the retry starts on a
                 # clean, defragmented GPU — not just the trainer wrapper.
+                if hasattr(train_ds, "clear_caches"):
+                    train_ds.clear_caches()
+                if val_ds is not None and hasattr(val_ds, "clear_caches"):
+                    val_ds.clear_caches()
                 del trainer, model, processor, train_ds
                 if val_ds is not None:
                     del val_ds
@@ -573,6 +577,12 @@ def train_experiment(
     # log_history is a plain list of dicts — a detached copy not tied to the
     # trainer's internals, so it's safe to capture before deleting the trainer.
     log_history = result.log_history
+    # Explicitly clear dataset caches before deleting references — prevents
+    # _pixel_cache tensors (up to 7.1 GB) from staying pinned until GC decides to run.
+    if hasattr(train_ds, "clear_caches"):
+        train_ds.clear_caches()
+    if val_ds is not None and hasattr(val_ds, "clear_caches"):
+        val_ds.clear_caches()
     del trainer, model, processor, train_ds
     if val_ds is not None:
         del val_ds
