@@ -263,9 +263,7 @@ kaggle/
 ├── run_all.py                # MAIN ENTRY POINT: full dual-architecture pipeline
 ├── inject_results.py         # PaperInjector: generates LaTeX from results JSON
 ├── preflight_checks.py       # Pre-flight validators + validate_pipeline()
-├── cloud_pipeline.py         # Cloud mode orchestrator (code-repair / ML-training)
-├── paper.tex                 # LaTeX template with \VAR{} placeholders
-├── references.bib            # BibTeX references for paper
+├── cloud_pipeline.py         # Cloud mode orchestrator + CloudConfig + GitController
 ├── requirements.txt          # Python dependencies with version pins
 ├── pyproject.toml            # Package metadata, entry points, ruff/pytest config
 │
@@ -274,6 +272,11 @@ kaggle/
 ├── train_trocr_yolo.py       # TrOCR+YOLO training (also called by run_all.py)
 ├── evaluate_models.py        # Alternative: unified evaluation
 │
+├── paper/                    # LaTeX source files
+│   ├── paper.tex             # Main paper template with \VAR{} placeholders
+│   ├── references.bib        # BibTeX references
+│   └── presentation.tex      # Presentation slides template
+│
 ├── validators/               # BugPatternDetector, ImportChainChecker, etc.
 ├── pipeline_types/           # Typed dataclasses for pipeline results
 ├── tests/                    # Unit tests (pytest)
@@ -281,7 +284,7 @@ kaggle/
 ├── results/                  # Runtime: per-experiment JSON (gitignored)
 ├── data/                     # Runtime: dataset cache (gitignored)
 ├── models/                   # Runtime: model checkpoints (gitignored)
-└── paper_filled.tex          # Runtime: generated paper output (gitignored)
+└── paper/paper_filled.tex    # Runtime: generated paper output (gitignored)
 ```
 
 **Canonical entry point:** `run_all.py`. The standalone scripts are a simplified alternative workflow for standalone use only.
@@ -378,7 +381,7 @@ python run_experiments.py --all --force      # force re-run
 ### Paper Generation
 
 ```bash
-python inject_results.py --all --paper paper.tex --output paper_filled.tex
+python inject_results.py --all --paper paper/paper.tex --output paper/paper_filled.tex
 ```
 
 ### Alternative Standalone Workflow
@@ -454,7 +457,7 @@ Each experiment saves `results/experiment_N.json`:
 }
 ```
 
-`inject_results.py` reads these files and resolves `\VAR{variable_name}` placeholders in `paper.tex`. Never edit `paper_filled.tex` directly — it is fully regenerated each run.
+`inject_results.py` reads these files and resolves `\VAR{variable_name}` placeholders in `paper/paper.tex`. Never edit `paper/paper_filled.tex` directly — it is fully regenerated each run.
 
 ---
 
@@ -486,14 +489,14 @@ Two-stage pipeline in `train_trocr_yolo.py` (called by `run_all.py`):
 | Workspace (model checkpoints) | `/workspace` | `--workspace PATH` or `DONUT_WORKSPACE` env var |
 | SROIE data directory | `/workspace/ICDAR-2019-SROIE/data` | `--sroie-dir PATH` |
 | Results directory | `results/` (relative) | hardcoded |
-| Paper template | `paper.tex` | `--paper-template F` |
-| Paper output | `paper_filled.tex` | `--output F` |
+| Paper template | `paper/paper.tex` | `--paper-template F` |
+| Paper output | `paper/paper_filled.tex` | `--output F` |
 
 **Gitignored runtime artifacts** (never commit):
 - `results/` — experiment JSON outputs
 - `data/` — dataset cache
 - `models/` — checkpoints (`*.pt`, `*.pth`, `*.pkl`, `*.h5`)
-- `paper_filled.tex` — generated LaTeX paper
+- `paper/paper_filled.tex` — generated LaTeX paper
 - `hf_token.txt` — HuggingFace authentication token
 
 ---
@@ -672,7 +675,7 @@ if "decoder.lm_head.weight" in missing_keys:
 | 2 | `run_experiments.run_experiment(N)` × 8 | `results/experiment_N.json` each |
 | 3-4 | `train_trocr_yolo.py` | `results/trocr_yolo_results.json` |
 | 5 | `benchmark_compare.main()` | `results/benchmark_results.json` + plots |
-| 6 | `inject_results.PaperInjector.fill()` | `paper_filled.tex` |
+| 6 | `inject_results.PaperInjector.fill()` | `paper/paper_filled.tex` |
 
 **Critical SROIE split invariant:** `val_img/` and `test_img/` are physically separate directories. `load_sroie_val()` and `load_sroie_test()` must never return overlapping images.
 
