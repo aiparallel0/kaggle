@@ -536,7 +536,7 @@ def build_var_map(all_exp: dict) -> dict:
     """
     injector = PaperInjector(
         results_dir=Path("results"),
-        template_path=Path("paper.tex"),
+        template_path=Path("paper/paper.tex"),
         _preloaded_experiments=all_exp,
     )
     return injector.build_var_map()
@@ -795,22 +795,24 @@ def main() -> None:
         help="Path to all_experiments.json (default: results/all_experiments.json)",
     )
     parser.add_argument(
-        "--paper", default="paper.tex", help="Path to paper.tex template (default: paper.tex)"
+        "--paper",
+        default="paper/paper.tex",
+        help="Path to paper.tex template (default: paper/paper.tex)",
     )
     parser.add_argument(
         "--output",
-        default="paper_filled.tex",
-        help="Path to write the filled paper (default: paper_filled.tex)",
+        default="paper/paper_filled.tex",
+        help="Path to write the filled paper (default: paper/paper_filled.tex)",
     )
     parser.add_argument(
         "--presentation",
-        default="presentation.tex",
-        help="Path to presentation.tex template (default: presentation.tex)",
+        default="paper/presentation.tex",
+        help="Path to presentation.tex template (default: paper/presentation.tex)",
     )
     parser.add_argument(
         "--presentation-output",
-        default="presentation_filled.tex",
-        help="Path to write the filled presentation (default: presentation_filled.tex)",
+        default="paper/presentation_filled.tex",
+        help="Path to write filled presentation (default: paper/presentation_filled.tex)",
     )
     args = parser.parse_args()
 

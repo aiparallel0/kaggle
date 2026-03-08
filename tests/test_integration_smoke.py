@@ -41,7 +41,8 @@ class TestImportChain:
         assert cfg.batch_size == 8
 
     def test_pipeline_config_importable(self):
-        from pipeline_config import PipelineMode
+        # PipelineMode merged into cloud_pipeline.py
+        from cloud_pipeline import PipelineMode
 
         assert PipelineMode.AUTO.value == "auto"
 
@@ -64,15 +65,15 @@ class TestImportChain:
         assert agg is not None
 
     def test_storage_manager_importable(self):
-        # StorageManager moved to cloud_utils.py
-        from cloud_utils import StorageManager
+        # StorageManager merged into cloud_pipeline.py
+        from cloud_pipeline import StorageManager
 
         sm = StorageManager(results_dir=Path("/tmp"))
         assert sm is not None
 
     def test_git_controller_importable(self):
-        # GitController moved to cloud_utils.py
-        from cloud_utils import GitController
+        # GitController merged into cloud_pipeline.py
+        from cloud_pipeline import GitController
 
         assert hasattr(GitController, "get_current_branch")
 

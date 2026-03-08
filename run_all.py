@@ -1735,10 +1735,10 @@ def _mini_mode_handler(args, logger: logging.Logger) -> int:
     stage_comparison(args)
 
     # ── Stage 7: Paper generation → paper_mini.tex ───────────────────────
-    logger.info("[Mini Stage 7] Generating paper_mini.tex...")
+    logger.info("[Mini Stage 7] Generating paper/paper_mini.tex...")
     args_paper = copy.copy(args)
-    args_paper.paper_template = "paper.tex"
-    args_paper.output = "paper_mini.tex"
+    args_paper.paper_template = "paper/paper.tex"
+    args_paper.output = "paper/paper_mini.tex"
     return _generate_mini_paper(args_paper, logger)
 
 
@@ -1863,10 +1863,10 @@ def _micro_mode_handler(args, logger: logging.Logger) -> int:
     stage_comparison(args)
 
     # ── Stage 7: Paper generation → paper_micro.tex ───────────────────────
-    logger.info("[Micro Stage 7] Generating paper_micro.tex...")
+    logger.info("[Micro Stage 7] Generating paper/paper_micro.tex...")
     args_paper = copy.copy(args)
-    args_paper.paper_template = "paper.tex"
-    args_paper.output = "paper_micro.tex"
+    args_paper.paper_template = "paper/paper.tex"
+    args_paper.output = "paper/paper_micro.tex"
     return _generate_mini_paper(args_paper, logger)
 
 
@@ -2049,15 +2049,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--paper-template",
-        default="paper.tex",
+        default="paper/paper.tex",
         metavar="FILE",
-        help="LaTeX template to fill (default: paper.tex)",
+        help="LaTeX template to fill (default: paper/paper.tex)",
     )
     p.add_argument(
         "--output",
-        default="paper_filled.tex",
+        default="paper/paper_filled.tex",
         metavar="FILE",
-        help="Output filled LaTeX file (default: paper_filled.tex)",
+        help="Output filled LaTeX file (default: paper/paper_filled.tex)",
     )
     # Quick mode arguments (NEW)
     p.add_argument(

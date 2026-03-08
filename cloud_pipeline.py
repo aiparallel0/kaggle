@@ -1,19 +1,17 @@
 # =============================================================================
 # cloud_pipeline.py
-# Purpose: Vast.ai cloud GPU pipeline orchestration (SSH, rsync, job dispatch)
+# Purpose: Cloud pipeline config, utilities, and orchestration (unified)
 # Project: DONUT Receipt KIE — SROIE Fine-tuning & Benchmarking
 # Updated: 2026-03-07
 # =============================================================================
 """cloud_pipeline.py — Unified orchestrator for code repair and ML training.
 
-Main entry point for the entire cloud pipeline system.  Two execution modes:
+Consolidates pipeline_config.py (CloudConfig, PipelineMode, LogLevel),
+cloud_utils.py (GitController, StorageManager), and the orchestration layer
+into a single module.  Two execution modes:
 
   Mode A — Code Repair  : Ollama-based automated bug fixing
   Mode B — ML Training  : GPU experiment runner (Vast.ai / local GPU)
-
-Previously split across mode_code_repair.py, mode_ml_training.py, and
-retro_ui.py — consolidated here to reduce module count and make the
-execution flow easier to follow in one place.
 
 Usage
 -----
@@ -26,28 +24,462 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import subprocess
 import sys
+from dataclasses import dataclass, field
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
 
-from cloud_utils import GitController, StorageManager
-from pipeline_config import CloudConfig, PipelineMode
 from pipeline_types import (
     CodeRepairResult,
     ExperimentMetrics,
     ExperimentResult,
+    GitCommitReport,
     MLTrainingResult,
     PipelineResult,
+    SyncReport,
+    UploadReport,
 )
 from preflight_checks import PreflightChecker
 
 __all__ = [
+    # Config (formerly pipeline_config.py)
+    "CloudConfig",
+    "PipelineMode",
+    "LogLevel",
+    # Utilities (formerly cloud_utils.py)
+    "GitController",
+    "StorageManager",
+    # Orchestration
     "CloudPipelineOrchestrator",
     "CodeRepairOrchestrator",
     "MLTrainingOrchestrator",
     "RetroUIFormatter",
 ]
+
+
+# =============================================================================
+# Pipeline Configuration  (formerly pipeline_config.py)
+# =============================================================================
+
+
+class PipelineMode(str, Enum):
+    """Available pipeline execution modes."""
+
+    CODE_REPAIR = "code_repair"
+    ML_TRAINING = "ml_training"
+    AUTO = "auto"
+
+
+class LogLevel(str, Enum):
+    """Log level options."""
+
+    DEBUG = "DEBUG"
+    INFO = "INFO"
+    WARNING = "WARNING"
+    ERROR = "ERROR"
+    CRITICAL = "CRITICAL"
+
+
+@dataclass
+class CloudConfig:
+    """Top-level configuration for cloud pipeline operations.
+
+    All values can be overridden via environment variables:
+    - CLOUD_PIPELINE_MODE
+    - DONUT_WORKSPACE
+    - GITHUB_REPO
+    - GITHUB_BRANCH
+    - OLLAMA_BASE_URL
+    - OLLAMA_MODEL
+    - etc.
+    """
+
+    # ====== Mode Selection ======
+    mode: PipelineMode = PipelineMode.AUTO
+    dry_run: bool = False
+
+    # ====== Common Settings ======
+    workspace: Path = Path("/workspace")  # overridden by DONUT_WORKSPACE env var
+    git_branch: str = "claude/setup-cloud-ai-agents-Olrqd"
+    github_repo: str = "aiparallel0/kaggle"
+    skip_validation: bool = False
+
+    # ====== Code Repair Settings (Ollama) ======
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_model: str = "mistral:latest"
+    ollama_max_retries: int = 3
+    ollama_auto_start: bool = True
+
+    # ====== ML Training Settings (Vast.ai) ======
+    gpu_required: bool = True
+    skip_trocr: bool = False
+    skip_pretrained_baseline: bool = False
+    experiments_to_run: list[int] = field(default_factory=lambda: list(range(1, 9)))
+
+    # ====== Cloud Storage Settings ======
+    s3_bucket: str | None = None
+    s3_region: str | None = None
+    gcs_bucket: str | None = None
+
+    # ====== Validation Settings ======
+    enable_ruff_check: bool = True
+    enable_pytest: bool = True
+    pytest_markers: str = ""
+    fail_on_warnings: bool = False
+
+    # ====== Commit Settings ======
+    auto_commit: bool = True
+    commit_on_error: bool = False
+
+    # ====== Logging Settings ======
+    log_level: LogLevel = LogLevel.INFO
+    log_dir: Path = Path("./logs")
+    stream_training_logs: bool = False
+
+    # ====== Paths ======
+    sroie_data_dir: Path | None = None
+    results_dir: Path = Path("./results")
+
+    @staticmethod
+    def from_env() -> "CloudConfig":
+        """Load configuration from environment variables with defaults."""
+        mode_str = os.getenv("CLOUD_PIPELINE_MODE", "auto").lower()
+        try:
+            mode = PipelineMode(mode_str)
+        except ValueError:
+            mode = PipelineMode.AUTO
+
+        workspace = Path(os.getenv("DONUT_WORKSPACE", "/workspace"))
+
+        sroie_dir = os.getenv("SROIE_DATA_DIR")
+        sroie_dir = Path(sroie_dir) if sroie_dir else workspace / "ICDAR-2019-SROIE" / "data"
+
+        ollama_auto_start = os.getenv("OLLAMA_AUTO_START", "true").lower() == "true"
+        results_dir = Path(os.getenv("RESULTS_DIR", "./results"))
+        log_dir = Path(os.getenv("LOG_DIR", "./logs"))
+        log_level_str = os.getenv("LOG_LEVEL", "INFO").upper()
+        try:
+            log_level = LogLevel(log_level_str)
+        except ValueError:
+            log_level = LogLevel.INFO
+
+        exp_str = os.getenv("EXPERIMENTS_TO_RUN")
+        if exp_str:
+            try:
+                experiments = [int(x.strip()) for x in exp_str.split(",")]
+            except ValueError:
+                experiments = list(range(1, 9))
+        else:
+            experiments = list(range(1, 9))
+
+        return CloudConfig(
+            mode=mode,
+            workspace=workspace,
+            git_branch=os.getenv("GITHUB_BRANCH", "claude/setup-cloud-ai-agents-Olrqd"),
+            github_repo=os.getenv("GITHUB_REPO", "aiparallel0/kaggle"),
+            ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
+            ollama_model=os.getenv("OLLAMA_MODEL", "mistral:latest"),
+            ollama_auto_start=ollama_auto_start,
+            skip_trocr=os.getenv("SKIP_TROCR", "false").lower() == "true",
+            skip_pretrained_baseline=os.getenv("SKIP_PRETRAINED_BASELINE", "false").lower()
+            == "true",
+            experiments_to_run=experiments,
+            s3_bucket=os.getenv("AWS_S3_BUCKET"),
+            s3_region=os.getenv("AWS_S3_REGION"),
+            gcs_bucket=os.getenv("GCS_BUCKET"),
+            enable_ruff_check=os.getenv("ENABLE_RUFF_CHECK", "true").lower() == "true",
+            enable_pytest=os.getenv("ENABLE_PYTEST", "true").lower() == "true",
+            fail_on_warnings=os.getenv("FAIL_ON_WARNINGS", "false").lower() == "true",
+            auto_commit=os.getenv("AUTO_COMMIT", "true").lower() == "true",
+            commit_on_error=os.getenv("COMMIT_ON_ERROR", "false").lower() == "true",
+            sroie_data_dir=sroie_dir,
+            results_dir=results_dir,
+            log_dir=log_dir,
+            log_level=log_level,
+            skip_validation=os.getenv("SKIP_VALIDATION", "false").lower() == "true",
+        )
+
+    @staticmethod
+    def from_args_and_env(args) -> "CloudConfig":
+        """Load configuration from argparse args and environment."""
+        config = CloudConfig.from_env()
+
+        if hasattr(args, "mode") and args.mode and args.mode != "auto":
+            config.mode = PipelineMode(args.mode)
+        if hasattr(args, "ollama_url"):
+            config.ollama_base_url = args.ollama_url
+        if hasattr(args, "ollama_model"):
+            config.ollama_model = args.ollama_model
+        if hasattr(args, "experiments") and args.experiments:
+            config.experiments_to_run = args.experiments
+        if hasattr(args, "skip_trocr") and args.skip_trocr:
+            config.skip_trocr = True
+        if hasattr(args, "s3_bucket"):
+            config.s3_bucket = args.s3_bucket
+        if hasattr(args, "gcs_bucket"):
+            config.gcs_bucket = args.gcs_bucket
+        if hasattr(args, "skip_validation") and args.skip_validation:
+            config.skip_validation = True
+        if hasattr(args, "dry_run") and args.dry_run:
+            config.dry_run = True
+        if hasattr(args, "no_commit") and args.no_commit:
+            config.auto_commit = False
+        if hasattr(args, "branch"):
+            config.git_branch = args.branch
+        if hasattr(args, "workspace"):
+            config.workspace = Path(args.workspace)
+
+        return config
+
+    def validate(self) -> tuple[bool, list[str]]:
+        """Validate configuration. Returns (is_valid, list of error messages)."""
+        errors = []
+        if not self.workspace.exists():
+            errors.append(f"Workspace does not exist: {self.workspace}")
+        self.results_dir.mkdir(parents=True, exist_ok=True)
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        if (
+            self.mode in [PipelineMode.ML_TRAINING, PipelineMode.AUTO]
+            and self.sroie_data_dir
+            and not self.sroie_data_dir.exists()
+        ):
+            errors.append(f"SROIE data directory does not exist: {self.sroie_data_dir}")
+        for exp_id in self.experiments_to_run:
+            if not (1 <= exp_id <= 8):
+                errors.append(f"Invalid experiment ID: {exp_id} (must be 1-8)")
+        return len(errors) == 0, errors
+
+
+# =============================================================================
+# Cloud Utilities  (formerly cloud_utils.py)
+# =============================================================================
+
+_utils_logger = logging.getLogger(__name__ + ".utils")
+
+
+class GitController:
+    """Manage git operations for the pipeline."""
+
+    @staticmethod
+    def get_current_branch() -> str | None:
+        """Return current git branch name, or None if not in a git repo."""
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0:
+                return result.stdout.strip()
+        except Exception as e:
+            _utils_logger.error(f"Could not get current branch: {e}")
+        return None
+
+    @staticmethod
+    def checkout_branch(branch_name: str) -> bool:
+        """Checkout *branch_name*, creating it if it does not yet exist."""
+        try:
+            result = subprocess.run(
+                ["git", "checkout", branch_name],
+                capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode == 0:
+                _utils_logger.info(f"✓ Checked out branch: {branch_name}")
+                return True
+            if "did not match any branch" in result.stderr.lower():
+                _utils_logger.info(f"Creating new branch: {branch_name}")
+                result = subprocess.run(
+                    ["git", "checkout", "-b", branch_name],
+                    capture_output=True, text=True, timeout=10,
+                )
+                if result.returncode == 0:
+                    _utils_logger.info(f"✓ Created and checked out branch: {branch_name}")
+                    return True
+            _utils_logger.error(f"Failed to checkout branch: {result.stderr}")
+            return False
+        except Exception as e:
+            _utils_logger.error(f"Git checkout error: {e}")
+            return False
+
+    @staticmethod
+    def commit(message: str, files: list | None = None) -> GitCommitReport:
+        """Stage *files* (or all changes when None) and create a commit."""
+        try:
+            cmd = ["git", "add", "-A"] if files is None else ["git", "add"] + files
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            if result.returncode != 0:
+                return GitCommitReport(success=False, error=f"Stage failed: {result.stderr}")
+            result = subprocess.run(
+                ["git", "commit", "-m", message],
+                capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode == 0:
+                commit_hash = None
+                for line in result.stdout.split("\n"):
+                    if line.startswith("["):
+                        parts = line.split()
+                        if len(parts) >= 2:
+                            commit_hash = parts[1].rstrip("]")
+                            break
+                _utils_logger.info(f"✓ Committed: {message} ({commit_hash})")
+                return GitCommitReport(
+                    success=True,
+                    commit_hash=commit_hash,
+                    message=message,
+                    branch=GitController.get_current_branch(),
+                )
+            if "nothing to commit" in result.stdout.lower():
+                _utils_logger.warning("Nothing to commit")
+                return GitCommitReport(
+                    success=True,
+                    message="Nothing to commit",
+                    branch=GitController.get_current_branch(),
+                )
+            return GitCommitReport(success=False, error=f"Commit failed: {result.stderr}")
+        except Exception as e:
+            _utils_logger.error(f"Git commit error: {e}")
+            return GitCommitReport(success=False, error=str(e))
+
+    @staticmethod
+    def push_branch(branch_name: str, force: bool = False) -> bool:
+        """Push *branch_name* to origin. Returns True on success."""
+        try:
+            cmd = ["git", "push", "-u", "origin", branch_name]
+            if force:
+                cmd.insert(2, "--force-with-lease")
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            if result.returncode == 0:
+                _utils_logger.info(f"✓ Pushed branch: {branch_name}")
+                return True
+            _utils_logger.error(f"Push failed: {result.stderr}")
+            return False
+        except Exception as e:
+            _utils_logger.error(f"Git push error: {e}")
+            return False
+
+    @staticmethod
+    def tag_commit(tag_name: str, message: str = "") -> bool:
+        """Create a git tag for the current commit. Returns True on success."""
+        try:
+            cmd = (
+                ["git", "tag", "-a", tag_name, "-m", message]
+                if message
+                else ["git", "tag", tag_name]
+            )
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            if result.returncode == 0:
+                _utils_logger.info(f"✓ Created tag: {tag_name}")
+                return True
+            _utils_logger.error(f"Tag creation failed: {result.stderr}")
+            return False
+        except Exception as e:
+            _utils_logger.error(f"Git tag error: {e}")
+            return False
+
+    @staticmethod
+    def get_status() -> str:
+        """Return short git status string (empty string on error)."""
+        try:
+            result = subprocess.run(
+                ["git", "status", "--short"],
+                capture_output=True, text=True, timeout=5,
+            )
+            return result.stdout if result.returncode == 0 else ""
+        except Exception as e:
+            _utils_logger.error(f"Git status error: {e}")
+            return ""
+
+
+class StorageManager:
+    """Store experiment results locally, ready to commit to GitHub."""
+
+    def __init__(self, results_dir: Path = Path("results")):
+        self.results_dir = results_dir
+        self.results_dir.mkdir(parents=True, exist_ok=True)
+
+    async def sync_results_directory(self, remote_prefix: str = "") -> SyncReport:
+        """Report which result files are ready for a GitHub commit."""
+        _utils_logger.info("Preparing results for GitHub commit...")
+        exp_files = list(self.results_dir.glob("experiment_*.json"))
+        agg_files = list(self.results_dir.glob("all_experiments.json"))
+        other_files = list(self.results_dir.glob("*.json"))
+        all_files = list(set(exp_files + agg_files + other_files))
+        _utils_logger.info(f"Found {len(all_files)} result files ready to commit:")
+        for f in all_files:
+            _utils_logger.info(f"  - {f.name}")
+        report = SyncReport(
+            backend_type="github",
+            total_files=len(all_files),
+            uploaded=len(all_files),
+            failed=0,
+            duration_sec=0.0,
+            details=[
+                UploadReport(
+                    success=True,
+                    local_path=f,
+                    remote_path=f"results/{f.name}",
+                    storage_type="github",
+                    size_bytes=f.stat().st_size if f.exists() else 0,
+                )
+                for f in all_files
+            ],
+        )
+        _utils_logger.info("✓ Results ready for GitHub commit")
+        return report
+
+    async def upload_experiment_result(self, exp_id: int) -> UploadReport:
+        """Return an UploadReport for experiment *exp_id*'s result file."""
+        exp_file = self.results_dir / f"experiment_{exp_id}.json"
+        if exp_file.exists():
+            return UploadReport(
+                success=True,
+                local_path=exp_file,
+                remote_path=f"results/experiment_{exp_id}.json",
+                storage_type="github",
+                size_bytes=exp_file.stat().st_size,
+            )
+        return UploadReport(
+            success=False,
+            local_path=exp_file,
+            remote_path=f"results/experiment_{exp_id}.json",
+            storage_type="github",
+            error=f"File not found: {exp_file}",
+        )
+
+    async def upload_paper(self, paper_path: Path) -> UploadReport:
+        """Return an UploadReport for *paper_path*."""
+        if paper_path.exists():
+            return UploadReport(
+                success=True,
+                local_path=paper_path,
+                remote_path=f"results/{paper_path.name}",
+                storage_type="github",
+                size_bytes=paper_path.stat().st_size,
+            )
+        return UploadReport(
+            success=False,
+            local_path=paper_path,
+            remote_path=f"results/{paper_path.name}",
+            storage_type="github",
+            error=f"File not found: {paper_path}",
+        )
+
+    async def download_previous_results(self, exp_id: int) -> bool:
+        """Return True if the local result file for *exp_id* already exists."""
+        exp_file = self.results_dir / f"experiment_{exp_id}.json"
+        exists = exp_file.exists()
+        _utils_logger.info(
+            f"Found previous result: {exp_file}" if exists
+            else f"No previous result found for experiment {exp_id}"
+        )
+        return exists
+
+
+# =============================================================================
+# Orchestration  (formerly the body of this file)
+# =============================================================================
 
 # Set up logging early so all submodules share the same format
 logging.basicConfig(
