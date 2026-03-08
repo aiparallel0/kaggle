@@ -1,0 +1,364 @@
+# =============================================================================
+# tests/test_control_suite.py
+# Purpose: Unit tests for the control_suite parameter hub
+# Project: DONUT Receipt KIE — SROIE Fine-tuning & Benchmarking
+# =============================================================================
+"""
+Unit tests for control_suite.py.
+
+All tests are designed to run WITHOUT torch, transformers, or GPU dependencies
+so they can be collected in any environment (CI, lint-only, CPU-only).
+Tests validate:
+  - Successful import and singleton construction
+  - Default values match project config (ExperimentConfig defaults)
+  - Previously-missing critical parameters are now explicitly present
+  - Commonly-underdocumented parameters are registered and accessible
+  - Inspection helpers work without errors
+"""
+
+import pytest
+
+# ── Guard: control_suite only depends on constants.py (stdlib + no torch) ──
+# These imports must succeed in any environment that has constants.py.
+from control_suite import (
+    CONTROL_SUITE,
+    ControlSuite,
+    DonutControlConfig,
+    TrOCRControlConfig,
+    YOLOControlConfig,
+)
+from constants import BASE_MODEL, MAX_LENGTH, SEED
+
+
+# ---------------------------------------------------------------------------
+# Basic import and construction
+# ---------------------------------------------------------------------------
+
+
+def test_control_suite_singleton_is_correct_type():
+    """CONTROL_SUITE module-level singleton is a ControlSuite instance."""
+    assert isinstance(CONTROL_SUITE, ControlSuite)
+    assert isinstance(CONTROL_SUITE.donut, DonutControlConfig)
+    assert isinstance(CONTROL_SUITE.trocr, TrOCRControlConfig)
+    assert isinstance(CONTROL_SUITE.yolo, YOLOControlConfig)
+
+
+def test_control_suite_default_factory():
+    """ControlSuite.default() returns a fresh identical instance."""
+    suite = ControlSuite.default()
+    assert isinstance(suite, ControlSuite)
+    assert suite.donut.base_model == CONTROL_SUITE.donut.base_model
+    assert suite.trocr.model_id == CONTROL_SUITE.trocr.model_id
+    assert suite.yolo.base_model == CONTROL_SUITE.yolo.base_model
+
+
+# ---------------------------------------------------------------------------
+# DONUT — defaults must match ExperimentConfig
+# ---------------------------------------------------------------------------
+
+
+def test_donut_base_model_matches_constants():
+    """DonutControlConfig.base_model matches constants.BASE_MODEL."""
+    assert CONTROL_SUITE.donut.base_model == BASE_MODEL
+
+
+def test_donut_max_length_matches_constants():
+    """DonutControlConfig.max_length matches constants.MAX_LENGTH."""
+    assert CONTROL_SUITE.donut.max_length == MAX_LENGTH
+
+
+def test_donut_seed_matches_constants():
+    """DonutControlConfig.seed matches constants.SEED."""
+    assert CONTROL_SUITE.donut.seed == SEED
+
+
+def test_donut_defaults_match_experiment_config():
+    """Key DonutControlConfig defaults match ExperimentConfig defaults.
+
+    ExperimentConfig is the authoritative training config per CLAUDE.md GP-1.
+    DonutControlConfig must mirror these values exactly for consistency.
+    """
+    d = CONTROL_SUITE.donut
+    # From ExperimentConfig in run_experiments.py
+    assert d.epochs == 10, "DonutControlConfig.epochs must match ExperimentConfig.epochs=10"
+    assert d.encoder_lr == 5e-5, "encoder_lr must be 5e-5 (CLAUDE.md §3)"
+    assert d.decoder_lr == 1e-4, "decoder_lr must be 1e-4 (2× encoder LR)"
+    assert d.batch_size == 8, "batch_size=8 is optimal per CLAUDE.md §3"
+    assert d.gradient_accumulation_steps == 2
+    assert d.early_stopping_patience == 3
+    assert d.weight_decay == 0.01
+    assert d.warmup_steps == 40
+
+
+def test_donut_tie_word_embeddings_is_false():
+    """tie_word_embeddings must be False — changing to True causes F1=0.
+
+    See CLAUDE.md §2: After resize_token_embeddings(), tie_word_embeddings=True
+    causes tie_weights() on reload to destroy the learned lm_head → F1=0.
+    """
+    assert CONTROL_SUITE.donut.tie_word_embeddings is False, (
+        "tie_word_embeddings must be False — see CLAUDE.md §2 lm_head weight tying bug"
+    )
+
+
+def test_donut_sort_json_key_is_false():
+    """sort_json_key must be False for CORD-based datasets.
+
+    Setting True silently corrupts token ordering in preprocessed datasets.
+    See finetuning_params.md commonly_underdocumented[].
+    """
+    assert CONTROL_SUITE.donut.sort_json_key is False, (
+        "sort_json_key must be False for SROIE/CORD datasets — silently corrupts token ordering"
+    )
+
+
+def test_donut_input_size_is_canonical():
+    """input_size must be the canonical DONUT finetuning resolution [1280, 960]."""
+    assert CONTROL_SUITE.donut.input_size == [1280, 960], (
+        "input_size must be [1280, 960] (width×height) — DONUT canonical finetuning resolution"
+    )
+
+
+def test_donut_swin_window_size_is_10():
+    """swin_window_size must be 10 (matches donut-base pretrain config).
+
+    Changing this forces full weight re-initialization of all attention layers.
+    See finetuning_params.md: marked CRITICAL ⚠️ underdocumented.
+    """
+    assert CONTROL_SUITE.donut.swin_window_size == 10, (
+        "swin_window_size=10 must match donut-base pretrain — changing causes full re-init"
+    )
+
+
+def test_donut_gradient_clip_val_is_one():
+    """gradient_clip_val is explicitly documented (was previously implicit)."""
+    assert CONTROL_SUITE.donut.gradient_clip_val == 1.0
+
+
+# ---------------------------------------------------------------------------
+# TrOCR — critical parameters and previously-missing ones
+# ---------------------------------------------------------------------------
+
+
+def test_trocr_model_id():
+    """TrOCR model ID is the printed-text variant."""
+    assert CONTROL_SUITE.trocr.model_id == "microsoft/trocr-base-printed"
+
+
+def test_trocr_input_size_is_fixed():
+    """TrOCR input_size is always 384 — FIXED by architecture (not configurable)."""
+    assert CONTROL_SUITE.trocr.input_size == 384, (
+        "TrOCR input_size is hardcoded at 384×384 by the BEiT/DeiT encoder architecture"
+    )
+
+
+def test_trocr_patch_size_is_fixed():
+    """TrOCR patch_size is always 16 — FIXED by architecture."""
+    assert CONTROL_SUITE.trocr.patch_size == 16
+
+
+def test_trocr_weight_decay_nonzero():
+    """TrOCR weight_decay must be non-zero.
+
+    PREVIOUSLY MISSING BUG: AdamW was called without weight_decay argument,
+    causing PyTorch to use its default of 0.0. Reference value is 1e-4.
+    """
+    assert CONTROL_SUITE.trocr.weight_decay > 0, (
+        "TrOCR weight_decay must be > 0. Before control_suite, AdamW used "
+        "PyTorch default of 0 because weight_decay was not passed."
+    )
+    assert CONTROL_SUITE.trocr.weight_decay == 1e-4
+
+
+def test_trocr_gradient_checkpointing_enabled():
+    """gradient_checkpointing must be True for TrOCR-base to fit in VRAM."""
+    assert CONTROL_SUITE.trocr.gradient_checkpointing is True
+
+
+def test_trocr_use_cache_disabled():
+    """use_cache must be False when gradient_checkpointing is True (incompatible)."""
+    assert CONTROL_SUITE.trocr.use_cache is False
+
+
+def test_trocr_lr_scheduler_is_string():
+    """lr_scheduler must be a string (was hardcoded 'linear' before control_suite)."""
+    assert isinstance(CONTROL_SUITE.trocr.lr_scheduler, str)
+    assert CONTROL_SUITE.trocr.lr_scheduler == "linear"
+
+
+def test_trocr_warmup_ratio_is_valid():
+    """warmup_ratio must be in [0, 1]."""
+    assert 0 < CONTROL_SUITE.trocr.warmup_ratio <= 0.5
+
+
+def test_trocr_warmup_init_lr_is_tiny():
+    """warmup_init_lr must be a tiny value (prevents instability at step 0).
+
+    See finetuning_params.md: marked ⚠️ underdocumented — absent from tutorials.
+    """
+    assert CONTROL_SUITE.trocr.warmup_init_lr < 1e-6, (
+        "warmup_init_lr must be tiny (default 1e-8) to prevent instability at warmup step 0"
+    )
+
+
+def test_trocr_patience_documented():
+    """patience field exists (even if None — early stopping not yet implemented)."""
+    # Attribute must exist; None means not implemented yet
+    assert hasattr(CONTROL_SUITE.trocr, "patience")
+
+
+def test_trocr_augmentation_preset_documented():
+    """augmentation_preset field exists (⚠️ underdocumented — DA2 is the official preset)."""
+    assert hasattr(CONTROL_SUITE.trocr, "augmentation_preset")
+
+
+def test_trocr_lora_rank_documented():
+    """lora_rank field exists (full finetuning currently, PEFT is optional)."""
+    assert hasattr(CONTROL_SUITE.trocr, "lora_rank")
+
+
+# ---------------------------------------------------------------------------
+# YOLO — critical parameters and previously-missing ones
+# ---------------------------------------------------------------------------
+
+
+def test_yolo_freeze_is_documented():
+    """freeze field exists — the #1 most impactful underdocumented YOLO param.
+
+    PREVIOUSLY MISSING from train_yolo() call entirely (was using Ultralytics
+    default of None). See finetuning_params.md: marked CRITICAL ⚠️.
+    """
+    assert hasattr(CONTROL_SUITE.yolo, "freeze"), (
+        "freeze field must exist in YOLOControlConfig — "
+        "it is the most impactful underdocumented finetuning parameter"
+    )
+    # Currently None (full training) — correct for first pass without domain data
+    assert CONTROL_SUITE.yolo.freeze is None
+
+
+def test_yolo_fliplr_is_zero():
+    """fliplr must be 0.0 for text detection (left-right orientation matters)."""
+    assert CONTROL_SUITE.yolo.fliplr == 0.0, (
+        "fliplr must be 0.0 for receipt text detection — "
+        "horizontal flipping corrupts text reading direction"
+    )
+
+
+def test_yolo_mosaic_is_reduced_for_receipts():
+    """mosaic is reduced from Ultralytics default 1.0 for the receipt domain."""
+    assert 0.0 <= CONTROL_SUITE.yolo.mosaic <= 1.0
+    assert CONTROL_SUITE.yolo.mosaic < 1.0, (
+        "mosaic should be < 1.0 for receipt domain — "
+        "full mosaic (4-image grid) distorts document structure"
+    )
+
+
+def test_yolo_close_mosaic_nonzero():
+    """close_mosaic must be > 0 (⚠️ critical for mAP convergence).
+
+    Ultralytics default is 10. Setting to 0 prevents final learning stabilisation.
+    See finetuning_params.md: CRITICALLY IMPORTANT for final accuracy.
+    """
+    assert CONTROL_SUITE.yolo.close_mosaic > 0, (
+        "close_mosaic must be > 0 — disabling mosaic for last N epochs is critical for mAP convergence"
+    )
+
+
+def test_yolo_amp_enabled():
+    """AMP (mixed precision) is enabled by default for VRAM efficiency."""
+    assert CONTROL_SUITE.yolo.amp is True
+
+
+def test_yolo_weight_decay_documented():
+    """weight_decay is explicitly documented (was previously using Ultralytics default)."""
+    assert CONTROL_SUITE.yolo.weight_decay == 0.0005
+
+
+def test_yolo_close_mosaic_documented():
+    """close_mosaic is explicitly set (was previously relying on Ultralytics default 10)."""
+    assert CONTROL_SUITE.yolo.close_mosaic == 10
+
+
+def test_yolo_rect_is_false():
+    """rect must be False — rect=True silently disables DataLoader shuffle.
+
+    See finetuning_params.md: ⚠️ underdocumented — 'rect shuffle conflict'.
+    """
+    assert CONTROL_SUITE.yolo.rect is False
+
+
+def test_yolo_loss_weights_documented():
+    """box, cls, dfl loss weights are explicitly documented (were previously missing)."""
+    assert CONTROL_SUITE.yolo.box == 7.5
+    assert CONTROL_SUITE.yolo.cls == 0.5
+    assert CONTROL_SUITE.yolo.dfl == 1.5
+
+
+# ---------------------------------------------------------------------------
+# Cross-model inspection helpers
+# ---------------------------------------------------------------------------
+
+
+def test_to_dict_returns_nested_dict():
+    """to_dict() returns a properly nested dict with all three model keys."""
+    d = CONTROL_SUITE.to_dict()
+    assert set(d.keys()) == {"donut", "trocr", "yolo"}
+    assert isinstance(d["donut"], dict)
+    assert isinstance(d["trocr"], dict)
+    assert isinstance(d["yolo"], dict)
+    # Spot-check a few values
+    assert d["donut"]["base_model"] == BASE_MODEL
+    assert d["trocr"]["model_id"] == "microsoft/trocr-base-printed"
+    assert d["yolo"]["freeze"] is None
+
+
+def test_critical_params_returns_dict():
+    """critical_params() returns a dict with at least the known critical params."""
+    crits = CONTROL_SUITE.critical_params()
+    assert isinstance(crits, dict)
+    # Known critical params that must be present
+    assert "donut.input_size" in crits
+    assert "donut.encoder_lr" in crits
+    assert "donut.tie_word_embeddings" in crits
+    assert "trocr.model_id" in crits
+    assert "trocr.learning_rate" in crits
+    assert "yolo.freeze" in crits
+    assert "yolo.imgsz" in crits
+    assert "yolo.mosaic" in crits
+
+
+def test_underdocumented_params_returns_list():
+    """underdocumented_params() returns a non-empty list of parameter names."""
+    underdoc = CONTROL_SUITE.underdocumented_params()
+    assert isinstance(underdoc, list)
+    assert len(underdoc) > 0
+    # Known underdocumented params from finetuning_params.md commonly_underdocumented[]
+    assert "donut.swin_window_size" in underdoc
+    assert "donut.sort_json_key" in underdoc
+    assert "donut.align_long_axis" in underdoc
+    assert "trocr.warmup_init_lr" in underdoc
+    assert "trocr.patience" in underdoc
+    assert "trocr.augmentation_preset" in underdoc
+    assert "yolo.freeze" in underdoc
+    assert "yolo.close_mosaic" in underdoc
+    assert "yolo.rect" in underdoc
+
+
+def test_print_summary_runs_without_error(capsys):
+    """print_summary() runs without raising and produces output."""
+    CONTROL_SUITE.print_summary()
+    captured = capsys.readouterr()
+    assert "CONTROL SUITE" in captured.out
+    assert "DONUT" in captured.out
+    assert "TrOCR" in captured.out
+    assert "YOLOv8" in captured.out
+    assert "CRITICAL" in captured.out
+    assert "freeze" in captured.out
+
+
+def test_total_param_count_is_comprehensive():
+    """Total parameter count covers all three models with significant coverage."""
+    d = CONTROL_SUITE.to_dict()
+    total = sum(len(v) for v in d.values())
+    # At least 60 params total (DONUT ~20, TrOCR ~20, YOLO ~40+)
+    assert total >= 60, f"Expected ≥60 documented parameters, found {total}"
