@@ -60,6 +60,7 @@ import torch
 from transformers import DonutProcessor, VisionEncoderDecoderModel
 
 import dataset_loaders
+import memory_manager as _mm
 
 # FIX: Import shared constants from single source of truth (constants.py)
 # instead of duplicating FIELDS/IMAGE_EXTS/etc. independently in this file.
@@ -516,6 +517,7 @@ def train_experiment(
                 )
                 # Delete ALL GPU-resident objects so the retry starts on a
                 # clean, defragmented GPU — not just the trainer wrapper.
+                _mm.shutdown_dataloader_workers(trainer)
                 if hasattr(train_ds, "clear_caches"):
                     train_ds.clear_caches()
                 if val_ds is not None and hasattr(val_ds, "clear_caches"):
@@ -579,6 +581,7 @@ def train_experiment(
     log_history = result.log_history
     # Explicitly clear dataset caches before deleting references — prevents
     # _pixel_cache tensors (up to 7.1 GB) from staying pinned until GC decides to run.
+    _mm.shutdown_dataloader_workers(trainer)
     if hasattr(train_ds, "clear_caches"):
         train_ds.clear_caches()
     if val_ds is not None and hasattr(val_ds, "clear_caches"):
@@ -1074,7 +1077,8 @@ def main() -> None:
         _base_model = VisionEncoderDecoderModel.from_pretrained(_cfg.base_model)
         for exp_id in EXPERIMENTS:
             run_experiment(exp_id, base_processor=_base_processor, base_model=_base_model)
-        _gpu_cleanup(_base_model, _base_processor)
+        del _base_model, _base_processor
+        _gpu_cleanup()
         save_summary()
     else:
         run_experiment(args.experiment)
