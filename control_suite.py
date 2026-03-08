@@ -954,7 +954,11 @@ def _flatten_suite(suite: ControlSuite) -> dict[str, Any]:
     return result
 
 
-def validate_sroie_oversample(datasets: list[str], sroie_oversample: int) -> None:
+def validate_sroie_oversample(
+    datasets: list[str],
+    sroie_oversample: int,
+    skip_guard: bool = False,
+) -> None:
     """Raise ValueError if a multi-dataset run uses sroie_oversample < 2.
 
     Without 2× SROIE oversampling, auxiliary datasets dilute the SROIE training
@@ -969,12 +973,21 @@ def validate_sroie_oversample(datasets: list[str], sroie_oversample: int) -> Non
         The list of dataset names for the experiment (e.g. ["sroie", "wildreceipt"]).
     sroie_oversample:
         The SROIE oversampling factor (must be >= 2 when len(datasets) > 1).
+    skip_guard:
+        When True, bypass the validation entirely.  Use only for intentional
+        naïve control experiments (Exps 2–4) that deliberately use
+        sroie_oversample=1 to prove that auxiliary data hurts without
+        oversampling.  The guard is still enforced for all other callers
+        (default False).
 
     Raises
     ------
     ValueError
-        When more than one dataset is combined and sroie_oversample < 2.
+        When more than one dataset is combined and sroie_oversample < 2,
+        unless skip_guard is True.
     """
+    if skip_guard:
+        return  # intentional naïve control group — guard explicitly waived
     if len(datasets) > 1 and sroie_oversample < 2:
         raise ValueError(
             f"sroie_oversample={sroie_oversample} is too low for a multi-dataset run "
