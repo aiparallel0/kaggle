@@ -1,0 +1,43 @@
+{
+  "_comment": "Dataset registry for the DONUT Receipt KIE pipeline. Add new datasets here.",
+  "_format_version": "1",
+  "_usage": "When adding a new dataset: (1) add an entry here, (2) implement BaseDatasetLoader in dataset_loaders.py, (3) call memory_manager.release_hf_dataset() + flush_hf_arrow_cache() in your loader if it uses HuggingFace load_from_disk().",
+  "datasets": {
+    "sroie": {
+      "loader_class": "SROIELoader",
+      "hf_id": null,
+      "source_url": "https://github.com/zzzDavid/ICDAR-2019-SROIE",
+      "approx_train_samples": 500,
+      "fields": ["company", "date", "address", "total"],
+      "format": "local_image_key_pairs",
+      "notes": "Primary dataset. 80/10/10 train/val/test split from 626 labeled images."
+    },
+    "wildreceipt": {
+      "loader_class": "WildReceiptLoader",
+      "hf_id": null,
+      "source_url": "https://download.openmmlab.com/mmocr/data/wildreceipt.tar",
+      "approx_train_samples": 1267,
+      "fields": ["company", "date", "address", "total"],
+      "format": "openmmlab_tar",
+      "notes": "Downloaded as tar archive. Annotations mapped to SROIE schema."
+    },
+    "funsd": {
+      "loader_class": "FUNSDLoader",
+      "hf_id": "nielsr/funsd",
+      "source_url": "https://huggingface.co/datasets/nielsr/funsd",
+      "approx_train_samples": 149,
+      "fields": ["company", "date", "address", "total"],
+      "format": "huggingface_arrow",
+      "notes": "Loaded via HuggingFace load_from_disk(). NER tags mapped to SROIE fields. Small dataset -- contributes layout diversity."
+    },
+    "invoices_donut": {
+      "loader_class": "InvoicesDonutLoader",
+      "hf_id": "katanaml-org/invoices-donut-data-v1",
+      "source_url": "https://huggingface.co/datasets/katanaml-org/invoices-donut-data-v1",
+      "approx_train_samples": 500,
+      "fields": ["company", "date", "address", "total"],
+      "format": "huggingface_arrow",
+      "notes": "Loaded via HuggingFace load_from_disk(). Structured invoice data with all four SROIE fields well-represented."
+    }
+  }
+}

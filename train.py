@@ -72,6 +72,7 @@ from constants import (
     _mask_empty_field_labels,
     _optimal_num_workers,
 )
+import memory_manager as _mm
 
 __all__ = ["SROIEDataset", "MultiDataset", "DonutTrainer", "TrainingResult"]
 
@@ -254,27 +255,18 @@ class MultiDataset(Dataset):
         self._label_cache: dict[int, Any] = {}  # precomputed label token tensors
 
         if cache_in_ram and len(samples) > 0:
-            # Estimate memory: ~3MB per receipt image × num_samples
-            estimated_mb = len(samples) * 3
+            # Determine actual image dimensions from processor_config.json so
+            # the RAM estimate is correct at any resolution.
+            # The old hardcoded `* 3` (3 MB/sample) was wrong at 2560×1920
+            # (actual: 14.06 MB/sample) causing the gate to open when it should
+            # be closed. memory_manager.ram_cache_is_safe() uses the real formula:
+            #   3 × H × W / 1_048_576 MB per sample.
             try:
-                import psutil
-
-                available_mb = psutil.virtual_memory().available // (1024 * 1024)
-            except ImportError:
-                available_mb = 0  # skip caching if psutil unavailable
-
-            # Only cache if we'd use less than 50% of available RAM.
-            # On systems with limited VRAM (< 25 GB), tighten the threshold to
-            # 25% to reduce memory pressure during sequential GPU experiments.
-            ram_threshold = 0.5
-            if torch.cuda.is_available():
-                try:
-                    vram_bytes = torch.cuda.get_device_properties(0).total_memory
-                    if vram_bytes < _LOW_VRAM_THRESHOLD_BYTES:
-                        ram_threshold = 0.25
-                except Exception:
-                    pass
-            if available_mb > 0 and estimated_mb < available_mb * ram_threshold:
+                from resource_optimizer import get_image_size_from_processor_config
+                _img_h, _img_w = get_image_size_from_processor_config()
+            except Exception:
+                _img_h, _img_w = 1280, 960  # safe fallback to DONUT native resolution
+            if _mm.ram_cache_is_safe(len(samples), _img_h, _img_w):
                 import concurrent.futures
 
                 def _load_one(idx_path):
@@ -293,12 +285,12 @@ class MultiDataset(Dataset):
                     "[RAM Cache] %d/%d images cached", len(self._image_cache), len(samples)
                 )
             else:
-                if available_mb > 0:
-                    logging.getLogger(__name__).info(
-                        "[RAM Cache] Skipped (need ~%dMB, available %dMB)",
-                        estimated_mb,
-                        available_mb,
-                    )
+                logging.getLogger(__name__).info(
+                    "[RAM Cache] Skipped (ram_cache_is_safe returned False for %d samples at %dx%d)",
+                    len(samples),
+                    _img_h,
+                    _img_w,
+                )
 
             # Precompute pixel_values tensors to eliminate per-step DonutImageProcessor
             # overhead. Each float32 tensor is 3×1280×960×4 bytes ≈ 14.2 MB.
@@ -319,12 +311,11 @@ class MultiDataset(Dataset):
                 else:
                     # Re-read available RAM right now — the earlier reading may be stale
                     # by hundreds of MB due to concurrent HF downloads and model loading.
-                    # Reuse the already-imported psutil if it was available (available_mb > 0).
-                    _fresh_available_mb = (
-                        psutil.virtual_memory().available // (1024 * 1024)
-                        if available_mb > 0
-                        else 0
-                    )
+                    try:
+                        import psutil as _psutil
+                        _fresh_available_mb = _psutil.virtual_memory().available // (1024 * 1024)
+                    except Exception:
+                        _fresh_available_mb = 0
                     # Use a tighter threshold for pixel tensors (14.2 MB each) than for PIL
                     # images (3 MB each).  On low-VRAM systems the GPU already consumes most
                     # of the RAM headroom, so cap at 15 % of fresh available RAM.
@@ -599,7 +590,7 @@ class DonutTrainer:
             # PERFORMANCE: Optimized DataLoader settings
             dataloader_num_workers=optimal_workers,
             dataloader_pin_memory=optimal_workers > 0,
-            dataloader_prefetch_factor=4 if optimal_workers > 0 else None,
+            dataloader_prefetch_factor=2 if optimal_workers > 0 else None,
             dataloader_persistent_workers=optimal_workers > 0,
             remove_unused_columns=False,
             seed=getattr(self.config, "seed", SEED),
@@ -690,6 +681,12 @@ class DonutTrainer:
         )
 
         trainer.train()
+
+        # Shut down persistent DataLoader worker subprocesses BEFORE returning.
+        # Without this, worker processes holding prefetch buffers stay alive
+        # across experiments, accumulating ~450 MB per experiment (8 workers ×
+        # 2 prefetch batches × ~28 MB/batch at 1280×960, batch_size=2).
+        _mm.shutdown_dataloader_workers(trainer)
 
         duration = time.time() - start_time
         return TrainingResult(
