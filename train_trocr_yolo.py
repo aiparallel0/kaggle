@@ -38,7 +38,7 @@ from transformers import (
 )
 
 from constants import DEVICE, FIELDS, SEED, WORKSPACE, _gpu_cleanup, _optimal_num_workers
-from control_suite import CONTROL_SUITE
+from control_suite import CONTROL_SUITE, get_augmentation_transforms
 
 __all__ = [
     "TrOCRReceiptDataset",
@@ -118,10 +118,17 @@ _ADDRESS_RE = re.compile(
 class TrOCRReceiptDataset(Dataset):
     """Line crop dataset for TrOCR fine-tuning."""
 
-    def __init__(self, data_dir: Path, processor: TrOCRProcessor, max_length: int):
+    def __init__(
+        self,
+        data_dir: Path,
+        processor: TrOCRProcessor,
+        max_length: int,
+        augmentation=None,  # Optional torchvision transforms pipeline (PIL Image → PIL Image)
+    ):
         self.data_dir = data_dir
         self.processor = processor
         self.max_len = max_length
+        self.augmentation = augmentation
         self.samples = []
 
         meta_path = data_dir / "metadata.jsonl"
@@ -138,6 +145,9 @@ class TrOCRReceiptDataset(Dataset):
     def __getitem__(self, idx):
         sample = self.samples[idx]
         img = Image.open(self.data_dir / sample["file_name"]).convert("RGB")
+
+        if self.augmentation is not None:
+            img = self.augmentation(img)
 
         pixel_values = self.processor(img, return_tensors="pt").pixel_values.squeeze(0)
 
@@ -207,8 +217,17 @@ def _materialize_meta_buffers(model: torch.nn.Module, device: str) -> int:
 # ════════════════════════════════════════════════════════════════════════════
 # STAGE 1: YOLO Training
 # ════════════════════════════════════════════════════════════════════════════
-def train_yolo(output_dir: Path | None = None) -> Path:
+def train_yolo(output_dir: Path | None = None, num_train_samples: int = 0) -> Path:
     """Fine-tune YOLOv8 for text-region detection on receipts.
+
+    Parameters
+    ----------
+    output_dir:
+        Directory for model checkpoints and run artefacts.
+    num_train_samples:
+        Number of training samples; used to log a freeze-depth recommendation
+        when CONTROL_SUITE.yolo.freeze is None (advisory only — behaviour
+        is unchanged by the recommendation).
 
     Returns the path to the best weights file.
     """
@@ -235,6 +254,19 @@ def train_yolo(output_dir: Path | None = None) -> Path:
     start = time.time()
 
     _yolo = CONTROL_SUITE.yolo
+
+    # Log recommended freeze depth when freeze is not explicitly set.
+    # This is advisory only — behaviour is unchanged (freeze=None = full training).
+    if _yolo.freeze is None and num_train_samples > 0:
+        _rec_freeze = _yolo.recommended_freeze(num_train_samples)
+        if _rec_freeze is not None:
+            print(
+                f"  [YOLO] NOTICE: {num_train_samples} training samples detected. "
+                f"Recommended freeze={_rec_freeze} (see YOLOControlConfig.recommended_freeze). "
+                "Currently using freeze=None (full training). "
+                "Set CONTROL_SUITE.yolo.freeze to apply."
+            )
+
     model.train(
         data=str(YOLO_DATA_YAML),
         epochs=YOLO_EPOCHS,
@@ -417,17 +449,15 @@ def train_trocr(output_dir: Path | None = None) -> dict:
     # Reserve accounts for: model weights (~0.9 GiB) + gradients (~0.9 GiB) +
     # AdamW optimizer states (~1.8 GiB) + system overhead (~0.9 GiB) = ~4.5 GiB.
     # Per-item cost with AMP (bf16 activations): ~0.3 GiB for TrOCR-base.
-    # These constants are empirically calibrated for TrOCR-base with AMP enabled.
-    _TROCR_RESERVED_GB = 6.0  # total non-activation overhead (weights + grads + optimizer)
-    _TROCR_PER_ITEM_GB = 0.3  # activation cost per batch item with AMP
+    # Calibration constants are defined on TrOCRControlConfig and shared with
+    # effective_batch_size() — both paths always use the same values.
     trocr_batch = TROCR_BATCH
     grad_accum = GRAD_ACCUM
     if torch.cuda.is_available():
         free_bytes, total_bytes = torch.cuda.mem_get_info()
         free_gb = free_bytes / (1024**3)
         total_gb = total_bytes / (1024**3)
-        usable_gb = max(free_gb - _TROCR_RESERVED_GB, 1.0)
-        max_safe_batch = max(1, int(usable_gb / _TROCR_PER_ITEM_GB))
+        max_safe_batch = CONTROL_SUITE.trocr.effective_batch_size(free_gb)
         if max_safe_batch < trocr_batch:
             old_batch = trocr_batch
             trocr_batch = max(1, max_safe_batch)
@@ -449,8 +479,13 @@ def train_trocr(output_dir: Path | None = None) -> dict:
         print("  Run dataset_preparation.py first.")
         return {"train_loss": [], "val_loss": []}
 
-    train_ds = TrOCRReceiptDataset(train_dir, processor, TROCR_MAX_LEN)
-    # Use val split (not test!) to match DONUT experiment design
+    train_ds = TrOCRReceiptDataset(
+        train_dir,
+        processor,
+        TROCR_MAX_LEN,
+        augmentation=get_augmentation_transforms(CONTROL_SUITE.trocr.augmentation_preset),
+    )
+    # Use val split (not test!) to match DONUT experiment design; no augmentation for val.
     val_ds = TrOCRReceiptDataset(val_dir, processor, TROCR_MAX_LEN)
 
     if len(train_ds) == 0:

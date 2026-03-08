@@ -61,7 +61,7 @@ Usage
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from typing import Any
+from typing import Any, ClassVar
 
 # Import shared constants — single source of truth per CLAUDE.md §7
 from constants import BASE_MODEL, MAX_LENGTH, SEED
@@ -72,6 +72,8 @@ __all__ = [
     "YOLOControlConfig",
     "ControlSuite",
     "CONTROL_SUITE",
+    "validate_sroie_oversample",
+    "get_augmentation_transforms",
 ]
 
 # ---------------------------------------------------------------------------
@@ -453,9 +455,14 @@ class TrOCRControlConfig:
     # ── Data Augmentation ───────────────────────────────────────────────────
     # impact: HIGH ⚠️ UNDERDOCUMENTED
     # Official fairseq config: DA2 (stronger augmentation used in IAM training).
-    # Omitting augmentation gives significantly worse CER.
+    # Microsoft TrOCR paper: DA2 augmentation gives significantly better CER.
     # None = no augmentation (current project state — only basic resize).
     # Options: None | "DA1" | "DA2"
+    # DA1 (light):   RandomRotation(±5°) + ColorJitter(brightness=0.2, contrast=0.2)
+    # DA2 (strong):  RandomPerspective(distortion=0.2, p=0.5) +
+    #                ElasticTransform(alpha=50.0) +
+    #                ColorJitter(brightness=0.3, contrast=0.3, saturation=0.2, hue=0.1)
+    # Use get_augmentation_transforms(preset) to obtain the pipeline.
     augmentation_preset: str | None = None
 
     # ── PEFT (Parameter-Efficient Fine-Tuning) ───────────────────────────────
@@ -476,6 +483,31 @@ class TrOCRControlConfig:
     # ── Reproducibility ─────────────────────────────────────────────────────
     # impact: LOW
     seed: int = SEED  # 42
+
+    # ── VRAM Calibration Constants (read-only, not tuneable) ─────────────────
+    # Used by effective_batch_size() to compute the safe batch for available VRAM.
+    # Empirically calibrated for TrOCR-base with AMP enabled.
+    #   _TROCR_RESERVED_GB: total overhead (weights + gradients + AdamW states + system)
+    #   _TROCR_PER_ITEM_GB: activation cost per batch item with AMP (bf16/fp16)
+    _TROCR_RESERVED_GB: ClassVar[float] = 6.0
+    _TROCR_PER_ITEM_GB: ClassVar[float] = 0.3
+
+    def effective_batch_size(self, vram_gb: float) -> int:
+        """Return the largest safe batch size for the given available VRAM (GB).
+
+        Uses empirically calibrated constants:
+          _TROCR_RESERVED_GB = 6.0  (model weights + grads + AdamW states + overhead)
+          _TROCR_PER_ITEM_GB  = 0.3  (activation cost per item with AMP, TrOCR-base)
+
+        Mirrors the inline VRAM check in train_trocr_yolo.train_trocr() so that
+        the reported batch size in CONTROL_SUITE always matches the actual training
+        batch after scaling.
+
+        Returns at most self.batch_size and at least 1.
+        """
+        usable = max(vram_gb - self._TROCR_RESERVED_GB, 1.0)
+        safe = max(1, int(usable / self._TROCR_PER_ITEM_GB))
+        return min(self.batch_size, safe)
 
 
 # ---------------------------------------------------------------------------
@@ -764,6 +796,27 @@ class YOLOControlConfig:
     # impact: LOW — forces CUDA deterministic algorithms (slight speed penalty)
     deterministic: bool = True
 
+    def recommended_freeze(self, num_train_samples: int) -> int | None:
+        """Return the recommended freeze depth for the given training dataset size.
+
+        Provides evidence-based guidance for domain finetuning on small receipt
+        datasets, where freezing backbone layers prevents overfitting:
+
+          >= 2000 samples  → None  (full training — enough data for all layers)
+          500–1999 samples → 10   (freeze backbone, train detection head only)
+          < 500 samples    → 3    (freeze first 3 backbone layers only)
+
+        Call this when self.freeze is None (not explicitly overridden) to get a
+        safe starting point. The recommendation is advisory — the caller decides
+        whether to apply it.
+        """
+        if num_train_samples >= 2000:
+            return None
+        elif num_train_samples >= 500:
+            return 10
+        else:
+            return 3
+
 
 # ---------------------------------------------------------------------------
 # ControlSuite — top-level bundle
@@ -891,6 +944,104 @@ def _flatten_suite(suite: ControlSuite) -> dict[str, Any]:
         for k, v in asdict(config).items():
             result[f"{model_name}.{k}"] = v
     return result
+
+
+def validate_sroie_oversample(datasets: list[str], sroie_oversample: int) -> None:
+    """Raise ValueError if a multi-dataset run uses sroie_oversample < 2.
+
+    Without 2× SROIE oversampling, auxiliary datasets dilute the SROIE training
+    signal and cause Experiments 2–4 to score at or below the baseline (see
+    CLAUDE.md §8).  This validator enforces the rule at the start of
+    run_experiment() so misconfigured runs fail fast rather than silently
+    producing suboptimal results.
+
+    Parameters
+    ----------
+    datasets:
+        The list of dataset names for the experiment (e.g. ["sroie", "wildreceipt"]).
+    sroie_oversample:
+        The SROIE oversampling factor (must be >= 2 when len(datasets) > 1).
+
+    Raises
+    ------
+    ValueError
+        When more than one dataset is combined and sroie_oversample < 2.
+    """
+    if len(datasets) > 1 and sroie_oversample < 2:
+        raise ValueError(
+            f"sroie_oversample={sroie_oversample} is too low for a multi-dataset run "
+            f"(datasets={datasets!r}). "
+            "Without 2× SROIE oversampling, auxiliary data dilutes the SROIE training "
+            "signal and causes F1 to fall at or below the single-dataset baseline. "
+            "Set sroie_oversample >= 2 when combining datasets."
+        )
+
+
+def get_augmentation_transforms(preset: str | None):
+    """Return a torchvision transforms pipeline for the given preset, or None.
+
+    Preset specifications
+    ---------------------
+    None
+        No augmentation (pass-through) — current project default.
+    "DA1" (light)
+        RandomRotation(degrees=5) +
+        ColorJitter(brightness=0.2, contrast=0.2)
+    "DA2" (strong, matches TrOCR paper DA2 config)
+        RandomPerspective(distortion_scale=0.2, p=0.5) +
+        ElasticTransform(alpha=50.0) +
+        ColorJitter(brightness=0.3, contrast=0.3, saturation=0.2, hue=0.1)
+
+    CI-safe: torchvision is an optional dependency.  If torchvision is not
+    installed, this function returns None instead of raising ImportError, so
+    control_suite.py remains importable in any environment.
+
+    Parameters
+    ----------
+    preset:
+        One of None, "DA1", or "DA2".
+
+    Returns
+    -------
+    torchvision.transforms.Compose | None
+        A pipeline that accepts a PIL image and returns a PIL image, or None
+        when preset is None or torchvision is unavailable.
+
+    Raises
+    ------
+    ValueError
+        When preset is an unrecognised non-None string.
+    """
+    if preset is None:
+        return None
+
+    # Validate preset name before attempting the optional torchvision import
+    # so that misconfigured presets raise immediately in all environments.
+    if preset not in ("DA1", "DA2"):
+        raise ValueError(
+            f"Unknown augmentation preset: {preset!r}. Valid values: None, 'DA1', 'DA2'."
+        )
+
+    try:
+        from torchvision import transforms
+    except ImportError:
+        return None
+
+    if preset == "DA1":
+        return transforms.Compose(
+            [
+                transforms.RandomRotation(degrees=5),
+                transforms.ColorJitter(brightness=0.2, contrast=0.2),
+            ]
+        )
+    else:  # "DA2"
+        return transforms.Compose(
+            [
+                transforms.RandomPerspective(distortion_scale=0.2, p=0.5),
+                transforms.ElasticTransform(alpha=50.0),
+                transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.2, hue=0.1),
+            ]
+        )
 
 
 # ---------------------------------------------------------------------------
