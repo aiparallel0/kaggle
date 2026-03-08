@@ -205,56 +205,76 @@ class _DualStreamHandler(logging.Handler):
     """Custom logger that writes to file AND filtered console output.
 
     Behavior:
-    - Always writes to file (file_path)
+    - Writes to file with repeat-line compression (collapse_after=3 by default)
     - Console output filtered: suppresses repetitive logs (epoch progress, etc.)
     - ERROR/WARNING always shown on console
     - INFO shown on console unless filtered
     - DEBUG written to file only
     """
 
-    def __init__(self, file_path: Path):
+    def __init__(self, file_path: Path, collapse_after: int = 3):
         super().__init__()
         self.file_path = file_path
         self.file_handle = open(str(file_path), "a", encoding="utf-8")  # noqa: SIM115
-        self._last_line = None
-        self._repeat_count = 0
+        self.collapse_after = collapse_after
+        # console dedup tracking
+        self._last_console_line: str | None = None
+        self._console_repeat_count: int = 0
+        # file dedup tracking
+        self._last_file_line: str | None = None
+        self._file_repeat_count: int = 0
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
             msg = self.format(record)
-
-            # Always write to file
-            self.file_handle.write(msg + "\n")
-            self.file_handle.flush()
+            self._write_to_file(msg)
 
             # Selectively write to console
             if record.levelno >= logging.INFO:
-                # Skip repetitive logs (epoch progress, etc.)
-                if self._should_suppress_console(msg):
-                    return
-
-                # Always show ERROR/WARNING
-                if record.levelno >= logging.WARNING:
-                    print(f"[{record.levelname:8s}] {msg}", file=sys.stderr)
-                else:
-                    print(f"[{record.levelname:8s}] {msg}")
-                sys.stdout.flush()
+                if not self._should_suppress_console(msg):
+                    # Always show ERROR/WARNING
+                    if record.levelno >= logging.WARNING:
+                        print(f"[{record.levelname:8s}] {msg}", file=sys.stderr)
+                    else:
+                        print(f"[{record.levelname:8s}] {msg}")
+                    sys.stdout.flush()
         except Exception:
             self.handleError(record)
 
+    def _write_to_file(self, msg: str) -> None:
+        """Write msg to file, collapsing consecutive identical lines."""
+        if msg == self._last_file_line:
+            self._file_repeat_count += 1
+            if self._file_repeat_count <= self.collapse_after:
+                self.file_handle.write(msg + "\n")
+                self.file_handle.flush()
+            # else: silently collapse — summary emitted on next different line
+        else:
+            if self._file_repeat_count > self.collapse_after:
+                skipped = self._file_repeat_count - self.collapse_after
+                self.file_handle.write(f"  ... (above line repeated ×{skipped} more times)\n")
+                self.file_handle.flush()
+            self._last_file_line = msg
+            self._file_repeat_count = 0
+            self.file_handle.write(msg + "\n")
+            self.file_handle.flush()
+
     def _should_suppress_console(self, msg: str) -> bool:
-        """Skip repetitive progress logs."""
-        # Suppress repeated lines that look like progress bars
+        """Skip repetitive progress logs on console."""
         if any(x in msg for x in ["Epoch ", "Step ", "[====", "%|", "batch"]):
-            if msg == self._last_line:
-                self._repeat_count += 1
+            if msg == self._last_console_line:
+                self._console_repeat_count += 1
                 return True
-            self._last_line = msg
-            self._repeat_count = 0
+            self._last_console_line = msg
+            self._console_repeat_count = 0
         return False
 
     def close(self) -> None:
         try:
+            # Flush any pending repeat summary before closing
+            if self._file_repeat_count > self.collapse_after:
+                skipped = self._file_repeat_count - self.collapse_after
+                self.file_handle.write(f"  ... (above line repeated ×{skipped} more times)\n")
             self.file_handle.close()
         except Exception:
             pass
@@ -400,6 +420,43 @@ def _print_final_summary(results_dir: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# CLI parameter override helpers
+# ---------------------------------------------------------------------------
+
+
+def _parse_param_overrides(params: list[str]) -> dict:
+    """Parse a list of 'KEY=VALUE' strings into a dict with auto-cast values.
+
+    Numeric values are auto-cast to int or float where possible; all others
+    are kept as strings.  Used to apply --param/-p CLI overrides to an
+    ExperimentConfig via dataclasses.replace().
+
+    Examples
+    --------
+    >>> _parse_param_overrides(["epochs=5", "lr=1e-4", "name=custom"])
+    {'epochs': 5, 'lr': 0.0001, 'name': 'custom'}
+    """
+    overrides: dict = {}
+    for item in params:
+        if "=" not in item:
+            print(f"  [--param] WARNING: Ignoring malformed override {item!r} (expected KEY=VALUE)")
+            continue
+        key, _, raw_value = item.partition("=")
+        key = key.strip()
+        raw_value = raw_value.strip()
+        # Auto-cast: try int first, then float, then keep as str
+        try:
+            value: int | float | str = int(raw_value)
+        except ValueError:
+            try:
+                value = float(raw_value)
+            except ValueError:
+                value = raw_value
+        overrides[key] = value
+    return overrides
+
+
+# ---------------------------------------------------------------------------
 # HuggingFace authentication
 # ---------------------------------------------------------------------------
 
@@ -439,9 +496,11 @@ def _setup_hf_auth() -> None:
         except Exception as e:
             print(f"  [HF Auth] Login failed: {e} — continuing unauthenticated")
     else:
-        raise OSError(
-            "[HF Auth] No HuggingFace token found. Authenticated downloads are required.\n"
-            "Fix: export HF_TOKEN=hf_... or create hf_token.txt in the project root."
+        print(
+            "  [HF Auth] No token found — running unauthenticated. "
+            "Downloads will work but may be slower or rate-limited.\n"
+            "  Tip: create hf_token.txt in the project root or set HF_TOKEN env var "
+            "for 5-10x faster downloads."
         )
 
 
@@ -830,6 +889,7 @@ def stage_experiments(args) -> StageResult:
                 exp_id,
                 base_processor=_base_processor,
                 base_model=_base_model,
+                overrides=getattr(args, "param_overrides", None) or None,
             )
         except Exception as exc:
             import traceback
@@ -2155,6 +2215,21 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Bypass startup diagnostics (useful for CI/automated runs)",
     )
+    p.add_argument(
+        "-p",
+        "--param",
+        metavar="KEY=VALUE",
+        action="append",
+        dest="params",
+        default=[],
+        help=(
+            "Override any ExperimentConfig field for a specific --experiment run. "
+            "Format: KEY=VALUE. Numeric values are auto-cast. "
+            "Example: --param epochs=5 --param lr=1e-4. "
+            "Can be specified multiple times. "
+            "Use with --experiment N to target a single experiment."
+        ),
+    )
     return p
 
 
@@ -2192,6 +2267,27 @@ def main() -> None:
     t_start = time.monotonic()
     parser = build_parser()
     args = parser.parse_args()
+
+    # Parse --param/-p overrides and attach to args for use in stage_experiments()
+    param_overrides = _parse_param_overrides(args.params)
+    if param_overrides:
+        if getattr(args, "paper_only", False):
+            print(
+                "  [--param] Overrides ignored with --paper-only (no experiments to run).\n"
+                "  Use --experiment N --param KEY=VALUE to override a specific experiment."
+            )
+            param_overrides = {}
+        elif getattr(args, "quick", False) or getattr(args, "mini", False) or getattr(args, "micro", False):
+            print(
+                "  [--param] Note: --param overrides apply to individual experiments only; "
+                "use --experiment N --param KEY=VALUE for targeted overrides."
+            )
+        else:
+            targets = f"experiment {args.experiment}" if args.experiment else "all experiments"
+            print(f"  [--param] Overrides will be applied to {targets}:")
+            for k, v in param_overrides.items():
+                print(f"    {k} = {v!r}")
+    args.param_overrides = param_overrides
 
     # Phase 1: Set up dual-stream logging (file + filtered console)
     logger = _setup_logging()

@@ -143,6 +143,9 @@ class ExperimentConfig:
     description: str = ""
     experiment_id: int = 0
     sroie_oversample: int = 1  # Number of times to duplicate SROIE training samples (1–3 typical)
+    skip_oversample_guard: bool = False  # Set True for intentional naïve control experiments (Exps 2–4).
+    # These exist to prove that sroie_oversample=1 hurts F1 vs sroie_oversample>=2.
+    # The guard is still enforced for all other paths (custom runs, CLI, etc.).
 
     # -- Mini-mode accelerators (all default to off so normal runs are unaffected) --
     subsample_train: int = 0  # >0: cap training set to this many samples (mini only)
@@ -185,22 +188,29 @@ EXPERIMENTS: dict[int, ExperimentConfig] = {
         experiment_id=1,
     ),
     2: ExperimentConfig(
-        name="SROIE + WildReceipt",
+        name="SROIE + WildReceipt (naïve baseline)",
         datasets=["sroie", "wildreceipt"],
-        description="Add ~1 740 WildReceipt receipt images with KIE remapping.",
+        description="Naïve multi-dataset run — sroie_oversample=1 intentionally. "
+                    "Control group: proves auxiliary data dilutes F1 without oversampling.",
         experiment_id=2,
+        sroie_oversample=1,
+        skip_oversample_guard=True,
     ),
     3: ExperimentConfig(
-        name="SROIE + Invoices-DONUT",
+        name="SROIE + Invoices-DONUT (naïve baseline)",
         datasets=["sroie", "invoices_donut"],
-        description="Add Invoices-DONUT invoice images.",
+        description="Naïve multi-dataset run — sroie_oversample=1 intentionally. Control group.",
         experiment_id=3,
+        sroie_oversample=1,
+        skip_oversample_guard=True,
     ),
     4: ExperimentConfig(
-        name="SROIE + WildReceipt + Invoices",
+        name="SROIE + WildReceipt + Invoices (naïve baseline)",
         datasets=["sroie", "wildreceipt", "invoices_donut"],
-        description="Combine SROIE with both auxiliary receipt/invoice datasets.",
+        description="Naïve combination — sroie_oversample=1 intentionally. Control group.",
         experiment_id=4,
+        sroie_oversample=1,
+        skip_oversample_guard=True,
     ),
     5: ExperimentConfig(
         name="SROIE + WildReceipt (2x SROIE)",
@@ -667,7 +677,12 @@ def evaluate_experiment(
 # ---------------------------------------------------------------------------
 
 
-def run_experiment(exp_id: int, base_processor=None, base_model=None) -> dict:
+def run_experiment(
+    exp_id: int,
+    base_processor=None,
+    base_model=None,
+    overrides: "dict | None" = None,
+) -> dict:
     """Run a single experiment: train, evaluate, save results.
 
     Checks cache validity (datasets AND hyperparams must match) before
@@ -677,12 +692,22 @@ def run_experiment(exp_id: int, base_processor=None, base_model=None) -> dict:
 
     When *base_processor* and *base_model* are supplied, they are passed to
     train_experiment() which deep-copies them instead of re-loading from disk.
+
+    When *overrides* is a non-empty dict, those key/value pairs are applied
+    to the base ExperimentConfig via dataclasses.replace() before training.
+    This allows ``--param`` CLI overrides without mutating the global EXPERIMENTS
+    dict (GP-1).
     """
+    import dataclasses as _dc
+
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     if exp_id not in EXPERIMENTS:
         raise ValueError(f"Unknown experiment ID {exp_id}. Valid: {list(EXPERIMENTS)}")
 
     config = EXPERIMENTS[exp_id]
+    if overrides:
+        config = _dc.replace(config, **overrides)
+        print(f"[Exp {exp_id}] --param overrides applied: {overrides}")
     print(f"\n{'=' * 72}")
     print(f"Experiment {exp_id}: {config.name}")
     print(f"Description: {config.description}")
@@ -692,7 +717,13 @@ def run_experiment(exp_id: int, base_processor=None, base_model=None) -> dict:
     # Validate that multi-dataset runs use sroie_oversample >= 2.
     # Without 2× oversampling, auxiliary data dilutes the SROIE training signal
     # and causes F1 to fall at or below the single-dataset baseline (CLAUDE.md §8).
-    validate_sroie_oversample(config.datasets, config.sroie_oversample)
+    # skip_oversample_guard=True is set only for intentional naïve control experiments
+    # (Exps 2–4) that deliberately use sroie_oversample=1 to prove dilution.
+    validate_sroie_oversample(
+        config.datasets,
+        config.sroie_oversample,
+        skip_guard=getattr(config, "skip_oversample_guard", False),
+    )
 
     result_file = RESULTS_DIR / f"experiment_{exp_id}.json"
 

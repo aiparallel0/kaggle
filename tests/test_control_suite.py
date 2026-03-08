@@ -426,6 +426,20 @@ def test_validate_sroie_oversample_exported():
     assert "validate_sroie_oversample" in control_suite.__all__
 
 
+def test_validate_sroie_oversample_skip_guard_waives_check():
+    """skip_guard=True must allow multi-dataset + oversample=1 without raising."""
+    validate_sroie_oversample(["sroie", "wildreceipt"], sroie_oversample=1, skip_guard=True)
+    validate_sroie_oversample(
+        ["sroie", "wildreceipt", "invoices_donut"], sroie_oversample=1, skip_guard=True
+    )
+
+
+def test_validate_sroie_oversample_skip_guard_false_still_raises():
+    """Explicitly passing skip_guard=False must still raise for bad configs."""
+    with pytest.raises(ValueError):
+        validate_sroie_oversample(["sroie", "wildreceipt"], sroie_oversample=1, skip_guard=False)
+
+
 # ---------------------------------------------------------------------------
 # Root Cause 2 — TrOCRControlConfig.effective_batch_size
 # ---------------------------------------------------------------------------
