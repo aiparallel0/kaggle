@@ -81,6 +81,7 @@ from resource_optimizer import (
     optimize_hyperparams,
 )
 from train import MultiDataset  # moved to train.py
+from control_suite import validate_sroie_oversample
 
 __all__ = [
     "ExperimentConfig",
@@ -674,6 +675,11 @@ def run_experiment(exp_id: int, base_processor=None, base_model=None) -> dict:
     print(f"Description: {config.description}")
     print(f"Datasets: {config.datasets}")
     print(f"{'=' * 72}")
+
+    # Validate that multi-dataset runs use sroie_oversample >= 2.
+    # Without 2× oversampling, auxiliary data dilutes the SROIE training signal
+    # and causes F1 to fall at or below the single-dataset baseline (CLAUDE.md §8).
+    validate_sroie_oversample(config.datasets, config.sroie_oversample)
 
     result_file = RESULTS_DIR / f"experiment_{exp_id}.json"
 

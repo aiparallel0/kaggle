@@ -26,6 +26,8 @@ from control_suite import (
     DonutControlConfig,
     TrOCRControlConfig,
     YOLOControlConfig,
+    get_augmentation_transforms,
+    validate_sroie_oversample,
 )
 from constants import BASE_MODEL, MAX_LENGTH, SEED
 
@@ -362,3 +364,218 @@ def test_total_param_count_is_comprehensive():
     total = sum(len(v) for v in d.values())
     # At least 60 params total (DONUT ~20, TrOCR ~20, YOLO ~40+)
     assert total >= 60, f"Expected ≥60 documented parameters, found {total}"
+
+
+# ---------------------------------------------------------------------------
+# Root Cause 1 — validate_sroie_oversample
+# ---------------------------------------------------------------------------
+
+
+def test_validate_sroie_oversample_single_dataset_passes():
+    """Single-dataset runs are always valid regardless of sroie_oversample."""
+    validate_sroie_oversample(["sroie"], sroie_oversample=1)
+    validate_sroie_oversample(["sroie"], sroie_oversample=2)
+    validate_sroie_oversample(["wildreceipt"], sroie_oversample=1)
+
+
+def test_validate_sroie_oversample_multi_dataset_sufficient_passes():
+    """Multi-dataset runs with sroie_oversample >= 2 must not raise."""
+    validate_sroie_oversample(["sroie", "wildreceipt"], sroie_oversample=2)
+    validate_sroie_oversample(["sroie", "wildreceipt"], sroie_oversample=3)
+    validate_sroie_oversample(["sroie", "wildreceipt", "invoices_donut"], sroie_oversample=2)
+
+
+def test_validate_sroie_oversample_multi_dataset_insufficient_raises():
+    """Multi-dataset runs with sroie_oversample < 2 must raise ValueError."""
+    with pytest.raises(ValueError, match="sroie_oversample=1"):
+        validate_sroie_oversample(["sroie", "wildreceipt"], sroie_oversample=1)
+
+
+def test_validate_sroie_oversample_error_message_is_informative():
+    """ValueError message must mention both datasets and the required minimum."""
+    with pytest.raises(ValueError) as exc_info:
+        validate_sroie_oversample(["sroie", "invoices_donut"], sroie_oversample=1)
+    msg = str(exc_info.value)
+    assert "sroie_oversample" in msg
+    assert ">= 2" in msg
+
+
+def test_validate_sroie_oversample_exported():
+    """validate_sroie_oversample must be in control_suite.__all__."""
+    import control_suite
+
+    assert "validate_sroie_oversample" in control_suite.__all__
+
+
+# ---------------------------------------------------------------------------
+# Root Cause 2 — TrOCRControlConfig.effective_batch_size
+# ---------------------------------------------------------------------------
+
+
+def test_effective_batch_size_high_vram_returns_max():
+    """With ample VRAM (>= reserved + batch * per_item), return full batch_size."""
+    cfg = TrOCRControlConfig(batch_size=16)
+    # 6.0 reserved + 16 * 0.3 = 6.0 + 4.8 = 10.8 GiB needed; 24 GiB available → no scaling
+    result = cfg.effective_batch_size(vram_gb=24.0)
+    assert result == 16
+
+
+def test_effective_batch_size_low_vram_reduces_batch():
+    """With constrained VRAM, effective_batch_size returns a value < batch_size."""
+    cfg = TrOCRControlConfig(batch_size=16)
+    # 8 GiB free: usable = 8 - 6 = 2 GiB, safe = int(2 / 0.3) = 6
+    result = cfg.effective_batch_size(vram_gb=8.0)
+    assert result < 16
+    assert result >= 1
+
+
+def test_effective_batch_size_minimum_is_one():
+    """effective_batch_size never returns less than 1, even for batch_size=1."""
+    cfg = TrOCRControlConfig(batch_size=1)
+    # min(batch_size=1, safe) == 1 regardless of VRAM
+    result = cfg.effective_batch_size(vram_gb=24.0)
+    assert result == 1
+    result_low = cfg.effective_batch_size(vram_gb=0.1)
+    assert result_low >= 1
+
+
+def test_effective_batch_size_matches_inline_formula():
+    """effective_batch_size must produce the same result as the inline formula in train_trocr."""
+    cfg = TrOCRControlConfig(batch_size=16)
+    free_gb = 10.0
+    # Replicate the formula from train_trocr_yolo.py
+    reserved = cfg._TROCR_RESERVED_GB
+    per_item = cfg._TROCR_PER_ITEM_GB
+    usable = max(free_gb - reserved, 1.0)
+    expected = min(16, max(1, int(usable / per_item)))
+    assert cfg.effective_batch_size(free_gb) == expected
+
+
+def test_trocr_control_config_has_calibration_constants():
+    """TrOCRControlConfig must expose _TROCR_RESERVED_GB and _TROCR_PER_ITEM_GB."""
+    assert hasattr(TrOCRControlConfig, "_TROCR_RESERVED_GB")
+    assert hasattr(TrOCRControlConfig, "_TROCR_PER_ITEM_GB")
+    assert TrOCRControlConfig._TROCR_RESERVED_GB == 6.0
+    assert TrOCRControlConfig._TROCR_PER_ITEM_GB == 0.3
+
+
+# ---------------------------------------------------------------------------
+# Root Cause 5 — YOLOControlConfig.recommended_freeze
+# ---------------------------------------------------------------------------
+
+
+def test_recommended_freeze_large_dataset_no_freeze():
+    """>= 2000 samples: no freezing (full training)."""
+    cfg = YOLOControlConfig()
+    assert cfg.recommended_freeze(2000) is None
+    assert cfg.recommended_freeze(3940) is None
+
+
+def test_recommended_freeze_medium_dataset_freeze_backbone():
+    """500–1999 samples: freeze backbone (value 10)."""
+    cfg = YOLOControlConfig()
+    assert cfg.recommended_freeze(500) == 10
+    assert cfg.recommended_freeze(1000) == 10
+    assert cfg.recommended_freeze(1999) == 10
+
+
+def test_recommended_freeze_small_dataset_freeze_early_layers():
+    """< 500 samples: freeze first 3 backbone layers."""
+    cfg = YOLOControlConfig()
+    assert cfg.recommended_freeze(499) == 3
+    assert cfg.recommended_freeze(100) == 3
+    assert cfg.recommended_freeze(0) == 3
+
+
+def test_recommended_freeze_boundary_exactly_500():
+    """Boundary: exactly 500 samples maps to freeze=10."""
+    cfg = YOLOControlConfig()
+    assert cfg.recommended_freeze(500) == 10
+
+
+def test_recommended_freeze_boundary_exactly_2000():
+    """Boundary: exactly 2000 samples maps to no freeze."""
+    cfg = YOLOControlConfig()
+    assert cfg.recommended_freeze(2000) is None
+
+
+# ---------------------------------------------------------------------------
+# Root Cause 4 — AST regression: weight_decay wired from CONTROL_SUITE
+# ---------------------------------------------------------------------------
+
+
+def test_train_trocr_yolo_reads_weight_decay_from_control_suite():
+    """train_trocr_yolo.py must read weight_decay from CONTROL_SUITE.trocr, not hardcode 0.
+
+    Uses AST inspection to verify the AdamW call passes weight_decay via
+    CONTROL_SUITE.trocr (or a local alias thereof), not as a literal 0 or omitted.
+    """
+    import ast
+    from pathlib import Path
+
+    source = (Path(__file__).parent.parent / "train_trocr_yolo.py").read_text()
+    tree = ast.parse(source)
+
+    # Collect all keyword arguments to AdamW calls
+    adamw_weight_decay_values = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            func = node.func
+            is_adamw = (
+                (isinstance(func, ast.Name) and func.id == "AdamW")
+                or (isinstance(func, ast.Attribute) and func.attr == "AdamW")
+            )
+            if is_adamw:
+                for kw in node.keywords:
+                    if kw.arg == "weight_decay":
+                        adamw_weight_decay_values.append(kw.value)
+
+    assert adamw_weight_decay_values, (
+        "No AdamW calls with weight_decay= found in train_trocr_yolo.py"
+    )
+
+    # At least one AdamW call must read weight_decay from a non-literal source.
+    # Acceptable: CONTROL_SUITE.trocr.weight_decay OR a local alias (_trocr.weight_decay
+    # where _trocr is assigned CONTROL_SUITE.trocr earlier in the function).
+    # Unacceptable: weight_decay=0 (literal 0) or weight_decay omitted entirely.
+    def _is_attribute_access(node: ast.expr) -> bool:
+        """Return True if node is an attribute access (x.y or x.y.z), not a literal."""
+        return isinstance(node, ast.Attribute)
+
+    has_attribute_ref = any(_is_attribute_access(v) for v in adamw_weight_decay_values)
+    assert has_attribute_ref, (
+        "train_trocr_yolo.py AdamW optimizer must read weight_decay via an attribute "
+        "access (e.g. CONTROL_SUITE.trocr.weight_decay or _trocr.weight_decay), not as "
+        f"a literal. Found AST nodes: {[ast.dump(v) for v in adamw_weight_decay_values]}"
+    )
+
+    # Also verify none of the AdamW weight_decay arguments are literal 0.
+    for val in adamw_weight_decay_values:
+        if isinstance(val, ast.Constant):
+            assert val.value != 0, (
+                "train_trocr_yolo.py AdamW weight_decay must not be literal 0 — "
+                "read from CONTROL_SUITE.trocr.weight_decay instead."
+            )
+
+
+# ---------------------------------------------------------------------------
+# Root Cause 3 — get_augmentation_transforms helper
+# ---------------------------------------------------------------------------
+
+
+def test_get_augmentation_transforms_none_returns_none():
+    """get_augmentation_transforms(None) must return None."""
+    assert get_augmentation_transforms(None) is None
+
+
+def test_get_augmentation_transforms_invalid_raises():
+    """get_augmentation_transforms with unknown preset must raise ValueError."""
+    with pytest.raises(ValueError, match="Unknown augmentation preset"):
+        get_augmentation_transforms("DA99")
+
+
+def test_get_augmentation_transforms_exported():
+    """get_augmentation_transforms must be in control_suite.__all__."""
+    import control_suite
+
+    assert "get_augmentation_transforms" in control_suite.__all__
