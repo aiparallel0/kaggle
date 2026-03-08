@@ -423,12 +423,39 @@ def train_trocr(output_dir: Path | None = None) -> dict:
     if n_fixed:
         print(f"  [TrOCR] Materialised {n_fixed} meta-device buffer(s) onto {DEVICE}")
 
-    # Enable gradient checkpointing — trades compute for ~30-40% activation memory savings.
-    # Required for TrOCR-base (246M params) to fit on lower-VRAM GPUs during backward.
-    # use_cache must be False when gradient_checkpointing is True (they are incompatible).
-    model.config.use_cache = False
-    model.decoder.config.use_cache = False
-    model.gradient_checkpointing_enable()
+    # Enable gradient checkpointing conditionally based on available VRAM.
+    # On high-VRAM cards (> 24 GB), checkpointing adds ~30-40% backward overhead
+    # for zero memory benefit — mirror the DONUT path in run_experiments.py.
+    # On lower-VRAM cards (≤ 24 GB, e.g. RTX 4090), it is required to fit the
+    # 246M-param TrOCR-base backward pass.
+    # use_cache must be False when gradient_checkpointing is True (incompatible).
+    _trocr = CONTROL_SUITE.trocr
+    _TROCR_GRAD_CKPT_THRESHOLD_GB = _trocr.grad_ckpt_vram_threshold_gb
+    _trocr_enable_grad_ckpt = True
+    if torch.cuda.is_available():
+        try:
+            _trocr_vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+            if _trocr_vram_gb > _TROCR_GRAD_CKPT_THRESHOLD_GB:
+                _trocr_enable_grad_ckpt = False
+                print(
+                    f"  [TrOCR] GradCkpt disabled — VRAM={_trocr_vram_gb:.1f} GB"
+                    f" > {_TROCR_GRAD_CKPT_THRESHOLD_GB:.0f} GB threshold"
+                )
+            else:
+                print(
+                    f"  [TrOCR] GradCkpt enabled — VRAM={_trocr_vram_gb:.1f} GB"
+                    f" <= {_TROCR_GRAD_CKPT_THRESHOLD_GB:.0f} GB threshold"
+                )
+        except Exception as _exc:
+            print(f"  [TrOCR] GradCkpt VRAM detection failed ({_exc}) — defaulting to enabled")
+
+    if _trocr_enable_grad_ckpt:
+        model.config.use_cache = False
+        model.decoder.config.use_cache = False
+        model.gradient_checkpointing_enable()
+    else:
+        model.config.use_cache = True
+        model.decoder.config.use_cache = True
 
     # Detect mixed precision dtype — bf16 preferred on Ampere+, fp16 as fallback.
     # This mirrors exactly how DonutTrainer (train.py lines 413-418) handles precision.
@@ -440,7 +467,7 @@ def train_trocr(output_dir: Path | None = None) -> dict:
     )
     scaler = torch.cuda.amp.GradScaler(enabled=(_use_amp and _amp_dtype == torch.float16))
     print(
-        f"  [TrOCR] AMP enabled: dtype={_amp_dtype}, gradient_checkpointing=True"
+        f"  [TrOCR] AMP enabled: dtype={_amp_dtype}, gradient_checkpointing={_trocr_enable_grad_ckpt}"
         if _use_amp
         else "  [TrOCR] AMP disabled (CPU mode)"
     )

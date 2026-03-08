@@ -395,6 +395,21 @@ class MultiDataset(Dataset):
                         100.0 * n / len(samples),
                     )
 
+    def clear_caches(self) -> None:
+        """Explicitly free all precomputed caches to release RAM/VRAM before GC.
+
+        Call this before ``del train_ds`` / ``del val_ds`` to ensure that
+        ``_pixel_cache`` tensors (up to 7.1 GB of float32 data) are freed
+        immediately rather than waiting for Python's cyclic GC to discover
+        that the dataset is unreachable.  This is critical between the 8
+        sequential DONUT experiments — without it, the previous experiment's
+        cache stays pinned while the next experiment allocates its own,
+        doubling the peak RAM usage.
+        """
+        self._pixel_cache.clear()
+        self._image_cache.clear()
+        self._label_cache.clear()
+
     def __len__(self) -> int:
         return len(self.samples)
 
