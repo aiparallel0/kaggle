@@ -119,6 +119,18 @@ def _run_impl(log_file: str) -> None:
     _collect_pip_show(lines)
 
     # -------------------------------------------------------------------
+    # 4. Optional packages
+    # -------------------------------------------------------------------
+    _append(lines, "## Optional Packages")
+    try:
+        import flash_attn
+
+        _append(lines, f"  flash-attn : {getattr(flash_attn, '__version__', 'unknown')}")
+    except Exception as e:
+        _append(lines, f"  flash-attn : NOT AVAILABLE ({type(e).__name__}: {e})")
+    _append(lines, "")
+
+    # -------------------------------------------------------------------
     # Write log file
     # -------------------------------------------------------------------
     try:

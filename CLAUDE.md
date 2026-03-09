@@ -517,6 +517,7 @@ Two-stage pipeline in `train_trocr_yolo.py` (called by `run_all.py`):
 | **val split missing → no early stopping guard** | `stage_install()` creates `val_img/`+`val_key/` distinct from `test_img/`+`test_key/` | `run_all.py` |
 | **mutable global `EXPERIMENTS` dict corrupted by `run_experiment()`** | `dataclasses.replace()` creates isolated copy; `_config_to_dict()` records actual training params | `run_experiments.py` |
 | **TrOCR OOM after DONUT experiments** | Prior stages' GPU memory not freed before TrOCR model load | Added defensive `_gpu_cleanup()` at start of `train_trocr()` and `train_yolo()`; explicit cleanup between YOLO and TrOCR in `stage_trocr_experiments()`; VRAM-aware batch auto-scaling halves batch when free VRAM < needed | `train_trocr_yolo.py`, `run_all.py` |
+| **`flash-attn` build fails with nvcc segfault on torch≥2.9+cu126** | Pipeline already falls back to PyTorch SDPA — no action needed. If you want FA2: use prebuilt wheel from https://flashattn.dev/wheel-finder/ (Python 3.12 / CUDA 12.6). Fixed `run_experiments.py` to catch `RuntimeError` in addition to `ImportError`. | `run_experiments.py`, `startup_diagnostics.py` |
 
 ### The F1 Collapse Chain (root-cause map for the three worst bugs)
 
