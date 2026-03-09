@@ -84,6 +84,14 @@ from resource_optimizer import (
 from train import MultiDataset  # moved to train.py
 from control_suite import validate_sroie_oversample
 
+# --- Optional flash-attn probe (at module top, after imports) ---
+try:
+    import flash_attn  # noqa: F401
+
+    FLASH_ATTN_AVAILABLE = True
+except Exception:
+    FLASH_ATTN_AVAILABLE = False
+
 __all__ = [
     "ExperimentConfig",
     "EXPERIMENTS",
@@ -352,16 +360,21 @@ def train_experiment(
             # Attempt Flash Attention 2 (requires flash-attn package; speeds up
             # decoder attention and reduces VRAM, enabling larger batch sizes).
             # Falls back silently to eager attention if unavailable or unsupported.
-            try:
-                _mdl = VisionEncoderDecoderModel.from_pretrained(
-                    config.base_model, attn_implementation="flash_attention_2"
-                )
-                logger.info("[Model] Flash Attention 2 enabled for decoder")
-            except (ImportError, ValueError, NotImplementedError) as _fa2_err:
-                logger.info(
-                    "[Model] Flash Attention 2 unavailable (%s), using default attention",
-                    _fa2_err,
-                )
+            if FLASH_ATTN_AVAILABLE:
+                try:
+                    _mdl = VisionEncoderDecoderModel.from_pretrained(
+                        config.base_model, attn_implementation="flash_attention_2"
+                    )
+                    logger.info("[Model] Flash Attention 2 enabled for decoder")
+                except Exception as _fa2_err:
+                    logger.info(
+                        "[Model] Flash Attention 2 load failed (%s: %s), using default attention",
+                        type(_fa2_err).__name__,
+                        _fa2_err,
+                    )
+                    _mdl = VisionEncoderDecoderModel.from_pretrained(config.base_model)
+            else:
+                logger.info("[Model] flash-attn not installed — using default attention (run fine)")
                 _mdl = VisionEncoderDecoderModel.from_pretrained(config.base_model)
 
         # Add SROIE special tokens with diagnostic logging (Phase 0a)
