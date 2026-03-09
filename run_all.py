@@ -456,6 +456,171 @@ def _parse_param_overrides(params: list[str]) -> dict:
     return overrides
 
 
+def _print_all_params() -> None:
+    """Print a formatted table of all DONUT/TrOCR/YOLO/memory parameters and system info."""
+    import dataclasses
+
+    try:
+        import run_experiments as re_mod
+        experiments = re_mod.EXPERIMENTS
+    except Exception as exc:
+        print(f"  [--list-params] Could not load experiments: {exc}")
+        experiments = {}
+
+    try:
+        import memory_manager as _mm_mod
+        ram_fraction = _mm_mod._RAM_SAFETY_FRACTION
+        pixel_cap = 4096  # _PIXEL_TENSOR_MAX_MB in train.py
+        ref_h = _mm_mod._REF_H
+        ref_w = _mm_mod._REF_W
+    except Exception:
+        ram_fraction = "?"
+        pixel_cap = "?"
+        ref_h = "?"
+        ref_w = "?"
+
+    eq = "=" * 72
+    print(f"\n{eq}")
+    print("  PARAMETER LISTING (--list-params)")
+    print(eq)
+
+    # DONUT experiments
+    print("\n  DONUT EXPERIMENTS")
+    print("  " + "-" * 50)
+    for exp_id, cfg in experiments.items():
+        print(f"\n  Exp {exp_id}  {cfg.name}")
+        print(
+            f"         epochs={cfg.epochs}  lr={cfg.lr}  batch={cfg.batch_size}"
+            f"  accum={cfg.gradient_accumulation_steps}  warmup={cfg.warmup_steps}  wd={cfg.weight_decay}"
+        )
+        print(
+            f"         early_stop={cfg.early_stopping_patience}  seed={cfg.seed}"
+            f"  max_len={cfg.max_length}  oversample={cfg.sroie_oversample}"
+        )
+        print(f"         datasets={cfg.datasets}")
+
+    # Memory management constants
+    print("\n  MEMORY MANAGEMENT CONSTANTS")
+    print("  " + "-" * 50)
+    print(f"  _RAM_SAFETY_FRACTION   = {ram_fraction}")
+    print(f"  _PIXEL_TENSOR_MAX_MB   = {pixel_cap}")
+    print(f"  _REF_H / _REF_W        = {ref_h} / {ref_w}")
+    print("  val precompute_tensors = False (always — val set skips pixel tensor cache)")
+
+    # System info
+    print("\n  SYSTEM")
+    print("  " + "-" * 50)
+    try:
+        import torch
+        if torch.cuda.is_available():
+            gpu_name = torch.cuda.get_device_name(0)
+            gpu_mem_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+            print(f"  GPU  : {gpu_name} ({gpu_mem_gb:.1f} GB)")
+        else:
+            print("  GPU  : Not available")
+    except Exception:
+        print("  GPU  : torch not available")
+    try:
+        import psutil
+        mem = psutil.virtual_memory()
+        print(
+            f"  RAM  : {mem.total / (1024**3):.1f} GB total, "
+            f"{mem.available / (1024**3):.1f} GB available"
+        )
+    except Exception:
+        print("  RAM  : psutil not available")
+
+    # TrOCR + YOLO parameters from control_suite
+    print("\n  TrOCR + YOLO (CONTROL_SUITE)")
+    print("  " + "-" * 50)
+    try:
+        from control_suite import CONTROL_SUITE
+        CONTROL_SUITE.print_summary()
+    except Exception as exc:
+        print(f"  (control_suite unavailable: {exc})")
+
+    print(f"\n{eq}\n")
+
+
+def _apply_params_override(args) -> None:
+    """Read params_override.json and apply its contents to the EXPERIMENTS global.
+
+    File location: --params-override path (default: /workspace/params_override.json).
+    Format:
+        {
+          "global": {"learning_rate": 3e-5, "early_stopping_patience": 5},
+          "experiments": {"6": {"epochs": 20}, "7": {"epochs": 20}}
+        }
+
+    Rules:
+    - "global" keys apply to ALL experiments as defaults.
+    - "experiments" keys override per-experiment (take precedence over "global").
+    - Unknown keys are logged as warnings and ignored.
+    - Parsing errors are printed and the function returns without modifying anything.
+    """
+    import dataclasses
+
+    override_path_str = getattr(args, "params_override", None)
+    if not override_path_str:
+        # Try default location
+        override_path_str = "/workspace/params_override.json"
+    override_path = Path(override_path_str)
+    if not override_path.exists():
+        return  # No override file — silent no-op
+
+    try:
+        raw = override_path.read_text()
+        data = json.loads(raw)
+    except Exception as exc:
+        print(f"  [params_override] WARNING: Could not read {override_path}: {exc}")
+        return
+
+    try:
+        import run_experiments as re_mod
+    except Exception as exc:
+        print(f"  [params_override] WARNING: Could not import run_experiments: {exc}")
+        return
+
+    global_overrides: dict = data.get("global", {})
+    per_exp_overrides: dict = {str(k): v for k, v in data.get("experiments", {}).items()}
+
+    # Gather valid field names from ExperimentConfig
+    valid_fields = {f.name for f in dataclasses.fields(re_mod.ExperimentConfig)}
+
+    def _warn_unknown(keys: dict, scope: str) -> dict:
+        clean = {}
+        for k, v in keys.items():
+            if k in valid_fields:
+                clean[k] = v
+            elif k == "comment":
+                pass  # silently ignore comment fields
+            else:
+                print(f"  [params_override] WARNING: Unknown key {k!r} in {scope} — ignored")
+        return clean
+
+    global_clean = _warn_unknown(global_overrides, "global")
+    applied_any = False
+
+    for exp_id, cfg in list(re_mod.EXPERIMENTS.items()):
+        exp_overrides = {**global_clean}
+        per_exp = per_exp_overrides.get(str(exp_id), {})
+        exp_overrides.update(_warn_unknown(per_exp, f"experiments.{exp_id}"))
+        if exp_overrides:
+            re_mod.EXPERIMENTS[exp_id] = dataclasses.replace(cfg, **exp_overrides)
+            applied_any = True
+
+    if applied_any:
+        print(f"  [params_override] Applied overrides from {override_path}:")
+        if global_clean:
+            print(f"    global: {global_clean}")
+        for exp_id_str, per_exp in per_exp_overrides.items():
+            clean = _warn_unknown(per_exp, f"experiments.{exp_id_str}")
+            if clean:
+                print(f"    experiment {exp_id_str}: {clean}")
+    else:
+        print(f"  [params_override] No valid overrides found in {override_path}")
+
+
 # ---------------------------------------------------------------------------
 # HuggingFace authentication
 # ---------------------------------------------------------------------------
@@ -2230,6 +2395,25 @@ def build_parser() -> argparse.ArgumentParser:
             "Use with --experiment N to target a single experiment."
         ),
     )
+    p.add_argument(
+        "--list-params",
+        action="store_true",
+        help=(
+            "Print all DONUT experiment hyperparameters, memory constants, "
+            "system info, and TrOCR/YOLO parameters, then exit."
+        ),
+    )
+    p.add_argument(
+        "--params-override",
+        metavar="FILE",
+        default=None,
+        help=(
+            "Path to a JSON file with live parameter overrides. "
+            "Applied before any experiment runs. "
+            "Default: /workspace/params_override.json (if it exists). "
+            "Format: {\"global\": {\"epochs\": 5}, \"experiments\": {\"6\": {\"epochs\": 20}}}"
+        ),
+    )
     return p
 
 
@@ -2267,6 +2451,14 @@ def main() -> None:
     t_start = time.monotonic()
     parser = build_parser()
     args = parser.parse_args()
+
+    # Apply live params_override.json overrides BEFORE any stage runs
+    _apply_params_override(args)
+
+    # --list-params: print full parameter table and exit
+    if getattr(args, "list_params", False):
+        _print_all_params()
+        sys.exit(0)
 
     # Parse --param/-p overrides and attach to args for use in stage_experiments()
     param_overrides = _parse_param_overrides(args.params)

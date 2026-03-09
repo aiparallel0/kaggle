@@ -246,6 +246,7 @@ class MultiDataset(Dataset):
         processor: DonutProcessor,
         max_length: int = MAX_LENGTH,
         cache_in_ram: bool = True,
+        precompute_tensors: bool = True,
     ):
         self.samples = samples
         self.processor = processor
@@ -301,7 +302,7 @@ class MultiDataset(Dataset):
             _PIXEL_TENSOR_MAX_MB = 4096
             _pix_mb = len(self._image_cache) * 14.2
             _log = logging.getLogger(__name__)
-            if len(self._image_cache) > 0:
+            if len(self._image_cache) > 0 and precompute_tensors:
                 if _pix_mb > _PIXEL_TENSOR_MAX_MB:
                     _log.info(
                         "[Tensor Cache] Skipped (estimated %.0f MB exceeds hard cap %d MB)",
@@ -309,34 +310,39 @@ class MultiDataset(Dataset):
                         _PIXEL_TENSOR_MAX_MB,
                     )
                 else:
-                    # The hard cap (_PIXEL_TENSOR_MAX_MB = 4 GB) is the sole gate.
-                    # The previous secondary check (_pix_threshold * fresh_available_mb)
-                    # allowed up to 46 GB on a 310 GB system, defeating the intent of
-                    # the hard cap.  Use only the hard cap so behaviour is the same on
-                    # every machine regardless of total system RAM.
-                    _log.info(
-                        "[Tensor Cache] Precomputing pixel_values for %d images"
-                        " (~%.0f MB) ...",
-                        len(self._image_cache),
-                        _pix_mb,
-                    )
-                    for _idx, _img in self._image_cache.items():
-                        try:
-                            self._pixel_cache[_idx] = processor(
-                                _img, return_tensors="pt"
-                            ).pixel_values.squeeze()
-                        except Exception:
-                            pass
-                    _log.info(
-                        "[Tensor Cache] Precomputed %d/%d pixel_values tensors",
-                        len(self._pixel_cache),
-                        len(samples),
-                    )
+                    _free_mb = _mm.ram_headroom_mb()
+                    if _pix_mb > _free_mb * 0.50:
+                        _log.info(
+                            "[Tensor Cache] Skipped (%.0f MB > 50%% of %.0f MB free RAM)",
+                            _pix_mb,
+                            _free_mb,
+                        )
+                    else:
+                        _log.info(
+                            "[Tensor Cache] Precomputing pixel_values for %d images"
+                            " (~%.0f MB) ...",
+                            len(self._image_cache),
+                            _pix_mb,
+                        )
+                        for _idx, _img in self._image_cache.items():
+                            try:
+                                self._pixel_cache[_idx] = processor(
+                                    _img, return_tensors="pt"
+                                ).pixel_values.squeeze()
+                            except Exception:
+                                pass
+                        _log.info(
+                            "[Tensor Cache] Precomputed %d/%d pixel_values tensors",
+                            len(self._pixel_cache),
+                            len(samples),
+                        )
+            elif len(self._image_cache) > 0 and not precompute_tensors:
+                _log.info("[Tensor Cache] Skipped (precompute_tensors=False — val/eval dataset)")
 
             # Precompute label token tensors — each is 768 ints (≈3 KB), always fits in RAM.
             # Amortises tokeniser overhead (sentencepiece BPE encode + pad to max_length)
             # across all training steps that revisit each sample.
-            if len(self._image_cache) > 0:
+            if len(self._image_cache) > 0 and precompute_tensors:
                 _log = logging.getLogger(__name__)
                 for _idx, (_, _gt) in enumerate(samples):
                     _target = "<s_sroie>"

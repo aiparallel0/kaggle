@@ -172,3 +172,70 @@ class TestTrainExperimentCleanup:
             f"Expected .clear_caches() to be called at least 2 times in train_experiment() "
             f"(normal cleanup + OOM retry), but found {count} call site(s)."
         )
+
+
+# ---------------------------------------------------------------------------
+# MultiDataset precompute_tensors=False
+# ---------------------------------------------------------------------------
+
+
+class TestPrecomputeTensorsFlag:
+    """Verify precompute_tensors=False behaviour in MultiDataset.__init__."""
+
+    def _make_dataset(self, precompute_tensors: bool, cache_in_ram: bool = False):
+        """Build a zero-sample MultiDataset without touching disk or GPU."""
+        try:
+            from transformers import DonutProcessor
+
+            proc = DonutProcessor.from_pretrained("naver-clova-ix/donut-base")
+        except (OSError, ImportError, ValueError):
+            pytest.skip("Cannot load DonutProcessor in this environment")
+
+        return MultiDataset(
+            samples=[],
+            processor=proc,
+            cache_in_ram=cache_in_ram,
+            precompute_tensors=precompute_tensors,
+        )
+
+    def test_accepts_precompute_tensors_false(self):
+        """MultiDataset.__init__ must accept precompute_tensors=False without error."""
+        ds = self._make_dataset(precompute_tensors=False)
+        assert ds is not None
+
+    def test_accepts_precompute_tensors_true(self):
+        """MultiDataset.__init__ must accept precompute_tensors=True (default) without error."""
+        ds = self._make_dataset(precompute_tensors=True)
+        assert ds is not None
+
+    def test_pixel_cache_empty_when_precompute_false(self):
+        """With precompute_tensors=False, _pixel_cache must be empty even if images are cached."""
+        ds = self._make_dataset(precompute_tensors=False, cache_in_ram=True)
+        # Manually populate _image_cache to simulate what happens when images are loaded
+        from PIL import Image
+        ds._image_cache[0] = Image.new("RGB", (4, 4))
+        # Pixel cache must remain empty — the precompute was suppressed
+        assert len(ds._pixel_cache) == 0, (
+            "_pixel_cache must be empty when precompute_tensors=False. "
+            "Exp 6 OOM: val dataset precomputed 1902 MB of pixel tensors unnecessarily."
+        )
+
+    def test_label_cache_empty_when_precompute_false(self):
+        """With precompute_tensors=False, _label_cache must be empty even if images are cached."""
+        ds = self._make_dataset(precompute_tensors=False, cache_in_ram=True)
+        from PIL import Image
+        ds._image_cache[0] = Image.new("RGB", (4, 4))
+        assert len(ds._label_cache) == 0, (
+            "_label_cache must be empty when precompute_tensors=False."
+        )
+
+    def test_val_dataset_in_run_experiments_uses_precompute_false(self):
+        """AST check: _build_model_and_datasets() must pass precompute_tensors=False for val."""
+        src_path = Path(__file__).resolve().parent.parent / "run_experiments.py"
+        source = src_path.read_text()
+        # The string "precompute_tensors=False" must appear in the source
+        assert "precompute_tensors=False" in source, (
+            "run_experiments.py must pass precompute_tensors=False when constructing "
+            "the val MultiDataset. Without this, ~1902 MB of val pixel tensors are "
+            "allocated after the train cache, causing SIGKILL at Experiment 6."
+        )
