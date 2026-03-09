@@ -176,15 +176,21 @@ def _install_dependencies() -> None:
         # Now try flash-attn separately with --no-build-isolation so that the
         # already-installed torch is visible during the build step.
         fa_result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "-q", "--no-build-isolation", "flash-attn>=2.0.0"],
+            [sys.executable, "-m", "pip", "install", "--no-build-isolation", "flash-attn>=2.0.0"],
             check=False,
             capture_output=True,
             text=True,
         )
         if fa_result.returncode != 0:
+            log_path = Path(__file__).parent / "flash_attn_install.log"
+            log_content = (
+                f"=== STDOUT ===\n{fa_result.stdout or ''}\n"
+                f"=== STDERR ===\n{fa_result.stderr or ''}"
+            )
+            log_path.write_text(log_content)
             print(
-                "[setup] flash-attn optional install skipped "
-                "(install manually: pip install flash-attn --no-build-isolation)"
+                f"[setup] flash-attn optional install failed — full output saved to {log_path}\n"
+                "[setup] To retry: pip install flash-attn --no-build-isolation"
             )
     except Exception:
         # Silently ignore all errors - pipeline may still work if packages are present
