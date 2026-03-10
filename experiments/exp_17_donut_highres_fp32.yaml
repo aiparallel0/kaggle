@@ -1,0 +1,96 @@
+# ============================================================
+# Experiment 17 — Donut Fine-Tuned, 2560x1920 Resolution, fp32
+# Maximum quality configuration: highest resolution + full fp32.
+# Most memory-intensive combination — resource_optimizer MUST
+# determine batch_size at runtime to avoid OOM.
+#
+# allow_high_res: true required.
+# resource_optimizer patches batch_size/grad_accum at runtime.
+# Target effective batch = 16.
+#
+# Parameter count: ~200M
+# ============================================================
+experiment_id: 17
+name: "donut_highres_fp32"
+description: >
+  donut-base fine-tuned at 2560x1920 resolution with fp32 precision.
+  Maximum quality configuration — highest resolution and highest
+  precision. resource_optimizer determines batch_size at runtime.
+  Establishes the absolute quality ceiling for the resolution+precision
+  grid (Exps 10/11/13/14/16/17).
+
+arch:
+  type: donut
+  base_checkpoint: "naver-clova-ix/donut-base"
+  tie_word_embeddings: false
+  full_parameter_finetuning: true
+
+model:
+  base_checkpoint: "naver-clova-ix/donut-base"
+  tie_word_embeddings: false
+  full_parameter_finetuning: true
+
+data:
+  image_height: 2560
+  image_width: 1920
+  allow_high_res: true
+  max_decode_length: 768
+  image_formats: [".jpg", ".jpeg", ".png", ".bmp", ".tiff"]
+  processor_config_note: >
+    processor_config.json MUST have max_size.height=2560, max_size.width=1920.
+    Revert to height=1280, width=960 after this experiment.
+
+datasets:
+  - name: sroie
+    split: train
+    oversample: 2
+  - name: invoices_donut
+    split: train
+    oversample: 1
+
+training:
+  is_zero_shot: false
+  skip: false
+  epochs: 10
+  batch_size: 1                      # fp32 + 2560x1920: very tight VRAM
+  gradient_accumulation_steps: 16   # 1x16=16 effective batch
+  resource_optimizer_target_effective_batch: 16
+  mixed_precision: fp32
+
+  optimizer:
+    type: AdamW
+    weight_decay: 0.01
+    encoder_lr: 5.0e-5
+    decoder_lr: 1.0e-4
+
+  scheduler:
+    type: cosine
+    warmup_steps: 500
+
+  early_stopping:
+    enabled: true
+    patience: 3
+    monitor: val_loss
+
+  seed: 42
+
+validation:
+  enabled: true
+  precompute_tensors: false
+
+output:
+  results_file: "results/experiment_17.json"
+  checkpoint_dir: "models/donut_exp17/"
+  log_file: "logs/experiment_17.log"
+
+hardware:
+  min_vram_gb: 60
+  recommended_vram_gb: 96
+  estimated_training_time:
+    RTX_6000_Blackwell_96GB: "~300 min (estimated: 4x res x 2x fp32 vs Exp 10)"
+    A100_80GB: "may OOM — use batch_size=1, grad_accum=16"
+    RTX_4090_24GB: "OOM — not supported"
+  preflight_checklist:
+    - "Set processor_config.json: max_size.height=2560, max_size.width=1920"
+    - "MANDATORY: run resource_optimizer.validate_training_config() first"
+    - "After experiment: REVERT processor_config.json to height=1280, width=960"

@@ -33,6 +33,17 @@ from pathlib import Path
 # FIX: FIELDS was duplicated independently here and in 4 other files.
 from constants import FIELDS, WORKSPACE
 
+# Optional dependency — plot_convergence lives in the same directory.
+# Imported here to make the dependency explicit; if the module is missing,
+# a warning is issued at runtime (not at import time).
+try:
+    import plot_convergence as _plot_convergence
+
+    _PLOT_CONVERGENCE_AVAILABLE = True
+except ImportError:
+    _plot_convergence = None  # type: ignore[assignment]
+    _PLOT_CONVERGENCE_AVAILABLE = False
+
 __all__ = [
     "PaperInjector",
     "UnresolvedVarError",
@@ -93,6 +104,16 @@ EXP_NAMES: dict[str, str] = {
     "6": "+Invoices (2x SROIE)",
     "7": "+All (2x SROIE)",
     "8": "+All (3x SROIE)",
+    "9": "Zero-shot",
+    "10": "Fine-tuned fp16",
+    "11": "Fine-tuned bf16",
+    "12": "TrOCR+YOLO pipeline",
+    "13": "Fine-tuned fp32",
+    "14": "High-res fp16 (2560x1920)",
+    "15": "TrOCR+YOLO (SROIE only)",
+    "16": "High-res bf16 (2560x1920)",
+    "17": "High-res fp32 (2560x1920)",
+    "18": "Zero-shot high-res (2560x1920)",
 }
 
 
@@ -279,6 +300,14 @@ class PaperInjector:
         # Ensure TrOCR vars have fallback values if file was missing
         for key in ["trocr_best_f1", "trocr_best_f1_pct", "trocr_best_exp"]:
             var_map.setdefault(key, "N/A")
+
+        # Experiment count / max ID (for dynamic slide titles and abstract)
+        exp_ids_with_results = sorted(all_exp.keys(), key=lambda x: int(x))
+        var_map["num_experiments"] = str(len(exp_ids_with_results))
+        if exp_ids_with_results:
+            var_map["max_exp_id"] = exp_ids_with_results[-1]
+        else:
+            var_map["max_exp_id"] = "0"
 
         return var_map
 
@@ -784,6 +813,46 @@ def generate_f1_barchart_tex(
 # ---------------------------------------------------------------------------
 
 
+def generate_experiment_table_slides(
+    all_exp: dict,
+    output_dir: str | Path = "results",
+) -> None:
+    """Generate results/experiment_table_slides.tex — tabular for Beamer slide.
+
+    Produces a compact tabular block (no \\begin{table} wrapper) listing all
+    experiments that have results, formatted for Beamer slide width.
+    Uses \\small font and abbreviated dataset names.
+    """
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    rows: list[str] = []
+    for exp_id_str in sorted(all_exp, key=lambda x: int(x)):
+        res = all_exp[exp_id_str]
+        m = res.get("metrics", {})
+        name = EXP_NAMES.get(exp_id_str, res.get("name", f"Exp {exp_id_str}"))
+        f1 = m.get("global_f1")
+        f1_str = f"{f1:.4f}" if f1 is not None else "N/A"
+        n = res.get("num_train_samples", 0)
+        rows.append(f"    {exp_id_str} & {name} & {n:,} & {f1_str} \\\\")
+
+    if not rows:
+        tex = "% No experiment results available yet.\n"
+    else:
+        header = (
+            "\\begin{tabular}{@{}clcc@{}}\n"
+            "  \\toprule\n"
+            "  \\textbf{Exp.} & \\textbf{Data} & "
+            "\\textbf{$n$} & \\textbf{F1} \\\\\n"
+            "  \\midrule\n"
+        )
+        footer = "  \\bottomrule\n\\end{tabular}\n"
+        tex = header + "\n".join(rows) + "\n" + footer
+
+    out = out_dir / "experiment_table_slides.tex"
+    out.write_text(tex, encoding="utf-8")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Inject experimental results into LaTeX tables")
     parser.add_argument(
@@ -835,6 +904,25 @@ def main() -> None:
         generate_convergence_data(args.results)
         generate_convergence_tex(args.results)
         generate_f1_barchart_tex(args.results)
+
+        # Generate slides experiment table and convergence plots
+        output_dir = str(results_path.parent)
+        generate_experiment_table_slides(all_exp, output_dir=output_dir)
+
+        # Generate cubic-spline convergence .tex files via plot_convergence
+        if _PLOT_CONVERGENCE_AVAILABLE:
+            try:
+                _plot_convergence.generate_all(results_dir=output_dir)
+            except Exception as exc:
+                warnings.warn(
+                    f"plot_convergence.generate_all() failed: {exc}",
+                    stacklevel=2,
+                )
+        else:
+            warnings.warn(
+                "plot_convergence module not found; skipping convergence .tex generation.",
+                stacklevel=2,
+            )
 
         var_map = build_var_map(all_exp)
 

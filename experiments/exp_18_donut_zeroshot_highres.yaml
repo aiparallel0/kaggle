@@ -1,0 +1,77 @@
+# ============================================================
+# Experiment 18 — Donut Zero-Shot at 2560x1920 Resolution
+# Zero-shot baseline at high resolution — no fine-tuning.
+# Completes the zero-shot row of the resolution/precision grid.
+# Expected F1: similar to Exp 9 (zero-shot at 1280x960) —
+# resolution alone does not help without fine-tuning.
+#
+# allow_high_res: true required.
+# ============================================================
+experiment_id: 18
+name: "donut_zeroshot_highres"
+description: >
+  Zero-shot donut-base evaluated at 2560x1920 resolution.
+  No fine-tuning. Paired with Exp 9 (zero-shot 1280x960) to
+  isolate the effect of resolution on zero-shot performance.
+  Expected result: similar to Exp 9 — resolution helps only
+  when the model has been trained at that resolution.
+
+arch:
+  type: donut
+  base_checkpoint: "naver-clova-ix/donut-base"
+  tie_word_embeddings: false
+  full_parameter_finetuning: false
+
+model:
+  base_checkpoint: "naver-clova-ix/donut-base"
+  tie_word_embeddings: false
+  full_parameter_finetuning: false
+
+data:
+  image_height: 2560
+  image_width: 1920
+  allow_high_res: true
+  max_decode_length: 768
+  image_formats: [".jpg", ".jpeg", ".png", ".bmp", ".tiff"]
+
+datasets: []
+
+training:
+  is_zero_shot: true
+  skip: true
+  epochs: 0
+  batch_size: 8
+  gradient_accumulation_steps: 1
+  mixed_precision: fp16
+
+  optimizer:
+    type: AdamW
+    weight_decay: 0.01
+    encoder_lr: 0.0
+    decoder_lr: 0.0
+
+  scheduler:
+    type: cosine
+    warmup_steps: 0
+
+  early_stopping:
+    enabled: false
+    patience: 0
+    monitor: val_loss
+
+  seed: 42
+
+validation:
+  enabled: false
+  precompute_tensors: false
+
+output:
+  results_file: "results/experiment_18.json"
+  checkpoint_dir: null
+  log_file: "logs/experiment_18.log"
+
+hardware:
+  min_vram_gb: 16
+  recommended_vram_gb: 24
+  estimated_inference_time:
+    RTX_6000_Blackwell_96GB: "~5 min (inference only at high res)"

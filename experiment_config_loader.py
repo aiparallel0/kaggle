@@ -42,6 +42,7 @@ import glob
 import json
 import os
 import re
+import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -109,8 +110,9 @@ class ExperimentConfig:
     full_parameter_finetuning: bool = True
 
     # Data / preprocessing
-    image_height: int = 1280               # DONUT native — do NOT exceed
-    image_width: int = 960                 # DONUT native — do NOT exceed
+    image_height: int = 1280               # DONUT native — do NOT exceed without allow_high_res
+    image_width: int = 960                 # DONUT native — do NOT exceed without allow_high_res
+    allow_high_res: bool = False           # bypasses image_height>1280 / image_width>960 guard
     max_length: int = 768                  # MAX_LENGTH from constants.py
 
     # Dataset mix
@@ -121,6 +123,7 @@ class ExperimentConfig:
     batch_size: int = 8
     gradient_accumulation_steps: int = 2   # effective batch = batch_size × grad_accum
     mixed_precision: str = "fp16"          # "fp16" | "bf16" | "fp32"
+    resource_optimizer_target_effective_batch: Optional[int] = None  # if set, runner calls resource_optimizer.optimize_hyperparams()
 
     # Optimizer (AdamW layerwise LR)
     optimizer_type: str = "AdamW"
@@ -155,16 +158,42 @@ class ExperimentConfig:
 
     def _validate(self) -> None:
         # Resolution guard — most important check
-        if self.image_height > 1280:
+        if self.image_height > 1280 and not self.allow_high_res:
             raise ValueError(
                 f"Exp {self.id}: image_height={self.image_height} exceeds "
                 f"DONUT native 1280. RAM scales as (H×W)/(1280×960). "
-                f"See memory_manager.py § 'The processor_config.json Rule'."
+                f"See memory_manager.py § 'The processor_config.json Rule'. "
+                f"Set allow_high_res: true in the YAML to bypass this guard."
             )
-        if self.image_width > 960:
+        if self.image_width > 960 and not self.allow_high_res:
             raise ValueError(
                 f"Exp {self.id}: image_width={self.image_width} exceeds "
-                f"DONUT native 960. RAM scales as (H×W)/(1280×960)."
+                f"DONUT native 960. RAM scales as (H×W)/(1280×960). "
+                f"Set allow_high_res: true in the YAML to bypass this guard."
+            )
+        if self.image_height > 1280 and self.allow_high_res:
+            warnings.warn(
+                f"\n{'=' * 60}\n"
+                f"WARNING: Exp {self.id} has image_height={self.image_height} "
+                f"(>{1280}). allow_high_res=True bypasses the guard.\n"
+                f"RAM scales as (H*W)/(1280*960). "
+                f"At 2560x1920 this is 4x.\n"
+                f"Ensure processor_config.json is updated BEFORE training.\n"
+                f"REVERT processor_config.json AFTER this experiment.\n"
+                f"{'=' * 60}",
+                stacklevel=3,
+            )
+        if self.image_width > 960 and self.allow_high_res:
+            warnings.warn(
+                f"\n{'=' * 60}\n"
+                f"WARNING: Exp {self.id} has image_width={self.image_width} "
+                f"(>{960}). allow_high_res=True bypasses the guard.\n"
+                f"RAM scales as (H*W)/(1280*960). "
+                f"At 2560x1920 this is 4x.\n"
+                f"Ensure processor_config.json is updated BEFORE training.\n"
+                f"REVERT processor_config.json AFTER this experiment.\n"
+                f"{'=' * 60}",
+                stacklevel=3,
             )
 
         # Weight-tying guard
@@ -352,6 +381,7 @@ def _yaml_to_config(path: str | Path) -> ExperimentConfig:
     data = raw.get("data", {})
     image_height = int(data.get("image_height", 1280))
     image_width = int(data.get("image_width", 960))
+    allow_high_res = bool(data.get("allow_high_res", False))
     max_length = int(data.get("max_decode_length", 768))
 
     # training section — read is_zero_shot before datasets validation
@@ -378,6 +408,8 @@ def _yaml_to_config(path: str | Path) -> ExperimentConfig:
     gradient_accumulation_steps = int(tr.get("gradient_accumulation_steps", 2))
     mixed_precision = str(tr.get("mixed_precision", "fp16"))
     seed = int(tr.get("seed", 42))
+    _roteb = tr.get("resource_optimizer_target_effective_batch")
+    resource_optimizer_target_effective_batch = int(_roteb) if _roteb is not None else None
 
     opt = tr.get("optimizer", {})
     optimizer_type = str(opt.get("type", "AdamW"))
@@ -417,12 +449,14 @@ def _yaml_to_config(path: str | Path) -> ExperimentConfig:
         full_parameter_finetuning=full_parameter_finetuning,
         image_height=image_height,
         image_width=image_width,
+        allow_high_res=allow_high_res,
         max_length=max_length,
         datasets=dataset_entries,
         epochs=epochs,
         batch_size=batch_size,
         gradient_accumulation_steps=gradient_accumulation_steps,
         mixed_precision=mixed_precision,
+        resource_optimizer_target_effective_batch=resource_optimizer_target_effective_batch,
         optimizer_type=optimizer_type,
         weight_decay=weight_decay,
         encoder_lr=encoder_lr,

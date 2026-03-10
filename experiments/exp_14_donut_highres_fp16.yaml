@@ -1,0 +1,103 @@
+# ============================================================
+# Experiment 14 — Donut Fine-Tuned, 2560x1920 Resolution, fp16
+# Increases DONUT input resolution from 1280x960 to 2560x1920.
+# 4x pixel area -> 4x activation memory -> batch_size reduced.
+# resource_optimizer.py patches batch_size/grad_accum at runtime.
+#
+# CRITICAL: processor_config.json MUST be updated before run:
+#   {"max_size": {"height": 2560, "width": 1920}}
+# The runner validates this automatically before the first batch.
+# After the experiment, processor_config.json MUST be reverted.
+#
+# allow_high_res: true — bypasses the image_height>1280 guard
+# with a loud console warning. Do NOT set on other experiments.
+#
+# Parameter count: ~200M (resolution does not add parameters)
+# ============================================================
+experiment_id: 14
+name: "donut_highres_fp16"
+description: >
+  donut-base fine-tuned at 2560x1920 resolution with fp16 precision.
+  Same data recipe as Exp 10. Only variable vs Exp 10: resolution
+  1280x960 -> 2560x1920. Tests whether higher resolution improves
+  extraction of dense text (addresses). resource_optimizer patches
+  batch_size/grad_accum automatically to keep effective batch=16.
+
+arch:
+  type: donut
+  base_checkpoint: "naver-clova-ix/donut-base"
+  tie_word_embeddings: false
+  full_parameter_finetuning: true
+
+model:
+  base_checkpoint: "naver-clova-ix/donut-base"
+  tie_word_embeddings: false
+  full_parameter_finetuning: true
+
+data:
+  image_height: 2560                 # HIGH RES — requires allow_high_res: true
+  image_width: 1920                  # HIGH RES — requires allow_high_res: true
+  allow_high_res: true               # bypasses image_height>1280 guard — prints WARNING
+  max_decode_length: 768
+  image_formats: [".jpg", ".jpeg", ".png", ".bmp", ".tiff"]
+  processor_config_note: >
+    processor_config.json MUST have max_size.height=2560, max_size.width=1920.
+    Revert to height=1280, width=960 after this experiment.
+
+datasets:
+  - name: sroie
+    split: train
+    oversample: 2
+  - name: invoices_donut
+    split: train
+    oversample: 1
+
+training:
+  is_zero_shot: false
+  skip: false
+  epochs: 10
+  # batch_size and gradient_accumulation_steps are patched at runtime
+  # by resource_optimizer.py to achieve effective_batch=16 within VRAM budget.
+  # Fallback values if resource_optimizer is unavailable:
+  batch_size: 2
+  gradient_accumulation_steps: 8
+  resource_optimizer_target_effective_batch: 16
+  mixed_precision: fp16
+
+  optimizer:
+    type: AdamW
+    weight_decay: 0.01
+    encoder_lr: 5.0e-5
+    decoder_lr: 1.0e-4
+
+  scheduler:
+    type: cosine
+    warmup_steps: 500
+
+  early_stopping:
+    enabled: true
+    patience: 3
+    monitor: val_loss
+
+  seed: 42
+
+validation:
+  enabled: true
+  precompute_tensors: false
+
+output:
+  results_file: "results/experiment_14.json"
+  checkpoint_dir: "models/donut_exp14/"
+  log_file: "logs/experiment_14.log"
+
+hardware:
+  min_vram_gb: 40
+  recommended_vram_gb: 80
+  estimated_training_time:
+    RTX_6000_Blackwell_96GB: "~160 min (4x pixels vs Exp 10)"
+    A100_80GB: "~100 min"
+    RTX_4090_24GB: "likely OOM — use batch_size=1, grad_accum=16"
+  preflight_checklist:
+    - "Set processor_config.json: max_size.height=2560, max_size.width=1920"
+    - "Run resource_optimizer.validate_training_config() before first batch"
+    - "After experiment: REVERT processor_config.json to height=1280, width=960"

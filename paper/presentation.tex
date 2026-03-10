@@ -14,6 +14,7 @@
 % ==================================================================
 \usetheme{Madrid}
 \usecolortheme{default}
+\usepackage{lmodern}
 
 % Custom palette — professional navy / teal
 \definecolor{PrimaryBlue}{RGB}{0,63,114}
@@ -67,7 +68,7 @@
 \usepackage{multirow}
 \usepackage{graphicx}
 \usepackage{tikz}
-\usetikzlibrary{shapes.geometric,arrows.meta,positioning,fit,calc}
+\usetikzlibrary{shapes.geometric,arrows.meta,positioning,fit,calc,shadows}
 \usepackage{pgfplots}
 \pgfplotsset{compat=1.18}
 \usepackage{xspace}
@@ -83,6 +84,11 @@
 \newcommand{\hlnum}[1]{\textcolor{AccentTeal}{\textbf{#1}}}
 \newcommand{\redbf}[1]{\textcolor{WarnRed}{\textbf{#1}}}
 \newcommand{\greenbf}[1]{\textcolor{GoodGreen}{\textbf{#1}}}
+
+% Conditional input for runtime-generated .tex files
+\newcommand{\inputifexists}[1]{%
+  \IfFileExists{#1}{\input{#1}}{}%
+}
 
 % ==================================================================
 % Title Information
@@ -197,6 +203,7 @@
 % ==================================================================
 
 \begin{frame}{Architecture Comparison}
+  \resizebox{\textwidth}{!}{%
   \begin{tikzpicture}[
     node distance=0.7cm and 1.1cm,
     block/.style={rectangle, draw, rounded corners=3pt,
@@ -244,7 +251,8 @@
       {No cascading\\errors};
     \node[right=0.2cm of out2, font=\tiny, WarnRed, align=left]
       {Error\\propagation};
-  \end{tikzpicture}
+  \end{tikzpicture}%
+  }
 \end{frame}
 
 % ------------------------------------------------------------------
@@ -356,8 +364,11 @@
 \end{frame}
 
 % ------------------------------------------------------------------
-\begin{frame}{Eight Controlled Experiments}
+\begin{frame}{Controlled Experiments (1--\VAR{max_exp_id})}
   \centering
+  {\small
+  \inputifexists{results/experiment_table_slides.tex}%
+  \iffalse% fallback static table (shown only if generated file missing)
   \begin{tabular}{@{}clc@{}}
     \toprule
     \textbf{Exp.} & \textbf{Training Data} &
@@ -373,8 +384,10 @@
     8 & SROIE + All (3$\times$)        & 3\,040 \\
     \bottomrule
   \end{tabular}
+  \fi
+  }
 
-  \vspace{0.4cm}
+  \vspace{0.2cm}
 
   \begin{block}{Controls}
     \begin{itemize}
@@ -634,6 +647,32 @@
   \centering
   {\large\donut achieves \hlnum{\VAR{best_f1}} F1 vs.\
    \VAR{trocr_best_f1} for \trocr\,+\,\yolo}
+\end{frame}
+
+% ==================================================================
+\section{Training Dynamics}
+% ==================================================================
+
+\begin{frame}{Training Loss Convergence --- All Experiments}
+  \centering
+  \inputifexists{results/convergence_combined_slides.tex}%
+  \begin{block}{}
+    \centering\small
+    Cubic spline interpolation over epoch-level loss values.
+    Solid = train loss, dashed = validation loss.
+  \end{block}
+\end{frame}
+
+% ------------------------------------------------------------------
+\begin{frame}{Convergence Curves --- Experiments 1--8}
+  \centering
+  \inputifexists{results/convergence_grid_1_8_slides.tex}
+\end{frame}
+
+% ------------------------------------------------------------------
+\begin{frame}{Convergence Curves --- Architecture Comparison (Exps 9--18)}
+  \centering
+  \inputifexists{results/convergence_grid_9_18_slides.tex}
 \end{frame}
 
 % ==================================================================
