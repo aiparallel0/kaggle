@@ -46,11 +46,15 @@ class TestSafe:
 
 
 class TestStaticData:
-    def test_exp_names_has_eight_entries(self):
-        assert len(EXP_NAMES) == 8
+    def test_exp_names_has_at_least_eight_entries(self):
+        assert len(EXP_NAMES) >= 8
 
-    def test_exp_names_keys_are_1_to_8(self):
-        assert set(EXP_NAMES.keys()) == {str(i) for i in range(1, 9)}
+    def test_exp_names_keys_include_1_to_8(self):
+        assert {str(i) for i in range(1, 9)}.issubset(set(EXP_NAMES.keys()))
+
+    def test_exp_names_keys_include_9_to_18(self):
+        # Architecture comparison experiments 9-18 should be present
+        assert {str(i) for i in range(9, 19)}.issubset(set(EXP_NAMES.keys()))
 
     def test_leaderboard_has_entries(self):
         assert len(LEADERBOARD) > 0

@@ -1,0 +1,85 @@
+# ============================================================
+# Experiment 13 — Donut Fine-Tuned, Full fp32 Precision
+# Identical to Exp 10 (fp16) but with mixed_precision: fp32.
+# Tests whether fp16 numeric range was a ceiling on quality.
+# fp32 is the reference precision — most stable, highest memory.
+#
+# Expected: similar or marginally better F1 than Exp 10.
+# Training ~2x slower and ~2x more VRAM than fp16.
+#
+# Parameter count: ~200M (unchanged — precision ≠ parameters)
+# ============================================================
+experiment_id: 13
+name: "donut_finetuned_fp32"
+description: >
+  donut-base fine-tuned with fp32 full precision. Same data recipe
+  as Exp 10 (SROIE x2 + Invoices). Only variable vs Exp 10: precision
+  fp16 -> fp32. Establishes the full-precision ceiling for the
+  precision comparison series (Exps 10=fp16, 11=bf16, 13=fp32).
+
+arch:
+  type: donut
+  base_checkpoint: "naver-clova-ix/donut-base"
+  tie_word_embeddings: false
+  full_parameter_finetuning: true
+
+model:
+  base_checkpoint: "naver-clova-ix/donut-base"
+  tie_word_embeddings: false
+  full_parameter_finetuning: true
+
+data:
+  image_height: 1280
+  image_width: 960
+  max_decode_length: 768
+  image_formats: [".jpg", ".jpeg", ".png", ".bmp", ".tiff"]
+
+datasets:
+  - name: sroie
+    split: train
+    oversample: 2
+  - name: invoices_donut
+    split: train
+    oversample: 1
+
+training:
+  is_zero_shot: false
+  skip: false
+  epochs: 10
+  batch_size: 4                      # reduced: fp32 doubles activation memory vs fp16
+  gradient_accumulation_steps: 4    # 4x4=16 effective batch — same as Exps 10/11
+  mixed_precision: fp32              # ← ONLY CHANGE vs Exp 10
+
+  optimizer:
+    type: AdamW
+    weight_decay: 0.01
+    encoder_lr: 5.0e-5
+    decoder_lr: 1.0e-4
+
+  scheduler:
+    type: cosine
+    warmup_steps: 500
+
+  early_stopping:
+    enabled: true
+    patience: 3
+    monitor: val_loss
+
+  seed: 42
+
+validation:
+  enabled: true
+  precompute_tensors: false
+
+output:
+  results_file: "results/experiment_13.json"
+  checkpoint_dir: "models/donut_exp13/"
+  log_file: "logs/experiment_13.log"
+
+hardware:
+  min_vram_gb: 24
+  recommended_vram_gb: 48
+  estimated_training_time:
+    RTX_6000_Blackwell_96GB: "~80 min (~2x Exp 10)"
+    A100_80GB: "~50 min"
+    RTX_4090_24GB: "~120 min"

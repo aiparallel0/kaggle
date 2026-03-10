@@ -582,6 +582,19 @@ test distribution.
   \end{figure}
 }{}
 
+Fig.~\ref{fig:convergence_combined} shows the training and validation
+loss trajectories for all experiments.  Curves are smoothed with cubic
+spline interpolation over epoch-level checkpoints.
+
+\begin{figure}[!t]
+  \centering
+  \inputifexists{results/convergence_combined_paper.tex}
+  \caption{Training (solid) and validation (dashed) loss curves for all
+           completed experiments. Curves smoothed with cubic spline
+           interpolation. Early-stopped experiments show fewer epochs.}
+  \label{fig:convergence_combined}
+\end{figure}
+
 \inputifexists{results/f1_barchart.tex}
 
 \subsection{TrOCR+YOLO Results}
