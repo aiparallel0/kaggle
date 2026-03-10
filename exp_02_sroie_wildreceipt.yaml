@@ -1,0 +1,77 @@
+# ============================================================
+# Experiment 2 — SROIE + WildReceipt (no oversampling)
+# Tests whether adding WildReceipt without domain rebalancing
+# improves over the SROIE baseline.
+#
+# Actual result (2026-03-07):
+#   global_f1=0.8257  training_time_sec=2511 (~42 min)
+#   WR alone (no oversample) slightly hurts vs Exp 1 (0.8503)
+#   Expected total samples: ~1,386
+# ============================================================
+
+experiment_id: 2
+name: "sroie_plus_wildreceipt"
+description: >
+  SROIE + WildReceipt combined at natural ratio (no oversampling of SROIE).
+  Hypothesis: auxiliary receipt data helps. Finding: without rebalancing,
+  WildReceipt domain shift slightly hurts F1 vs baseline.
+
+model:
+  base_checkpoint: "naver-clova-ix/donut-base"
+  tie_word_embeddings: false
+  full_parameter_finetuning: true
+
+data:
+  image_height: 1280
+  image_width: 960
+  max_decode_length: 768
+  image_formats: [".jpg", ".jpeg", ".png", ".bmp", ".tiff"]
+
+datasets:
+  - name: sroie
+    split: train
+    oversample: 1              # 500 samples — no oversampling
+  - name: wildreceipt
+    split: train
+    oversample: 1              # ~886 samples — no oversampling
+  # Expected total: ~1,386
+
+training:
+  epochs: 10
+  batch_size: 8
+  gradient_accumulation_steps: 2
+  mixed_precision: fp16
+
+  optimizer:
+    type: AdamW
+    weight_decay: 0.01
+    encoder_lr: 5.0e-5
+    decoder_lr: 1.0e-4
+
+  scheduler:
+    type: cosine
+    warmup_steps: 500
+
+  early_stopping:
+    enabled: true
+    patience: 3
+    monitor: val_loss
+
+  seed: 42
+
+validation:
+  enabled: true
+  precompute_tensors: false
+
+output:
+  results_file: "results/experiment_2.json"
+  checkpoint_dir: "models/donut_exp2/"
+  log_file: "logs/experiment_2.log"
+
+hardware:
+  min_vram_gb: 16
+  recommended_vram_gb: 40
+  estimated_training_time:
+    RTX_6000_Blackwell_96GB: "~42 min"
+    A100_80GB: "~25 min"
+    RTX_4090_24GB: "~60 min"

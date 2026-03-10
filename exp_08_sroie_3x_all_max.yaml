@@ -1,0 +1,93 @@
+# ============================================================
+# Experiment 8 — SROIE (3× oversample) + WildReceipt + Invoices
+# WARNING: Previous run OOM'd at WRONG resolution (2560×1920).
+# This config uses the CORRECT 1280×960 resolution.
+# Must validate RAM budget with resource_optimizer before running.
+#
+# Previous (broken) result: OOM at 2560×1920 image resolution.
+# Fixed result: Not yet measured. Estimated ~3,940 samples.
+# ============================================================
+
+experiment_id: 8
+name: "sroie_3x_all_datasets_max"
+description: >
+  Maximum data configuration: SROIE 3× oversample + WildReceipt + Invoices.
+  The prior OOM failure was caused by processor_config.json being set to
+  2560×1920 (4× the calibrated RAM per sample). This config enforces 1280×960.
+  RAM footprint at 3940 samples × 3.516 MB/sample (PIL) + 14.064 MB/sample
+  (float32 pixel) = ~69 GB system RAM — verify with memory_manager before running.
+  Recommend precompute_tensors=false if RAM is tight; also validate optimizer
+  step count (must be ≥200 steps for DONUT convergence).
+
+model:
+  base_checkpoint: "naver-clova-ix/donut-base"
+  tie_word_embeddings: false
+  full_parameter_finetuning: true
+
+data:
+  image_height: 1280           # CRITICAL: do NOT change to 2560 — causes 4× RAM
+  image_width: 960             # CRITICAL: do NOT change to 1920 — causes 4× RAM
+  max_decode_length: 768
+  image_formats: [".jpg", ".jpeg", ".png", ".bmp", ".tiff"]
+
+datasets:
+  - name: sroie
+    split: train
+    oversample: 3              # 500 × 3 = 1500 samples — maximum SROIE anchoring
+  - name: wildreceipt
+    split: train
+    oversample: 1              # ~886 samples
+  - name: invoices_donut
+    split: train
+    oversample: 1              # ~332 samples... wait -- ugh. But let's double check:
+                               # need to confirm invoices sample count in registry
+  # Estimated total: ~2,718 (1500 + 886 + 332)
+  # Note: original CLAUDE.md quotes ~3,940 — verify registry counts before run
+
+training:
+  epochs: 10
+  batch_size: 8
+  gradient_accumulation_steps: 2   # if OOM, try batch_size=4 + gradient_accumulation_steps=4
+  mixed_precision: fp16
+
+  optimizer:
+    type: AdamW
+    weight_decay: 0.01
+    encoder_lr: 5.0e-5
+    decoder_lr: 1.0e-4
+
+  scheduler:
+    type: cosine
+    warmup_steps: 500
+
+  early_stopping:
+    enabled: true
+    patience: 3
+    monitor: val_loss
+
+  seed: 42
+
+# IMPORTANT pre-run checklist for Exp 8:
+# 1. Confirm processor_config.json has height=1280, width=960 (not 2560×1920)
+# 2. Run: python -c "from resource_optimizer import validate_training_config; ..."
+# 3. Check available system RAM: needs ~69 GB for full pixel tensor precompute
+#    If system RAM < 80 GB, set precompute_tensors: false in train code too
+# 4. Confirm total sample count from dataset_registry matches expectation
+
+validation:
+  enabled: true
+  precompute_tensors: false
+
+output:
+  results_file: "results/experiment_8.json"
+  checkpoint_dir: "models/donut_exp8/"
+  log_file: "logs/experiment_8.log"
+
+hardware:
+  min_vram_gb: 24
+  recommended_vram_gb: 80
+  min_system_ram_gb: 80        # High RAM requirement — verify before running
+  estimated_training_time:
+    RTX_6000_Blackwell_96GB: "~110 min (estimated)"
+    A100_80GB: "~70 min (estimated)"
+    RTX_4090_24GB: "likely OOM — reduce batch_size to 4"

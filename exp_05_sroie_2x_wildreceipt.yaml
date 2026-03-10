@@ -1,0 +1,77 @@
+# ============================================================
+# Experiment 5 — SROIE (2× oversample) + WildReceipt
+# Tests whether SROIE anchoring unlocks WildReceipt benefit.
+#
+# Actual result (2026-03-07):
+#   global_f1=0.8514  — marginal gain with oversampling (+0.0011 vs Exp 1)
+#   Expected total samples: ~1,886 (1000 SROIE + 886 WR)
+# ============================================================
+
+experiment_id: 5
+name: "sroie_2x_plus_wildreceipt"
+description: >
+  SROIE oversampled 2× (1000 samples) combined with WildReceipt (886 samples).
+  Oversampling SROIE correctly anchors the model to the target domain.
+  Result is a marginal improvement over baseline (0.8514 vs 0.8503).
+  WildReceipt provides modest complementary signal when the domain is anchored.
+  Compare with Exp 6 which uses Invoices instead and achieves a much larger gain.
+
+model:
+  base_checkpoint: "naver-clova-ix/donut-base"
+  tie_word_embeddings: false
+  full_parameter_finetuning: true
+
+data:
+  image_height: 1280
+  image_width: 960
+  max_decode_length: 768
+  image_formats: [".jpg", ".jpeg", ".png", ".bmp", ".tiff"]
+
+datasets:
+  - name: sroie
+    split: train
+    oversample: 2              # 500 × 2 = 1000 samples — 2× SROIE oversampling
+  - name: wildreceipt
+    split: train
+    oversample: 1              # ~886 samples — no oversampling
+  # Expected total: ~1,886
+
+training:
+  epochs: 10
+  batch_size: 8
+  gradient_accumulation_steps: 2
+  mixed_precision: fp16
+
+  optimizer:
+    type: AdamW
+    weight_decay: 0.01
+    encoder_lr: 5.0e-5
+    decoder_lr: 1.0e-4
+
+  scheduler:
+    type: cosine
+    warmup_steps: 500
+
+  early_stopping:
+    enabled: true
+    patience: 3
+    monitor: val_loss
+
+  seed: 42
+
+validation:
+  enabled: true
+  precompute_tensors: false
+
+output:
+  results_file: "results/experiment_5.json"
+  checkpoint_dir: "models/donut_exp5/"
+  log_file: "logs/experiment_5.log"
+
+hardware:
+  min_vram_gb: 16
+  recommended_vram_gb: 40
+  estimated_training_time:
+    RTX_6000_Blackwell_96GB: "~55 min"
+    A100_80GB: "~33 min"
+    RTX_4090_24GB: "~80 min"

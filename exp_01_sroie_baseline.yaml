@@ -1,0 +1,108 @@
+# ============================================================
+# Experiment 1 — SROIE Baseline
+# DONUT fine-tuned on SROIE only. No auxiliary data.
+# Reference point for all other experiments.
+#
+# Actual result (2026-03-07, RTX 6000 Blackwell 96 GB):
+#   global_f1=0.8503  company=0.841  date=0.984
+#   address=0.790     total=0.784    exact_match=N/A
+# ============================================================
+
+experiment_id: 1
+name: "sroie_baseline"
+description: >
+  SROIE Task-3 fine-tuning with SROIE training data only.
+  Establishes the single-dataset baseline. No oversampling, no auxiliary data.
+
+# ------------------------------------------------------------------
+# MODEL
+# Base: naver-clova-ix/donut-base
+#   - Swin-B encoder:   ~88 M params  (~352 MB fp32)
+#   - mBART decoder:   ~112 M params  (~448 MB fp32)
+#   - Total:           ~200 M params  (~800 MB fp32 / ~400 MB fp16)
+#   - AdamW (m+v):     ~400 M param-copies → ~1600 MB fp32 on GPU
+# Fine-tuning: FULL parameter update (no LoRA / adapters)
+# ------------------------------------------------------------------
+model:
+  base_checkpoint: "naver-clova-ix/donut-base"
+  tie_word_embeddings: false        # CRITICAL: must stay false after resize_token_embeddings()
+  full_parameter_finetuning: true
+
+# ------------------------------------------------------------------
+# DATA — resolution is fixed at DONUT native 1280×960.
+# WARNING: Do NOT exceed height=1280 / width=960.
+#   RAM per sample scales as (H×W)/(1280×960). At 2560×1920 → 4× RAM.
+#   All resource_optimizer.py thresholds are calibrated to 1280×960.
+# ------------------------------------------------------------------
+data:
+  image_height: 1280         # DONUT native — do not increase
+  image_width: 960           # DONUT native — do not increase
+  max_decode_length: 768     # MAX_LENGTH in constants.py — do not increase
+  image_formats: [".jpg", ".jpeg", ".png", ".bmp", ".tiff"]
+
+# ------------------------------------------------------------------
+# DATASETS
+# Each entry has:
+#   name        — must match a key in datasets_registry.json
+#   split       — which split to load ("train" / "all")
+#   oversample  — integer repeat multiplier (1 = no oversampling)
+# Expected total samples: 500 (SROIE train split)
+# ------------------------------------------------------------------
+datasets:
+  - name: sroie
+    split: train
+    oversample: 1
+
+# ------------------------------------------------------------------
+# TRAINING HYPERPARAMETERS
+# ------------------------------------------------------------------
+training:
+  epochs: 10
+  batch_size: 8                    # per-GPU
+  gradient_accumulation_steps: 2   # effective batch = 8 × 2 = 16
+  mixed_precision: fp16            # falls back to fp32 on CPU
+
+  optimizer:
+    type: AdamW
+    weight_decay: 0.01
+    encoder_lr: 5.0e-5             # layerwise LR: lower for encoder
+    decoder_lr: 1.0e-4             # layerwise LR: higher for decoder
+
+  scheduler:
+    type: cosine
+    warmup_steps: 500
+
+  early_stopping:
+    enabled: true
+    patience: 3
+    monitor: val_loss
+
+  seed: 42
+
+# ------------------------------------------------------------------
+# VALIDATION
+# val dataset is always constructed with precompute_tensors=False.
+# val split: 63 SROIE images (physically distinct from test split).
+# ------------------------------------------------------------------
+validation:
+  enabled: true
+  precompute_tensors: false        # NEVER set true for val — causes OOM
+
+# ------------------------------------------------------------------
+# OUTPUT
+# ------------------------------------------------------------------
+output:
+  results_file: "results/experiment_1.json"
+  checkpoint_dir: "models/donut_exp1/"
+  log_file: "logs/experiment_1.log"
+
+# ------------------------------------------------------------------
+# HARDWARE HINTS (informational — not enforced by training code)
+# ------------------------------------------------------------------
+hardware:
+  min_vram_gb: 16
+  recommended_vram_gb: 40
+  estimated_training_time:
+    RTX_6000_Blackwell_96GB: "~20 min"
+    A100_80GB: "~12 min"
+    RTX_4090_24GB: "~30 min"
