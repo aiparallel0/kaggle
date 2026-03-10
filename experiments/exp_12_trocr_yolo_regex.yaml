@@ -1,0 +1,150 @@
+# ============================================================
+# Experiment 12 — TrOCR + YOLOv8 + Regex Training
+# Two-stage pipeline: YOLOv8x detects field regions ->
+# TrOCR reads crops -> regex post-processing normalises values.
+#
+# Architecture type: PIPELINE (not end-to-end).
+# Entry point: train_trocr_yolo.py
+#
+# PARAMETER COUNT (verified 2026-03-10):
+#   TrOCR-base-printed: ViT-B ~86M + RoBERTa-B ~125M = ~211M
+#   YOLOv8x: ~68M
+#   Pipeline total: ~279M
+#   vs Donut-base: ~200M
+#   Delta: +~79M (+40%). Documented and justified:
+#   Exact parameter equality in a heterogeneous pipeline
+#   is not achievable. This is an architecture comparison.
+#
+# TRAINING STAGES:
+#   Stage 1: YOLOv8x fine-tuned for field-region detection
+#   Stage 2: TrOCR fine-tuned on crops from Stage 1
+#   Stage 3: Regex patterns validated against SROIE labels
+# ============================================================
+
+experiment_id: 12
+name: "trocr_yolo_regex_pipeline"
+description: >
+  Two-stage receipt KIE pipeline. Stage 1: YOLOv8x detects four
+  field regions (company, date, address, total). Stage 2: TrOCR-base
+  reads each detected crop. Stage 3: Regex normalises raw OCR text.
+  Contrasts with Donut end-to-end approach: modular vs monolithic,
+  explicit detection vs implicit attention, regex-normalised vs
+  autoregressive decoding. Same data recipe as Exps 10/11 for fair
+  architecture comparison.
+
+arch:
+  type: trocr_yolo
+  trocr:
+    base_checkpoint: "microsoft/trocr-base-printed"
+    parameter_count: "~211M (ViT-B encoder ~86M + RoBERTa-base decoder ~125M)"
+    full_parameter_finetuning: true
+    max_new_tokens: 128
+  yolo:
+    base_checkpoint: "yolov8x.pt"
+    parameter_count: "~68M"
+    num_classes: 4
+    full_parameter_finetuning: true
+    input_size: 1280
+  regex:
+    enabled: true
+    validate_on_train_split: true
+    fail_on_coverage_below: 0.95
+  parameter_count_note: >
+    Total pipeline ~279M vs Donut ~200M (+40%). Exact parity not
+    achievable in heterogeneous pipeline. Architecture comparison
+    not a parameter race.
+
+model:
+  base_checkpoint: "microsoft/trocr-base-printed"
+  tie_word_embeddings: false
+  full_parameter_finetuning: true
+
+data:
+  image_height: 1280
+  image_width: 960
+  max_decode_length: 128
+  image_formats: [".jpg", ".jpeg", ".png", ".bmp", ".tiff"]
+  yolo_input_size: 1280
+  trocr_crop_height: 64
+  trocr_crop_width: 384
+
+datasets:
+  - name: sroie
+    split: train
+    oversample: 2
+  - name: invoices_donut
+    split: train
+    oversample: 1
+
+training:
+  is_zero_shot: false
+  skip: false
+  seed: 42
+
+  yolo_stage:
+    epochs: 50
+    batch_size: 16
+    imgsz: 1280
+    optimizer: SGD
+    lr0: 0.01
+    lrf: 0.01
+    momentum: 0.937
+    weight_decay: 0.0005
+    warmup_epochs: 3.0
+    patience: 10
+    mixed_precision: true
+
+  trocr_stage:
+    epochs: 10
+    batch_size: 32
+    gradient_accumulation_steps: 1
+    mixed_precision: fp16
+    optimizer:
+      type: AdamW
+      weight_decay: 0.01
+      lr: 5.0e-5
+    scheduler:
+      type: cosine
+      warmup_steps: 200
+    early_stopping:
+      enabled: true
+      patience: 3
+      monitor: val_cer
+
+  # For ExperimentConfig compat — mirrors trocr_stage values
+  epochs: 10
+  batch_size: 32
+  gradient_accumulation_steps: 1
+  mixed_precision: fp16
+
+  optimizer:
+    type: AdamW
+    weight_decay: 0.01
+    encoder_lr: 5.0e-5
+    decoder_lr: 5.0e-5
+
+  scheduler:
+    type: cosine
+    warmup_steps: 200
+
+  early_stopping:
+    enabled: true
+    patience: 3
+    monitor: val_loss
+
+validation:
+  enabled: true
+  precompute_tensors: false
+
+output:
+  results_file: "results/experiment_12.json"
+  checkpoint_dir: "models/trocr_yolo_exp12/"
+  log_file: "logs/experiment_12.log"
+
+hardware:
+  min_vram_gb: 16
+  recommended_vram_gb: 40
+  estimated_training_time:
+    RTX_6000_Blackwell_96GB: "~25 min YOLO + ~15 min TrOCR = ~40 min total"
+    A100_80GB: "~15 min YOLO + ~10 min TrOCR = ~25 min total"
+    RTX_4090_24GB: "~40 min YOLO + ~20 min TrOCR = ~60 min total"

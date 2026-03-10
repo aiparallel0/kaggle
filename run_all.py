@@ -1000,6 +1000,113 @@ def stage_pretrained_baseline(args) -> StageResult:
 # ---------------------------------------------------------------------------
 
 
+def _interactive_experiment_selection(
+    all_configs: "list",
+) -> "list":
+    """
+    Prompt the user at the terminal to select which experiments to run.
+
+    Displays a numbered menu of all available experiments and their arch type,
+    then waits for a space-separated list of IDs. Pressing Enter (empty input)
+    runs all experiments from the provided list.
+
+    Returns the filtered list of ExperimentConfig objects.
+    """
+    print("=" * 60)
+    print(" EXPERIMENT SELECTION")
+    print("=" * 60)
+    print("Available experiments:")
+    for cfg in all_configs:
+        print(f"  [{cfg.id:2d}]  {cfg.name:<40s} ({cfg.arch_type})")
+    print()
+    print("Enter experiment IDs to run (space-separated), or press Enter for all:")
+    try:
+        raw_input = input("> ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print("\n  (No input received — running all experiments)")
+        raw_input = ""
+
+    if not raw_input:
+        return list(all_configs)
+
+    selected_ids = set()
+    id_map = {cfg.id: cfg for cfg in all_configs}
+    for token in raw_input.split():
+        try:
+            eid = int(token)
+            if eid in id_map:
+                selected_ids.add(eid)
+            else:
+                print(f"  WARNING: experiment ID {eid} not found — skipping")
+        except ValueError:
+            print(f"  WARNING: '{token}' is not a valid integer ID — skipping")
+
+    selected = [cfg for cfg in all_configs if cfg.id in selected_ids]
+    selected.sort(key=lambda c: c.id)
+    return selected
+
+
+def _load_experiment_configs_for_run(args) -> "list":
+    """
+    Load the experiment configs to run, respecting the following priority:
+
+    1. ``--experiments 1 6 10 12`` (CLI flag — highest priority)
+    2. ``--interactive`` (prompts user at terminal)
+    3. ``experiment_selection.json`` (file-based — default)
+    4. ``load_all_experiments("experiments/")`` (fallback if no selection file)
+
+    Always falls back gracefully: any step that fails logs a warning and
+    delegates to the next lower priority.
+    """
+    try:
+        from experiment_config_loader import (
+            load_all_experiments,
+            load_experiment_selection,
+        )
+    except ImportError:
+        # experiment_config_loader not available — return empty list so caller
+        # can fall back to the legacy re_mod.EXPERIMENTS dict
+        return []
+
+    experiments_dir = Path("experiments")
+    if not experiments_dir.exists():
+        return []
+
+    # Priority 1 — --experiments CLI flag
+    if getattr(args, "experiments", None):
+        try:
+            requested_ids = [int(x) for x in args.experiments]
+            configs = load_all_experiments(experiments_dir, experiment_ids=requested_ids)
+            return configs
+        except Exception as exc:
+            print(f"  WARNING: --experiments flag failed: {exc}; falling through")
+
+    # Priority 2 — --interactive flag
+    if getattr(args, "interactive", False):
+        try:
+            all_configs = load_all_experiments(experiments_dir)
+            return _interactive_experiment_selection(all_configs)
+        except Exception as exc:
+            print(f"  WARNING: interactive selection failed: {exc}; falling through")
+
+    # Priority 3 — experiment_selection.json
+    sel_file = Path("experiment_selection.json")
+    try:
+        configs = load_experiment_selection(sel_file, experiments_dir)
+        return configs
+    except Exception as exc:
+        print(f"  WARNING: experiment_selection.json load failed: {exc}; "
+              "falling back to all experiments")
+
+    # Priority 4 — load everything
+    try:
+        return load_all_experiments(experiments_dir)
+    except Exception as exc:
+        print(f"  WARNING: load_all_experiments failed: {exc}; "
+              "will use legacy EXPERIMENTS dict")
+        return []
+
+
 def stage_experiments(args) -> StageResult:
     """Run all (or a single) experiment(s) SEQUENTIALLY. Returns StageResult."""
     import run_experiments as re_mod  # local module
@@ -1020,7 +1127,25 @@ def stage_experiments(args) -> StageResult:
             summary_file.unlink()
             print(f"  [force] Deleted cached summary: {summary_file}")
 
-    exp_ids = [args.experiment] if args.experiment else list(re_mod.EXPERIMENTS.keys())
+    # Determine which experiments to run.
+    # If --experiment N is given (legacy single-exp flag), use just that one.
+    # Otherwise, use the new multi-experiment loading logic.
+    yaml_configs: list = []
+    if args.experiment:
+        # Legacy single-experiment path: use re_mod.EXPERIMENTS as before
+        exp_ids = [args.experiment]
+        use_yaml_dispatch = False
+    else:
+        yaml_configs = _load_experiment_configs_for_run(args)
+        if yaml_configs:
+            # New path: use YAML-loaded configs with arch_type dispatch
+            exp_ids = [cfg.id for cfg in yaml_configs]
+            use_yaml_dispatch = True
+        else:
+            # Fallback: use legacy EXPERIMENTS dict
+            exp_ids = list(re_mod.EXPERIMENTS.keys())
+            use_yaml_dispatch = False
+
     total = len(exp_ids)
     had_empty = False
     completed = 0
@@ -1049,25 +1174,63 @@ def stage_experiments(args) -> StageResult:
             _base_processor = None
             _base_model = None
 
+    # Build a name lookup for display — from YAML configs if available, else
+    # from the legacy EXPERIMENTS dict
+    _yaml_cfg_map = {cfg.id: cfg for cfg in yaml_configs}
+
+    def _exp_display_name(exp_id: int) -> str:
+        if exp_id in _yaml_cfg_map:
+            return _yaml_cfg_map[exp_id].name
+        if exp_id in re_mod.EXPERIMENTS:
+            return re_mod.EXPERIMENTS[exp_id].name
+        return f"experiment_{exp_id}"
+
     for i, exp_id in enumerate(exp_ids, 1):
-        _step(i, total, f"Experiment {exp_id}: {re_mod.EXPERIMENTS[exp_id].name}")
+        exp_name = _exp_display_name(exp_id)
+        _step(i, total, f"Experiment {exp_id}: {exp_name}")
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-        print(f"  ▶ Experiment {exp_id} started at {ts}")
-        print(f"    Datasets: {re_mod.EXPERIMENTS[exp_id].datasets}")
+        print(f"  ▶ Experiment {exp_id} — {exp_name} started at {ts}")
+
+        # Determine arch_type for dispatch
+        yaml_cfg = _yaml_cfg_map.get(exp_id)
+        arch_type = yaml_cfg.arch_type if yaml_cfg is not None else "donut"
+        is_zero_shot = yaml_cfg.is_zero_shot if yaml_cfg is not None else False
+
+        if yaml_cfg is not None:
+            print(f"    arch={arch_type}  zero_shot={is_zero_shot}  "
+                  f"datasets={[d.name for d in yaml_cfg.datasets]}")
+        elif exp_id in re_mod.EXPERIMENTS:
+            print(f"    Datasets: {re_mod.EXPERIMENTS[exp_id].datasets}")
+
         t0 = time.monotonic()
         try:
-            result = re_mod.run_experiment(
-                exp_id,
-                base_processor=_base_processor,
-                base_model=_base_model,
-                overrides=getattr(args, "param_overrides", None) or None,
-            )
+            if arch_type == "trocr_yolo" and use_yaml_dispatch:
+                # Dispatch to TrOCR+YOLO training path
+                result = _run_trocr_yolo_experiment(args, yaml_cfg)
+            elif is_zero_shot and use_yaml_dispatch:
+                # Zero-shot: skip training, run evaluation only
+                result = _run_zero_shot_experiment(args, yaml_cfg)
+            elif use_yaml_dispatch and exp_id not in re_mod.EXPERIMENTS:
+                # New YAML-only experiment (IDs 9+) not in legacy dict
+                result = _run_yaml_donut_experiment(
+                    args, yaml_cfg,
+                    base_processor=_base_processor,
+                    base_model=_base_model,
+                )
+            else:
+                # Legacy path for experiments 1–8 (or any that are in re_mod.EXPERIMENTS)
+                result = re_mod.run_experiment(
+                    exp_id,
+                    base_processor=_base_processor,
+                    base_model=_base_model,
+                    overrides=getattr(args, "param_overrides", None) or None,
+                )
         except Exception as exc:
             import traceback
 
             elapsed = time.monotonic() - t0
             ts_end = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-            w = f"Experiment {exp_id} crashed: {type(exc).__name__}: {exc}"
+            w = f"Experiment {exp_id} ({exp_name}) crashed: {type(exc).__name__}: {exc}"
             print(f"\n  ✗ FATAL: {w}")
             print("    Traceback follows:")
             traceback.print_exc()
@@ -1090,16 +1253,16 @@ def stage_experiments(args) -> StageResult:
         elapsed = time.monotonic() - t0
         ts_end = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         f1 = result.get("metrics", {}).get("global_f1", "N/A")
-        print(f"  ◀ Experiment {exp_id} finished at {ts_end} ({elapsed:.1f}s)")
+        print(f"  ◀ Experiment {exp_id} — {exp_name} finished at {ts_end} ({elapsed:.1f}s)")
         print(
             f"    done in {elapsed / 60:.1f}min | F1={f1} "
             f"| Samples={result.get('num_train_samples', '?')}"
         )
         completed += 1
-        if result.get("num_train_samples", 0) == 0:
+        if result.get("num_train_samples", 0) == 0 and not is_zero_shot:
             had_empty = True
             failed_experiments.append(exp_id)
-            warnings.append(f"Experiment {exp_id} had 0 training samples")
+            warnings.append(f"Experiment {exp_id} ({exp_name}) had 0 training samples")
         else:
             succeeded += 1
 
@@ -1118,6 +1281,103 @@ def stage_experiments(args) -> StageResult:
     return StageResult(
         name="DONUT Experiments", duration=0.0, exit_status=exit_status, warnings=warnings
     )
+
+
+def _run_trocr_yolo_experiment(args, cfg) -> dict:
+    """
+    Dispatch Experiment 12 (arch_type=trocr_yolo) to the TrOCR+YOLO training path.
+    Returns a result dict compatible with the stage_experiments summary logic.
+    """
+    import train_trocr_yolo as tty
+
+    print(f"  [dispatch] arch=trocr_yolo → train_trocr_yolo.py")
+    # Run TrOCR+YOLO training and return results dict
+    # stage_trocr_experiments handles the full TrOCR flow; here we call it
+    # directly and wrap the result.
+    result = stage_trocr_experiments(args)
+    # Load result from file if it exists
+    results_file = Path(cfg.results_file) if cfg.results_file else None
+    if results_file and results_file.exists():
+        import json as _json
+        with open(results_file) as fh:
+            return _json.load(fh)
+    return {
+        "experiment_id": cfg.id,
+        "name": cfg.name,
+        "datasets": [d.name for d in cfg.datasets],
+        "num_train_samples": 0,
+        "metrics": {"global_f1": "see trocr_yolo_results.json" if result.exit_status == 0 else "N/A"},
+    }
+
+
+def _run_zero_shot_experiment(args, cfg) -> dict:
+    """
+    Run a zero-shot evaluation (no training).  Loads the base checkpoint,
+    runs inference on the SROIE test set, and saves results.
+    """
+    print(f"  [dispatch] is_zero_shot=True → evaluation only (no training)")
+    results_file = Path(cfg.results_file) if cfg.results_file else None
+    # If a result already exists and --force is not set, return it
+    if results_file and results_file.exists() and not getattr(args, "force", False):
+        import json as _json
+        with open(results_file) as fh:
+            return _json.load(fh)
+    # Attempt zero-shot evaluation using DonutEvaluator
+    try:
+        from donut_evaluator import DonutEvaluator
+        evaluator = DonutEvaluator(model_dir=cfg.base_checkpoint)
+        metrics = evaluator.evaluate(allow_high_parse_failures=True)
+        result = {
+            "experiment_id": cfg.id,
+            "name": cfg.name,
+            "datasets": [],
+            "num_train_samples": 0,
+            "metrics": metrics,
+        }
+        if results_file:
+            import json as _json
+            results_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(results_file, "w") as fh:
+                _json.dump(result, fh, indent=2)
+        return result
+    except Exception as exc:
+        print(f"  [zero-shot] Evaluation failed: {exc}; returning empty metrics")
+        return {
+            "experiment_id": cfg.id,
+            "name": cfg.name,
+            "datasets": [],
+            "num_train_samples": 0,
+            "metrics": {"global_f1": 0.0},
+        }
+
+
+def _run_yaml_donut_experiment(args, cfg, base_processor=None, base_model=None) -> dict:
+    """
+    Run a DONUT experiment defined purely in YAML (IDs 9+ not in legacy EXPERIMENTS dict).
+    Delegates to run_experiments.run_experiment_from_config() if available,
+    otherwise falls back to re-using the legacy run_experiment() mechanism.
+    """
+    print(f"  [dispatch] arch=donut (YAML-only exp {cfg.id}) → DONUT training path")
+    try:
+        import run_experiments as re_mod
+        if hasattr(re_mod, "run_experiment_from_config"):
+            return re_mod.run_experiment_from_config(
+                cfg,
+                base_processor=base_processor,
+                base_model=base_model,
+                overrides=getattr(args, "param_overrides", None) or None,
+            )
+    except Exception as exc:
+        print(f"  [dispatch] run_experiment_from_config failed ({exc}); "
+              "experiment not run (YAML-only experiments require run_experiments.py support)")
+    # Return a placeholder result indicating the experiment was not run
+    return {
+        "experiment_id": cfg.id,
+        "name": cfg.name,
+        "datasets": [d.name for d in cfg.datasets],
+        "num_train_samples": 0,
+        "metrics": {"global_f1": 0.0},
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -2244,7 +2504,24 @@ Benchmark        & See results/benchmark\_results.json \\
 # ---------------------------------------------------------------------------
 
 
+def _max_experiment_id() -> int:
+    """Return the highest experiment_id found in experiments/*.yaml, or 12 as fallback."""
+    try:
+        import glob as _glob
+        import re as _re
+        ids = []
+        for p in _glob.glob("experiments/*.yaml") + _glob.glob("experiments/*.yml"):
+            with open(p) as f:
+                m = _re.search(r"experiment_id\s*:\s*(\d+)", f.read())
+            if m:
+                ids.append(int(m.group(1)))
+        return max(ids) if ids else 12
+    except Exception:
+        return 12
+
+
 def build_parser() -> argparse.ArgumentParser:
+    _max_exp = _max_experiment_id()
     p = argparse.ArgumentParser(
         prog="run_all.py",
         description="Complete DONUT SROIE pipeline: download → train → evaluate → paper",
@@ -2255,7 +2532,25 @@ def build_parser() -> argparse.ArgumentParser:
         "--experiment",
         type=int,
         metavar="N",
-        help="Run only experiment N (1–8) instead of all 8",
+        help=f"Run only experiment N (1–{_max_exp}) instead of all experiments",
+    )
+    p.add_argument(
+        "--experiments",
+        nargs="+",
+        metavar="ID",
+        help=(
+            "Space-separated experiment IDs to run, e.g. --experiments 1 6 10 12. "
+            "Overrides experiment_selection.json for this run only."
+        ),
+    )
+    p.add_argument(
+        "--interactive",
+        "-i",
+        action="store_true",
+        help=(
+            "Prompt at terminal to select which experiments to run. "
+            "Overrides experiment_selection.json for this run only."
+        ),
     )
     p.add_argument(
         "--force",

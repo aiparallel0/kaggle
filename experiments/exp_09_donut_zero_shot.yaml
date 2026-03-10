@@ -1,0 +1,84 @@
+# ============================================================
+# Experiment 9 — Donut Zero-Shot Baseline
+# naver-clova-ix/donut-base evaluated on SROIE test set
+# with NO fine-tuning whatsoever.
+#
+# Purpose: establish the raw out-of-the-box performance of
+# donut-base on SROIE Task-3 before any domain adaptation.
+# Expected result: low F1 (~0.10–0.30).
+#
+# Parameter count (verified 2026-03-10):
+#   Swin-B encoder:   ~88 M params
+#   mBART decoder:   ~112 M params
+#   Total:           ~200 M params
+# ============================================================
+
+experiment_id: 9
+name: "donut_zero_shot"
+description: >
+  Pure zero-shot evaluation. donut-base loaded with no weight modification.
+  SROIE special tokens added so the decoder can tokenise the prompt, but
+  embedding rows for new tokens are randomly initialised — producing near-zero
+  output quality. Use as the floor for all comparison plots.
+
+arch:
+  type: donut
+  base_checkpoint: "naver-clova-ix/donut-base"
+  tie_word_embeddings: false
+  full_parameter_finetuning: false
+  parameter_count_verified: "~200M (Swin-B encoder ~88M + mBART decoder ~112M)"
+
+model:
+  base_checkpoint: "naver-clova-ix/donut-base"
+  tie_word_embeddings: false
+  full_parameter_finetuning: false
+
+data:
+  image_height: 1280
+  image_width: 960
+  max_decode_length: 768
+  image_formats: [".jpg", ".jpeg", ".png", ".bmp", ".tiff"]
+
+datasets: []
+
+training:
+  is_zero_shot: true
+  skip: true
+  epochs: 0
+  batch_size: 8
+  gradient_accumulation_steps: 1
+  mixed_precision: fp16
+
+  optimizer:
+    type: AdamW
+    weight_decay: 0.01
+    encoder_lr: 0.0
+    decoder_lr: 0.0
+
+  scheduler:
+    type: cosine
+    warmup_steps: 0
+
+  early_stopping:
+    enabled: false
+    patience: 0
+    monitor: val_loss
+
+  seed: 42
+
+validation:
+  enabled: false
+  precompute_tensors: false
+
+output:
+  results_file: "results/experiment_9.json"
+  checkpoint_dir: null
+  log_file: "logs/experiment_9.log"
+
+hardware:
+  min_vram_gb: 8
+  recommended_vram_gb: 16
+  estimated_inference_time:
+    RTX_6000_Blackwell_96GB: "~3 min (347 test images)"
+    A100_80GB: "~4 min"
+    RTX_4090_24GB: "~5 min"

@@ -18,6 +18,9 @@ Usage
     # Load specific experiments:
     configs = load_all_experiments("experiments/", experiment_ids=[1, 6])
 
+    # Load only enabled experiments from experiment_selection.json:
+    configs = load_experiment_selection()
+
 Design
 ------
 Each YAML file is self-describing and fully autonomous.  There is no
@@ -36,6 +39,7 @@ from __future__ import annotations
 
 import dataclasses
 import glob
+import json
 import os
 import re
 from pathlib import Path
@@ -90,6 +94,14 @@ class ExperimentConfig:
     id: int
     name: str
     description: str = ""
+
+    # Architecture type — controls which training entry point is used
+    # "donut" → existing DONUT Seq2Seq fine-tuning path
+    # "trocr_yolo" → train_trocr_yolo.py pipeline path
+    arch_type: str = "donut"
+
+    # Zero-shot flag — when True, skip fit() and go directly to evaluation
+    is_zero_shot: bool = False
 
     # Model
     base_checkpoint: str = "naver-clova-ix/donut-base"
@@ -170,15 +182,25 @@ class ExperimentConfig:
                 f"Precomputing val tensor cache causes OOM (see Exp 6 memory notes)."
             )
 
-        # Dataset list must not be empty
-        if not self.datasets:
-            raise ValueError(f"Exp {self.id}: datasets list is empty.")
+        # Dataset list must not be empty — unless this is a zero-shot experiment
+        if not self.datasets and not self.is_zero_shot:
+            raise ValueError(
+                f"Exp {self.id}: datasets list is empty. "
+                f"Set training.is_zero_shot: true if no training data is intended."
+            )
 
         # Mixed precision check
         if self.mixed_precision not in {"fp16", "bf16", "fp32"}:
             raise ValueError(
                 f"Exp {self.id}: mixed_precision='{self.mixed_precision}' invalid. "
                 f"Choose 'fp16', 'bf16', or 'fp32'."
+            )
+
+        # arch_type check
+        if self.arch_type not in {"donut", "trocr_yolo"}:
+            raise ValueError(
+                f"Exp {self.id}: arch_type='{self.arch_type}' invalid. "
+                f"Choose 'donut' or 'trocr_yolo'."
             )
 
     # Convenience helpers
@@ -316,6 +338,10 @@ def _yaml_to_config(path: str | Path) -> ExperimentConfig:
     name = str(_require(raw, "name", path))
     description = str(raw.get("description", ""))
 
+    # arch section — informational, passed through
+    arch = raw.get("arch", {})
+    arch_type = str(arch.get("type", "donut"))
+
     # model section
     model = raw.get("model", {})
     base_checkpoint = str(model.get("base_checkpoint", "naver-clova-ix/donut-base"))
@@ -328,8 +354,14 @@ def _yaml_to_config(path: str | Path) -> ExperimentConfig:
     image_width = int(data.get("image_width", 960))
     max_length = int(data.get("max_decode_length", 768))
 
-    # datasets section
-    raw_datasets = _require(raw, "datasets", path)
+    # training section — read is_zero_shot before datasets validation
+    tr = raw.get("training", {})
+    is_zero_shot = bool(tr.get("is_zero_shot", False)) or bool(tr.get("skip", False))
+
+    # datasets section — may be empty list or null for zero-shot experiments
+    raw_datasets = raw.get("datasets", [])
+    if raw_datasets is None:
+        raw_datasets = []
     if not isinstance(raw_datasets, list):
         raise ValueError(f"'datasets' in {path} must be a YAML list.")
     dataset_entries = [
@@ -341,8 +373,6 @@ def _yaml_to_config(path: str | Path) -> ExperimentConfig:
         for d in raw_datasets
     ]
 
-    # training section
-    tr = raw.get("training", {})
     epochs = int(tr.get("epochs", 10))
     batch_size = int(tr.get("batch_size", 8))
     gradient_accumulation_steps = int(tr.get("gradient_accumulation_steps", 2))
@@ -371,13 +401,17 @@ def _yaml_to_config(path: str | Path) -> ExperimentConfig:
     # output section
     out = raw.get("output", {})
     results_file = str(out.get("results_file", f"results/experiment_{exp_id}.json"))
-    checkpoint_dir = str(out.get("checkpoint_dir", f"models/donut_exp{exp_id}/"))
+    # checkpoint_dir may be null in YAML (zero-shot experiments have no checkpoint)
+    _ckpt = out.get("checkpoint_dir", f"models/donut_exp{exp_id}/")
+    checkpoint_dir = str(_ckpt) if _ckpt is not None else ""
     log_file = str(out.get("log_file", f"logs/experiment_{exp_id}.log"))
 
     return ExperimentConfig(
         id=exp_id,
         name=name,
         description=description,
+        arch_type=arch_type,
+        is_zero_shot=is_zero_shot,
         base_checkpoint=base_checkpoint,
         tie_word_embeddings=tie_word_embeddings,
         full_parameter_finetuning=full_parameter_finetuning,
@@ -406,6 +440,61 @@ def _yaml_to_config(path: str | Path) -> ExperimentConfig:
     )
 
 
+def load_experiment_selection(
+    selection_file: str | Path = "experiment_selection.json",
+    experiments_dir: str | Path = "experiments",
+) -> List[ExperimentConfig]:
+    """
+    Load only the experiments listed as enabled=true in experiment_selection.json.
+    Returns configs sorted by experiment_id ascending.
+    Falls back to load_all_experiments() if selection file does not exist.
+
+    The selection file format::
+
+        {
+          "experiments": [
+            {"id": "1", "enabled": true, "note": "..."},
+            {"id": "6", "enabled": false, "note": "..."},
+            ...
+          ]
+        }
+
+    Experiment IDs in the selection file may be integers or strings; they are
+    normalised to integers for comparison with ExperimentConfig.id.
+    """
+    selection_file = Path(selection_file)
+    if not selection_file.exists():
+        # Graceful fallback: load everything from the experiments directory
+        return load_all_experiments(experiments_dir)
+
+    with open(selection_file, "r", encoding="utf-8") as fh:
+        data = json.load(fh)
+
+    if not isinstance(data, dict) or "experiments" not in data:
+        raise ValueError(
+            f"experiment_selection.json must be a JSON object with an "
+            f"'experiments' key, got: {type(data)}"
+        )
+
+    enabled_ids: List[int] = []
+    for entry in data["experiments"]:
+        if not isinstance(entry, dict):
+            continue
+        # Normalise id to int
+        try:
+            exp_id = int(str(entry.get("id", "")))
+        except (ValueError, TypeError):
+            continue
+        if entry.get("enabled", True):
+            enabled_ids.append(exp_id)
+
+    if not enabled_ids:
+        # Nothing enabled — fall back to all experiments
+        return load_all_experiments(experiments_dir)
+
+    return load_all_experiments(experiments_dir, experiment_ids=enabled_ids)
+
+
 # ---------------------------------------------------------------------------
 # Quick self-test — run directly: python experiment_config_loader.py
 # ---------------------------------------------------------------------------
@@ -427,9 +516,11 @@ if __name__ == "__main__":
         ds_summary = ", ".join(
             f"{d.name}" + (f"×{d.oversample}" if d.oversample > 1 else "")
             for d in cfg.datasets
-        )
+        ) or "(zero-shot — no datasets)"
         print(
             f"  Exp {cfg.id:2d}  {cfg.name:<40s}  "
+            f"arch={cfg.arch_type:<12s}  "
+            f"zero_shot={cfg.is_zero_shot!s:<5s}  "
             f"datasets=[{ds_summary}]  "
             f"bs={cfg.batch_size}×{cfg.gradient_accumulation_steps}  "
             f"epochs={cfg.epochs}  "
@@ -437,3 +528,18 @@ if __name__ == "__main__":
         )
 
     print("\n✓ All configs loaded and validated successfully.")
+
+    # Test load_experiment_selection()
+    sel_file = Path("experiment_selection.json")
+    if sel_file.exists():
+        print(f"\nTesting load_experiment_selection() from {sel_file}...")
+        try:
+            sel_configs = load_experiment_selection(sel_file, experiments_dir)
+            print(f"  Selected {len(sel_configs)} experiment(s): "
+                  f"{[c.id for c in sel_configs]}")
+            print("✓ load_experiment_selection() passed.")
+        except Exception as exc:
+            print(f"✗ load_experiment_selection() FAILED: {exc}")
+            sys.exit(1)
+    else:
+        print(f"\n  (Skipping load_experiment_selection() — {sel_file} not found)")
