@@ -951,14 +951,21 @@ def stage_download(args) -> StageResult:
 
 
 def stage_pretrained_baseline(args) -> StageResult:
-    """Evaluate the pretrained CORD model as a zero-shot baseline on SROIE test."""
+    """Evaluate the CORD-finetuned DONUT model as a cross-dataset transfer (CORD→SROIE) baseline.
+
+    Loads ``naver-clova-ix/donut-base-finetuned-cord-v2`` and applies a structural
+    field remapping from the CORD schema (store_info.store_name, total.total_price)
+    to SROIE fields.  This is a *cross-dataset transfer* baseline, not a zero-shot
+    evaluation of the base DONUT model — the checkpoint was already fine-tuned on
+    CORD receipts with semantically similar fields.
+    """
     import torch
     from transformers import DonutProcessor, VisionEncoderDecoderModel
 
     import dataset_loaders
     import donut_evaluator as eval_mod
 
-    _banner("STAGE 1.5 — Pretrained baseline evaluation (zero-shot CORD)")
+    _banner("STAGE 1.5 — CORD-transfer baseline evaluation (cross-dataset CORD→SROIE)")
     warnings: list[str] = []
 
     workspace = Path(args.workspace)

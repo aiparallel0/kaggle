@@ -54,7 +54,7 @@ import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 
-__all__ = ["SampleResult", "BenchmarkResult", "compare_all", "main"]
+__all__ = ["SampleResult", "BenchmarkResult", "compare_all", "main", "_token_f1", "_token_f1_squad"]
 
 import numpy as np
 
@@ -129,10 +129,32 @@ def _normalise(text: str) -> str:
 
 def _token_f1(pred: str, gold: str) -> float:
     """
-    Token-level F1 (SROIE Task-3 official metric).
+    Exact-match entity-level F1 (SROIE Task-3 protocol).
+
+    A field pair is a True Positive only when the normalised predicted string
+    exactly matches the normalised ground-truth string — identical to the
+    protocol used in ``donut_evaluator.py::compute_metrics()``.  This is the
+    correct SROIE Task-3 entity-level F1; it is used as the primary metric for
+    all architectures so that cross-architecture comparisons are on equal terms.
+
+    Returns 1.0 for an exact match (including both-empty), 0.0 otherwise.
+    """
+    # Exact-match: 1.0 iff the normalised strings are identical.
+    # This matches donut_evaluator.py::_compute_f1 / compute_metrics().
+    return float(_normalise(pred) == _normalise(gold))
+
+
+def _token_f1_squad(pred: str, gold: str) -> float:
+    """
+    Bag-of-words token overlap F1 (SQuAD-style).
+
+    NOTE: This is *not* the SROIE Task-3 official metric.  It is provided
+    for diagnostic purposes only (e.g. per-token partial-credit analysis).
+    Do NOT use this as the primary benchmark metric — it inflates scores
+    relative to the exact-match F1 used by ``donut_evaluator.py``, making
+    cross-architecture comparisons invalid.
+
     Both strings are normalised before comparison.
-    Returns 0.0 when both are empty (defined as perfect match = 1.0
-    only if BOTH are empty simultaneously — edge case handled below).
     """
     pred = _normalise(pred)
     gold = _normalise(gold)
@@ -737,6 +759,9 @@ def compute_metrics(bench: BenchmarkResult) -> BenchmarkResult:
         for fld in FIELDS:
             pred_val = s.prediction.get(fld, "")
             gt_val = s.ground_truth.get(fld, "")
+            # Use exact-match F1 (SROIE Task-3 entity-level protocol) so that
+            # scores are directly comparable to donut_evaluator.py::compute_metrics().
+            # _token_f1_squad() provides partial-credit scores for diagnostics only.
             field_f1s[fld].append(_token_f1(pred_val, gt_val))
             field_exacts[fld].append(_exact(pred_val, gt_val))
             all_neds.append(_ned(pred_val, gt_val))
@@ -862,7 +887,7 @@ def plot_results(results: list[BenchmarkResult], out_dir: Path) -> None:
     ax1.set_xticks(x)
     ax1.set_xticklabels([f.capitalize() for f in FIELDS])
     ax1.set_ylim(0, 1.12)
-    ax1.set_ylabel("Token F1 (↑)")
+    ax1.set_ylabel("Exact-Match F1 (↑)")
     ax1.set_title("(a) Per-Field F1: DONUT vs. YOLOv8+TrOCR+Regex")
     ax1.legend(loc="upper right", frameon=False)
     ax1.grid(axis="y", linestyle=":", linewidth=0.5, alpha=0.6)
