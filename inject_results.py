@@ -173,12 +173,33 @@ class PaperInjector:
     # -- var map ------------------------------------------------------------
 
     def build_var_map(self) -> dict[str, str]:
-        """Build \\VAR{key} → replacement mapping entirely from JSON files."""
+        """Build \\VAR{key} → replacement mapping entirely from JSON files.
+
+        All known experiment-level placeholders (exp1_* through exp8_*) are
+        pre-populated with "---" so that partial or missing results produce
+        valid LaTeX (with "---" markers) rather than triggering
+        ``UnresolvedVarError``.  Real values overwrite the fallbacks for any
+        experiments that have completed.
+        """
         all_exp = self._load_all_experiments()
         eval_res = self._load_evaluation_results()
         var_map: dict[str, str] = {}
 
-        # Per-experiment scalars (from all_experiments.json)
+        # Pre-populate ALL expected experiment vars with "---" fallback.
+        # This guarantees fill() succeeds even on partial/fresh runs where
+        # only some experiments have completed.
+        for _eid in range(1, 9):
+            _e = str(_eid)
+            var_map[f"exp{_e}_n"] = "---"
+            var_map[f"exp{_e}_prec"] = "---"
+            var_map[f"exp{_e}_rec"] = "---"
+            var_map[f"exp{_e}_f1"] = "---"
+            var_map[f"exp{_e}_em"] = "---"
+            for _fld in FIELDS:
+                var_map[f"exp{_e}_{_fld}_f1"] = "---"
+                var_map[f"exp{_e}_{_fld}_ned"] = "---"
+
+        # Per-experiment scalars (from all_experiments.json) — override fallbacks
         for exp_id_str, res in all_exp.items():
             m = res.get("metrics", {})
             n = res.get("num_train_samples", 0)
@@ -313,8 +334,19 @@ class PaperInjector:
 
     # -- fill ---------------------------------------------------------------
 
-    def fill(self) -> str:
-        """Replace all \\VAR{key} in template; RAISE if any remain unresolved."""
+    def fill(self, strict: bool = False) -> str:
+        """Replace all \\VAR{key} in template and return the filled text.
+
+        Parameters
+        ----------
+        strict : bool, optional
+            When ``True`` (default: ``False``), raise ``UnresolvedVarError`` if
+            any ``\\VAR{key}`` placeholder remains unresolved after substitution.
+            When ``False`` (default), unresolved placeholders are replaced with
+            ``"---"`` and a warning is emitted instead.  The ``False`` default
+            allows partial runs (where only some experiments have completed) to
+            still produce a valid, compilable LaTeX file.
+        """
         var_map = self.build_var_map()
         text = self.template_path.read_text(encoding="utf-8")
 
@@ -326,9 +358,18 @@ class PaperInjector:
 
         remaining = _VAR_RE.findall(filled)
         if remaining:
-            raise UnresolvedVarError(
-                f"{len(remaining)} unresolved \\VAR{{}} placeholder(s): {remaining}"
-            )
+            if strict:
+                raise UnresolvedVarError(
+                    f"{len(remaining)} unresolved \\VAR{{}} placeholder(s): {remaining}"
+                )
+            else:
+                warnings.warn(
+                    f"{len(remaining)} unresolved \\VAR{{}} placeholder(s) replaced with "
+                    f"'---': {remaining}",
+                    stacklevel=2,
+                )
+                # Replace remaining \VAR{key} with "---" so LaTeX can still compile
+                filled = _VAR_RE.sub(lambda _m: "---", filled)
         return filled
 
     # -- leaderboard verification -------------------------------------------
@@ -409,15 +450,29 @@ def print_table1_dataset_stats(actual_counts: dict = None) -> None:
         Mapping of dataset name to actual sample count, e.g.
         ``{"sroie_train": 500, "sroie_val": 63, "sroie_test": 63, ...}``.
         When provided, overrides the hardcoded fallback values.
+
+    Notes
+    -----
+    FUNSD is downloaded during the dataset-download stage but is **not**
+    used in any of the 8 DONUT experiments (Exps 1-8 use only ``sroie``,
+    ``wildreceipt``, and ``invoices_donut``).  Its field coverage is also
+    highly uneven: company~100%, address~99%, date~42%, total~13.4%.
+    The low total coverage (13.4%) results from FUNSD being a forms
+    dataset where most documents have no currency-amount "total" field.
+    FUNSD is therefore excluded from the dataset table as it does not
+    contribute to any reported result.
     """
     print("% === TABLE 1: Dataset Statistics ===")
     _c = actual_counts or {}
+    # FUNSD is intentionally excluded: it is downloaded but not used in
+    # Experiments 1–8, and its field coverage is severely uneven
+    # (total=13.4%, date=42.3%).  Including it would misrepresent the
+    # training data composition.
     rows = [
         ("SROIE (train)", _c.get("sroie_train", 500), 4, "EN", "Receipts"),
         ("SROIE (val)", _c.get("sroie_val", 63), 4, "EN", "Receipts"),
         ("SROIE (test)", _c.get("sroie_test", 63), 4, "EN", "Receipts"),
         ("WildReceipt", _c.get("wildreceipt", 1740), 25, "EN", "Receipts"),
-        ("FUNSD", _c.get("funsd", 149), 4, "EN", "Forms"),
         ("Invoices-DONUT", _c.get("invoices_donut", 800), "7+", "EN", "Invoices"),
     ]
     for name, n, nf, lang, domain in rows:
@@ -571,10 +626,23 @@ def build_var_map(all_exp: dict) -> dict:
     return injector.build_var_map()
 
 
-def fill_paper(paper_path: str, output_path: str, var_map: dict) -> None:
-    """Replace all \\VAR{key} tokens in paper.tex and write output_path.
+def fill_paper(paper_path: str, output_path: str, var_map: dict, strict: bool = False) -> None:
+    """Replace all \\VAR{key} tokens in a LaTeX template and write output_path.
 
-    Raises UnresolvedVarError if any placeholder remains.
+    Parameters
+    ----------
+    paper_path : str
+        Path to the LaTeX template (paper.tex or presentation.tex).
+    output_path : str
+        Path to write the filled output file.
+    var_map : dict
+        Mapping of placeholder key → replacement string.
+    strict : bool, optional
+        When ``True``, raise ``UnresolvedVarError`` if any ``\\VAR{key}``
+        placeholder remains unresolved.  When ``False`` (default), unresolved
+        placeholders are replaced with ``"---"`` and a warning is emitted.
+        The ``False`` default ensures a partial run (not all experiments
+        complete) still produces a valid, compilable LaTeX file.
     """
     text = Path(paper_path).read_text(encoding="utf-8")
 
@@ -584,9 +652,18 @@ def fill_paper(paper_path: str, output_path: str, var_map: dict) -> None:
     filled = _VAR_RE.sub(_replace, text)
     remaining = _VAR_RE.findall(filled)
     if remaining:
-        raise UnresolvedVarError(
-            f"{len(remaining)} unresolved \\VAR{{}} placeholder(s): {remaining}"
-        )
+        if strict:
+            raise UnresolvedVarError(
+                f"{len(remaining)} unresolved \\VAR{{}} placeholder(s): {remaining}"
+            )
+        else:
+            import warnings as _w
+            _w.warn(
+                f"{len(remaining)} unresolved \\VAR{{}} placeholder(s) in "
+                f"{paper_path} replaced with '---': {remaining}",
+                stacklevel=2,
+            )
+            filled = _VAR_RE.sub(lambda _m: "---", filled)
     Path(output_path).write_text(filled, encoding="utf-8")
     print(f"Filled paper written -> {output_path}")
 

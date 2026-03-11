@@ -39,6 +39,7 @@ pipeline.  For standalone usage, main() defines defaults that match
 TRAIN_CONFIG.
 """
 
+import csv
 import logging
 import math
 import os
@@ -119,8 +120,115 @@ class LmHeadCloneCallback(TrainerCallback):
 
 
 # ---------------------------------------------------------------------------
-# Constants — imported from shared constants.py (eliminates 5x duplication)
+# SROIEOnlyValCallback — diagnostic logging of SROIE-only val F1 per epoch
 # ---------------------------------------------------------------------------
+
+
+class SROIEOnlyValCallback(TrainerCallback):
+    """Log SROIE-only exact-match F1 per epoch as a diagnostic metric.
+
+    For experiments with mixed validation sets (SROIE + auxiliary data),
+    the combined ``eval_loss`` used for early stopping is a mixture of
+    SROIE and auxiliary domain signals.  This callback computes and logs
+    SROIE-only exact-match F1 at every epoch-end so users can audit
+    whether early stopping fired at the SROIE-optimal epoch.
+
+    Does **not** change training behaviour — only logs a diagnostic value.
+
+    Attributes
+    ----------
+    sroie_val_samples : list[tuple]
+        ``(image_path, ground_truth_dict)`` tuples from the SROIE val split.
+    processor : DonutProcessor
+    output_dir : Path
+        Where to write the per-epoch ``sroie_only_val_f1.csv`` log.
+    """
+
+    def __init__(self, sroie_val_samples, processor, output_dir: Path):
+        super().__init__()
+        self._samples = sroie_val_samples
+        self._processor = processor
+        self._output_dir = Path(output_dir)
+        self._rows: list[dict] = []
+
+    def on_epoch_end(self, args, state, control, model=None, **kwargs):
+        """Compute SROIE-only exact-match F1 and log it."""
+        if model is None or not self._samples:
+            return control
+
+        try:
+            device = next(model.parameters()).device
+            model.eval()
+            correct = 0
+            total = 0
+            from constants import FIELDS
+
+            with torch.no_grad():
+                for img_path, gt in self._samples:
+                    try:
+                        image = Image.open(img_path).convert("RGB")
+                        pixel_values = self._processor(
+                            image, return_tensors="pt"
+                        ).pixel_values.to(device)
+                        decoder_input_ids = torch.tensor(
+                            self._processor.tokenizer.convert_tokens_to_ids(
+                                ["<s_sroie>"]
+                            )
+                        ).unsqueeze(0).to(device)
+                        outputs = model.generate(
+                            pixel_values,
+                            decoder_input_ids=decoder_input_ids,
+                            max_length=128,
+                            num_beams=1,
+                        )
+                        decoded = self._processor.batch_decode(
+                            outputs, skip_special_tokens=False
+                        )[0]
+                        result = self._processor.token2json(decoded)
+                        if isinstance(result, list):
+                            merged: dict = {}
+                            for page in result:
+                                if isinstance(page, dict):
+                                    for k, v in page.items():
+                                        if k not in merged:
+                                            merged[k] = v
+                            result = merged
+                        if not isinstance(result, dict):
+                            result = {}
+                        for fld in FIELDS:
+                            pred_val = str(result.get(fld, "")).lower().strip()
+                            gt_val = str(gt.get(fld, "")).lower().strip()
+                            total += 1
+                            if pred_val == gt_val:
+                                correct += 1
+                    except Exception:
+                        total += len(FIELDS)  # count as all wrong on error
+            f1 = correct / total if total > 0 else 0.0
+        except Exception as exc:
+            logger.warning("SROIEOnlyValCallback: failed to compute F1: %s", exc)
+            model.train()
+            return control
+
+        model.train()
+        epoch = int(state.epoch) if state.epoch else 0
+        self._rows.append({"epoch": epoch, "sroie_only_val_f1": round(f1, 4)})
+        logger.info(
+            "SROIEOnlyValCallback: epoch=%d  sroie_only_val_f1=%.4f", epoch, f1
+        )
+
+        # Append to CSV log
+        csv_path = self._output_dir / "sroie_only_val_f1.csv"
+        write_header = not csv_path.exists()
+        try:
+            self._output_dir.mkdir(parents=True, exist_ok=True)
+            with open(csv_path, "a", newline="") as fh:
+                writer = csv.DictWriter(fh, fieldnames=["epoch", "sroie_only_val_f1"])
+                if write_header:
+                    writer.writeheader()
+                writer.writerow(self._rows[-1])
+        except Exception as exc:
+            logger.warning("SROIEOnlyValCallback: could not write CSV: %s", exc)
+        return control
 
 # ---------------------------------------------------------------------------
 # TrainingResult dataclass
@@ -661,6 +769,26 @@ class DonutTrainer:
                 EarlyStoppingCallback(
                     early_stopping_patience=patience,
                 )
+            )
+
+        # Register SROIE-only val F1 diagnostic callback when a pure SROIE
+        # validation split is available.  This allows auditing whether
+        # early stopping fired at the SROIE-optimal epoch vs. the
+        # mixed-validation-optimal epoch (see §4 / §5 limitation note).
+        _sroie_val_samples = getattr(self.config, "_sroie_val_samples", None)
+        if do_eval and _sroie_val_samples and len(_sroie_val_samples) > 0:
+            _out_dir = getattr(self.config, "output_dir", "results")
+            callbacks.append(
+                SROIEOnlyValCallback(
+                    sroie_val_samples=_sroie_val_samples,
+                    processor=self.processor,
+                    output_dir=Path(str(_out_dir)),
+                )
+            )
+            logger.info(
+                "SROIEOnlyValCallback registered (%d SROIE val samples → %s/sroie_only_val_f1.csv)",
+                len(_sroie_val_samples),
+                _out_dir,
             )
 
         trainer = Seq2SeqTrainer(

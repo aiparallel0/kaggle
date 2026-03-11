@@ -641,3 +641,141 @@ def test_token2json_list_output_merged():
     assert result.get("address") == "NO 1 JALAN PUCHONG"
     assert result.get("total") == "47.80"
     assert evaluator.parse_failure_count == 0, "List merge must NOT count as a parse failure"
+
+
+# ---------------------------------------------------------------------------
+# Bug 1: Unified exact-match F1 in benchmark_compare.py
+# ---------------------------------------------------------------------------
+
+
+class TestBenchmarkCompareMetricUnification:
+    """Assert that benchmark_compare._token_f1 is exact-match and
+    _token_f1_squad is the SQuAD bag-of-words variant.
+
+    The point: cross-architecture comparison (DONUT vs TrOCR+YOLO) must use
+    the same metric protocol so numbers are comparable.  Before the fix,
+    _token_f1 was the SQuAD partial-credit function, inflating TrOCR+YOLO
+    scores relative to DONUT's exact-match scores.
+    """
+
+    def _get_fns(self):
+        """Import both metric functions from benchmark_compare without torch."""
+        import sys
+        # benchmark_compare imports torch/PIL at module level; mock them
+        mods = {
+            "torch": mock.MagicMock(),
+            "PIL": mock.MagicMock(),
+            "PIL.Image": mock.MagicMock(),
+            "tqdm": mock.MagicMock(),
+            "matplotlib": mock.MagicMock(),
+            "matplotlib.pyplot": mock.MagicMock(),
+            "editdistance": mock.MagicMock(),
+            "ultralytics": mock.MagicMock(),
+        }
+        # Avoid re-importing if already present (torch might be available)
+        saved = {}
+        for k, v in mods.items():
+            if k not in sys.modules:
+                saved[k] = v
+        with mock.patch.dict(sys.modules, saved):
+            import importlib
+            import benchmark_compare as bc
+            importlib.reload(bc)
+            return bc._token_f1, bc._token_f1_squad
+
+    def test_token_f1_is_exact_match(self):
+        """_token_f1 must return 1.0 only on exact match, 0.0 on partial match."""
+        try:
+            import benchmark_compare as bc
+        except ImportError:
+            pytest.skip("benchmark_compare unavailable")
+        # Exact match → 1.0
+        assert bc._token_f1("WATSON SODA", "watson soda") == 1.0
+        # Partial word overlap → must be 0.0 (exact-match protocol)
+        assert bc._token_f1("WATSON SODA SNACKS", "watson soda") == 0.0
+
+    def test_token_f1_squad_is_partial_credit(self):
+        """_token_f1_squad must give partial credit for overlapping tokens."""
+        try:
+            import benchmark_compare as bc
+        except ImportError:
+            pytest.skip("benchmark_compare unavailable")
+        # "WATSON SODA SNACKS" vs "watson soda" — 2 tokens in common
+        score = bc._token_f1_squad("WATSON SODA SNACKS", "watson soda")
+        assert 0.0 < score < 1.0, (
+            f"_token_f1_squad should give partial credit, got {score}"
+        )
+
+    def test_exact_match_and_squad_differ_on_partial(self):
+        """Confirm the two functions produce different scores on a partial match
+        so that the change from _token_f1_squad to _token_f1 actually matters."""
+        try:
+            import benchmark_compare as bc
+        except ImportError:
+            pytest.skip("benchmark_compare unavailable")
+        pred = "123 MAIN STREET SINGAPORE"
+        gold = "123 MAIN STREET"
+        exact = bc._token_f1(pred, gold)
+        squad = bc._token_f1_squad(pred, gold)
+        assert exact != squad, (
+            "Exact-match and SQuAD scores must differ on a partial-match example; "
+            f"both returned {exact}"
+        )
+        assert exact == 0.0, f"Exact-match should be 0.0 for partial, got {exact}"
+        assert squad > 0.0, f"SQuAD partial credit should be > 0.0, got {squad}"
+
+    def test_both_empty_returns_one(self):
+        """Both functions must return 1.0 when both pred and gold are empty."""
+        try:
+            import benchmark_compare as bc
+        except ImportError:
+            pytest.skip("benchmark_compare unavailable")
+        assert bc._token_f1("", "") == 1.0
+        assert bc._token_f1_squad("", "") == 1.0
+
+
+# ---------------------------------------------------------------------------
+# Bug 4: Interactive selection must not be silently bypassed
+# ---------------------------------------------------------------------------
+
+
+class TestInteractiveSelectionFallback:
+    """Assert _load_experiment_configs_for_run() always opens the interactive
+    selection screen when --interactive is set, even without experiments/ dir."""
+
+    def test_interactive_flag_triggers_prompt_without_experiments_dir(self, tmp_path, monkeypatch):
+        """When experiments/ does not exist and --interactive is True, the
+        function must call _interactive_experiment_selection (not return [])."""
+        import sys
+        import types
+
+        monkeypatch.chdir(tmp_path)  # clean dir — no experiments/ subdir
+
+        # Minimal args namespace with interactive=True
+        args = types.SimpleNamespace(interactive=True, experiments=None)
+
+        # Stub run_experiments.EXPERIMENTS so the legacy fallback works
+        stub_config = types.SimpleNamespace(id=1, name="SROIE only", arch_type="donut")
+        fake_re_mod = types.MagicMock()
+        fake_re_mod.EXPERIMENTS = {1: stub_config}
+        monkeypatch.setitem(sys.modules, "run_experiments", fake_re_mod)
+
+        # Capture whether _interactive_experiment_selection is called
+        called_with = []
+
+        def fake_interactive(all_configs):
+            called_with.extend(all_configs)
+            return list(all_configs)
+
+        # Import and monkeypatch _load_experiment_configs_for_run
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        import run_all
+        monkeypatch.setattr(run_all, "_interactive_experiment_selection", fake_interactive)
+
+        result = run_all._load_experiment_configs_for_run(args)
+
+        assert called_with, (
+            "_interactive_experiment_selection was never called — "
+            "interactive flag was silently bypassed"
+        )
+        assert result == [stub_config], f"Expected [stub_config], got {result}"

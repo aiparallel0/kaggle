@@ -951,14 +951,21 @@ def stage_download(args) -> StageResult:
 
 
 def stage_pretrained_baseline(args) -> StageResult:
-    """Evaluate the pretrained CORD model as a zero-shot baseline on SROIE test."""
+    """Evaluate the CORD-finetuned DONUT model as a cross-dataset transfer (CORD→SROIE) baseline.
+
+    Loads ``naver-clova-ix/donut-base-finetuned-cord-v2`` and applies a structural
+    field remapping from the CORD schema (store_info.store_name, total.total_price)
+    to SROIE fields.  This is a *cross-dataset transfer* baseline, not a zero-shot
+    evaluation of the base DONUT model — the checkpoint was already fine-tuned on
+    CORD receipts with semantically similar fields.
+    """
     import torch
     from transformers import DonutProcessor, VisionEncoderDecoderModel
 
     import dataset_loaders
     import donut_evaluator as eval_mod
 
-    _banner("STAGE 1.5 — Pretrained baseline evaluation (zero-shot CORD)")
+    _banner("STAGE 1.5 — CORD-transfer baseline evaluation (cross-dataset CORD→SROIE)")
     warnings: list[str] = []
 
     workspace = Path(args.workspace)
@@ -1078,6 +1085,12 @@ def _load_experiment_configs_for_run(args) -> "list":
 
     Always falls back gracefully: any step that fails logs a warning and
     delegates to the next lower priority.
+
+    When ``--interactive`` is set but ``experiments/`` does not exist,
+    the function falls through to build a config list from the legacy
+    ``re_mod.EXPERIMENTS`` dict and passes it to
+    ``_interactive_experiment_selection()`` so the selection screen always
+    appears when the flag is given.
     """
     try:
         from experiment_config_loader import (
@@ -1085,12 +1098,35 @@ def _load_experiment_configs_for_run(args) -> "list":
             load_experiment_selection,
         )
     except ImportError:
-        # experiment_config_loader not available — return empty list so caller
-        # can fall back to the legacy re_mod.EXPERIMENTS dict
-        return []
+        load_all_experiments = None  # type: ignore[assignment]
+        load_experiment_selection = None  # type: ignore[assignment]
 
     experiments_dir = Path("experiments")
-    if not experiments_dir.exists():
+    dir_exists = experiments_dir.exists() and load_all_experiments is not None
+
+    # --interactive always shows the selection screen, even if experiments/ is absent.
+    # When the directory is missing, build the config list from the legacy
+    # re_mod.EXPERIMENTS dict so the user can still choose which experiments to run.
+    if getattr(args, "interactive", False):
+        if dir_exists:
+            try:
+                all_configs = load_all_experiments(experiments_dir)
+                return _interactive_experiment_selection(all_configs)
+            except Exception as exc:
+                print(f"  WARNING: interactive selection from YAML failed: {exc}; "
+                      "falling back to built-in experiments")
+        # Fallback: build config-like objects from the legacy EXPERIMENTS dict
+        print("  [interactive] experiments/ not found — using built-in experiment definitions")
+        try:
+            import run_experiments as re_mod
+            legacy_configs = list(re_mod.EXPERIMENTS.values())
+            return _interactive_experiment_selection(legacy_configs)
+        except Exception as exc:
+            print(f"  WARNING: legacy EXPERIMENTS fallback failed: {exc}; "
+                  "running all experiments")
+            return []
+
+    if not dir_exists:
         return []
 
     # Priority 1 — --experiments CLI flag
@@ -1102,15 +1138,7 @@ def _load_experiment_configs_for_run(args) -> "list":
         except Exception as exc:
             print(f"  WARNING: --experiments flag failed: {exc}; falling through")
 
-    # Priority 2 — --interactive flag
-    if getattr(args, "interactive", False):
-        try:
-            all_configs = load_all_experiments(experiments_dir)
-            return _interactive_experiment_selection(all_configs)
-        except Exception as exc:
-            print(f"  WARNING: interactive selection failed: {exc}; falling through")
-
-    # Priority 3 — experiment_selection.json
+    # Priority 2 (non-interactive path) — experiment_selection.json
     sel_file = Path("experiment_selection.json")
     try:
         configs = load_experiment_selection(sel_file, experiments_dir)
@@ -1784,11 +1812,13 @@ def stage_comparison(args) -> StageResult:
 
 
 def stage_paper(args) -> StageResult:
-    """Generate LaTeX tables, plots, and fill paper_filled.tex.
+    """Generate LaTeX tables, plots, fill paper_filled.tex and presentation_filled.tex.
 
-    FIX: Now also generates TrOCR+YOLO tables and cross-architecture
-    comparison table, injects TrOCR+YOLO VAR{} values, and generates
-    2D loss plots for inclusion in the paper.
+    Handles partial runs gracefully: if ``all_experiments.json`` is missing or
+    only some experiments are present, the output files are written with "---"
+    for unresolved placeholders so the LaTeX still compiles.  Does NOT call
+    ``sys.exit()`` — returns a non-zero ``exit_status`` instead so the
+    orchestrator can continue.
     """
     import dataset_loaders
     import inject_results as ir  # local module
@@ -1798,14 +1828,21 @@ def stage_paper(args) -> StageResult:
 
     results_path = Path("results") / "all_experiments.json"
     if not results_path.exists():
-        print(f"ERROR: {results_path} not found — run experiments first.", file=sys.stderr)
-        sys.exit(2)
-
-    with open(results_path) as fh:
-        all_exp = json.load(fh)
+        w = f"{results_path} not found — generating paper with placeholder values only."
+        print(f"  WARNING: {w}", file=sys.stderr)
+        warnings.append(w)
+        all_exp = {}  # no results yet — fall through to fill with "---" placeholders
+    else:
+        with open(results_path) as fh:
+            all_exp = json.load(fh)
 
     # Generate training loss plots for the paper
-    ir.generate_training_plots(Path("results"))
+    try:
+        ir.generate_training_plots(Path("results"))
+    except Exception as exc:
+        w = f"generate_training_plots failed: {exc}; skipping plots."
+        print(f"  WARNING: {w}")
+        warnings.append(w)
 
     # Compute actual dataset counts for Table 1
     try:
@@ -1822,7 +1859,7 @@ def stage_paper(args) -> StageResult:
     ir.print_table3_perfield(all_exp)
     ir.print_table4_leaderboard(all_exp)
 
-    # FIX: Print TrOCR+YOLO and cross-architecture comparison tables
+    # Print TrOCR+YOLO and cross-architecture comparison tables
     trocr_path = Path("results") / "trocr_yolo_results.json"
     if trocr_path.exists():
         with open(trocr_path) as fh:
@@ -1830,25 +1867,50 @@ def stage_paper(args) -> StageResult:
         ir.print_table5_trocr_yolo(trocr_exp)
         ir.print_table6_cross_architecture(all_exp, trocr_exp)
 
-    ir.generate_convergence_data(str(results_path))
-    ir.generate_convergence_tex(str(results_path))
-    ir.generate_f1_barchart_tex(str(results_path))
+    try:
+        ir.generate_convergence_data(str(results_path))
+        ir.generate_convergence_tex(str(results_path))
+        ir.generate_f1_barchart_tex(str(results_path))
+    except Exception as exc:
+        w = f"Convergence/barchart tex generation failed: {exc}; skipping."
+        print(f"  WARNING: {w}")
+        warnings.append(w)
+
+    # Build a single var_map that covers both paper.tex and presentation.tex
+    var_map = ir.build_var_map(all_exp)
 
     paper_template = Path(args.paper_template)
     output_paper = Path(args.output)
 
     if paper_template.exists():
-        # FIX: build_var_map now also reads trocr_yolo_results.json
-        # and populates trocr_* variables for the paper template.
-        var_map = ir.build_var_map(all_exp)
-        ir.fill_paper(str(paper_template), str(output_paper), var_map)
-        print(f"\n  Complete paper written -> {output_paper}")
+        try:
+            ir.fill_paper(str(paper_template), str(output_paper), var_map)
+            print(f"\n  Complete paper written -> {output_paper}")
+        except Exception as exc:
+            w = f"fill_paper failed for {paper_template}: {exc}"
+            print(f"  WARNING: {w}")
+            warnings.append(w)
     else:
         w = f"paper template not found at {paper_template}; skipping paper_filled.tex generation."
         print(f"  WARNING: {w}")
         warnings.append(w)
 
-    return StageResult(name="Paper Generation", duration=0.0, exit_status=0, warnings=warnings)
+    # Also fill presentation.tex → presentation_filled.tex
+    pres_template = Path("paper/presentation.tex")
+    pres_output = Path("paper/presentation_filled.tex")
+    if pres_template.exists():
+        try:
+            ir.fill_paper(str(pres_template), str(pres_output), var_map)
+            print(f"  Complete presentation written -> {pres_output}")
+        except Exception as exc:
+            w = f"fill_paper failed for {pres_template}: {exc}"
+            print(f"  WARNING: {w}")
+            warnings.append(w)
+    else:
+        print(f"  INFO: {pres_template} not found; skipping presentation_filled.tex generation.")
+
+    exit_status = 1 if not all_exp else 0
+    return StageResult(name="Paper Generation", duration=0.0, exit_status=exit_status, warnings=warnings)
 
 
 # ---------------------------------------------------------------------------
