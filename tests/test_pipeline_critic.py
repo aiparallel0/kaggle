@@ -171,7 +171,9 @@ class TestCritiqueReport:
         assert report.passed
 
     def test_fatal_count(self):
-        report = self._make_report([FindingSeverity.FATAL, FindingSeverity.FATAL, FindingSeverity.WARNING])
+        report = self._make_report(
+            [FindingSeverity.FATAL, FindingSeverity.FATAL, FindingSeverity.WARNING]
+        )
         assert report.fatal_count == 2
 
     def test_critical_count(self):
@@ -223,7 +225,8 @@ class TestStatisticalPowerAudit:
         """Power finding must be CRITICAL or FATAL."""
         findings = StatisticalPowerAudit().run()
         power_findings = [
-            f for f in findings
+            f
+            for f in findings
             if "underpowered" in f.title.lower() or "minimum detectable" in f.title.lower()
         ]
         assert power_findings, "No underpowered finding returned"
@@ -235,7 +238,9 @@ class TestStatisticalPowerAudit:
     def test_per_field_warning_present(self):
         """Per-field sample size warning must be in findings."""
         findings = StatisticalPowerAudit().run()
-        per_field = [f for f in findings if "per-field" in f.title.lower() or "per field" in f.title.lower()]
+        per_field = [
+            f for f in findings if "per-field" in f.title.lower() or "per field" in f.title.lower()
+        ]
         assert per_field, "No per-field sample size warning returned"
         assert per_field[0].severity == FindingSeverity.WARNING
 
@@ -266,7 +271,9 @@ class TestMultipleTestingAudit:
 
     def test_finding_is_critical_or_worse(self):
         findings = MultipleTestingAudit().run()
-        assert any(f.severity in (FindingSeverity.CRITICAL, FindingSeverity.FATAL) for f in findings)
+        assert any(
+            f.severity in (FindingSeverity.CRITICAL, FindingSeverity.FATAL) for f in findings
+        )
 
     def test_fwer_value_in_evidence(self):
         findings = MultipleTestingAudit().run()
@@ -320,12 +327,10 @@ class TestEpochConfoundAudit:
         """Exp 1 must have fewer epochs than Exp 6; both IDs must be present."""
         epochs = EpochConfoundAudit._extract_experiment_epochs()
         assert 1 in epochs, (
-            "Exp 1 not found in extracted epochs dict; "
-            f"returned keys: {sorted(epochs.keys())}"
+            f"Exp 1 not found in extracted epochs dict; returned keys: {sorted(epochs.keys())}"
         )
         assert 6 in epochs, (
-            "Exp 6 not found in extracted epochs dict; "
-            f"returned keys: {sorted(epochs.keys())}"
+            f"Exp 6 not found in extracted epochs dict; returned keys: {sorted(epochs.keys())}"
         )
         assert epochs[1] < epochs[6], (
             f"Expected Exp 1 epochs ({epochs[1]}) < Exp 6 epochs ({epochs[6]}); "
@@ -449,7 +454,9 @@ class TestBenchmarkNarrowness:
     def test_recommendation_mentions_leaderboard(self):
         findings = BenchmarkNarrowness().run()
         combined = " ".join(f.recommendation for f in findings)
-        assert "leaderboard" in combined.lower() or "ICDAR" in combined or "split" in combined.lower()
+        assert (
+            "leaderboard" in combined.lower() or "ICDAR" in combined or "split" in combined.lower()
+        )
 
 
 # =============================================================================

@@ -1113,17 +1113,19 @@ def _load_experiment_configs_for_run(args) -> "list":
                 all_configs = load_all_experiments(experiments_dir)
                 return _interactive_experiment_selection(all_configs)
             except Exception as exc:
-                print(f"  WARNING: interactive selection from YAML failed: {exc}; "
-                      "falling back to built-in experiments")
+                print(
+                    f"  WARNING: interactive selection from YAML failed: {exc}; "
+                    "falling back to built-in experiments"
+                )
         # Fallback: build config-like objects from the legacy EXPERIMENTS dict
         print("  [interactive] experiments/ not found — using built-in experiment definitions")
         try:
             import run_experiments as re_mod
+
             legacy_configs = list(re_mod.EXPERIMENTS.values())
             return _interactive_experiment_selection(legacy_configs)
         except Exception as exc:
-            print(f"  WARNING: legacy EXPERIMENTS fallback failed: {exc}; "
-                  "running all experiments")
+            print(f"  WARNING: legacy EXPERIMENTS fallback failed: {exc}; running all experiments")
             return []
 
     if not dir_exists:
@@ -1910,7 +1912,9 @@ def stage_paper(args) -> StageResult:
         print(f"  INFO: {pres_template} not found; skipping presentation_filled.tex generation.")
 
     exit_status = 1 if not all_exp else 0
-    return StageResult(name="Paper Generation", duration=0.0, exit_status=exit_status, warnings=warnings)
+    return StageResult(
+        name="Paper Generation", duration=0.0, exit_status=exit_status, warnings=warnings
+    )
 
 
 # ---------------------------------------------------------------------------

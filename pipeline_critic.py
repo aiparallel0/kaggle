@@ -175,9 +175,7 @@ class StatisticalPowerAudit:
                     f"Field-level deltas reported in the paper (e.g. company F1 swings) "
                     f"are unreliable at this sample size."
                 ),
-                evidence=(
-                    f"per_field_n={per_field_n}, MDD₈₀_per_field={mdd_per_field:.4f}"
-                ),
+                evidence=(f"per_field_n={per_field_n}, MDD₈₀_per_field={mdd_per_field:.4f}"),
                 recommendation=(
                     "Do not draw conclusions from individual field F1 movements "
                     f"smaller than {mdd_per_field:.3f}. Treat per-field numbers as exploratory."
@@ -344,7 +342,9 @@ class EpochConfoundAudit:
         findings: list[CritiqueFinding] = []
 
         if confounded_exps:
-            epoch_summary = ", ".join(f"Exp {e}: {ep} epochs" for e, ep in sorted(confounded_exps.items()))
+            epoch_summary = ", ".join(
+                f"Exp {e}: {ep} epochs" for e, ep in sorted(confounded_exps.items())
+            )
             findings.append(
                 CritiqueFinding(
                     severity=FindingSeverity.CRITICAL,
@@ -431,7 +431,11 @@ class PretrainingBiasAudit:
                 evidence=(
                     f"base_model={self.BASE_MODEL}; "
                     f"SynthDoG includes receipt images (Donut paper, Kim et al. 2022 §3.1); "
-                    + ("donut_evaluator.py references CORD <sep/> token handling. " if cord_mention else "")
+                    + (
+                        "donut_evaluator.py references CORD <sep/> token handling. "
+                        if cord_mention
+                        else ""
+                    )
                 ),
                 recommendation=(
                     "Acknowledge the SynthDoG receipt pretraining in the paper's limitations. "
@@ -694,7 +698,11 @@ def _print_report(report: CritiqueReport, exit_on_fatal: bool = True) -> None:
         print(f"  Fix         : {finding.recommendation}")
 
     print(f"\n{_SEP}")
-    verdict = "DOES NOT SURVIVE SCRUTINY" if not report.passed else "SURVIVES SCRUTINY (no FATAL findings)"
+    verdict = (
+        "DOES NOT SURVIVE SCRUTINY"
+        if not report.passed
+        else "SURVIVES SCRUTINY (no FATAL findings)"
+    )
     print(f"VERDICT: {verdict}")
     print(_SEP)
 
