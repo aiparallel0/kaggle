@@ -18,6 +18,8 @@ Tests validate:
 
 import pytest
 
+from constants import BASE_MODEL, MAX_LENGTH, SEED
+
 # ── Guard: control_suite only depends on constants.py (stdlib + no torch) ──
 # These imports must succeed in any environment that has constants.py.
 from control_suite import (
@@ -29,8 +31,6 @@ from control_suite import (
     get_augmentation_transforms,
     validate_sroie_oversample,
 )
-from constants import BASE_MODEL, MAX_LENGTH, SEED
-
 
 # ---------------------------------------------------------------------------
 # Basic import and construction
@@ -554,9 +554,8 @@ def test_train_trocr_yolo_reads_weight_decay_from_control_suite():
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):
             func = node.func
-            is_adamw = (
-                (isinstance(func, ast.Name) and func.id == "AdamW")
-                or (isinstance(func, ast.Attribute) and func.attr == "AdamW")
+            is_adamw = (isinstance(func, ast.Name) and func.id == "AdamW") or (
+                isinstance(func, ast.Attribute) and func.attr == "AdamW"
             )
             if is_adamw:
                 for kw in node.keywords:

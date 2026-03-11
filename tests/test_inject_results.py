@@ -1,11 +1,8 @@
 """Tests for inject_results.py — _safe helper, PaperInjector, var map building."""
 
 import json
-import sys
 import tempfile
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from inject_results import (
     EXP_NAMES,

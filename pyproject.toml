@@ -4,7 +4,14 @@ pythonpath = ["."]
 
 [build-system]
 requires = ["setuptools>=61"]
-build-backend = "setuptools.backends.legacy:build"
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+# Ensure pipeline_types/ and validators/ sub-packages are included when the
+# project is installed with `pip install -e .`, making them importable regardless
+# of the working directory.
+where = ["."]
+include = ["pipeline_types*", "validators*"]
 
 [project]
 name = "donut-kiedata"

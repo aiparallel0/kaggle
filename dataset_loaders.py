@@ -59,10 +59,10 @@ except Exception:
 
 # FIX: Import shared constants from single source of truth (constants.py)
 # instead of defining EMPTY_GT and IMAGE_EXTS independently here.
+import memory_manager as _mm
 from constants import EMPTY_GT, SEED, _get_sroie_dir
 from constants import IMAGE_EXTS as _IMAGE_EXTS_SET
 from dataset_normalizer import extract_address_from_seller
-import memory_manager as _mm
 
 # ── Type alias ────────────────────────────────────────────────────────
 Sample = tuple[Path, dict[str, str]]

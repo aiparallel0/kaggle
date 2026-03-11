@@ -1,12 +1,9 @@
 """Tests for dataset_loaders.py — schema helpers, DatasetLoadError, path helpers."""
 
 import os
-import sys
 from pathlib import Path
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from dataset_loaders import (  # noqa: E402, I001
     DatasetLoadError,

@@ -16,11 +16,6 @@ run_experiments.py imports it at the top level.
 
 import dataclasses
 import inspect
-import sys
-from pathlib import Path
-
-# Ensure project root is importable
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pytest
 

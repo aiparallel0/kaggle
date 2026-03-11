@@ -26,6 +26,7 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install pytest editdistance
+      - run: pip install -e .
       - run: pytest tests/ -v --ignore=tests/test_metrics.py -k "not torch"
         # test_metrics.py requires torch/transformers — skip in CI (no GPU)
         # address_extractor and constants tests run fine without heavy deps

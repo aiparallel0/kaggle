@@ -269,7 +269,9 @@ class GitController:
         try:
             result = subprocess.run(
                 ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
             if result.returncode == 0:
                 return result.stdout.strip()
@@ -283,7 +285,9 @@ class GitController:
         try:
             result = subprocess.run(
                 ["git", "checkout", branch_name],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
             if result.returncode == 0:
                 _utils_logger.info(f"✓ Checked out branch: {branch_name}")
@@ -292,7 +296,9 @@ class GitController:
                 _utils_logger.info(f"Creating new branch: {branch_name}")
                 result = subprocess.run(
                     ["git", "checkout", "-b", branch_name],
-                    capture_output=True, text=True, timeout=10,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
                 )
                 if result.returncode == 0:
                     _utils_logger.info(f"✓ Created and checked out branch: {branch_name}")
@@ -313,7 +319,9 @@ class GitController:
                 return GitCommitReport(success=False, error=f"Stage failed: {result.stderr}")
             result = subprocess.run(
                 ["git", "commit", "-m", message],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
             if result.returncode == 0:
                 commit_hash = None
@@ -384,7 +392,9 @@ class GitController:
         try:
             result = subprocess.run(
                 ["git", "status", "--short"],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
             return result.stdout if result.returncode == 0 else ""
         except Exception as e:
@@ -471,7 +481,8 @@ class StorageManager:
         exp_file = self.results_dir / f"experiment_{exp_id}.json"
         exists = exp_file.exists()
         _utils_logger.info(
-            f"Found previous result: {exp_file}" if exists
+            f"Found previous result: {exp_file}"
+            if exists
             else f"No previous result found for experiment {exp_id}"
         )
         return exists

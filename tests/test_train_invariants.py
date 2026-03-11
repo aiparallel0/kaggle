@@ -6,12 +6,9 @@ broken property alias produces garbage output that never raises an exception.
 All tests are CPU-only (no GPU, no model weights required).
 """
 
-import sys
 from pathlib import Path
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 transformers = pytest.importorskip("transformers", reason="transformers required")
 
@@ -152,7 +149,6 @@ class TestLabelTokenizationNoSpecialTokens:
 
     def test_getitem_label_uses_add_special_tokens_false(self):
         """MultiDataset.__getitem__ must call tokenizer with add_special_tokens=False."""
-        from pathlib import Path
         from unittest.mock import MagicMock
 
         import torch

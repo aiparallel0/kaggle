@@ -40,27 +40,27 @@ from __future__ import annotations
 import dataclasses
 import glob
 import json
-import os
 import re
 import warnings
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any
 
 try:
     import yaml
 except ImportError as e:
-    raise ImportError(
-        "PyYAML is required: pip install pyyaml"
-    ) from e
+    raise ImportError("PyYAML is required: pip install pyyaml") from e
 
 
 # ---------------------------------------------------------------------------
 # DatasetEntry — per-dataset config within an experiment
 # ---------------------------------------------------------------------------
 
+
 @dataclasses.dataclass(frozen=True)
 class DatasetEntry:
     """One dataset slot in an experiment's training mix."""
+
     name: str
     split: str = "train"
     oversample: int = 1
@@ -80,6 +80,7 @@ class DatasetEntry:
 # ---------------------------------------------------------------------------
 # ExperimentConfig — the authoritative config object consumed by training code
 # ---------------------------------------------------------------------------
+
 
 @dataclasses.dataclass
 class ExperimentConfig:
@@ -106,24 +107,26 @@ class ExperimentConfig:
 
     # Model
     base_checkpoint: str = "naver-clova-ix/donut-base"
-    tie_word_embeddings: bool = False       # MUST stay False after resize_token_embeddings()
+    tie_word_embeddings: bool = False  # MUST stay False after resize_token_embeddings()
     full_parameter_finetuning: bool = True
 
     # Data / preprocessing
-    image_height: int = 1280               # DONUT native — do NOT exceed without allow_high_res
-    image_width: int = 960                 # DONUT native — do NOT exceed without allow_high_res
-    allow_high_res: bool = False           # bypasses image_height>1280 / image_width>960 guard
-    max_length: int = 768                  # MAX_LENGTH from constants.py
+    image_height: int = 1280  # DONUT native — do NOT exceed without allow_high_res
+    image_width: int = 960  # DONUT native — do NOT exceed without allow_high_res
+    allow_high_res: bool = False  # bypasses image_height>1280 / image_width>960 guard
+    max_length: int = 768  # MAX_LENGTH from constants.py
 
     # Dataset mix
-    datasets: List[DatasetEntry] = dataclasses.field(default_factory=list)
+    datasets: list[DatasetEntry] = dataclasses.field(default_factory=list)
 
     # Training
     epochs: int = 10
     batch_size: int = 8
-    gradient_accumulation_steps: int = 2   # effective batch = batch_size × grad_accum
-    mixed_precision: str = "fp16"          # "fp16" | "bf16" | "fp32"
-    resource_optimizer_target_effective_batch: Optional[int] = None  # if set, runner calls resource_optimizer.optimize_hyperparams()
+    gradient_accumulation_steps: int = 2  # effective batch = batch_size × grad_accum
+    mixed_precision: str = "fp16"  # "fp16" | "bf16" | "fp32"
+    resource_optimizer_target_effective_batch: int | None = (
+        None  # if set, runner calls resource_optimizer.optimize_hyperparams()
+    )
 
     # Optimizer (AdamW layerwise LR)
     optimizer_type: str = "AdamW"
@@ -144,7 +147,7 @@ class ExperimentConfig:
     seed: int = 42
 
     # Validation
-    val_precompute_tensors: bool = False   # MUST stay False — see memory_manager.py
+    val_precompute_tensors: bool = False  # MUST stay False — see memory_manager.py
 
     # Output paths
     results_file: str = ""
@@ -239,11 +242,11 @@ class ExperimentConfig:
         return self.batch_size * self.gradient_accumulation_steps
 
     @property
-    def dataset_names(self) -> List[str]:
+    def dataset_names(self) -> list[str]:
         """Names of all datasets in this experiment (with multiplicity collapsed)."""
         return [d.name for d in self.datasets]
 
-    def estimated_sample_count(self, registry: Optional[Dict[str, int]] = None) -> Optional[int]:
+    def estimated_sample_count(self, registry: dict[str, int] | None = None) -> int | None:
         """
         Returns estimated sample count if a registry dict {name: base_count}
         is provided, otherwise returns None.
@@ -263,7 +266,8 @@ class ExperimentConfig:
 # YAML → ExperimentConfig
 # ---------------------------------------------------------------------------
 
-def _parse_yaml(path: str | Path) -> Dict[str, Any]:
+
+def _parse_yaml(path: str | Path) -> dict[str, Any]:
     with open(path, "r", encoding="utf-8") as fh:
         raw = yaml.safe_load(fh)
     if not isinstance(raw, dict):
@@ -271,7 +275,7 @@ def _parse_yaml(path: str | Path) -> Dict[str, Any]:
     return raw
 
 
-def _require(d: Dict[str, Any], key: str, path: str) -> Any:
+def _require(d: dict[str, Any], key: str, path: str) -> Any:
     if key not in d:
         raise KeyError(f"Required key '{key}' missing in {path}")
     return d[key]
@@ -294,7 +298,7 @@ def load_experiment(
     candidates = glob.glob(pattern) + glob.glob(str(experiments_dir / "*.yml"))
 
     # Match files that contain the experiment ID as a number
-    matched: List[Path] = []
+    matched: list[Path] = []
     for c in candidates:
         stem = Path(c).stem
         # Look for exp_id appearing as a standalone number (underscore-bounded or start/end)
@@ -319,8 +323,8 @@ def load_experiment(
 
 def load_all_experiments(
     experiments_dir: str | Path = "experiments",
-    experiment_ids: Optional[Sequence[int]] = None,
-) -> List[ExperimentConfig]:
+    experiment_ids: Sequence[int] | None = None,
+) -> list[ExperimentConfig]:
     """
     Load all experiment YAML files from experiments_dir, sorted by
     experiment_id.  Pass experiment_ids to load only specific IDs.
@@ -337,8 +341,8 @@ def load_all_experiments(
             f"Expected files matching '{experiments_dir}/*.yaml'."
         )
 
-    configs: List[ExperimentConfig] = []
-    errors: List[str] = []
+    configs: list[ExperimentConfig] = []
+    errors: list[str] = []
 
     for p in paths:
         try:
@@ -350,8 +354,7 @@ def load_all_experiments(
 
     if errors:
         raise ValueError(
-            f"Failed to load {len(errors)} experiment config(s):\n"
-            + "\n".join(errors)
+            f"Failed to load {len(errors)} experiment config(s):\n" + "\n".join(errors)
         )
 
     configs.sort(key=lambda c: c.id)
@@ -477,7 +480,7 @@ def _yaml_to_config(path: str | Path) -> ExperimentConfig:
 def load_experiment_selection(
     selection_file: str | Path = "experiment_selection.json",
     experiments_dir: str | Path = "experiments",
-) -> List[ExperimentConfig]:
+) -> list[ExperimentConfig]:
     """
     Load only the experiments listed as enabled=true in experiment_selection.json.
     Returns configs sorted by experiment_id ascending.
@@ -510,7 +513,7 @@ def load_experiment_selection(
             f"'experiments' key, got: {type(data)}"
         )
 
-    enabled_ids: List[int] = []
+    enabled_ids: list[int] = []
     for entry in data["experiments"]:
         if not isinstance(entry, dict):
             continue
@@ -547,10 +550,12 @@ if __name__ == "__main__":
 
     print(f"\nLoaded {len(configs)} experiment config(s):\n")
     for cfg in configs:
-        ds_summary = ", ".join(
-            f"{d.name}" + (f"×{d.oversample}" if d.oversample > 1 else "")
-            for d in cfg.datasets
-        ) or "(zero-shot — no datasets)"
+        ds_summary = (
+            ", ".join(
+                f"{d.name}" + (f"×{d.oversample}" if d.oversample > 1 else "") for d in cfg.datasets
+            )
+            or "(zero-shot — no datasets)"
+        )
         print(
             f"  Exp {cfg.id:2d}  {cfg.name:<40s}  "
             f"arch={cfg.arch_type:<12s}  "
@@ -569,8 +574,7 @@ if __name__ == "__main__":
         print(f"\nTesting load_experiment_selection() from {sel_file}...")
         try:
             sel_configs = load_experiment_selection(sel_file, experiments_dir)
-            print(f"  Selected {len(sel_configs)} experiment(s): "
-                  f"{[c.id for c in sel_configs]}")
+            print(f"  Selected {len(sel_configs)} experiment(s): {[c.id for c in sel_configs]}")
             print("✓ load_experiment_selection() passed.")
         except Exception as exc:
             print(f"✗ load_experiment_selection() FAILED: {exc}")

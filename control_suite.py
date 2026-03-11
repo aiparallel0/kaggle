@@ -852,7 +852,7 @@ class ControlSuite:
     yolo: YOLOControlConfig
 
     @classmethod
-    def default(cls) -> "ControlSuite":
+    def default(cls) -> ControlSuite:
         """Return a ControlSuite with project-default configurations."""
         return cls(
             donut=DonutControlConfig(),
@@ -875,9 +875,7 @@ class ControlSuite:
         """
         flat = _flatten_suite(self)
         return {
-            k: v
-            for k, v in flat.items()
-            if _IMPACT_REGISTRY.get(k, ("", False))[0] == "CRITICAL"
+            k: v for k, v in flat.items() if _IMPACT_REGISTRY.get(k, ("", False))[0] == "CRITICAL"
         }
 
     def underdocumented_params(self) -> list[str]:
@@ -926,7 +924,7 @@ class ControlSuite:
             print(f"  {_model_labels[model_name]}")
             print(f"{'─' * 80}")
             print(f"  {'Parameter':<45} {'Impact':<10} {'Value'}")
-            print(f"  {'─'*44} {'─'*9} {'─'*20}")
+            print(f"  {'─' * 44} {'─' * 9} {'─' * 20}")
             for key, value, impact, underdoc in params:
                 param_name = key.split(".", 1)[1]
                 flag = " ⚠️" if underdoc else ""
@@ -936,7 +934,9 @@ class ControlSuite:
         total = len(flat)
         n_critical = sum(1 for k in flat if _IMPACT_REGISTRY.get(k, ("",))[0] == "CRITICAL")
         n_underdoc = len(self.underdocumented_params())
-        print(f"  Total parameters: {total}  |  Critical: {n_critical}  |  Underdocumented: {n_underdoc}")
+        print(
+            f"  Total parameters: {total}  |  Critical: {n_critical}  |  Underdocumented: {n_underdoc}"
+        )
         print("=" * 80 + "\n")
 
 
@@ -948,7 +948,11 @@ class ControlSuite:
 def _flatten_suite(suite: ControlSuite) -> dict[str, Any]:
     """Flatten a ControlSuite to a dot-notation dict keyed by 'model.param'."""
     result: dict[str, Any] = {}
-    for model_name, config in [("donut", suite.donut), ("trocr", suite.trocr), ("yolo", suite.yolo)]:
+    for model_name, config in [
+        ("donut", suite.donut),
+        ("trocr", suite.trocr),
+        ("yolo", suite.yolo),
+    ]:
         for k, v in asdict(config).items():
             result[f"{model_name}.{k}"] = v
     return result

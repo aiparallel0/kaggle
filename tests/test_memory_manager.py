@@ -8,12 +8,6 @@ the DONUT native resolution (1280x960) and the previously-wrong resolution
 
 No GPU, no network, no HuggingFace downloads required.
 """
-import sys
-from pathlib import Path
-
-import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import memory_manager as mm
 
@@ -54,6 +48,7 @@ class TestComputePilMbPerSample:
 def _make_psutil_mock(available_bytes: int):
     """Return a mock psutil module with virtual_memory().available set."""
     import unittest.mock as mock
+
     mock_psutil = mock.MagicMock()
     mock_vm = mock.MagicMock()
     mock_vm.available = available_bytes
@@ -66,8 +61,8 @@ class TestRamCacheIsSafe:
 
     def test_small_dataset_at_ref_resolution_is_safe(self):
         """500 samples x 3.516 MB = 1,758 MB -- safe on any machine with > 12 GB RAM."""
-        import sys
         import unittest.mock as mock
+
         mock_psutil = _make_psutil_mock(64 * 1024 * 1024 * 1024)  # 64 GB
         with mock.patch.dict("sys.modules", {"psutil": mock_psutil}):
             result = mm.ram_cache_is_safe(500, 1280, 960)
@@ -80,6 +75,7 @@ class TestRamCacheIsSafe:
         This is the exact Experiment 8 scenario that caused 192 GB RAM exhaustion.
         """
         import unittest.mock as mock
+
         mock_psutil = _make_psutil_mock(192 * 1024 * 1024 * 1024)  # 192 GB
         with mock.patch.dict("sys.modules", {"psutil": mock_psutil}):
             result = mm.ram_cache_is_safe(3940, 2560, 1920)
@@ -95,6 +91,7 @@ class TestRamCacheIsSafe:
         even with the conservative 6% safety fraction.
         """
         import unittest.mock as mock
+
         mock_psutil = _make_psutil_mock(256 * 1024 * 1024 * 1024)  # 256 GB
         with mock.patch.dict("sys.modules", {"psutil": mock_psutil}):
             result = mm.ram_cache_is_safe(3940, 1280, 960)
@@ -105,6 +102,7 @@ class TestRamCacheIsSafe:
     def test_psutil_import_error_returns_false(self):
         """If psutil raises ImportError, caching is disabled (safe default)."""
         import unittest.mock as mock
+
         with mock.patch.dict("sys.modules", {"psutil": None}):
             result = mm.ram_cache_is_safe(100, 1280, 960)
         assert isinstance(result, bool)
@@ -112,6 +110,7 @@ class TestRamCacheIsSafe:
     def test_custom_safety_fraction(self):
         """Custom safety_fraction parameter is respected."""
         import unittest.mock as mock
+
         # 10 GB available = 10,240 MB
         mock_psutil = _make_psutil_mock(10 * 1024 * 1024 * 1024)
         with mock.patch.dict("sys.modules", {"psutil": mock_psutil}):
@@ -135,6 +134,7 @@ class TestFlushHfArrowCache:
     def test_flush_does_not_crash_when_datasets_missing(self):
         """flush_hf_arrow_cache() must not raise if datasets is not installed."""
         import unittest.mock as mock
+
         with mock.patch.dict("sys.modules", {"datasets": None}):
             mm.flush_hf_arrow_cache()  # should complete without exception
 
@@ -149,6 +149,7 @@ class TestReleaseHfDataset:
     def test_object_with_cleanup_cache_files_is_called(self):
         """Objects with cleanup_cache_files() have it called."""
         import unittest.mock as mock
+
         mock_ds = mock.Mock()
         mock_ds.cleanup_cache_files = mock.Mock()
         mm.release_hf_dataset(mock_ds)
@@ -156,8 +157,10 @@ class TestReleaseHfDataset:
 
     def test_object_without_cleanup_does_not_crash(self):
         """Objects without cleanup_cache_files() are handled gracefully."""
+
         class FakeDataset:
             pass
+
         mm.release_hf_dataset(FakeDataset())  # must not raise
 
 
@@ -170,13 +173,16 @@ class TestShutdownDataloaderWorkers:
 
     def test_trainer_without_get_train_dataloader_does_not_crash(self):
         """Trainers that don't have get_train_dataloader() are handled gracefully."""
+
         class FakeTrainer:
             pass
+
         mm.shutdown_dataloader_workers(FakeTrainer())  # must not raise
 
     def test_trainer_with_iterator_calls_shutdown(self):
         """When _iterator._shutdown_workers exists it is called."""
         import unittest.mock as mock
+
         mock_iter = mock.Mock()
         mock_iter._shutdown_workers = mock.Mock()
         mock_dl = mock.Mock()
@@ -200,17 +206,17 @@ class TestRamHeadroomMb:
     def test_returns_float_with_mock_psutil(self):
         """ram_headroom_mb() returns available / 1024**2 from psutil.virtual_memory()."""
         import unittest.mock as mock
+
         mock_psutil = _make_psutil_mock(8 * 1024 * 1024 * 1024)  # 8 GB
         with mock.patch.dict("sys.modules", {"psutil": mock_psutil}):
             result = mm.ram_headroom_mb()
         expected = 8 * 1024  # 8 GB in MB = 8192
-        assert abs(result - expected) < 1.0, (
-            f"Expected ~{expected} MB, got {result:.1f} MB"
-        )
+        assert abs(result - expected) < 1.0, f"Expected ~{expected} MB, got {result:.1f} MB"
 
     def test_returns_zero_on_psutil_error(self):
         """ram_headroom_mb() returns 0.0 when psutil is unavailable."""
         import unittest.mock as mock
+
         with mock.patch.dict("sys.modules", {"psutil": None}):
             result = mm.ram_headroom_mb()
         assert result == 0.0, f"Expected 0.0 on psutil error, got {result}"
