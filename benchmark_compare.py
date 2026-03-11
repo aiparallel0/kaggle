@@ -45,6 +45,8 @@ License: MIT
 # ─────────────────────────────────────────────────────────────────────────────
 # Imports
 # ─────────────────────────────────────────────────────────────────────────────
+from __future__ import annotations
+
 import argparse
 import json
 import re
@@ -59,9 +61,10 @@ __all__ = ["SampleResult", "BenchmarkResult", "compare_all", "main", "_token_f1"
 import numpy as np
 
 # Defer heavy imports to avoid import-time crashes when deps are missing.
-# _HEAVY_DEPS_AVAILABLE is False when any dep is absent; main() and _ned()
-# check this flag so the module can still be imported (and _token_f1 /
-# _token_f1_squad used) in test environments that lack torch/PIL/etc.
+# _HEAVY_DEPS_AVAILABLE is False when any dep is absent; main() guards entry
+# and _ned() raises ImportError on usage so the module can still be imported
+# (and _token_f1 / _token_f1_squad used) in test environments that lack
+# torch/PIL/etc.
 _HEAVY_DEPS_AVAILABLE: bool = True
 _HEAVY_DEPS_ERROR: str = ""
 try:

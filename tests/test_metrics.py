@@ -756,7 +756,7 @@ class TestInteractiveSelectionFallback:
 
         # Stub run_experiments.EXPERIMENTS so the legacy fallback works
         stub_config = types.SimpleNamespace(id=1, name="SROIE only", arch_type="donut")
-        fake_re_mod = types.MagicMock()
+        fake_re_mod = mock.MagicMock()
         fake_re_mod.EXPERIMENTS = {1: stub_config}
         monkeypatch.setitem(sys.modules, "run_experiments", fake_re_mod)
 
