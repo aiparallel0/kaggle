@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 
-
 from dataset_loaders import (  # noqa: E402, I001
     DatasetLoadError,
     _ensure_dir,

@@ -421,7 +421,10 @@ def generate_all(
     if not exp_ids:
         # Fallback: discover from available CSV files
         exp_ids = sorted(
-            [p.stem.replace("convergence_exp", "") for p in results_dir.glob("convergence_exp*.csv")],
+            [
+                p.stem.replace("convergence_exp", "")
+                for p in results_dir.glob("convergence_exp*.csv")
+            ],
             key=lambda s: int(s) if s.isdigit() else 999,
         )
 

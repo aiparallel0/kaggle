@@ -59,6 +59,8 @@ from transformers import (
     VisionEncoderDecoderModel,
 )
 
+import memory_manager as _mm
+
 # FIX: Previously FIELDS, MAX_LENGTH, IMAGE_EXTS, NEW_TOKENS, BASE_MODEL,
 # SEED were defined independently here and in 4 other files, risking silent
 # drift if any file was updated without updating the others.
@@ -72,7 +74,6 @@ from constants import (
     _mask_empty_field_labels,
     _optimal_num_workers,
 )
-import memory_manager as _mm
 
 __all__ = ["SROIEDataset", "MultiDataset", "DonutTrainer", "TrainingResult"]
 
@@ -264,6 +265,7 @@ class MultiDataset(Dataset):
             #   3 × H × W / 1_048_576 MB per sample.
             try:
                 from resource_optimizer import get_image_size_from_processor_config
+
                 _img_h, _img_w = get_image_size_from_processor_config()
             except Exception:
                 _img_h, _img_w = 1280, 960  # safe fallback to DONUT native resolution
@@ -319,8 +321,7 @@ class MultiDataset(Dataset):
                         )
                     else:
                         _log.info(
-                            "[Tensor Cache] Precomputing pixel_values for %d images"
-                            " (~%.0f MB) ...",
+                            "[Tensor Cache] Precomputing pixel_values for %d images (~%.0f MB) ...",
                             len(self._image_cache),
                             _pix_mb,
                         )

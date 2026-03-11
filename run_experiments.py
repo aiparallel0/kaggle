@@ -74,6 +74,7 @@ from constants import (
     _gpu_cleanup,
     set_seed,
 )
+from control_suite import validate_sroie_oversample
 
 # Phase 3-5: Dynamic resource optimization and audit logging
 from resource_optimizer import (
@@ -82,7 +83,6 @@ from resource_optimizer import (
     optimize_hyperparams,
 )
 from train import MultiDataset  # moved to train.py
-from control_suite import validate_sroie_oversample
 
 # --- Optional flash-attn probe (at module top, after imports) ---
 try:
@@ -160,7 +160,9 @@ class ExperimentConfig:
     description: str = ""
     experiment_id: int = 0
     sroie_oversample: int = 1  # Number of times to duplicate SROIE training samples (1–3 typical)
-    skip_oversample_guard: bool = False  # Set True for intentional naïve control experiments (Exps 2–4).
+    skip_oversample_guard: bool = (
+        False  # Set True for intentional naïve control experiments (Exps 2–4).
+    )
     # These exist to prove that sroie_oversample=1 hurts F1 vs sroie_oversample>=2.
     # The guard is still enforced for all other paths (custom runs, CLI, etc.).
 
@@ -208,7 +210,7 @@ EXPERIMENTS: dict[int, ExperimentConfig] = {
         name="SROIE + WildReceipt (naïve baseline)",
         datasets=["sroie", "wildreceipt"],
         description="Naïve multi-dataset run — sroie_oversample=1 intentionally. "
-                    "Control group: proves auxiliary data dilutes F1 without oversampling.",
+        "Control group: proves auxiliary data dilutes F1 without oversampling.",
         experiment_id=2,
         sroie_oversample=1,
         skip_oversample_guard=True,

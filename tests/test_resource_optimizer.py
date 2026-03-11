@@ -9,10 +9,8 @@ All tests are CPU-only (no GPU required).
 
 import dataclasses
 import math
-from pathlib import Path
 
 import pytest
-
 
 from resource_optimizer import (
     ResourceOptimizedConfig,

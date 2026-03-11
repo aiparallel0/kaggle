@@ -16,8 +16,6 @@ run_experiments.py imports it at the top level.
 
 import dataclasses
 import inspect
-from pathlib import Path
-
 
 import pytest
 

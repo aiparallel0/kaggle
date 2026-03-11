@@ -192,7 +192,9 @@ def _collect_gpu_info(lines: list[str]) -> tuple[str, list[tuple[int, int]]]:
                         try:
                             used_gb = int(used_mb) / 1024
                             total_gb = int(total_mb) / 1024
-                            summaries.append(f"GPU {idx} ({name}): {used_gb:.1f}/{total_gb:.1f} GB used")
+                            summaries.append(
+                                f"GPU {idx} ({name}): {used_gb:.1f}/{total_gb:.1f} GB used"
+                            )
                         except ValueError:
                             summaries.append(gpu_line)
                     else:
@@ -230,7 +232,9 @@ def _collect_gpu_info(lines: list[str]) -> tuple[str, list[tuple[int, int]]]:
             timeout=15,
         )
         if proc_result.returncode == 0:
-            proc_lines = [ln.strip() for ln in proc_result.stdout.strip().splitlines() if ln.strip()]
+            proc_lines = [
+                ln.strip() for ln in proc_result.stdout.strip().splitlines() if ln.strip()
+            ]
             if proc_lines:
                 for pline in proc_lines:
                     _append(lines, f"  {pline}")

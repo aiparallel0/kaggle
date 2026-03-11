@@ -13,7 +13,6 @@ All tests run without GPU, model weights, or disk access.
 import ast
 from pathlib import Path
 
-
 import pytest
 
 # ---------------------------------------------------------------------------

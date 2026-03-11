@@ -13,10 +13,7 @@ Requires: torch, transformers.
 """
 
 import json
-import sys
 import unittest.mock as mock
-from pathlib import Path
-
 
 import pytest
 

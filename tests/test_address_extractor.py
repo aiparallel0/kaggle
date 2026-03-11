@@ -1,4 +1,5 @@
 """Tests for address_extractor.py and multi-line SROIE key file parsing."""
+
 from pathlib import Path
 
 from dataset_normalizer import extract_address_from_seller

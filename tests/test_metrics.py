@@ -7,7 +7,6 @@ Requires: torch, transformers (donut_evaluator.py imports them at module level).
 import unittest.mock as mock
 from pathlib import Path
 
-
 import pytest
 
 torch = pytest.importorskip("torch", reason="torch required by donut_evaluator.py")

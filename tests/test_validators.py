@@ -7,8 +7,6 @@ DataSplitValidator. All tests run without GPU, model weights, or internet access
 
 from pathlib import Path
 
-
-
 # ---------------------------------------------------------------------------
 # BugPatternDetector — JSON literal confusion (Pattern 2 from CLAUDE.md §5)
 # ---------------------------------------------------------------------------

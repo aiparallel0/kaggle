@@ -8,7 +8,6 @@ These tests must pass in CI (no torch, no GPU).
 from pathlib import Path
 
 
-
 class TestImportChain:
     """Verify every module can be imported without crashing."""
 

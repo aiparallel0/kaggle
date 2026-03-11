@@ -10,7 +10,6 @@ All tests run without GPU, model weights, or disk access.
 
 from pathlib import Path
 
-
 from pipeline_types import (
     AggregatedResults,
     BugPattern,

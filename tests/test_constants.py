@@ -1,4 +1,5 @@
 """Tests for constants.py — validate schema and invariants."""
+
 import pytest
 
 from constants import BASE_MODEL, EMPTY_GT, FIELDS, IMAGE_EXTS, MAX_LENGTH, NEW_TOKENS, SEED

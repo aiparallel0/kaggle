@@ -4,7 +4,6 @@ import json
 import tempfile
 from pathlib import Path
 
-
 from inject_results import (
     EXP_NAMES,
     LEADERBOARD,

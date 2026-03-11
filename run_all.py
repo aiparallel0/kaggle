@@ -87,7 +87,14 @@ __all__ = [
 
 # Packages that must be importable for the pipeline to function correctly.
 # 'torch' is checked during install; the remaining are verified post-install.
-_CRITICAL_INSTALL_PACKAGES = ["torch", "transformers", "datasets", "accelerate", "editdistance", "pandas"]
+_CRITICAL_INSTALL_PACKAGES = [
+    "torch",
+    "transformers",
+    "datasets",
+    "accelerate",
+    "editdistance",
+    "pandas",
+]
 _CRITICAL_VERIFY_PACKAGES = ["transformers", "datasets", "accelerate", "editdistance", "pandas"]
 
 
@@ -151,7 +158,9 @@ def _install_dependencies() -> None:
         req_lines = [
             stripped
             for line in req_file.read_text().splitlines()
-            if (stripped := line.strip()) and not stripped.startswith("#") and "flash-attn" not in stripped.lower()
+            if (stripped := line.strip())
+            and not stripped.startswith("#")
+            and "flash-attn" not in stripped.lower()
         ]
 
         print("[setup] Installing dependencies from requirements.txt...")
@@ -236,7 +245,7 @@ class _DualStreamHandler(logging.Handler):
             self._write_to_file(msg)
 
             # Selectively write to console
-            if record.levelno >= logging.INFO:
+            if record.levelno >= logging.INFO:  # noqa: SIM102
                 if not self._should_suppress_console(msg):
                     # Always show ERROR/WARNING
                     if record.levelno >= logging.WARNING:
@@ -472,10 +481,10 @@ def _parse_param_overrides(params: list[str]) -> dict:
 
 def _print_all_params() -> None:
     """Print a formatted table of all DONUT/TrOCR/YOLO/memory parameters and system info."""
-    import dataclasses
 
     try:
         import run_experiments as re_mod
+
         experiments = re_mod.EXPERIMENTS
     except Exception as exc:
         print(f"  [--list-params] Could not load experiments: {exc}")
@@ -483,6 +492,7 @@ def _print_all_params() -> None:
 
     try:
         import memory_manager as _mm_mod
+
         ram_fraction = _mm_mod._RAM_SAFETY_FRACTION
         pixel_cap = 4096  # _PIXEL_TENSOR_MAX_MB in train.py
         ref_h = _mm_mod._REF_H
@@ -526,6 +536,7 @@ def _print_all_params() -> None:
     print("  " + "-" * 50)
     try:
         import torch
+
         if torch.cuda.is_available():
             gpu_name = torch.cuda.get_device_name(0)
             gpu_mem_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
@@ -536,6 +547,7 @@ def _print_all_params() -> None:
         print("  GPU  : torch not available")
     try:
         import psutil
+
         mem = psutil.virtual_memory()
         print(
             f"  RAM  : {mem.total / (1024**3):.1f} GB total, "
@@ -549,6 +561,7 @@ def _print_all_params() -> None:
     print("  " + "-" * 50)
     try:
         from control_suite import CONTROL_SUITE
+
         CONTROL_SUITE.print_summary()
     except Exception as exc:
         print(f"  (control_suite unavailable: {exc})")
@@ -1103,15 +1116,16 @@ def _load_experiment_configs_for_run(args) -> "list":
         configs = load_experiment_selection(sel_file, experiments_dir)
         return configs
     except Exception as exc:
-        print(f"  WARNING: experiment_selection.json load failed: {exc}; "
-              "falling back to all experiments")
+        print(
+            f"  WARNING: experiment_selection.json load failed: {exc}; "
+            "falling back to all experiments"
+        )
 
     # Priority 4 — load everything
     try:
         return load_all_experiments(experiments_dir)
     except Exception as exc:
-        print(f"  WARNING: load_all_experiments failed: {exc}; "
-              "will use legacy EXPERIMENTS dict")
+        print(f"  WARNING: load_all_experiments failed: {exc}; will use legacy EXPERIMENTS dict")
         return []
 
 
@@ -1171,14 +1185,17 @@ def stage_experiments(args) -> StageResult:
         # load directly in train_experiment() via from_pretrained().
         try:
             from transformers import DonutProcessor, VisionEncoderDecoderModel
+
             _cfg0 = re_mod.EXPERIMENTS[1]
             print(f"  [stage_experiments] Pre-loading base model: {_cfg0.base_model}")
             _base_processor = DonutProcessor.from_pretrained(_cfg0.base_model)
             _base_model = VisionEncoderDecoderModel.from_pretrained(_cfg0.base_model)
             print("  [stage_experiments] Base model pre-loaded (will deep-copy per experiment).")
         except Exception as _preload_exc:
-            print(f"  [stage_experiments] Base model pre-load failed ({_preload_exc}); "
-                  "each experiment will load from disk.")
+            print(
+                f"  [stage_experiments] Base model pre-load failed ({_preload_exc}); "
+                "each experiment will load from disk."
+            )
             _base_processor = None
             _base_model = None
 
@@ -1205,8 +1222,10 @@ def stage_experiments(args) -> StageResult:
         is_zero_shot = yaml_cfg.is_zero_shot if yaml_cfg is not None else False
 
         if yaml_cfg is not None:
-            print(f"    arch={arch_type}  zero_shot={is_zero_shot}  "
-                  f"datasets={[d.name for d in yaml_cfg.datasets]}")
+            print(
+                f"    arch={arch_type}  zero_shot={is_zero_shot}  "
+                f"datasets={[d.name for d in yaml_cfg.datasets]}"
+            )
         elif exp_id in re_mod.EXPERIMENTS:
             print(f"    Datasets: {re_mod.EXPERIMENTS[exp_id].datasets}")
 
@@ -1221,7 +1240,8 @@ def stage_experiments(args) -> StageResult:
             elif use_yaml_dispatch and exp_id not in re_mod.EXPERIMENTS:
                 # New YAML-only experiment (IDs 9+) not in legacy dict
                 result = _run_yaml_donut_experiment(
-                    args, yaml_cfg,
+                    args,
+                    yaml_cfg,
                     base_processor=_base_processor,
                     base_model=_base_model,
                 )
@@ -1280,6 +1300,7 @@ def stage_experiments(args) -> StageResult:
     if _base_model is not None or _base_processor is not None:
         try:
             from constants import _gpu_cleanup
+
             del _base_model, _base_processor
             _gpu_cleanup()
         except Exception:
@@ -1298,7 +1319,7 @@ def _run_trocr_yolo_experiment(args, cfg) -> dict:
     """
     import train_trocr_yolo  # noqa: F401  # early import to fail fast if package missing
 
-    print(f"  [dispatch] arch=trocr_yolo → train_trocr_yolo.py")
+    print("  [dispatch] arch=trocr_yolo → train_trocr_yolo.py")
     # Ensure TrOCR+YOLO data is prepared before running experiments.
     # stage_trocr_data_prep() is idempotent — it skips if data already exists.
     yolo_val_images = Path(args.workspace) / "data" / "yolo" / "images" / "val"
@@ -1312,6 +1333,7 @@ def _run_trocr_yolo_experiment(args, cfg) -> dict:
     results_file = Path(cfg.results_file) if cfg.results_file else None
     if results_file and results_file.exists():
         import json as _json
+
         with open(results_file) as fh:
             return _json.load(fh)
     return {
@@ -1319,7 +1341,9 @@ def _run_trocr_yolo_experiment(args, cfg) -> dict:
         "name": cfg.name,
         "datasets": [d.name for d in cfg.datasets],
         "num_train_samples": 0,
-        "metrics": {"global_f1": "see trocr_yolo_results.json" if result.exit_status == 0 else "N/A"},
+        "metrics": {
+            "global_f1": "see trocr_yolo_results.json" if result.exit_status == 0 else "N/A"
+        },
     }
 
 
@@ -1328,18 +1352,20 @@ def _run_zero_shot_experiment(args, cfg) -> dict:
     Run a zero-shot evaluation (no training).  Loads the base checkpoint,
     runs inference on the SROIE test set, and saves results.
     """
-    print(f"  [dispatch] is_zero_shot=True → evaluation only (no training)")
+    print("  [dispatch] is_zero_shot=True → evaluation only (no training)")
     results_file = Path(cfg.results_file) if cfg.results_file else None
     # If a result already exists and --force is not set, return it
     if results_file and results_file.exists() and not getattr(args, "force", False):
         import json as _json
+
         with open(results_file) as fh:
             return _json.load(fh)
     # Attempt zero-shot evaluation using DonutEvaluator
     try:
-        from donut_evaluator import DonutEvaluator
         from transformers import DonutProcessor
+
         import dataset_loaders
+        from donut_evaluator import DonutEvaluator
 
         processor = DonutProcessor.from_pretrained(cfg.base_checkpoint)
         test_samples = dataset_loaders.load_sroie_test()
@@ -1358,6 +1384,7 @@ def _run_zero_shot_experiment(args, cfg) -> dict:
         }
         if results_file:
             import json as _json
+
             results_file.parent.mkdir(parents=True, exist_ok=True)
             with open(results_file, "w") as fh:
                 _json.dump(result, fh, indent=2)
@@ -1382,6 +1409,7 @@ def _run_yaml_donut_experiment(args, cfg, base_processor=None, base_model=None) 
     print(f"  [dispatch] arch=donut (YAML-only exp {cfg.id}) → DONUT training path")
     try:
         import run_experiments as re_mod
+
         if hasattr(re_mod, "run_experiment_from_config"):
             return re_mod.run_experiment_from_config(
                 cfg,
@@ -1390,8 +1418,10 @@ def _run_yaml_donut_experiment(args, cfg, base_processor=None, base_model=None) 
                 overrides=getattr(args, "param_overrides", None) or None,
             )
     except Exception as exc:
-        print(f"  [dispatch] run_experiment_from_config failed ({exc}); "
-              "experiment not run (YAML-only experiments require run_experiments.py support)")
+        print(
+            f"  [dispatch] run_experiment_from_config failed ({exc}); "
+            "experiment not run (YAML-only experiments require run_experiments.py support)"
+        )
     # run_experiment_from_config is not available — raise loud error so it is
     # never mistaken for a real zero-F1 result.
     raise RuntimeError(
@@ -2530,6 +2560,7 @@ def _max_experiment_id() -> int:
     try:
         import glob as _glob
         import re as _re
+
         ids = []
         for p in _glob.glob("experiments/*.yaml") + _glob.glob("experiments/*.yml"):
             with open(p) as f:
@@ -2733,7 +2764,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Path to a JSON file with live parameter overrides. "
             "Applied before any experiment runs. "
             "Default: /workspace/params_override.json (if it exists). "
-            "Format: {\"global\": {\"epochs\": 5}, \"experiments\": {\"6\": {\"epochs\": 20}}}"
+            'Format: {"global": {"epochs": 5}, "experiments": {"6": {"epochs": 20}}}'
         ),
     )
     return p
@@ -2757,6 +2788,7 @@ def main() -> None:
             # This token was already consumed as the value for --startup-log; skip.
             continue
     import startup_diagnostics  # noqa: E402, I001  (uses stdlib only — safe before heavy imports)
+
     startup_diagnostics.run(log_file=_startup_log_file, skip=_skip_startup)
 
     # Phase 0: Install dependencies (before any other imports)
@@ -2791,7 +2823,11 @@ def main() -> None:
                 "  Use --experiment N --param KEY=VALUE to override a specific experiment."
             )
             param_overrides = {}
-        elif getattr(args, "quick", False) or getattr(args, "mini", False) or getattr(args, "micro", False):
+        elif (
+            getattr(args, "quick", False)
+            or getattr(args, "mini", False)
+            or getattr(args, "micro", False)
+        ):
             print(
                 "  [--param] Note: --param overrides apply to individual experiments only; "
                 "use --experiment N --param KEY=VALUE for targeted overrides."

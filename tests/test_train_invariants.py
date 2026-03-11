@@ -10,7 +10,6 @@ from pathlib import Path
 
 import pytest
 
-
 transformers = pytest.importorskip("transformers", reason="transformers required")
 
 
@@ -150,7 +149,6 @@ class TestLabelTokenizationNoSpecialTokens:
 
     def test_getitem_label_uses_add_special_tokens_false(self):
         """MultiDataset.__getitem__ must call tokenizer with add_special_tokens=False."""
-        from pathlib import Path
         from unittest.mock import MagicMock
 
         import torch

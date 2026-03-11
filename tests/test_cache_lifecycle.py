@@ -14,7 +14,6 @@ from pathlib import Path
 
 import pytest
 
-
 torch = pytest.importorskip("torch", reason="torch required by train.py")
 pytest.importorskip("transformers", reason="transformers required by train.py")
 
@@ -211,6 +210,7 @@ class TestPrecomputeTensorsFlag:
         ds = self._make_dataset(precompute_tensors=False, cache_in_ram=True)
         # Manually populate _image_cache to simulate what happens when images are loaded
         from PIL import Image
+
         ds._image_cache[0] = Image.new("RGB", (4, 4))
         # Pixel cache must remain empty — the precompute was suppressed
         assert len(ds._pixel_cache) == 0, (
@@ -222,6 +222,7 @@ class TestPrecomputeTensorsFlag:
         """With precompute_tensors=False, _label_cache must be empty even if images are cached."""
         ds = self._make_dataset(precompute_tensors=False, cache_in_ram=True)
         from PIL import Image
+
         ds._image_cache[0] = Image.new("RGB", (4, 4))
         assert len(ds._label_cache) == 0, (
             "_label_cache must be empty when precompute_tensors=False."

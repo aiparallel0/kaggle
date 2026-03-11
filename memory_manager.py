@@ -133,6 +133,7 @@ def ram_cache_is_safe(
 
     try:
         import psutil
+
         available_mb = psutil.virtual_memory().available / (1024 * 1024)
     except ImportError:
         logger.warning(
@@ -173,6 +174,7 @@ def ram_headroom_mb() -> float:
     """
     try:
         import psutil
+
         return psutil.virtual_memory().available / (1024 * 1024)
     except Exception:
         return 0.0
@@ -240,6 +242,7 @@ def flush_hf_arrow_cache() -> None:
     """
     try:
         import datasets as _ds_lib
+
         if hasattr(_ds_lib, "disable_caching"):
             _ds_lib.disable_caching()
             logger.debug("[memory_manager] HuggingFace datasets caching disabled.")
