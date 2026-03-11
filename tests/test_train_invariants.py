@@ -6,12 +6,10 @@ broken property alias produces garbage output that never raises an exception.
 All tests are CPU-only (no GPU, no model weights required).
 """
 
-import sys
 from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 transformers = pytest.importorskip("transformers", reason="transformers required")
 

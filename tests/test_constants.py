@@ -1,11 +1,4 @@
 """Tests for constants.py — validate schema and invariants."""
-
-import sys
-from pathlib import Path
-
-# Ensure project root is importable
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
 import pytest
 
 from constants import BASE_MODEL, EMPTY_GT, FIELDS, IMAGE_EXTS, MAX_LENGTH, NEW_TOKENS, SEED

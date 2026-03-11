@@ -325,6 +325,14 @@ def _setup_logging(log_file: Path = Path("terminal.txt")) -> logging.Logger:
     ]:
         logging.getLogger(pkg).setLevel(logging.WARNING)
 
+    # Suppress PIL chunk-level DEBUG flood and other noisy third-party loggers
+    try:
+        from logging_utils import suppress_noisy_loggers
+
+        suppress_noisy_loggers()
+    except ImportError:
+        pass
+
     return root
 
 
@@ -1288,9 +1296,14 @@ def _run_trocr_yolo_experiment(args, cfg) -> dict:
     Dispatch Experiment 12 (arch_type=trocr_yolo) to the TrOCR+YOLO training path.
     Returns a result dict compatible with the stage_experiments summary logic.
     """
-    import train_trocr_yolo as tty
+    import train_trocr_yolo  # noqa: F401  # early import to fail fast if package missing
 
     print(f"  [dispatch] arch=trocr_yolo → train_trocr_yolo.py")
+    # Ensure TrOCR+YOLO data is prepared before running experiments.
+    # stage_trocr_data_prep() is idempotent — it skips if data already exists.
+    yolo_val_images = Path(args.workspace) / "data" / "yolo" / "images" / "val"
+    if not yolo_val_images.exists():
+        stage_trocr_data_prep(args)
     # Run TrOCR+YOLO training and return results dict
     # stage_trocr_experiments handles the full TrOCR flow; here we call it
     # directly and wrap the result.
@@ -1325,7 +1338,16 @@ def _run_zero_shot_experiment(args, cfg) -> dict:
     # Attempt zero-shot evaluation using DonutEvaluator
     try:
         from donut_evaluator import DonutEvaluator
-        evaluator = DonutEvaluator(model_dir=cfg.base_checkpoint)
+        from transformers import DonutProcessor
+        import dataset_loaders
+
+        processor = DonutProcessor.from_pretrained(cfg.base_checkpoint)
+        test_samples = dataset_loaders.load_sroie_test()
+        evaluator = DonutEvaluator(
+            model_path=cfg.base_checkpoint,
+            processor=processor,
+            test_dataset=test_samples,
+        )
         metrics = evaluator.evaluate(allow_high_parse_failures=True)
         result = {
             "experiment_id": cfg.id,
@@ -1370,14 +1392,13 @@ def _run_yaml_donut_experiment(args, cfg, base_processor=None, base_model=None) 
     except Exception as exc:
         print(f"  [dispatch] run_experiment_from_config failed ({exc}); "
               "experiment not run (YAML-only experiments require run_experiments.py support)")
-    # Return a placeholder result indicating the experiment was not run
-    return {
-        "experiment_id": cfg.id,
-        "name": cfg.name,
-        "datasets": [d.name for d in cfg.datasets],
-        "num_train_samples": 0,
-        "metrics": {"global_f1": 0.0},
-    }
+    # run_experiment_from_config is not available — raise loud error so it is
+    # never mistaken for a real zero-F1 result.
+    raise RuntimeError(
+        f"[Exp {cfg.id}] run_experiment_from_config not available in run_experiments.py. "
+        "This experiment cannot run until the function is implemented. "
+        "Add run_experiment_from_config() to run_experiments.py and its __all__."
+    )
 
 
 # ---------------------------------------------------------------------------

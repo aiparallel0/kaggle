@@ -11,10 +11,8 @@ All tests run without GPU, model weights, or disk access.
 """
 
 import ast
-import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pytest
 

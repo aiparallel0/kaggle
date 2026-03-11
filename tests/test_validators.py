@@ -5,10 +5,8 @@ Tests for BugPatternDetector, ImportChainChecker, ModelWeightValidator, and
 DataSplitValidator. All tests run without GPU, model weights, or internet access.
 """
 
-import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
 # ---------------------------------------------------------------------------

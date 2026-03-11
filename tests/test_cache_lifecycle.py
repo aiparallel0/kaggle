@@ -10,12 +10,10 @@ All tests run without GPU, model weights, or torch.cuda — CPU-only.
 """
 
 import ast
-import sys
 from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 torch = pytest.importorskip("torch", reason="torch required by train.py")
 pytest.importorskip("transformers", reason="transformers required by train.py")

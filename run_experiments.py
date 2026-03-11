@@ -98,6 +98,7 @@ __all__ = [
     "TRAIN_CONFIG",
     "_config_to_dict",
     "run_experiment",
+    "run_experiment_from_config",
     "run_custom_experiment",
     "save_summary",
 ]
@@ -111,6 +112,14 @@ logger = logging.getLogger(__name__)
 # Suppress verbose third-party HTTP loggers to keep output clean
 for pkg in ["httpx", "httpcore", "urllib3", "datasets", "transformers", "huggingface_hub"]:
     logging.getLogger(pkg).setLevel(logging.WARNING)
+
+# Suppress PIL chunk-level DEBUG flood and other noisy third-party loggers
+try:
+    from logging_utils import suppress_noisy_loggers
+
+    suppress_noisy_loggers()
+except ImportError:
+    pass
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -1017,6 +1026,78 @@ def run_custom_experiment(config: "ExperimentConfig", result_file: Path) -> dict
     print(f"[Sweep Exp {exp_id}] Results saved -> {result_file}")
     print(f"[Sweep Exp {exp_id}] Global F1 = {metrics.get('global_f1', 'N/A')}")
     return result
+
+
+def run_experiment_from_config(
+    cfg,
+    base_processor=None,
+    base_model=None,
+    overrides: "dict | None" = None,
+) -> dict:
+    """Run a YAML-defined DONUT experiment (IDs 9+) via run_custom_experiment().
+
+    Bridges the ``experiment_config_loader.ExperimentConfig`` object (YAML-sourced)
+    to the ``run_experiments.ExperimentConfig`` dataclass expected by
+    ``run_custom_experiment()``.  Training logic is NOT duplicated — all training
+    is handled by the existing ``run_custom_experiment`` / ``train_experiment`` pair.
+
+    Args:
+        cfg: An ``experiment_config_loader.ExperimentConfig`` instance (YAML-loaded).
+        base_processor: Optional pre-loaded DonutProcessor for reuse across experiments.
+            NOTE: run_custom_experiment does not currently accept base_processor;
+            the arg is accepted here for API compatibility but ignored.
+        base_model: Optional pre-loaded base model.  Same caveat as base_processor.
+        overrides: Optional dict of ExperimentConfig field overrides (e.g.
+            ``{"epochs": 5}``).  Applied via ``dataclasses.replace()`` so the
+            input cfg is never mutated.
+
+    Returns:
+        Result dict with experiment_id, name, datasets, num_train_samples, metrics.
+    """
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    result_file = (
+        Path(cfg.results_file)
+        if getattr(cfg, "results_file", "")
+        else RESULTS_DIR / f"experiment_{cfg.id}.json"
+    )
+
+    # Compute sroie_oversample from per-dataset oversampling in YAML config.
+    # The YAML specifies oversampling per DatasetEntry (.oversample field).
+    # The ExperimentConfig uses a single sroie_oversample int for SROIE.
+    sroie_oversample = 1
+    dataset_names: list[str] = []
+    if hasattr(cfg, "datasets"):
+        for d in cfg.datasets:
+            dataset_names.append(d.name)
+            if d.name == "sroie":
+                sroie_oversample = getattr(d, "oversample", 1)
+
+    # Build a run_experiments.ExperimentConfig from the YAML cfg fields
+    ec = ExperimentConfig(
+        name=cfg.name,
+        datasets=dataset_names,
+        epochs=getattr(cfg, "epochs", 10),
+        lr=getattr(cfg, "encoder_lr", 5e-5),
+        batch_size=getattr(cfg, "batch_size", 8),
+        seed=getattr(cfg, "seed", SEED),
+        early_stopping_patience=getattr(cfg, "early_stopping_patience", 3),
+        base_model=getattr(cfg, "base_checkpoint", BASE_MODEL),
+        warmup_steps=getattr(cfg, "warmup_steps", 40),
+        weight_decay=getattr(cfg, "weight_decay", 0.01),
+        max_length=getattr(cfg, "max_length", MAX_LENGTH),
+        gradient_accumulation_steps=getattr(cfg, "gradient_accumulation_steps", 2),
+        encoder_lr=getattr(cfg, "encoder_lr", 5e-5),
+        decoder_lr=getattr(cfg, "decoder_lr", 1e-4),
+        description=getattr(cfg, "description", ""),
+        experiment_id=getattr(cfg, "id", 0),
+        sroie_oversample=sroie_oversample,
+        lr_schedule=getattr(cfg, "scheduler_type", "cosine"),
+    )
+
+    if overrides:
+        ec = dataclasses.replace(ec, **{k: v for k, v in overrides.items() if hasattr(ec, k)})
+
+    return run_custom_experiment(ec, result_file)
 
 
 # ---------------------------------------------------------------------------

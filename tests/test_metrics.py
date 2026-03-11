@@ -4,11 +4,9 @@ These tests exercise the core metric logic without requiring GPU or model weight
 Requires: torch, transformers (donut_evaluator.py imports them at module level).
 """
 
-import sys
 import unittest.mock as mock
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pytest
 

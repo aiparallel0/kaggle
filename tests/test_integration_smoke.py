@@ -5,10 +5,8 @@ without GPU/model weights.
 These tests must pass in CI (no torch, no GPU).
 """
 
-import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
 class TestImportChain:

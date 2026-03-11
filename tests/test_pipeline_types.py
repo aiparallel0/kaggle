@@ -8,10 +8,8 @@ the pipeline silently passes None or default values instead of raising.
 All tests run without GPU, model weights, or disk access.
 """
 
-import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from pipeline_types import (
     AggregatedResults,
