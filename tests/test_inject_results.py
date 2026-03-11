@@ -179,13 +179,9 @@ class TestPartialResultsRobustness:
     def _make_injector(self, tmp, all_exp=None, template=None, eval_res=None):
         tmp = Path(tmp)
         if all_exp:
-            (tmp / "all_experiments.json").write_text(
-                json.dumps(all_exp), encoding="utf-8"
-            )
+            (tmp / "all_experiments.json").write_text(json.dumps(all_exp), encoding="utf-8")
         if eval_res:
-            (tmp / "evaluation_results.json").write_text(
-                json.dumps(eval_res), encoding="utf-8"
-            )
+            (tmp / "evaluation_results.json").write_text(json.dumps(eval_res), encoding="utf-8")
         tmpl_path = tmp / "template.tex"
         if template:
             tmpl_path.write_text(template, encoding="utf-8")
@@ -195,12 +191,11 @@ class TestPartialResultsRobustness:
 
     def test_fill_with_no_results_does_not_raise(self):
         """With zero experiment results, fill() must return a string, not raise."""
-        template = (
-            r"\VAR{exp1_f1} \VAR{exp2_f1} \VAR{exp3_f1} \VAR{best_f1}"
-        )
+        template = r"\VAR{exp1_f1} \VAR{exp2_f1} \VAR{exp3_f1} \VAR{best_f1}"
         with tempfile.TemporaryDirectory() as tmp:
             injector = self._make_injector(tmp, template=template)
             import warnings as _w
+
             with _w.catch_warnings(record=True):
                 _w.simplefilter("always")
                 result = injector.fill()
@@ -211,19 +206,30 @@ class TestPartialResultsRobustness:
         """With only Exp 1 complete, fill() for a template that references all
         8 experiments must not raise — missing ones fall back to '---'."""
         all_exp = {
-            "1": {"metrics": {"global_f1": 0.85, "global_precision": 0.86,
-                               "global_recall": 0.84, "overall_exact_match": 0.75,
-                               "company_f1": 0.90, "company_ned": 0.05,
-                               "date_f1": 0.95, "date_ned": 0.02,
-                               "address_f1": 0.80, "address_ned": 0.10,
-                               "total_f1": 0.85, "total_ned": 0.08},
-             "num_train_samples": 500}
+            "1": {
+                "metrics": {
+                    "global_f1": 0.85,
+                    "global_precision": 0.86,
+                    "global_recall": 0.84,
+                    "overall_exact_match": 0.75,
+                    "company_f1": 0.90,
+                    "company_ned": 0.05,
+                    "date_f1": 0.95,
+                    "date_ned": 0.02,
+                    "address_f1": 0.80,
+                    "address_ned": 0.10,
+                    "total_f1": 0.85,
+                    "total_ned": 0.08,
+                },
+                "num_train_samples": 500,
+            }
         }
         # Template references exp2_f1 through exp8_f1 (not in results)
         template = " ".join(rf"\VAR{{exp{i}_f1}}" for i in range(1, 9))
         with tempfile.TemporaryDirectory() as tmp:
             injector = self._make_injector(tmp, all_exp=all_exp, template=template)
             import warnings as _w
+
             with _w.catch_warnings(record=True):
                 _w.simplefilter("always")
                 result = injector.fill()
@@ -244,6 +250,7 @@ class TestPartialResultsRobustness:
         """build_var_map() must pre-populate expN_* vars for all N=1..8
         even when no experiments have completed."""
         from constants import FIELDS
+
         with tempfile.TemporaryDirectory() as tmp:
             template_path = Path(tmp) / "t.tex"
             template_path.write_text("x", encoding="utf-8")
@@ -253,5 +260,4 @@ class TestPartialResultsRobustness:
                 assert f"exp{i}_n" in var_map, f"exp{i}_n missing from var_map"
                 assert f"exp{i}_f1" in var_map, f"exp{i}_f1 missing from var_map"
                 for fld in FIELDS:
-                    assert f"exp{i}_{fld}_f1" in var_map, \
-                        f"exp{i}_{fld}_f1 missing from var_map"
+                    assert f"exp{i}_{fld}_f1" in var_map, f"exp{i}_{fld}_f1 missing from var_map"

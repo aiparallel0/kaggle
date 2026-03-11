@@ -167,23 +167,25 @@ class SROIEOnlyValCallback(TrainerCallback):
                 for img_path, gt in self._samples:
                     try:
                         image = Image.open(img_path).convert("RGB")
-                        pixel_values = self._processor(
-                            image, return_tensors="pt"
-                        ).pixel_values.to(device)
-                        decoder_input_ids = torch.tensor(
-                            self._processor.tokenizer.convert_tokens_to_ids(
-                                ["<s_sroie>"]
+                        pixel_values = self._processor(image, return_tensors="pt").pixel_values.to(
+                            device
+                        )
+                        decoder_input_ids = (
+                            torch.tensor(
+                                self._processor.tokenizer.convert_tokens_to_ids(["<s_sroie>"])
                             )
-                        ).unsqueeze(0).to(device)
+                            .unsqueeze(0)
+                            .to(device)
+                        )
                         outputs = model.generate(
                             pixel_values,
                             decoder_input_ids=decoder_input_ids,
                             max_length=128,
                             num_beams=1,
                         )
-                        decoded = self._processor.batch_decode(
-                            outputs, skip_special_tokens=False
-                        )[0]
+                        decoded = self._processor.batch_decode(outputs, skip_special_tokens=False)[
+                            0
+                        ]
                         result = self._processor.token2json(decoded)
                         if isinstance(result, list):
                             merged: dict = {}
@@ -212,9 +214,7 @@ class SROIEOnlyValCallback(TrainerCallback):
         model.train()
         epoch = int(state.epoch) if state.epoch else 0
         self._rows.append({"epoch": epoch, "sroie_only_val_f1": round(f1, 4)})
-        logger.info(
-            "SROIEOnlyValCallback: epoch=%d  sroie_only_val_f1=%.4f", epoch, f1
-        )
+        logger.info("SROIEOnlyValCallback: epoch=%d  sroie_only_val_f1=%.4f", epoch, f1)
 
         # Append to CSV log
         csv_path = self._output_dir / "sroie_only_val_f1.csv"
@@ -229,6 +229,7 @@ class SROIEOnlyValCallback(TrainerCallback):
         except Exception as exc:
             logger.warning("SROIEOnlyValCallback: could not write CSV: %s", exc)
         return control
+
 
 # ---------------------------------------------------------------------------
 # TrainingResult dataclass

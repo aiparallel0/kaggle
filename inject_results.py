@@ -658,6 +658,7 @@ def fill_paper(paper_path: str, output_path: str, var_map: dict, strict: bool = 
             )
         else:
             import warnings as _w
+
             _w.warn(
                 f"{len(remaining)} unresolved \\VAR{{}} placeholder(s) in "
                 f"{paper_path} replaced with '---': {remaining}",

@@ -661,6 +661,7 @@ class TestBenchmarkCompareMetricUnification:
     def _get_fns(self):
         """Import both metric functions from benchmark_compare without torch."""
         import sys
+
         # benchmark_compare imports torch/PIL at module level; mock them
         mods = {
             "torch": mock.MagicMock(),
@@ -678,8 +679,9 @@ class TestBenchmarkCompareMetricUnification:
             if k not in sys.modules:
                 saved[k] = v
         with mock.patch.dict(sys.modules, saved):
+            import benchmark_compare as bc  # noqa: I001
             import importlib
-            import benchmark_compare as bc
+
             importlib.reload(bc)
             return bc._token_f1, bc._token_f1_squad
 
@@ -702,9 +704,7 @@ class TestBenchmarkCompareMetricUnification:
             pytest.skip("benchmark_compare unavailable")
         # "WATSON SODA SNACKS" vs "watson soda" — 2 tokens in common
         score = bc._token_f1_squad("WATSON SODA SNACKS", "watson soda")
-        assert 0.0 < score < 1.0, (
-            f"_token_f1_squad should give partial credit, got {score}"
-        )
+        assert 0.0 < score < 1.0, f"_token_f1_squad should give partial credit, got {score}"
 
     def test_exact_match_and_squad_differ_on_partial(self):
         """Confirm the two functions produce different scores on a partial match
@@ -756,7 +756,7 @@ class TestInteractiveSelectionFallback:
 
         # Stub run_experiments.EXPERIMENTS so the legacy fallback works
         stub_config = types.SimpleNamespace(id=1, name="SROIE only", arch_type="donut")
-        fake_re_mod = types.MagicMock()
+        fake_re_mod = mock.MagicMock()
         fake_re_mod.EXPERIMENTS = {1: stub_config}
         monkeypatch.setitem(sys.modules, "run_experiments", fake_re_mod)
 
@@ -770,6 +770,7 @@ class TestInteractiveSelectionFallback:
         # Import and monkeypatch _load_experiment_configs_for_run
         sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
         import run_all
+
         monkeypatch.setattr(run_all, "_interactive_experiment_selection", fake_interactive)
 
         result = run_all._load_experiment_configs_for_run(args)

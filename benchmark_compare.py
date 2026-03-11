@@ -45,6 +45,8 @@ License: MIT
 # ─────────────────────────────────────────────────────────────────────────────
 # Imports
 # ─────────────────────────────────────────────────────────────────────────────
+from __future__ import annotations
+
 import argparse
 import json
 import re
@@ -58,7 +60,13 @@ __all__ = ["SampleResult", "BenchmarkResult", "compare_all", "main", "_token_f1"
 
 import numpy as np
 
-# Defer heavy imports to avoid import-time crashes when deps are missing
+# Defer heavy imports to avoid import-time crashes when deps are missing.
+# _HEAVY_DEPS_AVAILABLE is False when any dep is absent; main() guards entry
+# and _ned() raises ImportError on usage so the module can still be imported
+# (and _token_f1 / _token_f1_squad used) in test environments that lack
+# torch/PIL/etc.
+_HEAVY_DEPS_AVAILABLE: bool = True
+_HEAVY_DEPS_ERROR: str = ""
 try:
     import editdistance
     import matplotlib
@@ -69,7 +77,8 @@ try:
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 except ImportError as e:
-    sys.exit(
+    _HEAVY_DEPS_AVAILABLE = False
+    _HEAVY_DEPS_ERROR = (
         f"FATAL: missing dependency — {e}\n"
         "Run: pip install torch torchvision transformers "
         "ultralytics pillow editdistance matplotlib tqdm numpy"
@@ -78,7 +87,7 @@ except ImportError as e:
 # ─────────────────────────────────────────────────────────────────────────────
 # Constants — imported from single source of truth (constants.py)
 # ─────────────────────────────────────────────────────────────────────────────
-from constants import BASE_MODEL, FIELDS, IMAGE_EXTS, MAX_LENGTH
+from constants import BASE_MODEL, FIELDS, IMAGE_EXTS, MAX_LENGTH  # noqa: E402
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -177,7 +186,10 @@ def _ned(pred: str, gold: str) -> float:
     Normalised Edit Distance.  Lower is better.
     NED = edit_distance(pred, gold) / max(len(pred), len(gold))
     Returns 0.0 when both are empty.
+    Requires editdistance; raises ImportError if _HEAVY_DEPS_AVAILABLE is False.
     """
+    if not _HEAVY_DEPS_AVAILABLE:
+        raise ImportError(_HEAVY_DEPS_ERROR)
     pred = _normalise(pred)
     gold = _normalise(gold)
     if pred == gold:
@@ -825,19 +837,20 @@ def print_report(results: list[BenchmarkResult], n_samples: int) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 # Visualisation — journal-ready 2D plots
 # ─────────────────────────────────────────────────────────────────────────────
-plt.rcParams.update(
-    {
-        "font.family": "serif",
-        "font.size": 8,
-        "axes.labelsize": 8,
-        "axes.titlesize": 9,
-        "legend.fontsize": 7,
-        "xtick.labelsize": 7,
-        "ytick.labelsize": 7,
-        "lines.linewidth": 1.4,
-        "figure.dpi": 300,
-    }
-)
+if _HEAVY_DEPS_AVAILABLE:
+    plt.rcParams.update(
+        {
+            "font.family": "serif",
+            "font.size": 8,
+            "axes.labelsize": 8,
+            "axes.titlesize": 9,
+            "legend.fontsize": 7,
+            "xtick.labelsize": 7,
+            "ytick.labelsize": 7,
+            "lines.linewidth": 1.4,
+            "figure.dpi": 300,
+        }
+    )
 
 _METHOD_COLORS = {
     "DONUT": "#4C72B0",
@@ -1151,6 +1164,9 @@ def compare_all(results_dir: Path = Path("results"), figures_dir: Path = Path("f
 
 
 def main() -> None:
+    if not _HEAVY_DEPS_AVAILABLE:
+        sys.exit(_HEAVY_DEPS_ERROR)
+
     args = parse_args()
 
     # ── Validate inputs ──────────────────────────────────────────────────────
