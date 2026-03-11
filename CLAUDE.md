@@ -330,6 +330,8 @@ from constants import FIELDS, IMAGE_EXTS, MAX_LENGTH, BASE_MODEL, SEED, NEW_TOKE
 
 **Key insight:** SROIE oversampling (2×) is a prerequisite for auxiliary data to help. Without it, Exps 2–4 all score at or below the baseline.
 
+**Known: Exp 1 company F1 at 10 epochs is a convergence failure, not the SROIE-only ceiling.** The CORD-pretrained encoder needs more than 10 epochs on 500 samples to converge on Southeast Asian merchant names (short, capitalised, mixed English–Malay). Experiments 5–7 ran more epochs, so the reported gain of +0.0479 over Exp 1 conflates auxiliary-data benefit with extended-training benefit. A controlled 15-epoch Exp 1 run would establish a fairer baseline before drawing magnitude claims.
+
 **Exp 6 per-field:** company=0.9048, date=0.9841, address=0.7903, total=0.9120, exact_match=0.6667
 
 **Gain over baseline:** Exp 6 (0.8982) − Exp 1 (0.8503) = **+0.0479**; vs published DONUT (0.8411) = **+0.0571**

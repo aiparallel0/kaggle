@@ -388,7 +388,10 @@ mappings in Table~\ref{tab:field_mapping}; missing fields are represented as
 empty strings.
 
 \begin{table}[!t]
-  \caption{Dataset Statistics}
+  \caption{Dataset Statistics. Only datasets used in Experiments~1--8 are shown.
+           FUNSD (149 forms) was downloaded but excluded from training because
+           its field coverage is highly uneven: total field is present in only
+           13.4\% of documents, causing training-signal corruption for that field.}
   \label{tab:dataset_stats}
   \centering
   \begin{tabular}{@{}lrrcl@{}}
@@ -474,6 +477,24 @@ Experiments 5--8 apply SROIE oversampling (2$\times$ or 3$\times$) to
 counteract field-coverage dilution when combining with large auxiliary
 datasets.
 
+\paragraph{Baseline.}
+We include a \textbf{CORD-transfer baseline} that loads
+\texttt{donut-base-finetuned-cord-v2} and evaluates it directly on SROIE test
+images using the CORD task prompt (\texttt{<s\_cord-v2>}).  A structural
+field-remapping function translates CORD schema fields
+(\texttt{store\_info.store\_name}, \texttt{total.total\_price}) to SROIE
+fields.  This is a \emph{cross-dataset transfer} evaluation, not a zero-shot
+evaluation of the base DONUT model; the checkpoint was already fine-tuned on
+CORD receipts with semantically similar fields.
+
+\paragraph{Early-stopping limitation.}\label{par:early-stopping}
+For Experiments~5--7, roughly 25--37\% of validation samples come from
+auxiliary datasets.  The combined validation loss is therefore a mixture of
+SROIE and auxiliary domain signals, and early stopping may over- or
+under-shoot the SROIE-optimal epoch.  Experiment~1 uses pure SROIE validation
+loss; the stopping criteria are therefore not directly comparable across
+experiments.  See Section~\ref{sec:limitations} for discussion.
+
 \subsection{Evaluation Metrics}
 \label{sec:metrics}
 
@@ -482,7 +503,9 @@ We report three metrics following the SROIE Task-3 evaluation protocol:
   \item \textbf{Entity-level F1:} An (image,\,field) pair is a true positive
         if the predicted string exactly matches the ground truth
         (case-insensitive, whitespace-stripped).  Global precision, recall,
-        and F1 are computed over all pairs.
+        and F1 are computed over all pairs.  \emph{This exact-match protocol
+        is applied uniformly to both DONUT and TrOCR\,+\,YOLO so that
+        cross-architecture comparisons are on equal terms.}
   \item \textbf{Normalised Edit Distance (NED):} Per-field average of
         $\text{NED} = {\text{editdist}(p,\, g)}\,/\,{\max(|p|,\, |g|)}$,
         where lower is better ($\downarrow$).
@@ -499,7 +522,8 @@ We report three metrics following the SROIE Task-3 evaluation protocol:
 \subsection{DONUT Per-Experiment Results}
 
 Table~\ref{tab:experiments} presents the global metrics for all eight \donut
-experiments alongside the zero-shot pretrained-DONUT$\to$SROIE transfer baseline.
+experiments alongside the CORD-transfer baseline (cross-dataset
+\texttt{donut-base-finetuned-cord-v2}$\to$SROIE).
 
 \begin{table*}[!t]
   \caption{DONUT per-experiment results on the SROIE test set
@@ -522,7 +546,7 @@ experiments alongside the zero-shot pretrained-DONUT$\to$SROIE transfer baseline
     7 & +\,All (2$\times$ SROIE)& \VAR{exp7_n} & \VAR{exp7_prec} & \VAR{exp7_rec} & \VAR{exp7_f1} & \VAR{exp7_em} \\
     8 & +\,All (3$\times$ SROIE)& \VAR{exp8_n} & \VAR{exp8_prec} & \VAR{exp8_rec} & \VAR{exp8_f1} & \VAR{exp8_em} \\
     \midrule
-      & Pretrained zero-shot    & ---          & \VAR{pre_prec}  & \VAR{pre_rec}  & \VAR{pre_f1}  & \VAR{pre_em} \\
+      & CORD-transfer baseline  & ---          & \VAR{pre_prec}  & \VAR{pre_rec}  & \VAR{pre_f1}  & \VAR{pre_em} \\
     \bottomrule
   \end{tabular}
 \end{table*}
@@ -603,7 +627,9 @@ Table~\ref{tab:trocr_results} compares the best results from each
 architecture under identical evaluation conditions.
 
 \begin{table}[!t]
-  \caption{Cross-architecture comparison on the SROIE test set ($N{=}63$).}
+  \caption{Cross-architecture comparison on the SROIE test set ($N{=}63$).
+           F1 is entity-level exact-match for both architectures
+           (unified SROIE Task-3 protocol; no partial-credit token overlap).}
   \label{tab:trocr_results}
   \centering
   \begin{tabular}{@{}lcc@{}}
@@ -640,11 +666,15 @@ SROIE Task-3 scores.
     DONUT~\cite{kim2022donut}                        & 84.11 \\
     \midrule
     \multicolumn{2}{@{}l}{\textit{Our results (63-image test split):}} \\
-    ~~~Pretrained zero-shot                    & \VAR{pre_f1_pct} \\
+    ~~~CORD-transfer baseline$^\dagger$        & \VAR{pre_f1_pct} \\
     ~~~Best fine-tuned (Exp.~\VAR{best_exp})   & \VAR{best_f1_pct} \\
     \bottomrule
   \end{tabular}
 \end{table}
+\footnotetext[$\dagger$]{\texttt{donut-base-finetuned-cord-v2} evaluated on SROIE
+with CORD-schema prompt \texttt{<s\_cord-v2>} and structural field remapping;
+this is a \emph{cross-dataset transfer} baseline, not a zero-shot evaluation
+of the base DONUT model.}
 
 % ==================================================================
 % SECTION 5 --- Analysis & Discussion
@@ -705,6 +735,29 @@ published result, demonstrating that multi-dataset fine-tuning with
 SROIE oversampling provides meaningful improvements beyond single-dataset
 training.
 
+\paragraph{Note on Experiment~1 company field.}
+Experiment~1 exhibits an unusually low company F1, indicating that
+10~epochs on 500~SROIE samples is insufficient for the CORD-pretrained
+encoder to converge on Southeast Asian merchant names (short,
+capitalised, often mixed English--Malay).  Experiments~5--7 were run for
+more epochs; consequently, the gain of \VAR{gain_best_over_baseline}
+over the SROIE-only baseline conflates the benefit of auxiliary data
+with the benefit of extended training.  A controlled comparison at equal
+epoch counts would isolate the auxiliary-data effect.
+
+\subsection{Limitations}
+\label{sec:limitations}
+
+\paragraph{Mixed-validation early stopping.}
+For Experiments~5--7, roughly 25--37\% of the validation set consists of
+auxiliary-dataset samples.  The combined validation loss is a mixture of
+SROIE and auxiliary domain signals, meaning early stopping may
+under- or over-shoot the SROIE-optimal epoch.  Experiment~1 uses a pure
+SROIE validation loss; stopping criteria are therefore not strictly
+comparable across experiments.  Future work should use SROIE-only
+validation F1 as the stopping criterion while logging auxiliary
+validation loss separately for diagnostics.
+
 % ==================================================================
 % SECTION 6 --- Conclusion & Future Work
 % ==================================================================
@@ -740,7 +793,8 @@ a single GPU (Vast.ai RTX~6000 Blackwell, 96\,GB, March 2026), and limited
 hyperparameter search.  The \trocr\,+\,\yolo pipeline uses hand-crafted
 heuristics for field assignment, which may not generalise to other receipt
 formats.  Experiment~8 was aborted due to GPU out-of-memory at the chosen
-image resolution; results for Exp.~8 are therefore not available.
+image resolution; results for Exp.~8 are therefore not available.  Further
+limitations are discussed in Section~\ref{sec:limitations}.
 
 \paragraph{Future work.}
 Promising directions include: (i)~evaluation on the official SROIE test set

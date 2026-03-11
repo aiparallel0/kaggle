@@ -4,6 +4,8 @@ import json
 import tempfile
 from pathlib import Path
 
+import pytest
+
 from inject_results import (
     EXP_NAMES,
     LEADERBOARD,
@@ -134,7 +136,7 @@ class TestPaperInjector:
         with tempfile.TemporaryDirectory() as tmp:
             injector = self._make_injector(tmp, template=template)
             try:
-                injector.fill()
+                injector.fill(strict=True)
                 assert False, "Should have raised UnresolvedVarError"
             except UnresolvedVarError as e:
                 assert "nonexistent_var" in str(e)
@@ -163,3 +165,93 @@ class TestPaperInjector:
             injector = self._make_injector(tmp, all_exp=all_exp)
             var_map = injector.build_var_map()
             assert var_map["gain_1_4"] == "+0.0500"
+
+
+# ---------------------------------------------------------------------------
+# Partial-results robustness (paper/presentation generation)
+# ---------------------------------------------------------------------------
+
+
+class TestPartialResultsRobustness:
+    """Paper/presentation generation must not fail when only some experiments
+    have completed.  Unresolved \\VAR{} vars should fall back to "---"."""
+
+    def _make_injector(self, tmp, all_exp=None, template=None, eval_res=None):
+        tmp = Path(tmp)
+        if all_exp:
+            (tmp / "all_experiments.json").write_text(
+                json.dumps(all_exp), encoding="utf-8"
+            )
+        if eval_res:
+            (tmp / "evaluation_results.json").write_text(
+                json.dumps(eval_res), encoding="utf-8"
+            )
+        tmpl_path = tmp / "template.tex"
+        if template:
+            tmpl_path.write_text(template, encoding="utf-8")
+        else:
+            tmpl_path.write_text(r"F1=\VAR{exp1_f1}", encoding="utf-8")
+        return PaperInjector(tmp, tmpl_path)
+
+    def test_fill_with_no_results_does_not_raise(self):
+        """With zero experiment results, fill() must return a string, not raise."""
+        template = (
+            r"\VAR{exp1_f1} \VAR{exp2_f1} \VAR{exp3_f1} \VAR{best_f1}"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            injector = self._make_injector(tmp, template=template)
+            import warnings as _w
+            with _w.catch_warnings(record=True):
+                _w.simplefilter("always")
+                result = injector.fill()
+            assert isinstance(result, str), "fill() must return a string"
+            assert r"\VAR{" not in result, "No raw \\VAR{} must remain in output"
+
+    def test_fill_with_partial_results_does_not_raise(self):
+        """With only Exp 1 complete, fill() for a template that references all
+        8 experiments must not raise — missing ones fall back to '---'."""
+        all_exp = {
+            "1": {"metrics": {"global_f1": 0.85, "global_precision": 0.86,
+                               "global_recall": 0.84, "overall_exact_match": 0.75,
+                               "company_f1": 0.90, "company_ned": 0.05,
+                               "date_f1": 0.95, "date_ned": 0.02,
+                               "address_f1": 0.80, "address_ned": 0.10,
+                               "total_f1": 0.85, "total_ned": 0.08},
+             "num_train_samples": 500}
+        }
+        # Template references exp2_f1 through exp8_f1 (not in results)
+        template = " ".join(rf"\VAR{{exp{i}_f1}}" for i in range(1, 9))
+        with tempfile.TemporaryDirectory() as tmp:
+            injector = self._make_injector(tmp, all_exp=all_exp, template=template)
+            import warnings as _w
+            with _w.catch_warnings(record=True):
+                _w.simplefilter("always")
+                result = injector.fill()
+            assert r"\VAR{" not in result, "No raw \\VAR{} must remain in output"
+            assert "0.8500" in result, "Exp 1 F1 must be filled from results"
+            assert "---" in result, "Missing exps must fall back to '---'"
+
+    def test_fill_strict_raises_for_unknown_var(self):
+        """fill(strict=True) must still raise UnresolvedVarError for truly
+        unknown variables (not in pre-populated fallbacks)."""
+        template = r"\VAR{completely_unknown_key_xyz}"
+        with tempfile.TemporaryDirectory() as tmp:
+            injector = self._make_injector(tmp, template=template)
+            with pytest.raises(UnresolvedVarError):
+                injector.fill(strict=True)
+
+    def test_all_exp_vars_pre_populated(self):
+        """build_var_map() must pre-populate expN_* vars for all N=1..8
+        even when no experiments have completed."""
+        from constants import FIELDS
+        with tempfile.TemporaryDirectory() as tmp:
+            template_path = Path(tmp) / "t.tex"
+            template_path.write_text("x", encoding="utf-8")
+            injector = PaperInjector(Path(tmp), template_path)
+            var_map = injector.build_var_map()
+            for i in range(1, 9):
+                assert f"exp{i}_n" in var_map, f"exp{i}_n missing from var_map"
+                assert f"exp{i}_f1" in var_map, f"exp{i}_f1 missing from var_map"
+                for fld in FIELDS:
+                    assert f"exp{i}_{fld}_f1" in var_map, \
+                        f"exp{i}_{fld}_f1 missing from var_map"
