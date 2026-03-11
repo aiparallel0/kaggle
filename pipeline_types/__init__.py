@@ -27,6 +27,10 @@ __all__ = [
     "GitCommitReport",
     "MLTrainingResult",
     "PipelineResult",
+    # Pipeline Critic
+    "FindingSeverity",
+    "CritiqueFinding",
+    "CritiqueReport",
 ]
 
 
@@ -367,3 +371,83 @@ class PipelineResult:
         if isinstance(self.mode_result, MLTrainingResult):
             return len(self.mode_result.experiments_run) > 0
         return False
+
+
+# ============================================================================
+# Pipeline Critic — research validity findings
+# ============================================================================
+
+
+class FindingSeverity(str, Enum):
+    """Severity of a research-validity critique finding."""
+
+    FATAL = "FATAL"  # Invalidates the result outright
+    CRITICAL = "CRITICAL"  # Severely undermines the main claim
+    WARNING = "WARNING"  # Notable weakness requiring acknowledgement
+    INFO = "INFO"  # Contextual observation
+
+
+@dataclass
+class CritiqueFinding:
+    """A single research-validity critique finding."""
+
+    severity: FindingSeverity
+    category: str
+    title: str
+    description: str
+    evidence: str
+    recommendation: str
+
+    def to_dict(self) -> dict:
+        return {
+            "severity": self.severity.value,
+            "category": self.category,
+            "title": self.title,
+            "description": self.description,
+            "evidence": self.evidence,
+            "recommendation": self.recommendation,
+        }
+
+
+@dataclass
+class CritiqueReport:
+    """Complete critical audit of the ML pipeline."""
+
+    findings: list[CritiqueFinding] = field(default_factory=list)
+
+    @property
+    def fatal_count(self) -> int:
+        return sum(1 for f in self.findings if f.severity == FindingSeverity.FATAL)
+
+    @property
+    def critical_count(self) -> int:
+        return sum(1 for f in self.findings if f.severity == FindingSeverity.CRITICAL)
+
+    @property
+    def warning_count(self) -> int:
+        return sum(1 for f in self.findings if f.severity == FindingSeverity.WARNING)
+
+    @property
+    def passed(self) -> bool:
+        """True only when there are no FATAL findings."""
+        return self.fatal_count == 0
+
+    def to_dict(self) -> dict:
+        return {
+            "passed": self.passed,
+            "fatal_count": self.fatal_count,
+            "critical_count": self.critical_count,
+            "warning_count": self.warning_count,
+            "findings": [f.to_dict() for f in self.findings],
+        }
+
+    def print_loud(self, exit_on_fatal: bool = True) -> None:
+        """Print all findings to stdout; call sys.exit(1) on FATAL when exit_on_fatal=True.
+
+        Import ``pipeline_critic._print_report`` lazily to avoid a circular import
+        (pipeline_critic imports pipeline_types, not the other way around).
+        """
+        import importlib
+
+        mod = importlib.import_module("pipeline_critic")
+        mod._print_report(self, exit_on_fatal=exit_on_fatal)
