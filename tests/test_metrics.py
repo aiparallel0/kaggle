@@ -678,8 +678,9 @@ class TestBenchmarkCompareMetricUnification:
             if k not in sys.modules:
                 saved[k] = v
         with mock.patch.dict(sys.modules, saved):
+            import benchmark_compare as bc  # noqa: I001
             import importlib
-            import benchmark_compare as bc
+
             importlib.reload(bc)
             return bc._token_f1, bc._token_f1_squad
 
