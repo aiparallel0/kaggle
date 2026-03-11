@@ -837,19 +837,20 @@ def print_report(results: list[BenchmarkResult], n_samples: int) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 # Visualisation — journal-ready 2D plots
 # ─────────────────────────────────────────────────────────────────────────────
-plt.rcParams.update(
-    {
-        "font.family": "serif",
-        "font.size": 8,
-        "axes.labelsize": 8,
-        "axes.titlesize": 9,
-        "legend.fontsize": 7,
-        "xtick.labelsize": 7,
-        "ytick.labelsize": 7,
-        "lines.linewidth": 1.4,
-        "figure.dpi": 300,
-    }
-)
+if _HEAVY_DEPS_AVAILABLE:
+    plt.rcParams.update(
+        {
+            "font.family": "serif",
+            "font.size": 8,
+            "axes.labelsize": 8,
+            "axes.titlesize": 9,
+            "legend.fontsize": 7,
+            "xtick.labelsize": 7,
+            "ytick.labelsize": 7,
+            "lines.linewidth": 1.4,
+            "figure.dpi": 300,
+        }
+    )
 
 _METHOD_COLORS = {
     "DONUT": "#4C72B0",
