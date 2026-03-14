@@ -85,6 +85,7 @@ benchmark_results.json
 trocr_yolo_results*.json
 finetuning_params.*
 seller_split_cache.json
+convergence_exp*.csv
 
 # Admin / meta documents (not project source)
 PR.md
@@ -100,6 +101,8 @@ paper/paper_micro.tex
 
 # Secrets — never commit
 hf_token.txt
+*_token.txt
+*.secret
 .env
 
 # Dataset cache

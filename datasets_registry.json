@@ -38,6 +38,15 @@
       "fields": ["company", "date", "address", "total"],
       "format": "huggingface_arrow",
       "notes": "Loaded via HuggingFace load_from_disk(). Structured invoice data with all four SROIE fields well-represented."
+    },
+    "cord_v2": {
+      "loader_class": "CORDv2Loader",
+      "hf_id": "naver-clova-ix/cord-v2",
+      "source_url": "https://huggingface.co/datasets/naver-clova-ix/cord-v2",
+      "approx_train_samples": 800,
+      "fields": ["company", "date", "address", "total"],
+      "format": "huggingface_arrow",
+      "notes": "CORD-v2: ~1k Indonesian receipts with rich NER annotations. Loaded via HuggingFace load_from_disk(). Fields mapped: store_name→company, payment.date→date, store_addr→address, total.total_price→total. Address coverage ~60% (lower than other fields). DatasetNormalizer coverage_threshold set to 0.30. release_hf_dataset() + flush_hf_arrow_cache() called after sample extraction."
     }
   }
 }

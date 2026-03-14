@@ -792,6 +792,27 @@ class DonutTrainer:
                 _out_dir,
             )
 
+        # LiveDashboardCallback — auto-registered when rich is installed.
+        # Writes per-epoch CSV and optionally redraws a rich table.
+        # Disabled by setting env var DISABLE_LIVE_DASHBOARD=1.
+        if os.environ.get("DISABLE_LIVE_DASHBOARD", "0") != "1":
+            try:
+                from live_dashboard import LiveDashboardCallback
+
+                exp_id = getattr(self.config, "experiment_id", 0)
+                _out_dir_str = getattr(self.config, "output_dir", "results")
+                _csv_path = Path(str(_out_dir_str)) / f"convergence_exp{exp_id}.csv"
+                _live_cb = LiveDashboardCallback(
+                    csv_path=_csv_path,
+                    experiment_id=exp_id,
+                )
+                callbacks.append(_live_cb)
+                logger.debug("[LiveDashboard] Callback registered for experiment %d", exp_id)
+            except ImportError:
+                pass  # live_dashboard.py not found — skip silently
+            except Exception as _ld_exc:
+                logger.debug("[LiveDashboard] Registration failed: %s", _ld_exc)
+
         trainer = Seq2SeqTrainer(
             model=self.model,
             args=training_args,

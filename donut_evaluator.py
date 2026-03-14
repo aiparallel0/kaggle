@@ -346,6 +346,22 @@ class DonutEvaluator:
 
         # Load model with weight re-tying fix
         logger.info("Loading model from %s", self.model_path)
+
+        # Run checkpoint integrity checks before loading
+        # (lm_head present, vocab size match)
+        try:
+            from validators.checkpoint_resume_validator import validate_checkpoint
+            validate_checkpoint(
+                model_path=self.model_path,
+                expected_vocab_size=(
+                    len(self.processor.tokenizer) if self.processor is not None else None
+                ),
+            )
+        except Exception as _ckpt_exc:
+            logger.warning(
+                "[DonutEvaluator] Checkpoint validation warning: %s", _ckpt_exc
+            )
+
         self.model = load_model_with_tied_weights(
             str(self.model_path), device=self.device, processor=self.processor
         )

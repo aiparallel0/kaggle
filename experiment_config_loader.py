@@ -154,6 +154,11 @@ class ExperimentConfig:
     checkpoint_dir: str = ""
     log_file: str = ""
 
+    # DAG scheduler: list of experiment IDs that must finish before this one starts.
+    # An empty list means no dependencies (run immediately).
+    # Used by dag_scheduler.py when --parallel is enabled.
+    depends_on: list[int] = dataclasses.field(default_factory=list)
+
     # ---------------------------------------------------------------------------
 
     def __post_init__(self) -> None:
@@ -441,6 +446,12 @@ def _yaml_to_config(path: str | Path) -> ExperimentConfig:
     checkpoint_dir = str(_ckpt) if _ckpt is not None else ""
     log_file = str(out.get("log_file", f"logs/experiment_{exp_id}.log"))
 
+    # depends_on: list of experiment IDs this experiment must wait for (DAG scheduler)
+    _depends_raw = raw.get("depends_on", [])
+    if isinstance(_depends_raw, (int, str)):
+        _depends_raw = [_depends_raw]
+    depends_on = [int(d) for d in (_depends_raw or []) if str(d).strip().isdigit() or isinstance(d, int)]
+
     return ExperimentConfig(
         id=exp_id,
         name=name,
@@ -474,6 +485,7 @@ def _yaml_to_config(path: str | Path) -> ExperimentConfig:
         results_file=results_file,
         checkpoint_dir=checkpoint_dir,
         log_file=log_file,
+        depends_on=depends_on,
     )
 
 

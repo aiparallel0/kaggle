@@ -281,6 +281,68 @@ class PreflightChecker:
                 message=status_msg + " (GitHub token recommended for git operations)",
             )
 
+    async def check_hf_token(self) -> CheckResult:
+        """Check that a HuggingFace token is available from a secure source.
+
+        Reads the token from (in priority order):
+          1. ``HF_TOKEN`` environment variable.
+          2. ``HUGGINGFACE_HUB_TOKEN`` environment variable (legacy name).
+          3. ``~/.huggingface/token`` (the HF CLI default location).
+
+        Never reads from a file in the repository root (e.g. ``hf_token.txt``).
+        If the token is found in the repo root file but not in any secure
+        location, emits a WARNING and suggests migrating to the env var.
+        """
+        import os
+        from pathlib import Path
+
+        logger.info("Checking HuggingFace token ...")
+
+        # Secure token sources
+        hf_token = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_HUB_TOKEN")
+        token_source = "env:HF_TOKEN" if os.getenv("HF_TOKEN") else (
+            "env:HUGGINGFACE_HUB_TOKEN" if os.getenv("HUGGINGFACE_HUB_TOKEN") else None
+        )
+
+        if not hf_token:
+            hf_cli_token_path = Path.home() / ".huggingface" / "token"
+            if hf_cli_token_path.exists():
+                try:
+                    hf_token = hf_cli_token_path.read_text().strip()
+                    token_source = str(hf_cli_token_path)
+                except OSError:
+                    pass
+
+        if hf_token:
+            return CheckResult(
+                name="hf_token",
+                status=CheckStatus.PASSED,
+                message=f"HuggingFace token found ({token_source})",
+            )
+
+        # Check if insecure repo-root file exists
+        insecure_file = Path("hf_token.txt")
+        if insecure_file.exists():
+            return CheckResult(
+                name="hf_token",
+                status=CheckStatus.WARNING,
+                message=(
+                    "hf_token.txt found in repo root (insecure). "
+                    "Set HF_TOKEN env var instead: export HF_TOKEN=$(cat hf_token.txt). "
+                    "Pipeline will still work but token may be exposed."
+                ),
+            )
+
+        return CheckResult(
+            name="hf_token",
+            status=CheckStatus.WARNING,
+            message=(
+                "No HuggingFace token found. "
+                "Set HF_TOKEN env var for authenticated downloads (5-10× faster). "
+                "Unauthenticated mode will be used — downloads may be rate-limited."
+            ),
+        )
+
     async def run_all(self) -> PreflightReport:
         """Run all preflight checks.
 
@@ -311,6 +373,7 @@ class PreflightChecker:
             self.check_disk_space(),
             self.check_git_state(),
             self.check_cloud_credentials(),
+            self.check_hf_token(),
         )
 
         check_names = [
@@ -321,6 +384,7 @@ class PreflightChecker:
             "disk_space",
             "git",
             "credentials",
+            "hf_token",
         ]
 
         for name, result in zip(check_names, results):

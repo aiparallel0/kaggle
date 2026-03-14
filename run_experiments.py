@@ -101,6 +101,7 @@ __all__ = [
     "run_experiment_from_config",
     "run_custom_experiment",
     "save_summary",
+    "_apply_resolution_sync",
 ]
 
 # ---------------------------------------------------------------------------
@@ -126,6 +127,61 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 RESULTS_DIR = Path("results")
+
+# ---------------------------------------------------------------------------
+# v2 resolution-sync constants and helper
+# ---------------------------------------------------------------------------
+
+# Canonical fine-tuning resolution for DONUT on SROIE.
+# Height × Width must be multiples of 32 (patch_size=4, Swin stride=8 → 32).
+# 1280×960 is the standard community fine-tuning resolution that fits
+# comfortably in 24 GB VRAM at batch_size=8.
+_FINETUNE_H: int = 1280  # height (tall receipts)
+_FINETUNE_W: int = 960   # width
+
+
+def _apply_resolution_sync(
+    processor,
+    model,
+    height: int = _FINETUNE_H,
+    width: int = _FINETUNE_W,
+) -> None:
+    """Synchronise processor image size and Swin encoder image_size.
+
+    The ``naver-clova-ix/donut-base`` pretrained checkpoint stores
+    ``model.config.encoder.image_size = [2560, 1920]``.  When fine-tuning
+    at 1280×960, the processor resizes images to 1280×960 but the encoder's
+    positional embeddings remain anchored to the 2560×1920 grid.  HuggingFace
+    interpolates the mismatched embeddings silently, suppressing F1 for
+    spatially distributed fields (company, address).
+
+    This function sets BOTH fields atomically so they agree before any forward
+    pass or gradient computation occurs.
+
+    Side Effects
+    ------------
+    * ``processor.image_processor.size`` → ``{"height": height, "width": width}``.
+    * ``model.config.encoder.image_size`` → ``[height, width]``
+
+    Both mutations happen in-place.  Raises ``AssertionError`` if the fields
+    still disagree after the update.
+    """
+    processor.image_processor.size = {"height": height, "width": width}
+    model.config.encoder.image_size = [height, width]
+
+    proc_h = processor.image_processor.size["height"]
+    proc_w = processor.image_processor.size["width"]
+    enc_h, enc_w = model.config.encoder.image_size
+    assert proc_h == enc_h and proc_w == enc_w, (
+        f"Resolution sync FAILED: processor=({proc_h},{proc_w}) "
+        f"vs encoder=({enc_h},{enc_w}).  Check API compatibility."
+    )
+    logger.info(
+        "[ResolutionSync] processor.image_processor.size = {height: %d, width: %d}  |  "
+        "model.config.encoder.image_size = [%d, %d]  ✓",
+        height, width, height, width,
+    )
+
 
 # ---------------------------------------------------------------------------
 # ExperimentConfig — THE single source of truth for all hyperparameters
@@ -172,6 +228,13 @@ class ExperimentConfig:
     skip_step_validation: bool = False  # bypass 200-step minimum guard (mini only)
     lr_schedule: str = "cosine"  # "cosine" | "one_cycle" | "linear"
     optimizer_type: str = "adamw"  # "adamw" | "sgd" (sgd = SGD + Nesterov)
+
+    # -- v2: explicit fine-tuning resolution (height × width) -------------
+    # When non-default, _apply_resolution_sync() is called before training
+    # to align processor.image_processor.size and model.config.encoder.image_size.
+    # Both must be multiples of 32 (patch_size=4, Swin stride=8 → 32).
+    finetune_height: int = _FINETUNE_H
+    finetune_width: int = _FINETUNE_W
 
     # -- Duck-typed aliases for DonutTrainer compatibility ----------------
     # DonutTrainer reads config.max_epochs, config.learning_rate, etc.
@@ -290,6 +353,10 @@ TRAIN_CONFIG: dict[str, Any] = {
     "max_length": _default_config.max_length,
     "seed": _default_config.seed,
     "gradient_accumulation_steps": _default_config.gradient_accumulation_steps,
+    # v2: include resolution so changing finetune resolution correctly
+    # invalidates previously cached results.
+    "finetune_height": _default_config.finetune_height,
+    "finetune_width": _default_config.finetune_width,
 }
 
 
@@ -310,6 +377,8 @@ def _config_to_dict(config: "ExperimentConfig") -> dict:
         "max_length": config.max_length,
         "seed": config.seed,
         "gradient_accumulation_steps": config.gradient_accumulation_steps,
+        "finetune_height": config.finetune_height,
+        "finetune_width": config.finetune_width,
     }
 
 
@@ -388,6 +457,15 @@ def train_experiment(
                 logger.info("[Model] flash-attn not installed — using default attention (run fine)")
                 _mdl = VisionEncoderDecoderModel.from_pretrained(config.base_model)
 
+        # v2: Synchronise processor and encoder image sizes when resolution fields
+        # are set (non-default values trigger the sync; default _FINETUNE_H/_FINETUNE_W
+        # values always apply the sync for correctness).
+        _apply_resolution_sync(
+            _proc, _mdl,
+            height=config.finetune_height,
+            width=config.finetune_width,
+        )
+
         # Add SROIE special tokens with diagnostic logging (Phase 0a)
         logger.debug("[Pre-resize] Tokenizer vocab size: %d", len(_proc.tokenizer))
         logger.debug(
@@ -441,6 +519,11 @@ def train_experiment(
                 f"convert_tokens_to_ids was called, or the list-wrapping syntax is missing. "
                 f"Use: tokenizer.convert_tokens_to_ids(['<s_sroie>'])[0]"
             )
+        # v2: set max_length on both model config and generation config consistently.
+        _mdl.config.max_length = MAX_LENGTH
+        if hasattr(_mdl, "generation_config"):
+            _mdl.generation_config.max_new_tokens = MAX_LENGTH
+
         # Only enable gradient checkpointing when VRAM is constrained (< 24 GB).
         # 24 GB covers RTX 3090/4090 (24 GB) and below, where activation memory
         # during DONUT's backward pass (~3.5 GB at batch_size=8) is a real constraint.
@@ -477,6 +560,18 @@ def train_experiment(
             # use_cache=True is the default and correct when not using grad checkpointing
             _mdl.config.use_cache = True
             _mdl.decoder.config.use_cache = True
+
+        # v2: freeze only Swin stage-0 (v1 froze stages 0+1).
+        # Freezing fewer encoder layers lets the model adapt more freely to
+        # SROIE's Southeast Asian receipt layouts while still preserving the
+        # low-level patch embeddings from pre-training.
+        frozen_count = 0
+        for name, param in _mdl.encoder.named_parameters():
+            if "layers.0" in name:
+                param.requires_grad = False
+                frozen_count += 1
+        if frozen_count:
+            logger.info("[FreezeEncoder] Frozen Swin stage-0 only (%d parameters)", frozen_count)
 
         # Build PyTorch datasets
         _train_ds = MultiDataset(samples, _proc, max_length=config.max_length)

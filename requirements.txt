@@ -31,3 +31,15 @@ pytest>=7.0              # required to run: pytest tests/
 # due to an nvcc segfault.  Use a prebuilt wheel finder:
 #   https://flashattn.dev/wheel-finder/
 # Select: Python 3.12 / CUDA 12.6 / your PyTorch version → copy the pip command.
+
+# Optional: Textual TUI for interactive experiment selection (run_all.py --interactive)
+# textual>=0.40.0
+
+# Optional: Optuna hyperparameter search (run_all.py --hparam-search)
+# optuna>=3.0.0
+
+# Optional: Live training dashboard + results browser coloured output
+# rich>=13.0.0
+
+# Optional: Pre-commit secret detection
+# detect-secrets

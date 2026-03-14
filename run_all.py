@@ -1034,12 +1034,22 @@ def _interactive_experiment_selection(
     """
     Prompt the user at the terminal to select which experiments to run.
 
-    Displays a numbered menu of all available experiments and their arch type,
-    then waits for a space-separated list of IDs. Pressing Enter (empty input)
-    runs all experiments from the provided list.
+    Tries the Textual TUI first (if ``textual`` is installed).  Falls back
+    to the existing plain-text prompt when ``textual`` is not installed or
+    when running in a non-interactive environment.
 
     Returns the filtered list of ExperimentConfig objects.
     """
+    # ── Try Textual TUI first ─────────────────────────────────────────────
+    try:
+        from tui_console import select_experiments_tui
+        return select_experiments_tui(all_configs)
+    except ImportError:
+        pass  # textual not installed — fall through to plain-text prompt
+    except Exception as _tui_exc:
+        print(f"  [TUI] Could not launch TUI ({_tui_exc}) — falling back to plain-text prompt.")
+
+    # ── Plain-text fallback ───────────────────────────────────────────────
     print("=" * 60)
     print(" EXPERIMENT SELECTION")
     print("=" * 60)
@@ -1240,6 +1250,54 @@ def stage_experiments(args) -> StageResult:
             return re_mod.EXPERIMENTS[exp_id].name
         return f"experiment_{exp_id}"
 
+    # ── Parallel mode (--parallel flag) ──────────────────────────────────
+    # When --parallel is set and multiple GPUs are available, use DAGScheduler
+    # to run independent experiments concurrently.  On single-GPU setups,
+    # DAGScheduler degrades to serial execution automatically.
+    if getattr(args, "parallel", False) and yaml_configs:
+        try:
+            from dag_scheduler import DAGScheduler
+
+            def _parallel_run_fn(cfg):
+                """Single-experiment runner for the DAG scheduler thread pool."""
+                import run_experiments as _re_mod
+                yaml_cfg_inner = _yaml_cfg_map.get(cfg.id)
+                arch = getattr(cfg, "arch_type", "donut")
+                is_zs = getattr(cfg, "is_zero_shot", False)
+                if arch == "trocr_yolo":
+                    return _run_trocr_yolo_experiment(args, yaml_cfg_inner)
+                elif is_zs:
+                    return _run_zero_shot_experiment(args, yaml_cfg_inner)
+                elif cfg.id not in _re_mod.EXPERIMENTS:
+                    return _run_yaml_donut_experiment(args, yaml_cfg_inner)
+                else:
+                    return _re_mod.run_experiment(
+                        cfg.id,
+                        overrides=getattr(args, "param_overrides", None) or None,
+                    )
+
+            print("  [stage_experiments] --parallel: using DAGScheduler")
+            scheduler = DAGScheduler(yaml_configs, _parallel_run_fn)
+            dag_results = scheduler.run()
+            had_empty_dag = any(
+                isinstance(r, dict) and (r.get("error") or r.get("num_train_samples", 1) == 0)
+                for r in dag_results.values()
+            )
+            re_mod.save_summary()
+            exit_status = 1 if had_empty_dag else 0
+            return StageResult(
+                name="DONUT Experiments (parallel)",
+                duration=0.0,
+                exit_status=exit_status,
+                warnings=warnings,
+            )
+        except ImportError as _dag_exc:
+            print(
+                f"  [stage_experiments] DAGScheduler unavailable ({_dag_exc}) "
+                "— falling back to serial execution"
+            )
+
+    # ── Serial loop ───────────────────────────────────────────────────────
     for i, exp_id in enumerate(exp_ids, 1):
         exp_name = _exp_display_name(exp_id)
         _step(i, total, f"Experiment {exp_id}: {exp_name}")
@@ -2833,6 +2891,36 @@ def build_parser() -> argparse.ArgumentParser:
             'Format: {"global": {"epochs": 5}, "experiments": {"6": {"epochs": 20}}}'
         ),
     )
+    # ── New flags (Tasks 2, 3, 7) ──────────────────────────────────────────
+    p.add_argument(
+        "--hparam-search",
+        action="store_true",
+        help=(
+            "Run Optuna hyperparameter sweep on the selected experiment "
+            "(default: Experiment 2).  Requires: pip install 'optuna>=3.0.0'. "
+            "Results stored in results/optuna/study.db."
+        ),
+    )
+    p.add_argument(
+        "--seeds",
+        metavar="SEEDS",
+        default=None,
+        help=(
+            "Comma-separated seed list for multi-seed robustness run. "
+            "Use with --experiment N to target a single experiment. "
+            "Example: --seeds 42,123,7,99,2026. "
+            "Aborts if any seed fails (no partial aggregation)."
+        ),
+    )
+    p.add_argument(
+        "--parallel",
+        action="store_true",
+        help=(
+            "Enable DAG-based parallel experiment scheduling on multi-GPU setups. "
+            "Experiments with no unmet depends_on run concurrently. "
+            "Auto-serialised on single-GPU / CPU-only machines."
+        ),
+    )
     return p
 
 
@@ -2954,6 +3042,34 @@ def main() -> None:
         total_elapsed = time.monotonic() - t_start
         logger.info(f"Micro mode complete in {total_elapsed / 60:.1f} min (exit code {exit_code})")
         sys.exit(exit_code)
+
+    # ── Optuna hyperparameter search (--hparam-search) ──────────────────
+    if getattr(args, "hparam_search", False):
+        logger.info("--hparam-search flag detected: launching Optuna sweep")
+        try:
+            from hparam_search import run_hparam_search
+            exp_id = getattr(args, "experiment", None) or 2
+            run_hparam_search(experiment_id=exp_id)
+        except ImportError as _hs_exc:
+            logger.error("--hparam-search requires optuna: %s", _hs_exc)
+            sys.exit(1)
+        sys.exit(0)
+
+    # ── Multi-seed robustness run (--seeds) ──────────────────────────────
+    if getattr(args, "seeds", None):
+        exp_id = getattr(args, "experiment", None)
+        if exp_id is None:
+            logger.error("--seeds requires --experiment N to specify which experiment to run")
+            sys.exit(1)
+        seed_list = [int(s.strip()) for s in args.seeds.split(",") if s.strip()]
+        logger.info("--seeds detected: running Exp %d with seeds %s", exp_id, seed_list)
+        try:
+            from multi_seed_runner import run_multi_seed
+            run_multi_seed(experiment_id=exp_id, seeds=seed_list)
+        except RuntimeError as _ms_exc:
+            logger.error("Multi-seed run failed: %s", _ms_exc)
+            sys.exit(1)
+        sys.exit(0)
 
     if getattr(args, "yolo", False):
         logger.info("--yolo flag detected: starting from TrOCR+YOLO stages (Stage 3+)")

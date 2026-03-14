@@ -6,6 +6,12 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from pipeline_types.exceptions import (  # noqa: F401 (re-exported)
+    CheckpointCorruptionError,
+    DatasetLoadError,
+    PipelineConfigError,
+)
+
 __all__ = [
     "SeverityLevel",
     "CheckStatus",
@@ -31,6 +37,10 @@ __all__ = [
     "FindingSeverity",
     "CritiqueFinding",
     "CritiqueReport",
+    # Exceptions
+    "CheckpointCorruptionError",
+    "PipelineConfigError",
+    "DatasetLoadError",
 ]
 
 

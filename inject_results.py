@@ -1031,7 +1031,25 @@ def main() -> None:
         var_map = build_var_map(all_exp)
 
         if Path(args.paper).exists():
+            # Read old content before overwriting so paper_diff can compare
+            output_path = Path(args.output)
+            _old_content = ""
+            if output_path.exists():
+                try:
+                    _old_content = output_path.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    pass
+
             fill_paper(args.paper, args.output, var_map)
+
+            # Run paper diff (compare old vs new paper_filled.tex)
+            if _old_content:
+                try:
+                    from paper_diff import run_paper_diff
+                    _new_content = output_path.read_text(encoding="utf-8", errors="replace")
+                    run_paper_diff(_old_content, _new_content, results_dir="results")
+                except Exception as _pd_exc:
+                    print(f"[PaperDiff] Skipped: {_pd_exc}")
         else:
             print(f"paper.tex not found at {args.paper}; skipping filled paper generation.")
 
