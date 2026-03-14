@@ -41,7 +41,8 @@ from __future__ import annotations
 import concurrent.futures
 import logging
 from collections import deque
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -256,8 +257,7 @@ def main() -> None:
         print(f"[DAGScheduler] Could not load experiments: {exc}")
         raise SystemExit(1) from exc
 
-    if args.list or True:  # always show the graph
-        print_dag(configs)
+    print_dag(configs)  # always show the graph
 
 
 if __name__ == "__main__":

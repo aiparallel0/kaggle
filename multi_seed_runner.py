@@ -39,9 +39,6 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_SEEDS: list[int] = [42, 123, 7, 99, 2026]
 
-# Fields to aggregate (from constants — no duplication)
-from constants import FIELDS
-
 
 def run_multi_seed(
     experiment_id: int,

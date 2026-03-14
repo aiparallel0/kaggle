@@ -35,6 +35,10 @@ import dataclasses
 import logging
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import optuna
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +60,7 @@ def run_hparam_search(
     study_name: str = "donut_sroie_sweep",
     results_dir: str | Path = "results/optuna",
     timeout_seconds: int | None = None,
-) -> "optuna.Study":
+) -> optuna.Study:
     """Run Optuna multi-objective hyperparameter sweep.
 
     Parameters
@@ -96,7 +100,7 @@ def run_hparam_search(
     # Suppress Optuna's per-trial INFO logs in non-verbose mode
     _optuna.logging.set_verbosity(_optuna.logging.WARNING)
 
-    def objective(trial: "_optuna.Trial") -> tuple[float, float]:
+    def objective(trial: Any) -> tuple[float, float]:
         """Return (global_f1, val_loss) — maximise f1, minimise loss."""
         lr = trial.suggest_float("lr", 1e-5, 2e-4, log=True)
         batch_size = trial.suggest_categorical("batch_size", [4, 8])
