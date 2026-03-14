@@ -1141,6 +1141,249 @@ class InvoicesDonutLoader(BaseDatasetLoader):
 
 
 # ======================================================================
+#  CORDv2Loader — naver-clova-ix/cord-v2 from HuggingFace
+# ======================================================================
+
+
+class CORDv2Loader(BaseDatasetLoader):
+    """Download CORD-v2 (naver-clova-ix/cord-v2) from HuggingFace and
+    normalize to SROIE schema.
+
+    CORD-v2 contains ~1,000 Indonesian receipts with rich NER annotations.
+    Field mapping to SROIE schema:
+
+    - company: ``nm`` field in ``menu``/``store_info.store_name``
+    - date:    ``cnt`` in ``payment.date`` or closest date field
+    - address: ``store_info.store_addr``
+    - total:   ``total.total_price`` or ``subtotal.subtotal_price``
+
+    Coverage note: CORD-v2 has very good company/date/total coverage (>90%).
+    Address coverage is lower (~60%) because many receipts omit the address.
+    The DatasetNormalizer coverage threshold is set to 0.30 to accommodate this.
+    """
+
+    name = "CORD-v2"
+
+    # ── internal paths ────────────────────────────────────────────────
+
+    def _dest_dir(self) -> Path:
+        return self._get_dest_dir("cord_v2")
+
+    def _hf_cache(self) -> Path:
+        return self._get_hf_cache_dir(self._dest_dir())
+
+    def _marker(self) -> Path:
+        return self._get_marker_path(self._dest_dir())
+
+    def _download(self) -> Path:
+        dest = self._dest_dir()
+        marker = self._marker()
+        if marker.exists():
+            if not self._hf_cache().exists():
+                self._warn("Marker present but hf_cache/ missing — re-downloading.")
+                marker.unlink(missing_ok=True)
+            else:
+                return dest
+
+        try:
+            from datasets import load_dataset  # type: ignore
+
+            self._log("Downloading naver-clova-ix/cord-v2 from HuggingFace ...")
+            ds = load_dataset("naver-clova-ix/cord-v2")
+            ds.save_to_disk(str(self._hf_cache()))
+            marker.touch()
+            self._log("CORD-v2 download complete.")
+        except Exception as exc:
+            raise self._fatal(f"CORD-v2 download failed: {exc}") from exc
+        return dest
+
+    # ── CORD-v2 → SROIE remapping ─────────────────────────────────────
+
+    @staticmethod
+    def _cord_remap(ground_truth_str: Any) -> dict[str, str]:
+        """Parse CORD-v2 ground_truth JSON and remap to SROIE schema.
+
+        CORD-v2 ground_truth structure (top-level keys):
+          - ``gt_parse``: dict with ``menu``, ``subtotal``, ``total``
+          - ``valid_line``: list of text lines (not used here)
+        """
+        gt = BaseDatasetLoader._empty_gt_dict()
+        try:
+            obj = (
+                json.loads(ground_truth_str)
+                if isinstance(ground_truth_str, str)
+                else ground_truth_str
+            )
+            gt_parse = obj.get("gt_parse", obj)
+
+            # ── company ──────────────────────────────────────────────
+            # Store name is in gt_parse.store_info.store_name or nm field of menu items
+            store_info = gt_parse.get("store_info", {})
+            if isinstance(store_info, dict):
+                gt["company"] = str(store_info.get("store_name", "")).strip()
+
+            # Fallback: first nm (name) from menu items
+            if not gt["company"]:
+                menu = gt_parse.get("menu", [])
+                if isinstance(menu, list) and menu:
+                    first_item = menu[0]
+                    if isinstance(first_item, dict):
+                        gt["company"] = str(first_item.get("nm", "")).strip()
+
+            # ── date ─────────────────────────────────────────────────
+            # CORD-v2 stores date in various locations
+            for date_path in [
+                ("store_info", "store_addr"),  # sometimes combined
+                ("payment", "date"),
+                ("subtotal", "cnt"),
+            ]:
+                node = gt_parse
+                for key in date_path:
+                    if isinstance(node, dict):
+                        node = node.get(key, {})
+                if isinstance(node, str) and node.strip():
+                    # Quick date-pattern check
+                    _date_re = re.compile(
+                        r"\b\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}\b"
+                        r"|\b\d{4}[\/\-\.]\d{1,2}[\/\-\.]\d{1,2}\b"
+                    )
+                    m = _date_re.search(node)
+                    if m:
+                        gt["date"] = m.group()
+                        break
+
+            # Dedicated date field search
+            if not gt["date"]:
+                payment = gt_parse.get("payment", {})
+                if isinstance(payment, dict):
+                    for k in ("date", "date_time", "receipt_date"):
+                        val = str(payment.get(k, "")).strip()
+                        if val:
+                            gt["date"] = val
+                            break
+
+            # ── address ──────────────────────────────────────────────
+            if isinstance(store_info, dict):
+                addr = str(store_info.get("store_addr", "")).strip()
+                # Sometimes company and address are concatenated in store_addr
+                if addr and not gt["company"]:
+                    from dataset_normalizer import extract_address_from_seller
+                    gt["company"], gt["address"] = extract_address_from_seller(addr)
+                else:
+                    gt["address"] = addr
+
+            # ── total ─────────────────────────────────────────────────
+            total_node = gt_parse.get("total", {})
+            if isinstance(total_node, dict):
+                for total_key in ("total_price", "creditcardprice", "cashprice", "emoneyprice"):
+                    val = str(total_node.get(total_key, "")).strip()
+                    if val:
+                        gt["total"] = re.sub(r"^[\$€£¥₹₩\u20ac\u00a3\u00a5]+", "", val).strip()
+                        break
+
+            # Fallback: subtotal_price
+            if not gt["total"]:
+                subtotal = gt_parse.get("subtotal", {})
+                if isinstance(subtotal, dict):
+                    val = str(subtotal.get("subtotal_price", "")).strip()
+                    if val:
+                        gt["total"] = re.sub(r"^[\$€£¥₹₩\u20ac\u00a3\u00a5]+", "", val).strip()
+
+        except (json.JSONDecodeError, AttributeError, TypeError):
+            pass
+        return gt
+
+    # ── public interface ──────────────────────────────────────────────
+
+    def load(self, split: str = "train") -> list[Sample]:
+        """Load CORD-v2 and normalize to SROIE schema."""
+        dest = self._download()
+        hf_cache = self._hf_cache()
+        if not hf_cache.exists():
+            raise self._fatal("hf_cache/ not found after download.")
+
+        try:
+            from datasets import load_from_disk  # type: ignore
+
+            ds = load_from_disk(str(hf_cache))
+        except Exception as exc:
+            raise self._fatal(f"Failed to load CORD-v2 cache: {exc}") from exc
+
+        samples: list[Sample] = []
+        splits = list(ds.keys()) if hasattr(ds, "keys") else ["train"]
+
+        for ds_split in splits:
+            if ds_split == "test":
+                continue  # skip test split to avoid contamination
+
+            if split != "train" and ds_split != split:
+                continue
+
+            split_ds = ds[ds_split] if hasattr(ds, "keys") else ds
+            for idx, item in enumerate(split_ds):
+                gt = self._cord_remap(item.get("ground_truth", "{}"))
+                pil_image = item.get("image")
+                if pil_image is not None:
+                    img_dest_dir = _ensure_dir(dest / "images")
+                    img_path = img_dest_dir / f"{ds_split}_{idx:06d}.jpg"
+                    if not img_path.exists():
+                        pil_image.convert("RGB").save(img_path, "JPEG")
+                    samples.append((img_path, gt))
+
+        _log_field_coverage(samples, self.name)
+        _mm.release_hf_dataset(ds)
+        _mm.flush_hf_arrow_cache()
+        return _validate_samples_nonempty(samples, self.name)
+
+    def validate_cache(self) -> bool:
+        hf_cache = self._hf_cache()
+        if not hf_cache.exists():
+            return False
+        try:
+            from datasets import load_from_disk  # type: ignore
+
+            ds = load_from_disk(str(hf_cache))
+            splits = list(ds.keys()) if hasattr(ds, "keys") else ["train"]
+            first_split = ds[splits[0]] if hasattr(ds, "keys") else ds
+            if len(first_split) == 0:
+                return False
+            item = first_split[0]
+            gt_str = item.get("ground_truth", "")
+            if not gt_str:
+                return False
+            obj = json.loads(gt_str) if isinstance(gt_str, str) else gt_str
+            return "gt_parse" in obj
+        except Exception:
+            return False
+
+    def clear_cache(self) -> None:
+        import shutil
+        dest = self._dest_dir()
+        if dest.exists():
+            shutil.rmtree(dest, ignore_errors=True)
+            self._log("CORD-v2 cache cleared.")
+
+    def sample_count(self, split: str = "train") -> int:
+        hf_cache = self._hf_cache()
+        if not hf_cache.exists():
+            return 0
+        try:
+            from datasets import load_from_disk  # type: ignore
+
+            ds = load_from_disk(str(hf_cache))
+            total = 0
+            splits = list(ds.keys()) if hasattr(ds, "keys") else ["train"]
+            for s in splits:
+                if s == "test":
+                    continue
+                split_ds = ds[s] if hasattr(ds, "keys") else ds
+                total += len(split_ds)
+            return total
+        except Exception:
+            return 0
+
+
+# ======================================================================
 #  Singleton loader instances (lazy)
 # ======================================================================
 
@@ -1148,6 +1391,7 @@ _sroie_loader: SROIELoader | None = None
 _wildreceipt_loader: WildReceiptLoader | None = None
 _funsd_loader: FUNSDLoader | None = None
 _invoices_donut_loader: InvoicesDonutLoader | None = None
+_cord_v2_loader: CORDv2Loader | None = None
 
 
 def _get_sroie_loader() -> SROIELoader:
@@ -1176,6 +1420,13 @@ def _get_invoices_donut_loader() -> InvoicesDonutLoader:
     if _invoices_donut_loader is None:
         _invoices_donut_loader = InvoicesDonutLoader()
     return _invoices_donut_loader
+
+
+def _get_cord_v2_loader() -> CORDv2Loader:
+    global _cord_v2_loader
+    if _cord_v2_loader is None:
+        _cord_v2_loader = CORDv2Loader()
+    return _cord_v2_loader
 
 
 # ======================================================================
@@ -1222,6 +1473,11 @@ def load_invoices_donut() -> list[Sample]:
     return _get_invoices_donut_loader().load("train")
 
 
+def load_cord_v2() -> list[Sample]:
+    """Load CORD-v2 — compatibility wrapper for CORDv2Loader."""
+    return _get_cord_v2_loader().load("train")
+
+
 # ======================================================================
 #  Combined dataset loader
 # ======================================================================
@@ -1231,6 +1487,7 @@ _LOADERS = {
     "wildreceipt": load_wildreceipt,
     "funsd": load_funsd,
     "invoices_donut": load_invoices_donut,
+    "cord_v2": load_cord_v2,
 }
 
 
@@ -1289,7 +1546,7 @@ def get_combined_dataset(
     ----------
     dataset_names : list of str
         Names of datasets to include.  Valid names: sroie, wildreceipt,
-        funsd, invoices_donut.
+        funsd, invoices_donut, cord_v2.
     sroie_oversample : int, optional
         Number of times to duplicate SROIE training samples (default 1).
         Use 2 or 3 to counteract SROIE field dilution when combining with

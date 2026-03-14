@@ -1,0 +1,36 @@
+# .pre-commit-config.yaml
+# Pre-commit hooks for security and code quality.
+#
+# Install pre-commit:
+#   pip install pre-commit
+#   pre-commit install
+#
+# Run manually:
+#   pre-commit run --all-files
+#
+# Optional dependency: detect-secrets (listed as a comment in requirements.txt)
+#   pip install detect-secrets
+#   detect-secrets scan > .secrets.baseline  # create baseline first
+
+repos:
+  # detect-secrets: scan for accidentally committed secrets
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: latest
+    hooks:
+      - id: detect-secrets
+        args: ["--baseline", ".secrets.baseline"]
+        # Exclude known-safe files (e.g., lock files, test fixtures)
+        exclude: |
+          (?x)(
+            package-lock\.json|
+            \.secrets\.baseline|
+            tests/fixtures/
+          )
+
+  # Ruff: linter + formatter (already configured in pyproject.toml)
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.4.0
+    hooks:
+      - id: ruff
+        args: ["--fix"]
+      - id: ruff-format
