@@ -32,7 +32,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 # Import CheckpointCorruptionError from pipeline_types so it is project-wide
-from pipeline_types.exceptions import CheckpointCorruptionError  # noqa: F401 (re-exported)
+from pipeline_types.exceptions import CheckpointCorruptionError
 
 __all__ = ["CheckpointCorruptionError", "validate_checkpoint"]
 
