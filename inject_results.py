@@ -23,7 +23,6 @@ import argparse
 import json
 import os
 import re
-import sys
 import warnings
 from pathlib import Path
 
@@ -1097,8 +1096,8 @@ def compute_diff(old_text: str, new_text: str) -> list[dict]:
 
 def print_diff_table(
     changes: list[dict],
-    output_file: "Path | None" = None,
-    use_rich: "bool | None" = None,
+    output_file: Path | None = None,
+    use_rich: bool | None = None,
 ) -> None:
     """Print the diff as a table."""
     if use_rich is None:
@@ -1157,7 +1156,7 @@ def print_diff_table(
 def run_paper_diff(
     old_text: str,
     new_text: str,
-    results_dir: "str | Path" = "results",
+    results_dir: str | Path = "results",
 ) -> None:
     """Compare old and new filled paper text; print and save the diff."""
     from datetime import datetime, timezone

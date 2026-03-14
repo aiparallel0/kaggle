@@ -584,7 +584,7 @@ class LiveDashboardCallback:
             csv_path = f"convergence_exp{experiment_id}.csv"
         self._csv_path = Path(csv_path)
         self._experiment_id = experiment_id
-        self._rows: "list[_EpochRow]" = []
+        self._rows: list[_EpochRow] = []
         self._best_f1: float = float("nan")
 
         if use_rich is None:

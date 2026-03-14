@@ -16,7 +16,13 @@ import struct
 from pathlib import Path
 from typing import Any
 
-from pipeline_types import BugPattern, BugReport, CheckpointCorruptionError, DataSplitValidationReport, SeverityLevel
+from pipeline_types import (
+    BugPattern,
+    BugReport,
+    CheckpointCorruptionError,
+    DataSplitValidationReport,
+    SeverityLevel,
+)
 
 __all__ = [
     "ImportChainChecker",
@@ -485,10 +491,7 @@ def _check_image_size(model_path: Path, result_json_path: Path) -> None:
         try:
             cfg: dict = json.loads(cf.read_text())
             # config.json wraps encoder under "encoder" key
-            if "encoder" in cfg:
-                enc = cfg["encoder"]
-            else:
-                enc = cfg
+            enc = cfg.get("encoder", cfg)
             if "image_size" in enc:
                 encoder_image_size = enc["image_size"]
                 break

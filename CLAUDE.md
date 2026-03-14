@@ -257,29 +257,31 @@ After any `pip install --upgrade` or dependency version bump, check these 5 thin
 kaggle/
 ├── constants.py              # SINGLE SOURCE OF TRUTH for all shared constants
 ├── dataset_loaders.py        # ABC-based download & normalization for all datasets
-├── train.py                  # DonutTrainer OOP wrapper
+├── train.py                  # DonutTrainer OOP wrapper + LiveDashboardCallback (inlined)
 ├── donut_evaluator.py        # DonutEvaluator OOP wrapper (computes F1, NED)
 ├── run_experiments.py        # 8-experiment DONUT orchestrator (ExperimentConfig)
 ├── run_all.py                # MAIN ENTRY POINT: full dual-architecture pipeline
-├── inject_results.py         # PaperInjector: generates LaTeX from results JSON
+├── inject_results.py         # PaperInjector: generates LaTeX from results JSON + paper_diff (inlined)
 ├── preflight_checks.py       # Pre-flight validators + validate_pipeline()
-├── cloud_pipeline.py         # Cloud mode orchestrator + CloudConfig + GitController
+├── cloud_pipeline.py         # Cloud mode orchestrator + CloudConfig + GitController + TestRunner (inlined)
+├── validators.py             # All validator classes (BugPatternDetector, ImportChainChecker, etc.)
+├── pipeline_types.py         # All typed dataclasses + exceptions for pipeline results
 ├── requirements.txt          # Python dependencies with version pins
 ├── pyproject.toml            # Package metadata, entry points, ruff/pytest config
 │
-├── dataset_preparation.py    # Alternative standalone: dataset prep
-├── train_donut.py            # Alternative: DONUT training script
 ├── train_trocr_yolo.py       # TrOCR+YOLO training (also called by run_all.py)
 ├── evaluate_models.py        # Alternative: unified evaluation
+├── dataset_preparation.py    # Alternative standalone: dataset prep
 │
 ├── paper/                    # LaTeX source files
 │   ├── paper.tex             # Main paper template with \VAR{} placeholders
 │   ├── references.bib        # BibTeX references
 │   └── presentation.tex      # Presentation slides template
 │
-├── validators/               # BugPatternDetector, ImportChainChecker, etc.
-├── pipeline_types/           # Typed dataclasses for pipeline results
 ├── tests/                    # Unit tests (pytest)
+│   ├── __init__.py
+│   ├── conftest.py           # pytest fixtures
+│   └── test_all.py           # All tests merged into single file
 │
 ├── results/                  # Runtime: per-experiment JSON (gitignored)
 ├── data/                     # Runtime: dataset cache (gitignored)
@@ -288,6 +290,15 @@ kaggle/
 ```
 
 **Canonical entry point:** `run_all.py`. The standalone scripts are a simplified alternative workflow for standalone use only.
+
+**Consolidation notes:**
+- `live_dashboard.py` → inlined into `train.py` (LiveDashboardCallback and _EpochRow classes)
+- `paper_diff.py` → inlined into `inject_results.py` (compute_diff, print_diff_table, run_paper_diff)
+- `test_runner.py` → inlined into `cloud_pipeline.py` (TestRunner, RuffReport, PytestReport, etc.)
+- `validators/` directory → merged into single `validators.py`
+- `pipeline_types/` directory → merged into single `pipeline_types.py`
+- `tests/test_*.py` (20 files) → merged into single `tests/test_all.py`
+- Deleted dead code: `run_experiments_v2.py`, `train_donut.py`, `results_browser.py`, `tui_console.py`, `quick_results_generator.py`
 
 ---
 

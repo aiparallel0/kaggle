@@ -1373,6 +1373,20 @@ def stage_experiments(args) -> StageResult:
         else:
             succeeded += 1
 
+        # ── Inter-experiment GPU cleanup ──────────────────────────────────
+        # Flush any GPU memory left by this experiment before the next one
+        # starts instantiating Seq2SeqTrainingArguments (which calls
+        # torch.cuda.set_device() and may OOM if VRAM is still fragmented).
+        import gc
+        gc.collect()
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+        except Exception:
+            pass
+
     re_mod.save_summary()
 
     # Clean up pre-loaded base model now that all experiments are done.
