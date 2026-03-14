@@ -1,16 +1,40 @@
 """Type definitions for cloud pipeline."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from pipeline_types.exceptions import (  # noqa: F401 (re-exported)
-    CheckpointCorruptionError,
-    DatasetLoadError,
-    PipelineConfigError,
-)
+# ============================================================================
+# Pipeline-level exception classes
+# ============================================================================
+
+
+class CheckpointCorruptionError(Exception):
+    """Raised when a model checkpoint fails integrity validation.
+
+    Possible causes:
+    - ``lm_head.weight`` is missing from the checkpoint (safetensors
+      deduplication dropped it because it was tied to ``embed_tokens``).
+    - ``model.config.encoder.image_size`` does not match the image size
+      used during training (stored in the experiment result JSON).
+    - The token vocabulary size in the checkpoint's embedding matrix does
+      not match the expected size after ``add_special_tokens()``.
+
+    See: CLAUDE.md § 5 (Pattern 6) and validators/checkpoint_resume_validator.py.
+    """
+
+
+class PipelineConfigError(Exception):
+    """Raised when experiment or pipeline configuration is invalid."""
+
+
+class DatasetLoadError(Exception):
+    """Raised when a dataset cannot be loaded or validated."""
+
 
 __all__ = [
     "SeverityLevel",

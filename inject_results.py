@@ -608,17 +608,15 @@ def generate_training_plots(results_dir: Path = Path("results")) -> None:
     """Generate 2D training loss plots from experiment results.
 
     Creates publication-ready loss plots in results/figures/ for inclusion
-    in paper.tex. Uses quick_results_generator if available.
+    in paper.tex. Uses plot_convergence if available.
 
     Args:
         results_dir: Path to results directory
     """
     try:
-        from quick_results_generator import generate_loss_plots_from_results
+        from plot_convergence import main as plot_convergence_main
 
-        plots = generate_loss_plots_from_results(results_dir)
-        if plots:
-            print(f"[OK] Generated {len(plots)} loss plots for paper")
+        plot_convergence_main()
     except Exception:
         pass  # Gracefully skip if plotting unavailable
 
@@ -1045,7 +1043,6 @@ def main() -> None:
             # Run paper diff (compare old vs new paper_filled.tex)
             if _old_content:
                 try:
-                    from paper_diff import run_paper_diff
                     _new_content = output_path.read_text(encoding="utf-8", errors="replace")
                     run_paper_diff(_old_content, _new_content, results_dir="results")
                 except Exception as _pd_exc:
@@ -1062,6 +1059,115 @@ def main() -> None:
             )
     else:
         legacy_output()
+
+
+# ---------------------------------------------------------------------------
+# Paper diff utilities (inlined from paper_diff.py)
+# ---------------------------------------------------------------------------
+
+_NUMERIC_RE = re.compile(r"^[+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$")
+
+
+def compute_diff(old_text: str, new_text: str) -> list[dict]:
+    """Compute line-level diff between old and new filled LaTeX."""
+    old_lines = old_text.splitlines()
+    new_lines = new_text.splitlines()
+    changes: list[dict] = []
+    max_len = max(len(old_lines), len(new_lines))
+    for i in range(max_len):
+        old_line = old_lines[i] if i < len(old_lines) else ""
+        new_line = new_lines[i] if i < len(new_lines) else ""
+        if old_line != new_line:
+            old_stripped = old_line.strip()
+            new_stripped = new_line.strip()
+            delta: float | None = None
+            direction = "~"
+            if _NUMERIC_RE.match(old_stripped) and _NUMERIC_RE.match(new_stripped):
+                try:
+                    o = float(old_stripped)
+                    n = float(new_stripped)
+                    delta = n - o
+                    direction = "↑" if delta > 0 else ("↓" if delta < 0 else "=")
+                except ValueError:
+                    pass
+            changes.append({"line": i + 1, "old": old_line, "new": new_line,
+                             "delta": delta, "direction": direction})
+    return changes
+
+
+def print_diff_table(
+    changes: list[dict],
+    output_file: "Path | None" = None,
+    use_rich: "bool | None" = None,
+) -> None:
+    """Print the diff as a table."""
+    if use_rich is None:
+        try:
+            import rich  # noqa: F401
+            use_rich = True
+        except ImportError:
+            use_rich = False
+
+    lines: list[str] = [
+        f"paper_diff — {len(changes)} line(s) changed",
+        "=" * 80,
+        f"{'Line':<6} {'Old value':<30} {'New value':<30} {'Δ':<12} {'Dir':<4}",
+        "-" * 80,
+    ]
+    for c in changes:
+        old_short = c["old"][:28].replace("\n", "").replace("\r", "")
+        new_short = c["new"][:28].replace("\n", "").replace("\r", "")
+        delta_str = f"{c['delta']:+.4f}" if c["delta"] is not None else ""
+        lines.append(f"{c['line']:<6} {old_short:<30} {new_short:<30} {delta_str:<12} {c['direction']:<4}")
+    lines.append("=" * 80)
+    plain_text = "\n".join(lines)
+
+    if use_rich:
+        try:
+            from rich.console import Console
+            from rich.table import Table
+            console = Console()
+            table = Table(title=f"Paper Diff — {len(changes)} line(s) changed",
+                          show_header=True, header_style="bold magenta")
+            table.add_column("Line", justify="right", style="dim", width=6)
+            table.add_column("Old value", style="red")
+            table.add_column("New value", style="green")
+            table.add_column("Δ", justify="right")
+            table.add_column("Dir", justify="center")
+            for c in changes:
+                delta_str = f"{c['delta']:+.4f}" if c["delta"] is not None else ""
+                dir_colour = "green" if c["direction"] == "↑" else ("red" if c["direction"] == "↓" else "yellow")
+                table.add_row(str(c["line"]), c["old"][:35], c["new"][:35], delta_str,
+                              f"[{dir_colour}]{c['direction']}[/{dir_colour}]")
+            console.print(table)
+        except Exception:
+            print(plain_text)
+    else:
+        print(plain_text)
+
+    if output_file is not None:
+        try:
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+            output_file.write_text(plain_text, encoding="utf-8")
+            print(f"[PaperDiff] Diff written to: {output_file}")
+        except OSError as exc:
+            print(f"[PaperDiff] WARNING: Could not write diff file: {exc}")
+
+
+def run_paper_diff(
+    old_text: str,
+    new_text: str,
+    results_dir: "str | Path" = "results",
+) -> None:
+    """Compare old and new filled paper text; print and save the diff."""
+    from datetime import datetime, timezone
+    changes = compute_diff(old_text, new_text)
+    if not changes:
+        print("[PaperDiff] No changes detected in paper_filled.tex.")
+        return
+    date_str = datetime.now(timezone.utc).strftime("%Y%m%d")
+    out_file = Path(results_dir) / f"paper_diff_{date_str}.txt"
+    print_diff_table(changes, output_file=out_file)
 
 
 if __name__ == "__main__":

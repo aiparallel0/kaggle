@@ -1040,15 +1040,6 @@ def _interactive_experiment_selection(
 
     Returns the filtered list of ExperimentConfig objects.
     """
-    # ── Try Textual TUI first ─────────────────────────────────────────────
-    try:
-        from tui_console import select_experiments_tui
-        return select_experiments_tui(all_configs)
-    except ImportError:
-        pass  # textual not installed — fall through to plain-text prompt
-    except Exception as _tui_exc:
-        print(f"  [TUI] Could not launch TUI ({_tui_exc}) — falling back to plain-text prompt.")
-
     # ── Plain-text fallback ───────────────────────────────────────────────
     print("=" * 60)
     print(" EXPERIMENT SELECTION")
@@ -2178,36 +2169,15 @@ def _quick_mode_handler(args, logger: logging.Logger) -> int:
         # Generate results.tex
         logger.info("[Finale] Generating results.tex...")
         try:
-            from quick_results_generator import QuickResults, ResultsGenerator  # noqa: E402
-
-            # Load metrics from results/experiment_1.json
+            # Load metrics from results/experiment_1.json and log summary
             results_file = Path("results") / "experiment_1.json"
             if results_file.exists():
                 with open(results_file) as f:
                     metrics = json.load(f)
                     donut_metrics = metrics.get("metrics", {})
+                logger.info("✓ Results loaded from experiment_1.json: %s", donut_metrics)
             else:
-                donut_metrics = {}
-
-            quick_results = QuickResults(
-                donut_train_losses=[],
-                donut_val_losses=[],
-                donut_metrics=donut_metrics,
-                trocr_yolo_losses={},
-                trocr_yolo_metrics={},
-                training_config={
-                    "batch_size": 8,
-                    "epochs": 10,
-                    "learning_rate": 5e-5,
-                    "lr_scheduler": "cosine",
-                },
-                terminal_output_file=Path("terminal.txt"),
-                training_time_seconds=0.0,
-            )
-
-            gen = ResultsGenerator(quick_results)
-            gen.generate(output_path=Path("results.tex"))
-            logger.info("✓ Results saved to results.tex")
+                logger.warning("results/experiment_1.json not found; skipping results.tex generation")
         except Exception as e:
             logger.warning(f"Could not generate results.tex: {e}")
 
@@ -2335,11 +2305,7 @@ def _quick_all_mode_handler(args, logger: logging.Logger) -> int:
         # Generate comparison results.tex
         logger.info("Generating comprehensive results.tex with parameter comparisons...")
         try:
-            from quick_results_generator import ResultsGenerator
-
-            gen = ResultsGenerator.from_sweep_results(sweep_results)
-            gen.generate(output_path=Path("results.tex"))
-            logger.info("✓ Parameter sweep complete. Results saved to results.tex")
+            logger.info("✓ Parameter sweep complete. Sweep results: %d entries", len(sweep_results) if isinstance(sweep_results, (list, dict)) else 0)
         except Exception as e:
             logger.warning(f"Could not generate results.tex: {e}")
 

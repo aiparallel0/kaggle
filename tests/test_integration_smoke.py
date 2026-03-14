@@ -50,7 +50,7 @@ class TestImportChain:
         assert RetroUIFormatter.bold("x")
 
     def test_test_runner_importable(self):
-        from test_runner import TestRunner
+        from cloud_pipeline import TestRunner
 
         assert hasattr(TestRunner, "run_all_checks")
 
