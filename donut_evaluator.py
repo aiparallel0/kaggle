@@ -350,7 +350,7 @@ class DonutEvaluator:
         # Run checkpoint integrity checks before loading
         # (lm_head present, vocab size match)
         try:
-            from validators.checkpoint_resume_validator import validate_checkpoint
+            from validators import validate_checkpoint
             validate_checkpoint(
                 model_path=self.model_path,
                 expected_vocab_size=(
