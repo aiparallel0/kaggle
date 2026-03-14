@@ -2,6 +2,7 @@
 
 import json
 import tempfile
+import warnings
 from pathlib import Path
 
 import pytest
@@ -194,10 +195,8 @@ class TestPartialResultsRobustness:
         template = r"\VAR{exp1_f1} \VAR{exp2_f1} \VAR{exp3_f1} \VAR{best_f1}"
         with tempfile.TemporaryDirectory() as tmp:
             injector = self._make_injector(tmp, template=template)
-            import warnings as _w
-
-            with _w.catch_warnings(record=True):
-                _w.simplefilter("always")
+            with warnings.catch_warnings(record=True):
+                warnings.simplefilter("always")
                 result = injector.fill()
             assert isinstance(result, str), "fill() must return a string"
             assert r"\VAR{" not in result, "No raw \\VAR{} must remain in output"
@@ -228,10 +227,8 @@ class TestPartialResultsRobustness:
         template = " ".join(rf"\VAR{{exp{i}_f1}}" for i in range(1, 9))
         with tempfile.TemporaryDirectory() as tmp:
             injector = self._make_injector(tmp, all_exp=all_exp, template=template)
-            import warnings as _w
-
-            with _w.catch_warnings(record=True):
-                _w.simplefilter("always")
+            with warnings.catch_warnings(record=True):
+                warnings.simplefilter("always")
                 result = injector.fill()
             assert r"\VAR{" not in result, "No raw \\VAR{} must remain in output"
             assert "0.8500" in result, "Exp 1 F1 must be filled from results"
@@ -261,3 +258,93 @@ class TestPartialResultsRobustness:
                 assert f"exp{i}_f1" in var_map, f"exp{i}_f1 missing from var_map"
                 for fld in FIELDS:
                     assert f"exp{i}_{fld}_f1" in var_map, f"exp{i}_{fld}_f1 missing from var_map"
+
+
+# ---------------------------------------------------------------------------
+# New robustness tests (paper/presentation generation)
+# ---------------------------------------------------------------------------
+
+
+class TestInjectorRobustness:
+    """Edge-case robustness for paper/presentation generation."""
+
+    def _make_injector(self, tmp_dir, template="x"):
+        tmp = Path(tmp_dir)
+        tmpl = tmp / "paper.tex"
+        tmpl.write_text(template, encoding="utf-8")
+        return PaperInjector(tmp, tmpl)
+
+    # -- malformed JSON -------------------------------------------------------
+
+    def test_malformed_all_experiments_json_falls_back_gracefully(self):
+        """_load_all_experiments() must return {} (not raise) for truncated JSON."""
+        with tempfile.TemporaryDirectory() as tmp:
+            bad_json = Path(tmp) / "all_experiments.json"
+            bad_json.write_text("{broken json,,", encoding="utf-8")
+            injector = self._make_injector(tmp)
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                result = injector._load_all_experiments()
+            assert result == {}, "Malformed JSON must fall back to empty dict"
+            user_warnings = [w for w in caught if issubclass(w.category, UserWarning)]
+            assert len(user_warnings) > 0, "A UserWarning must be emitted for malformed JSON"
+            assert any(
+                "parse" in str(w.message).lower() or "json" in str(w.message).lower()
+                for w in user_warnings
+            ), "Warning must mention parsing/JSON"
+
+    def test_malformed_evaluation_results_json_falls_back_gracefully(self):
+        """_load_evaluation_results() must return {} (not raise) for truncated JSON."""
+        with tempfile.TemporaryDirectory() as tmp:
+            bad_json = Path(tmp) / "evaluation_results.json"
+            bad_json.write_text('{"pretrained_metrics": {', encoding="utf-8")
+            injector = self._make_injector(tmp)
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                result = injector._load_evaluation_results()
+            assert result == {}, "Malformed JSON must fall back to empty dict"
+            user_warnings = [w for w in caught if issubclass(w.category, UserWarning)]
+            assert len(user_warnings) > 0, "A UserWarning must be emitted for malformed JSON"
+            assert any(
+                "parse" in str(w.message).lower() or "json" in str(w.message).lower()
+                for w in user_warnings
+            ), "Warning must mention parsing/JSON"
+
+    def test_fill_with_malformed_json_returns_string(self):
+        """fill() must return a filled string even when all_experiments.json is broken."""
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "all_experiments.json").write_text("{bad", encoding="utf-8")
+            template = r"\VAR{exp1_f1} \VAR{best_f1}"
+            injector = self._make_injector(tmp, template=template)
+            with warnings.catch_warnings(record=True):
+                warnings.simplefilter("always")
+                result = injector.fill()
+            assert isinstance(result, str)
+            assert r"\VAR{" not in result
+
+    # -- output directory creation -------------------------------------------
+
+    def test_fill_paper_creates_missing_output_directory(self):
+        """fill_paper() must create the parent directory of output_path if absent."""
+        from inject_results import fill_paper
+
+        with tempfile.TemporaryDirectory() as tmp:
+            paper = Path(tmp) / "paper.tex"
+            paper.write_text(r"F1=\VAR{exp1_f1}", encoding="utf-8")
+            # Nested directory that does not exist yet
+            output = Path(tmp) / "subdir" / "nested" / "out.tex"
+            assert not output.parent.exists()
+            fill_paper(str(paper), str(output), {"exp1_f1": "0.8500"})
+            assert output.exists(), "fill_paper must create missing parent dirs"
+            assert "0.8500" in output.read_text(encoding="utf-8")
+
+    def test_fill_paper_creates_output_in_existing_directory(self):
+        """fill_paper() must still work normally when output dir already exists."""
+        from inject_results import fill_paper
+
+        with tempfile.TemporaryDirectory() as tmp:
+            paper = Path(tmp) / "paper.tex"
+            paper.write_text(r"F1=\VAR{best_f1}", encoding="utf-8")
+            output = Path(tmp) / "out.tex"
+            fill_paper(str(paper), str(output), {"best_f1": "0.9000"})
+            assert "0.9000" in output.read_text(encoding="utf-8")

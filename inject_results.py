@@ -160,15 +160,31 @@ class PaperInjector:
         path = self.results_dir / "all_experiments.json"
         if not path.exists():
             return {}
-        with open(path) as fh:
-            return json.load(fh)
+        try:
+            with open(path, encoding="utf-8") as fh:
+                return json.load(fh)
+        except json.JSONDecodeError as exc:
+            warnings.warn(
+                f"Could not parse {path} as JSON ({exc}); "
+                "generating paper with placeholder values only.",
+                stacklevel=3,
+            )
+            return {}
 
     def _load_evaluation_results(self) -> dict:
         path = self.results_dir / "evaluation_results.json"
         if not path.exists():
             return {}
-        with open(path) as fh:
-            return json.load(fh)
+        try:
+            with open(path, encoding="utf-8") as fh:
+                return json.load(fh)
+        except json.JSONDecodeError as exc:
+            warnings.warn(
+                f"Could not parse {path} as JSON ({exc}); "
+                "pretrained metrics will show N/A.",
+                stacklevel=3,
+            )
+            return {}
 
     # -- var map ------------------------------------------------------------
 
@@ -665,6 +681,7 @@ def fill_paper(paper_path: str, output_path: str, var_map: dict, strict: bool = 
                 stacklevel=2,
             )
             filled = _VAR_RE.sub(lambda _m: "---", filled)
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     Path(output_path).write_text(filled, encoding="utf-8")
     print(f"Filled paper written -> {output_path}")
 
@@ -718,7 +735,7 @@ def generate_convergence_data(
                 epoch_data[ep]["eval_loss"] = entry["eval_loss"]
 
         csv_path = out_dir / f"convergence_exp{exp_id_str}.csv"
-        with open(csv_path, "w") as fh:
+        with open(csv_path, "w", encoding="utf-8") as fh:
             fh.write("epoch,train_loss,eval_loss\n")
             for ep in sorted(epoch_data):
                 row = epoch_data[ep]
@@ -966,13 +983,22 @@ def main() -> None:
     if args.all:
         results_path = Path(args.results)
         if not results_path.exists():
-            print(
-                f"ERROR: {results_path} not found. Run run_experiments.py first.",
-                file=sys.stderr,
+            warnings.warn(
+                f"{results_path} not found — generating paper with placeholder values only.",
+                stacklevel=1,
             )
-            sys.exit(1)
-        with open(results_path) as fh:
-            all_exp = json.load(fh)
+            all_exp = {}
+        else:
+            try:
+                with open(results_path, encoding="utf-8") as fh:
+                    all_exp = json.load(fh)
+            except json.JSONDecodeError as exc:
+                warnings.warn(
+                    f"Could not parse {results_path} as JSON ({exc}); "
+                    "generating paper with placeholder values only.",
+                    stacklevel=1,
+                )
+                all_exp = {}
 
         print_table1_dataset_stats()
         print_table2_experiments(all_exp)
