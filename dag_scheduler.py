@@ -54,7 +54,10 @@ class DAGScheduler:
     ----------
     configs:
         Ordered list of experiment config objects.  Each config must have
-        an ``id`` attribute.  Optionally has ``depends_on: list[int]``.
+        an ``id`` attribute (or an ``experiment_id`` field — both classes in
+        the codebase expose ``.id`` as a property or direct field).
+        Optionally has ``depends_on: list[int]``; if absent, defaults to ``[]``
+        via ``getattr(cfg, "depends_on", [])``.
     run_fn:
         Callable that runs a single experiment: ``run_fn(cfg) -> Any``.
         Called in a thread — must be thread-safe for parallel execution.

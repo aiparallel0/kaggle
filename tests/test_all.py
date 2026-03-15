@@ -4489,11 +4489,15 @@ class TestExperimentConfigFields:
         assert c.experiment_id == 99
 
     def test_does_not_have_id_field(self):
-        """id is NOT a field — prevents regression of Bug A/B."""
-        c = ExperimentConfig(experiment_id=1, name="test", datasets=["sroie"])
-        assert not hasattr(c, "id"), (
-            "ExperimentConfig must not have an 'id' attribute — use experiment_id. "
-            "If 'id' was added, update run_all.py and run_experiments.py to match."
+        """id is a @property alias for experiment_id, NOT a dataclass field."""
+        c = ExperimentConfig(experiment_id=7, name="test", datasets=["sroie"])
+        # id must exist as a property and equal experiment_id
+        assert c.id == 7, "id property must return experiment_id"
+        # id must NOT be a dataclass field (only a property)
+        field_names = {f.name for f in dataclasses.fields(c)}
+        assert "id" not in field_names, (
+            "id must be a @property alias, not a dataclass field, "
+            "to prevent 'id' from appearing in dataclasses.asdict() output"
         )
 
     def test_does_not_accept_lr_scheduler_type(self):
@@ -4510,6 +4514,105 @@ class TestExperimentConfigFields:
         assert c.epochs > 0
         assert c.lr > 0
         assert c.batch_size > 0
+
+
+class TestExperimentConfigLoaderCompat:
+    """Verify cross-class compatibility: both ExperimentConfig classes share a common interface."""
+
+    def test_run_experiments_id_property(self):
+        """run_experiments.ExperimentConfig.id must alias experiment_id."""
+        if not _TORCH_AVAILABLE:
+            pytest.skip("torch required")
+        c = ExperimentConfig(experiment_id=7, name="test", datasets=["sroie"])
+        assert c.id == 7
+        assert c.id == c.experiment_id
+
+    def test_run_experiments_id_is_not_dataclass_field(self):
+        """id must be a property, not a dataclass field, to stay out of asdict()."""
+        if not _TORCH_AVAILABLE:
+            pytest.skip("torch required")
+        c = ExperimentConfig(experiment_id=3, name="test", datasets=["sroie"])
+        field_names = {f.name for f in dataclasses.fields(c)}
+        assert "id" not in field_names, "id must be a @property, not a dataclass field"
+
+    def test_run_experiments_dataset_names_property(self):
+        """run_experiments.ExperimentConfig.dataset_names must return list[str]."""
+        if not _TORCH_AVAILABLE:
+            pytest.skip("torch required")
+        c = ExperimentConfig(experiment_id=1, name="test", datasets=["sroie", "wildreceipt"])
+        assert c.dataset_names == ["sroie", "wildreceipt"]
+
+    def test_run_experiments_base_checkpoint_property(self):
+        """run_experiments.ExperimentConfig.base_checkpoint must alias base_model."""
+        if not _TORCH_AVAILABLE:
+            pytest.skip("torch required")
+        from constants import BASE_MODEL
+        c = ExperimentConfig(experiment_id=1, name="test", datasets=["sroie"])
+        assert c.base_checkpoint == c.base_model
+        assert c.base_model == BASE_MODEL
+
+    def test_run_experiments_has_yaml_compat_fields(self):
+        """run_experiments.ExperimentConfig must have YAML-only fields for dataclasses.replace() compat."""
+        if not _TORCH_AVAILABLE:
+            pytest.skip("torch required")
+        c = ExperimentConfig(experiment_id=1, name="test", datasets=["sroie"])
+        assert c.arch_type == "donut"
+        assert c.is_zero_shot is False
+        assert c.depends_on == []
+        assert c.full_parameter_finetuning is True
+        assert c.image_height == 1280
+        assert c.image_width == 960
+        assert c.allow_high_res is False
+
+    def test_loader_experiment_id_property(self):
+        """experiment_config_loader.ExperimentConfig.experiment_id must alias id."""
+        import experiment_config_loader as _ecl
+        from experiment_config_loader import DatasetEntry
+        c = _ecl.ExperimentConfig(
+            id=5,
+            name="yaml_test",
+            datasets=[DatasetEntry(name="sroie")],
+        )
+        assert c.experiment_id == 5
+        assert c.experiment_id == c.id
+
+    def test_loader_base_model_property(self):
+        """experiment_config_loader.ExperimentConfig.base_model must alias base_checkpoint."""
+        import experiment_config_loader as _ecl
+        from experiment_config_loader import DatasetEntry
+        c = _ecl.ExperimentConfig(
+            id=5,
+            name="yaml_test",
+            datasets=[DatasetEntry(name="sroie")],
+            base_checkpoint="naver-clova-ix/donut-base",
+        )
+        assert c.base_model == "naver-clova-ix/donut-base"
+        assert c.base_model == c.base_checkpoint
+
+    def test_loader_dataset_names_property(self):
+        """experiment_config_loader.ExperimentConfig.dataset_names returns list[str]."""
+        import experiment_config_loader as _ecl
+        from experiment_config_loader import DatasetEntry
+        c = _ecl.ExperimentConfig(
+            id=2,
+            name="yaml_test2",
+            datasets=[DatasetEntry(name="sroie"), DatasetEntry(name="wildreceipt")],
+        )
+        assert c.dataset_names == ["sroie", "wildreceipt"]
+
+    def test_loader_warmup_steps_default(self):
+        """experiment_config_loader.ExperimentConfig warmup_steps default must be 40."""
+        import experiment_config_loader as _ecl
+        from experiment_config_loader import DatasetEntry
+        c = _ecl.ExperimentConfig(
+            id=1,
+            name="yaml_test",
+            datasets=[DatasetEntry(name="sroie")],
+        )
+        assert c.warmup_steps == 40, (
+            f"warmup_steps default must be 40 (matches run_experiments.ExperimentConfig), "
+            f"got {c.warmup_steps}"
+        )
 
 
 class TestTrainExperimentSignature:

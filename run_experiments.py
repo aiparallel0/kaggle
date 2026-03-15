@@ -49,7 +49,7 @@ import logging
 import math
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -236,6 +236,18 @@ class ExperimentConfig:
     finetune_height: int = _FINETUNE_H
     finetune_width: int = _FINETUNE_W
 
+    # -- YAML-sourced config compatibility fields -------------------------
+    # These fields are present in experiment_config_loader.ExperimentConfig and
+    # needed by hparam_search.py, multi_seed_runner.py, and dag_scheduler.py
+    # when they call dataclasses.replace() on configs from either class.
+    arch_type: str = "donut"
+    is_zero_shot: bool = False
+    depends_on: list = field(default_factory=list)
+    full_parameter_finetuning: bool = True
+    image_height: int = 1280
+    image_width: int = 960
+    allow_high_res: bool = False
+
     # -- Duck-typed aliases for DonutTrainer compatibility ----------------
     # DonutTrainer reads config.max_epochs, config.learning_rate, etc.
     # These properties ensure a single source of truth (no duplication).
@@ -256,6 +268,26 @@ class ExperimentConfig:
     def output_dir(self) -> str:
         """Default output directory; overridden at call site when needed."""
         return str(WORKSPACE / "models" / f"experiment_{self.experiment_id}")
+
+    @property
+    def id(self) -> int:
+        """Alias for experiment_id — used by dag_scheduler.py and run_all.py dispatch."""
+        return self.experiment_id
+
+    @property
+    def dataset_names(self) -> list[str]:
+        """Names of all datasets in this experiment.
+
+        Returns datasets directly since they are already strings in this class.
+        Provides a consistent interface with experiment_config_loader.ExperimentConfig
+        which stores DatasetEntry objects instead.
+        """
+        return self.datasets
+
+    @property
+    def base_checkpoint(self) -> str:
+        """Alias for base_model — used by experiment_config_loader code paths."""
+        return self.base_model
 
 
 # ---------------------------------------------------------------------------
