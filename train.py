@@ -881,7 +881,7 @@ class DonutTrainer:
             patience = getattr(
                 self.config,
                 "early_stopping_patience",
-                5,
+                3,
             )
             callbacks.append(
                 EarlyStoppingCallback(

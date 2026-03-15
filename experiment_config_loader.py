@@ -53,6 +53,33 @@ except ImportError as e:
 
 
 # ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+__all__ = [
+    "DatasetEntry",
+    "load_experiment",
+    "load_all_experiments",
+    "load_experiment_selection",
+    # ExperimentConfig is intentionally NOT exported here.
+    # Callers should use run_experiments.ExperimentConfig for hardcoded experiments.
+    # experiment_config_loader.ExperimentConfig is for YAML-loaded experiments only.
+]
+
+# ---------------------------------------------------------------------------
+# Module-level guard: verify canonical ExperimentConfig consistency
+# ---------------------------------------------------------------------------
+try:
+    from run_experiments import ExperimentConfig as _CanonicalConfig  # noqa: E402
+    if not hasattr(_CanonicalConfig, "experiment_id"):
+        raise RuntimeError(
+            "run_experiments.ExperimentConfig must have 'experiment_id' field"
+        )
+except ImportError:
+    pass  # run_experiments not available in torch-free test envs
+
+
+# ---------------------------------------------------------------------------
 # DatasetEntry — per-dataset config within an experiment
 # ---------------------------------------------------------------------------
 
@@ -136,7 +163,7 @@ class ExperimentConfig:
 
     # Scheduler
     scheduler_type: str = "cosine"
-    warmup_steps: int = 500
+    warmup_steps: int = 40  # matches run_experiments.ExperimentConfig default; 500 is capped for small datasets
 
     # Early stopping
     early_stopping_enabled: bool = True
@@ -241,6 +268,16 @@ class ExperimentConfig:
             )
 
     # Convenience helpers
+
+    @property
+    def experiment_id(self) -> int:
+        """Alias for id — used by DonutTrainer.train() for LiveDashboard CSV naming."""
+        return self.id
+
+    @property
+    def base_model(self) -> str:
+        """Alias for base_checkpoint — used by run_experiments.py code paths."""
+        return self.base_checkpoint
 
     @property
     def effective_batch_size(self) -> int:
@@ -427,7 +464,7 @@ def _yaml_to_config(path: str | Path) -> ExperimentConfig:
 
     sched = tr.get("scheduler", {})
     scheduler_type = str(sched.get("type", "cosine"))
-    warmup_steps = int(sched.get("warmup_steps", 500))
+    warmup_steps = int(sched.get("warmup_steps", 40))
 
     es = tr.get("early_stopping", {})
     early_stopping_enabled = bool(es.get("enabled", True))
