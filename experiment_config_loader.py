@@ -71,9 +71,10 @@ __all__ = [
 # ---------------------------------------------------------------------------
 try:
     from run_experiments import ExperimentConfig as _CanonicalConfig  # noqa: E402
-    assert hasattr(_CanonicalConfig, "experiment_id"), (  # noqa: S101
-        "run_experiments.ExperimentConfig must have 'experiment_id' field"
-    )
+    if not hasattr(_CanonicalConfig, "experiment_id"):
+        raise RuntimeError(
+            "run_experiments.ExperimentConfig must have 'experiment_id' field"
+        )
 except ImportError:
     pass  # run_experiments not available in torch-free test envs
 

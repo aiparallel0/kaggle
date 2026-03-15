@@ -242,7 +242,7 @@ class ExperimentConfig:
     # when they call dataclasses.replace() on configs from either class.
     arch_type: str = "donut"
     is_zero_shot: bool = False
-    depends_on: list = field(default_factory=list)
+    depends_on: list[int] = field(default_factory=list)
     full_parameter_finetuning: bool = True
     image_height: int = 1280
     image_width: int = 960
