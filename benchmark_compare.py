@@ -50,7 +50,10 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math as _math
 import re
+import statistics as _statistics
+import subprocess as _subprocess
 import sys
 import time
 import unicodedata
@@ -68,19 +71,24 @@ import numpy as np
 # torch/PIL/etc.
 _HEAVY_DEPS_AVAILABLE: bool = True
 _HEAVY_DEPS_ERROR: str = ""
+_MATPLOTLIB_AVAILABLE: bool = False
+
 try:
-    import matplotlib
     import torch
     from PIL import Image
+except ImportError as e:
+    _HEAVY_DEPS_AVAILABLE = False
+    _HEAVY_DEPS_ERROR = f"FATAL: missing dependency — {e}\nRun: pip install torch Pillow"
+
+try:
+    import matplotlib
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-except ImportError as e:
-    _HEAVY_DEPS_AVAILABLE = False
-    _HEAVY_DEPS_ERROR = (
-        f"FATAL: missing dependency — {e}\n"
-        "Run: pip install torch transformers ultralytics Pillow matplotlib"
-    )
+
+    _MATPLOTLIB_AVAILABLE = True
+except ImportError:
+    pass
 
 
 def _edit_distance(s1: str, s2: str) -> int:
@@ -105,6 +113,256 @@ def _progress(iterable, desc: str = "", total: int | None = None):
             _log.info("%s %d/%d (%d%%)", desc, i, n, 100 * i // n if n else 0)
         yield item
     _log.info("%s done (%d items)", desc, n)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Inline SVG chart generator — zero-dependency fallback when matplotlib absent
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _svg_esc(s: str) -> str:
+    """XML-escape a value for safe SVG text content."""
+    return (
+        str(s)
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+
+
+def _svg_save(svg_content: str, stem: Path) -> None:
+    """Write .svg and attempt PDF conversion via inkscape / rsvg-convert / cairosvg."""
+    svg_path = stem.with_suffix(".svg")
+    svg_path.write_text(svg_content, encoding="utf-8")
+    pdf_path = str(stem.with_suffix(".pdf"))
+    for cmd in [
+        ["inkscape", "--export-type=pdf", f"--export-filename={pdf_path}", str(svg_path)],
+        ["rsvg-convert", "-f", "pdf", "-o", pdf_path, str(svg_path)],
+        ["cairosvg", str(svg_path), "-o", pdf_path],
+    ]:
+        try:
+            _subprocess.run(cmd, capture_output=True, timeout=30, check=True)
+            break
+        except (FileNotFoundError, _subprocess.CalledProcessError, _subprocess.TimeoutExpired):
+            continue
+
+
+def _svg_bar_chart(
+    fields: list,
+    methods: list,
+    values_per_method: list,
+    colors: list,
+    title: str,
+    ylabel: str,
+) -> str:
+    """Grouped vertical bar chart as SVG string (replaces matplotlib Fig 1)."""
+    W, H = 550, 300
+    ML, MR, MT, MB = 58, 20, 35, 65
+    PW, PH = W - ML - MR, H - MT - MB
+    n_fields, n_methods = len(fields), len(methods)
+    group_w = PW / n_fields
+    bar_w = group_w * 0.72 / max(n_methods, 1)
+    ymax = 1.0
+    lines = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" font-family="serif" font-size="8">',
+        f'<text x="{W // 2}" y="18" text-anchor="middle" font-size="9" font-weight="bold">{_svg_esc(title)}</text>',
+        f'<text x="12" y="{MT + PH // 2}" text-anchor="middle" font-size="8"'
+        f' transform="rotate(-90 12 {MT + PH // 2})">{_svg_esc(ylabel)}</text>',
+        f'<line x1="{ML}" y1="{MT}" x2="{ML}" y2="{MT + PH}" stroke="#333" stroke-width="1"/>',
+        f'<line x1="{ML}" y1="{MT + PH}" x2="{ML + PW}" y2="{MT + PH}" stroke="#333" stroke-width="1"/>',
+    ]
+    for tick in [0.0, 0.25, 0.5, 0.75, 1.0]:
+        y_px = MT + PH - int(tick / ymax * PH)
+        lines += [
+            f'<line x1="{ML - 3}" y1="{y_px}" x2="{ML + PW}" y2="{y_px}"'
+            f' stroke="#aaa" stroke-width="0.5" stroke-dasharray="3,2"/>',
+            f'<text x="{ML - 5}" y="{y_px + 3}" text-anchor="end" font-size="7">{tick:.2f}</text>',
+        ]
+    for fi, fname in enumerate(fields):
+        gx = ML + fi * group_w
+        lines.append(
+            f'<text x="{gx + group_w / 2:.1f}" y="{MT + PH + 14}"'
+            f' text-anchor="middle" font-size="7">{_svg_esc(fname.capitalize())}</text>'
+        )
+        for mi, (_method, vals) in enumerate(zip(methods, values_per_method)):
+            val = vals[fi]
+            bh = int(val / ymax * PH)
+            offset = (mi - (n_methods - 1) / 2.0) * bar_w
+            bx = gx + group_w / 2.0 + offset - bar_w / 2.0
+            by = MT + PH - bh
+            color = colors[mi] if mi < len(colors) else f"hsl({mi * 137},60%,50%)"
+            lines.append(
+                f'<rect x="{bx:.1f}" y="{by}" width="{bar_w:.1f}" height="{bh}"'
+                f' fill="{color}" opacity="0.88" stroke="white" stroke-width="0.6"/>'
+            )
+            if bh > 6:
+                lines.append(
+                    f'<text x="{bx + bar_w / 2:.1f}" y="{by - 2}"'
+                    f' text-anchor="middle" font-size="5.5">{val:.2f}</text>'
+                )
+    lx0 = ML + PW - 155
+    for mi, method in enumerate(methods):
+        color = colors[mi] if mi < len(colors) else f"hsl({mi * 137},60%,50%)"
+        lx, ly = lx0, MT + 10 + mi * 14
+        lines += [
+            f'<rect x="{lx}" y="{ly}" width="10" height="8" fill="{color}" opacity="0.88"/>',
+            f'<text x="{lx + 13}" y="{ly + 7}" font-size="7">{_svg_esc(method)}</text>',
+        ]
+    lines.append("</svg>")
+    return "\n".join(lines)
+
+
+def _svg_speed_chart(methods: list, times_data: list, colors: list, title: str) -> str:
+    """Box-and-whisker speed chart as SVG string (replaces matplotlib Fig 2 violin)."""
+    W, H = 400, 300
+    ML, MR, MT, MB = 62, 20, 35, 65
+    PW, PH = W - ML - MR, H - MT - MB
+    stats = []
+    for times in times_data:
+        if not times:
+            stats.append((0.0, 0.0, 0.0, 0.0, 0.0))
+            continue
+        st = sorted(times)
+        n = len(st)
+        stats.append((st[0], st[n // 4], _statistics.median(st), st[3 * n // 4], st[-1]))
+    all_vals = [v for td in times_data for v in td]
+    ymax = max(all_vals) * 1.1 if all_vals else 1.0
+
+    def _ty(v: float) -> int:
+        return MT + PH - int(v / ymax * PH)
+
+    n = len(methods)
+    group_w = PW / (n + 1)
+    box_w = group_w * 0.5
+    lines = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" font-family="serif" font-size="8">',
+        f'<text x="{W // 2}" y="18" text-anchor="middle" font-size="9" font-weight="bold">{_svg_esc(title)}</text>',
+        f'<text x="14" y="{MT + PH // 2}" text-anchor="middle" font-size="8"'
+        f' transform="rotate(-90 14 {MT + PH // 2})">Inference time (ms) \u2193</text>',
+        f'<line x1="{ML}" y1="{MT}" x2="{ML}" y2="{MT + PH}" stroke="#333" stroke-width="1"/>',
+        f'<line x1="{ML}" y1="{MT + PH}" x2="{ML + PW}" y2="{MT + PH}" stroke="#333" stroke-width="1"/>',
+    ]
+    for tf in [0.0, 0.25, 0.5, 0.75, 1.0]:
+        y_px = _ty(tf * ymax)
+        lines += [
+            f'<line x1="{ML}" y1="{y_px}" x2="{ML + PW}" y2="{y_px}"'
+            f' stroke="#aaa" stroke-width="0.5" stroke-dasharray="3,2"/>',
+            f'<text x="{ML - 5}" y="{y_px + 3}" text-anchor="end" font-size="6">{tf * ymax:.0f}</text>',
+        ]
+    for i, (method, (mn, q1, med, q3, mx), color) in enumerate(zip(methods, stats, colors)):
+        cx = ML + (i + 1) * group_w
+        lines += [
+            f'<line x1="{cx:.1f}" y1="{_ty(mn)}" x2="{cx:.1f}" y2="{_ty(mx)}" stroke="{color}" stroke-width="1.2"/>',
+        ]
+        box_top, box_bot = _ty(q3), _ty(q1)
+        bh = max(1, box_bot - box_top)
+        lines += [
+            f'<rect x="{cx - box_w / 2:.1f}" y="{box_top}" width="{box_w:.1f}" height="{bh}"'
+            f' fill="{color}" opacity="0.72" stroke="{color}" stroke-width="1"/>',
+            f'<line x1="{cx - box_w / 2:.1f}" y1="{_ty(med)}" x2="{cx + box_w / 2:.1f}" y2="{_ty(med)}"'
+            f' stroke="black" stroke-width="1.5"/>',
+            f'<text x="{cx:.1f}" y="{MT + PH + 14}" text-anchor="middle" font-size="7">{_svg_esc(method)}</text>',
+        ]
+    lines.append("</svg>")
+    return "\n".join(lines)
+
+
+def _svg_radar_chart(labels: list, series: list, title: str) -> str:
+    """Radar/spider chart as SVG string (replaces matplotlib Fig 3 polar)."""
+    W, H = 380, 380
+    cx, cy, r = W // 2, H // 2 - 5, 115
+    n = len(labels)
+    angles = [_math.pi / 2 - i * 2 * _math.pi / n for i in range(n)]
+
+    def _pt(angle: float, val: float) -> tuple:
+        return cx + r * val * _math.cos(angle), cy - r * val * _math.sin(angle)
+
+    lines = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" font-family="serif" font-size="8">',
+        f'<text x="{W // 2}" y="16" text-anchor="middle" font-size="9" font-weight="bold">{_svg_esc(title)}</text>',
+    ]
+    for ring in [0.25, 0.5, 0.75, 1.0]:
+        pts = " ".join(f"{_pt(a, ring)[0]:.1f},{_pt(a, ring)[1]:.1f}" for a in angles)
+        lines.append(
+            f'<polygon points="{pts}" fill="none" stroke="#bbb" stroke-width="0.6" stroke-dasharray="3,2"/>'
+        )
+        rx, ry = _pt(angles[0], ring)
+        lines.append(
+            f'<text x="{rx + 3:.1f}" y="{ry:.1f}" font-size="6" fill="#888">{ring:.2f}</text>'
+        )
+    for angle, label in zip(angles, labels):
+        ax, ay = _pt(angle, 1.0)
+        lines.append(
+            f'<line x1="{cx}" y1="{cy}" x2="{ax:.1f}" y2="{ay:.1f}" stroke="#ccc" stroke-width="0.8"/>'
+        )
+        lx, ly = _pt(angle, 1.22)
+        anchor = "middle" if abs(lx - cx) < 5 else ("end" if lx < cx else "start")
+        lines.append(
+            f'<text x="{lx:.1f}" y="{ly + 3:.1f}" text-anchor="{anchor}" font-size="8" font-weight="bold">'
+            f"{_svg_esc(label)}</text>"
+        )
+    lx0, ly0 = W - 130, 30
+    for i, (name, values, color) in enumerate(series):
+        pts_raw = [_pt(a, min(1.0, max(0.0, v))) for a, v in zip(angles, values)]
+        pts_raw.append(pts_raw[0])
+        pts_str = " ".join(f"{x:.1f},{y:.1f}" for x, y in pts_raw)
+        lines.append(
+            f'<polygon points="{pts_str}" fill="{color}" fill-opacity="0.18"'
+            f' stroke="{color}" stroke-width="1.6"/>'
+        )
+        lines += [
+            f'<rect x="{lx0}" y="{ly0 + i * 14}" width="10" height="8" fill="{color}" opacity="0.88"/>',
+            f'<text x="{lx0 + 13}" y="{ly0 + i * 14 + 7}" font-size="7">{_svg_esc(name)}</text>',
+        ]
+    lines.append("</svg>")
+    return "\n".join(lines)
+
+
+def _svg_compare_bar(labels: list, values: list, title: str, ylabel: str) -> str:
+    """Simple vertical bar chart SVG for compare_all() cross-arch plot."""
+    W = max(600, 80 * len(labels) + 120)
+    H = 500
+    ML, MR, MT, MB = 62, 20, 40, 130
+    PW, PH = W - ML - MR, H - MT - MB
+    ymax = max(values, default=1.0) * 1.12
+    bar_w = PW / max(len(labels), 1) * 0.65
+
+    def _ty(v: float) -> int:
+        return MT + PH - int(v / ymax * PH)
+
+    lines = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" font-family="sans-serif" font-size="10">',
+        f'<text x="{W // 2}" y="24" text-anchor="middle" font-size="12" font-weight="bold">{_svg_esc(title)}</text>',
+        f'<text x="16" y="{MT + PH // 2}" text-anchor="middle" font-size="10"'
+        f' transform="rotate(-90 16 {MT + PH // 2})">{_svg_esc(ylabel)}</text>',
+        f'<line x1="{ML}" y1="{MT}" x2="{ML}" y2="{MT + PH}" stroke="#333" stroke-width="1.5"/>',
+        f'<line x1="{ML}" y1="{MT + PH}" x2="{ML + PW}" y2="{MT + PH}" stroke="#333" stroke-width="1.5"/>',
+    ]
+    for tf in [0.0, 0.25, 0.5, 0.75, 1.0]:
+        v = tf * ymax
+        y_px = _ty(v)
+        lines += [
+            f'<line x1="{ML}" y1="{y_px}" x2="{ML + PW}" y2="{y_px}"'
+            f' stroke="#ccc" stroke-width="0.7" stroke-dasharray="4,3"/>',
+            f'<text x="{ML - 6}" y="{y_px + 4}" text-anchor="end" font-size="9">{v:.2f}</text>',
+        ]
+    for i, (label, val) in enumerate(zip(labels, values)):
+        bx = ML + (i + 0.175) * PW / max(len(labels), 1)
+        by = _ty(val)
+        bh = MT + PH - by
+        lines += [
+            f'<rect x="{bx:.1f}" y="{by}" width="{bar_w:.1f}" height="{bh}"'
+            f' fill="#4C72B0" opacity="0.82" stroke="white" stroke-width="0.8"/>',
+            f'<text x="{bx + bar_w / 2:.1f}" y="{by - 4}" text-anchor="middle" font-size="9">{val:.3f}</text>',
+        ]
+        lx = bx + bar_w / 2
+        lines.append(
+            f'<text x="{lx:.1f}" y="{MT + PH + 10}" text-anchor="end" font-size="9"'
+            f' transform="rotate(-45 {lx:.1f} {MT + PH + 10})">{_svg_esc(label)}</text>'
+        )
+    lines.append("</svg>")
+    return "\n".join(lines)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -861,7 +1119,7 @@ def print_report(results: list[BenchmarkResult], n_samples: int) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 # Visualisation — journal-ready 2D plots
 # ─────────────────────────────────────────────────────────────────────────────
-if _HEAVY_DEPS_AVAILABLE:
+if _MATPLOTLIB_AVAILABLE:
     plt.rcParams.update(
         {
             "font.family": "serif",
@@ -886,118 +1144,150 @@ def plot_results(results: list[BenchmarkResult], out_dir: Path) -> None:
     """
     Generate 3 publication-quality plots:
       Fig 1 — Per-field F1 grouped bar chart
-      Fig 2 — Speed distribution (violin)
+      Fig 2 — Speed distribution (violin when matplotlib present, box-whisker otherwise)
       Fig 3 — Radar / spider chart (F1, Accuracy, 1-NED, Speed-normalised)
+
+    Uses matplotlib when available; falls back to inline SVG generator otherwise.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
-
-    # ── Fig 1: Per-field F1 grouped bar chart ────────────────────────────────
-    fig1, ax1 = plt.subplots(figsize=(5.5, 3.0))
-    x = np.arange(len(FIELDS))
-    n = len(results)
-    width = 0.72 / n
-    offsets = np.linspace(-(n - 1) * width / 2, (n - 1) * width / 2, n)
-
-    for i, res in enumerate(results):
-        vals = [res.per_field_f1.get(f, 0.0) for f in FIELDS]
-        color = _METHOD_COLORS.get(res.method, f"C{i}")
-        bars = ax1.bar(
-            x + offsets[i],
-            vals,
-            width * 0.92,
-            label=res.method,
-            color=color,
-            alpha=0.88,
-            edgecolor="white",
-            linewidth=0.6,
-        )
-        for bar, val in zip(bars, vals):
-            ax1.text(
-                bar.get_x() + bar.get_width() / 2,
-                bar.get_height() + 0.012,
-                f"{val:.2f}",
-                ha="center",
-                va="bottom",
-                fontsize=5.5,
-            )
-
-    ax1.set_xticks(x)
-    ax1.set_xticklabels([f.capitalize() for f in FIELDS])
-    ax1.set_ylim(0, 1.12)
-    ax1.set_ylabel("Exact-Match F1 (↑)")
-    ax1.set_title("(a) Per-Field F1: DONUT vs. YOLOv8+TrOCR+Regex")
-    ax1.legend(loc="upper right", frameon=False)
-    ax1.grid(axis="y", linestyle=":", linewidth=0.5, alpha=0.6)
-    ax1.spines["top"].set_visible(False)
-    ax1.spines["right"].set_visible(False)
-
-    _save(fig1, out_dir / "fig1_field_f1")
-
-    # ── Fig 2: Speed distribution — violin plot ───────────────────────────────
-    fig2, ax2 = plt.subplots(figsize=(4.0, 3.0))
-    times_data = [[s.inference_time_ms for s in r.samples] for r in results]
-    labels_list = [r.method for r in results]
+    methods = [r.method for r in results]
     colors_list = [_METHOD_COLORS.get(r.method, f"C{i}") for i, r in enumerate(results)]
 
-    parts = ax2.violinplot(
-        times_data, positions=range(1, len(results) + 1), showmedians=True, showextrema=True
-    )
-    for pc, color in zip(parts["bodies"], colors_list):
-        pc.set_facecolor(color)
-        pc.set_alpha(0.72)
-    parts["cmedians"].set_color("black")
-    parts["cmedians"].set_linewidth(1.5)
+    if _MATPLOTLIB_AVAILABLE:
+        # ── Fig 1: Per-field F1 grouped bar chart ────────────────────────────
+        fig1, ax1 = plt.subplots(figsize=(5.5, 3.0))
+        x = np.arange(len(FIELDS))
+        n = len(results)
+        width = 0.72 / n
+        offsets = np.linspace(-(n - 1) * width / 2, (n - 1) * width / 2, n)
 
-    ax2.set_xticks(range(1, len(results) + 1))
-    ax2.set_xticklabels(labels_list, rotation=12, ha="right")
-    ax2.set_ylabel("Inference time (ms) ↓")
-    ax2.set_title("(b) Inference Speed Distribution")
-    ax2.grid(axis="y", linestyle=":", linewidth=0.5, alpha=0.6)
-    ax2.spines["top"].set_visible(False)
-    ax2.spines["right"].set_visible(False)
+        for i, res in enumerate(results):
+            vals = [res.per_field_f1.get(f, 0.0) for f in FIELDS]
+            color = _METHOD_COLORS.get(res.method, f"C{i}")
+            bars = ax1.bar(
+                x + offsets[i],
+                vals,
+                width * 0.92,
+                label=res.method,
+                color=color,
+                alpha=0.88,
+                edgecolor="white",
+                linewidth=0.6,
+            )
+            for bar, val in zip(bars, vals):
+                ax1.text(
+                    bar.get_x() + bar.get_width() / 2,
+                    bar.get_height() + 0.012,
+                    f"{val:.2f}",
+                    ha="center",
+                    va="bottom",
+                    fontsize=5.5,
+                )
 
-    _save(fig2, out_dir / "fig2_speed")
+        ax1.set_xticks(x)
+        ax1.set_xticklabels([f.capitalize() for f in FIELDS])
+        ax1.set_ylim(0, 1.12)
+        ax1.set_ylabel("Exact-Match F1 (↑)")
+        ax1.set_title("(a) Per-Field F1: DONUT vs. YOLOv8+TrOCR+Regex")
+        ax1.legend(loc="upper right", frameon=False)
+        ax1.grid(axis="y", linestyle=":", linewidth=0.5, alpha=0.6)
+        ax1.spines["top"].set_visible(False)
+        ax1.spines["right"].set_visible(False)
+        _save(fig1, out_dir / "fig1_field_f1")
 
-    # ── Fig 3: Radar chart — 4 axes ──────────────────────────────────────────
-    # Axes: F1, Accuracy, 1-NED (higher=better), Speed-score (1 - norm_time)
-    max_time = max(r.mean_inference_ms for r in results) or 1.0
-    radar_labels = ["F1", "Accuracy", "1-NED", "Speed"]
+        # ── Fig 2: Speed distribution — violin plot ──────────────────────────
+        fig2, ax2 = plt.subplots(figsize=(4.0, 3.0))
+        times_data = [[s.inference_time_ms for s in r.samples] for r in results]
+        parts = ax2.violinplot(
+            times_data, positions=range(1, len(results) + 1), showmedians=True, showextrema=True
+        )
+        for pc, color in zip(parts["bodies"], colors_list):
+            pc.set_facecolor(color)
+            pc.set_alpha(0.72)
+        parts["cmedians"].set_color("black")
+        parts["cmedians"].set_linewidth(1.5)
+        ax2.set_xticks(range(1, len(results) + 1))
+        ax2.set_xticklabels(methods, rotation=12, ha="right")
+        ax2.set_ylabel("Inference time (ms) ↓")
+        ax2.set_title("(b) Inference Speed Distribution")
+        ax2.grid(axis="y", linestyle=":", linewidth=0.5, alpha=0.6)
+        ax2.spines["top"].set_visible(False)
+        ax2.spines["right"].set_visible(False)
+        _save(fig2, out_dir / "fig2_speed")
 
-    angles = np.linspace(0, 2 * np.pi, len(radar_labels), endpoint=False).tolist()
-    angles += angles[:1]  # close the polygon
+        # ── Fig 3: Radar chart ───────────────────────────────────────────────
+        max_time = max(r.mean_inference_ms for r in results) or 1.0
+        radar_labels = ["F1", "Accuracy", "1-NED", "Speed"]
+        angles = np.linspace(0, 2 * np.pi, len(radar_labels), endpoint=False).tolist()
+        angles += angles[:1]
+        fig3, ax3 = plt.subplots(figsize=(3.8, 3.8), subplot_kw={"projection": "polar"})
+        ax3.set_theta_offset(np.pi / 2)
+        ax3.set_theta_direction(-1)
+        ax3.set_xticks(angles[:-1])
+        ax3.set_xticklabels(radar_labels, size=8)
+        ax3.set_ylim(0, 1)
+        ax3.set_yticks([0.25, 0.5, 0.75, 1.0])
+        ax3.set_yticklabels(["0.25", "0.50", "0.75", "1.00"], size=6)
+        ax3.grid(linestyle=":", linewidth=0.6, alpha=0.7)
+        ax3.set_title("(c) Multi-Metric Radar", pad=14, size=9)
+        for i, res in enumerate(results):
+            speed_score = 1.0 - (res.mean_inference_ms / max_time)
+            values = [
+                res.global_f1,
+                res.global_accuracy,
+                max(0.0, 1.0 - res.global_ned),
+                speed_score,
+            ]
+            values += values[:1]
+            color = _METHOD_COLORS.get(res.method, f"C{i}")
+            ax3.plot(angles, values, color=color, linewidth=1.6, label=res.method)
+            ax3.fill(angles, values, color=color, alpha=0.18)
+        ax3.legend(loc="upper right", bbox_to_anchor=(1.35, 1.15), frameon=False, fontsize=7)
+        _save(fig3, out_dir / "fig3_radar")
 
-    fig3, ax3 = plt.subplots(figsize=(3.8, 3.8), subplot_kw={"projection": "polar"})
-    ax3.set_theta_offset(np.pi / 2)
-    ax3.set_theta_direction(-1)
-    ax3.set_xticks(angles[:-1])
-    ax3.set_xticklabels(radar_labels, size=8)
-    ax3.set_ylim(0, 1)
-    ax3.set_yticks([0.25, 0.5, 0.75, 1.0])
-    ax3.set_yticklabels(["0.25", "0.50", "0.75", "1.00"], size=6)
-    ax3.grid(linestyle=":", linewidth=0.6, alpha=0.7)
-    ax3.set_title("(c) Multi-Metric Radar", pad=14, size=9)
+    else:
+        # ── Inline SVG fallback (no matplotlib needed) ───────────────────────
+        vals_per_method = [[r.per_field_f1.get(f, 0.0) for f in FIELDS] for r in results]
+        svg1 = _svg_bar_chart(
+            list(FIELDS),
+            methods,
+            vals_per_method,
+            colors_list,
+            "(a) Per-Field F1: DONUT vs. YOLOv8+TrOCR+Regex",
+            "Exact-Match F1 (\u2191)",
+        )
+        _svg_save(svg1, out_dir / "fig1_field_f1")
 
-    for i, res in enumerate(results):
-        speed_score = 1.0 - (res.mean_inference_ms / max_time)
-        values = [
-            res.global_f1,
-            res.global_accuracy,
-            max(0.0, 1.0 - res.global_ned),
-            speed_score,
+        times_data = [[s.inference_time_ms for s in r.samples] for r in results]
+        svg2 = _svg_speed_chart(
+            methods, times_data, colors_list, "(b) Inference Speed Distribution"
+        )
+        _svg_save(svg2, out_dir / "fig2_speed")
+
+        max_time = max(r.mean_inference_ms for r in results) or 1.0
+        series = [
+            (
+                r.method,
+                [
+                    r.global_f1,
+                    r.global_accuracy,
+                    max(0.0, 1.0 - r.global_ned),
+                    1.0 - r.mean_inference_ms / max_time,
+                ],
+                c,
+            )
+            for r, c in zip(results, colors_list)
         ]
-        values += values[:1]
-        color = _METHOD_COLORS.get(res.method, f"C{i}")
-        ax3.plot(angles, values, color=color, linewidth=1.6, label=res.method)
-        ax3.fill(angles, values, color=color, alpha=0.18)
-
-    ax3.legend(loc="upper right", bbox_to_anchor=(1.35, 1.15), frameon=False, fontsize=7)
-
-    _save(fig3, out_dir / "fig3_radar")
+        svg3 = _svg_radar_chart(
+            ["F1", "Accuracy", "1-NED", "Speed"], series, "(c) Multi-Metric Radar"
+        )
+        _svg_save(svg3, out_dir / "fig3_radar")
 
     print(f"\n[Plots] Saved to: {out_dir}")
 
 
 def _save(fig, stem: Path) -> None:
+    """Save a matplotlib figure to PDF + PNG."""
     fig.tight_layout()
     fig.savefig(stem.with_suffix(".pdf"), bbox_inches="tight")
     fig.savefig(stem.with_suffix(".png"), bbox_inches="tight", dpi=300)
@@ -1147,12 +1437,6 @@ def compare_all(results_dir: Path = Path("results"), figures_dir: Path = Path("f
         with open(all_exp_path) as f:
             donut_data = json.load(f)
 
-    # Generate a simple comparison bar chart
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.set_title("Cross-Architecture Comparison (DONUT vs TrOCR+YOLO+Regex)")
-    ax.set_xlabel("Architecture / Experiment")
-    ax.set_ylabel("F1 Score")
-
     labels: list[str] = []
     values: list[float] = []
 
@@ -1175,16 +1459,30 @@ def compare_all(results_dir: Path = Path("results"), figures_dir: Path = Path("f
                 values.append(float(f1))
 
     if labels:
-        ax.bar(range(len(labels)), values, tick_label=labels)
-        plt.xticks(rotation=45, ha="right")
-        plt.tight_layout()
-        out_path = figures_dir / "cross_arch_comparison.png"
-        fig.savefig(str(out_path), dpi=150)
-        print(f"  [compare_all] Saved comparison plot → {out_path}")
+        if _MATPLOTLIB_AVAILABLE:
+            fig, ax = plt.subplots(figsize=(10, 6))
+            ax.set_title("Cross-Architecture Comparison (DONUT vs TrOCR+YOLO+Regex)")
+            ax.set_xlabel("Architecture / Experiment")
+            ax.set_ylabel("F1 Score")
+            ax.bar(range(len(labels)), values, tick_label=labels)
+            plt.xticks(rotation=45, ha="right")
+            plt.tight_layout()
+            out_path = figures_dir / "cross_arch_comparison.png"
+            fig.savefig(str(out_path), dpi=150)
+            plt.close(fig)
+            print(f"  [compare_all] Saved comparison plot \u2192 {out_path}")
+        else:
+            svg = _svg_compare_bar(
+                labels,
+                values,
+                "Cross-Architecture Comparison (DONUT vs TrOCR+YOLO+Regex)",
+                "F1 Score",
+            )
+            stem = figures_dir / "cross_arch_comparison"
+            _svg_save(svg, stem)
+            print(f"  [compare_all] Saved comparison chart \u2192 {stem.with_suffix('.svg')}")
     else:
         print("  [compare_all] No F1 metrics found in result files — skipping plot.")
-
-    plt.close(fig)
 
 
 def main() -> None:

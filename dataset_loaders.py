@@ -203,6 +203,163 @@ def _download_with_progress(url: str, dest_path: Path) -> None:
 
 
 # ======================================================================
+#  Inline HuggingFace dataset downloader — fallback when `datasets` absent
+# ======================================================================
+
+
+def _read_hf_token() -> str | None:
+    """Read HuggingFace token from hf_token.txt (one line, no newline required)."""
+    try:
+        token_path = Path(__file__).parent / "hf_token.txt"
+        if token_path.exists():
+            return token_path.read_text().strip() or None
+    except Exception:
+        pass
+    return os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN") or None
+
+
+def _hf_api_get(url: str, hf_token: str | None = None) -> Any:
+    """GET a HuggingFace API URL and return parsed JSON."""
+    req = urllib.request.Request(url)
+    req.add_header("User-Agent", "inline-hf-downloader/1.0")
+    if hf_token:
+        req.add_header("Authorization", f"Bearer {hf_token}")
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        return json.loads(resp.read())
+
+
+def _hf_download_dataset_inline(
+    repo_id: str,
+    dest_dir: Path,
+    hf_token: str | None = None,
+    split: str = "train",
+) -> Path:
+    """Download a HuggingFace dataset via the datasets-server HTTP API.
+
+    Saves to dest_dir/hf_cache_inline/ as:
+      images/{split}_{idx:06d}.jpg  — one JPEG per sample
+      data_{split}.jsonl            — one JSON record per line (no image bytes)
+      .done_{split}                 — marker written on success
+
+    Returns the hf_cache_inline/ directory path.
+
+    This is a zero-external-dependency replacement for:
+        ds = load_dataset(repo_id); ds.save_to_disk(...)
+    """
+    cache_dir = dest_dir / "hf_cache_inline"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    marker = cache_dir / f".done_{split}"
+    if marker.exists():
+        return cache_dir
+
+    img_dir = cache_dir / "images"
+    img_dir.mkdir(exist_ok=True)
+    jsonl_path = cache_dir / f"data_{split}.jsonl"
+
+    log = logging.getLogger(__name__)
+    log.info("[inline-hf] Downloading %s/%s from HuggingFace datasets-server …", repo_id, split)
+
+    # ── Discover config name ──────────────────────────────────────────────────
+    try:
+        splits_info = _hf_api_get(
+            f"https://datasets-server.huggingface.co/splits?dataset={repo_id}",
+            hf_token,
+        )
+        config = (
+            splits_info["splits"][0].get("config", "default")
+            if splits_info.get("splits")
+            else "default"
+        )
+    except Exception:
+        config = "default"
+
+    # ── Get total row count ───────────────────────────────────────────────────
+    total_rows = 1000  # fallback estimate
+    try:
+        size_info = _hf_api_get(
+            f"https://datasets-server.huggingface.co/size?dataset={repo_id}",
+            hf_token,
+        )
+        for s in size_info.get("size", {}).get("splits", []):
+            if s.get("split") == split:
+                total_rows = int(s.get("num_rows", total_rows))
+                break
+    except Exception:
+        pass
+
+    # ── Download rows in batches of 100 ──────────────────────────────────────
+    batch_size = 100
+    all_rows: list[dict] = []
+    for offset in range(0, total_rows + batch_size, batch_size):
+        try:
+            resp = _hf_api_get(
+                f"https://datasets-server.huggingface.co/rows"
+                f"?dataset={repo_id}&config={config}&split={split}"
+                f"&offset={offset}&length={batch_size}",
+                hf_token,
+            )
+        except Exception as exc:
+            log.warning("[inline-hf] Batch offset=%d failed: %s — stopping early.", offset, exc)
+            break
+        rows = resp.get("rows", [])
+        if not rows:
+            break
+        all_rows.extend(rows)
+        log.info("[inline-hf] %d/%d rows fetched …", len(all_rows), total_rows)
+        if len(all_rows) >= total_rows:
+            break
+
+    # ── Process rows: save images, write JSONL ────────────────────────────────
+    with open(jsonl_path, "w", encoding="utf-8") as f_out:
+        for idx, row_wrapper in enumerate(all_rows):
+            row = row_wrapper.get("row", row_wrapper)
+            record: dict[str, Any] = {}
+            for key, val in row.items():
+                if isinstance(val, dict) and "src" in val:
+                    # Image feature — download the image URL
+                    img_path = img_dir / f"{split}_{idx:06d}.jpg"
+                    if not img_path.exists():
+                        try:
+                            img_req = urllib.request.Request(val["src"])
+                            if hf_token:
+                                img_req.add_header("Authorization", f"Bearer {hf_token}")
+                            with urllib.request.urlopen(img_req, timeout=30) as img_resp:
+                                img_path.write_bytes(img_resp.read())
+                        except Exception as img_exc:
+                            log.warning("[inline-hf] Image %d download failed: %s", idx, img_exc)
+                    record[key] = str(img_path)
+                elif isinstance(val, (str, int, float, list, dict, bool)) or val is None:
+                    record[key] = val
+            f_out.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+    marker.touch()
+    log.info("[inline-hf] Download complete: %d rows saved to %s", len(all_rows), cache_dir)
+    return cache_dir
+
+
+def _hf_load_jsonl_rows(cache_dir: Path, split: str = "train") -> list[dict]:
+    """Load the inline-downloaded JSONL cache produced by _hf_download_dataset_inline().
+
+    Each returned dict has the same keys as the original HF dataset row, except:
+    - image columns contain a Path string pointing to the saved JPEG file
+      (not a PIL Image; callers use PIL.Image.open() or inline image loader)
+    """
+    jsonl_path = cache_dir / f"data_{split}.jsonl"
+    if not jsonl_path.exists():
+        raise FileNotFoundError(
+            f"Inline HF cache not found at {jsonl_path}. "
+            f"Run _hf_download_dataset_inline() first, or install the `datasets` package."
+        )
+    rows = []
+    with open(jsonl_path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                rows.append(json.loads(line))
+    return rows
+
+
+# ======================================================================
 #  Schema validation helpers
 # ======================================================================
 
@@ -758,12 +915,16 @@ class FUNSDLoader(BaseDatasetLoader):
         dest = self._dest_dir()
         marker = self._marker()
         if marker.exists():
-            if not self._hf_cache().exists():
-                self._warn("Cache marker present but hf_cache/ missing — re-downloading.")
+            if (
+                not self._hf_cache().exists()
+                and not (dest / "hf_cache_inline" / ".done_train").exists()
+            ):
+                self._warn("Cache marker present but cache missing — re-downloading.")
                 marker.unlink(missing_ok=True)
             else:
                 return dest
 
+        hf_token = _read_hf_token()
         try:
             from datasets import load_dataset  # type: ignore
 
@@ -772,6 +933,13 @@ class FUNSDLoader(BaseDatasetLoader):
             ds.save_to_disk(str(self._hf_cache()))
             marker.touch()
             self._log("Download complete.")
+        except ImportError:
+            self._log("datasets package absent — using inline HF downloader for FUNSD ...")
+            try:
+                _hf_download_dataset_inline("nielsr/funsd", dest, hf_token, split="train")
+                marker.touch()
+            except Exception as exc:
+                raise self._fatal(f"Inline download failed: {exc}") from exc
         except Exception as exc:
             raise self._fatal(f"Download failed: {exc}") from exc
         return dest
@@ -855,57 +1023,75 @@ class FUNSDLoader(BaseDatasetLoader):
 
         Skips the ``test`` split to prevent contamination.  Uses content
         hash for on-disk filenames to avoid collisions.
+
+        Uses HF Arrow cache (datasets library) when available; falls back to
+        the inline JSONL cache written by _hf_download_dataset_inline().
         """
         dest = self._download()
-        hf_cache = self._hf_cache()
-        if not hf_cache.exists():
-            raise self._fatal("hf_cache/ not found after download.")
-
-        try:
-            from datasets import load_from_disk  # type: ignore
-
-            ds = load_from_disk(str(hf_cache))
-        except Exception as exc:
-            raise self._fatal(f"Failed to load cache: {exc}") from exc
-
-        samples: list[Sample] = []
         img_dest_dir = _ensure_dir(dest / "images")
-        ds_splits = list(ds.keys()) if hasattr(ds, "keys") else ["train"]
+        samples: list[Sample] = []
 
-        for ds_split in ds_splits:
-            if ds_split == "test":
-                continue  # avoid test contamination
-            if split != "train" and ds_split != split:
-                continue
+        # ── HF Arrow path (preferred) ─────────────────────────────────────────
+        hf_cache = self._hf_cache()
+        _use_inline = not hf_cache.exists()
+        if not _use_inline:
+            try:
+                from datasets import load_from_disk  # type: ignore
 
-            split_ds = ds[ds_split] if hasattr(ds, "keys") else ds
-            for item in split_ds:
-                words = item.get("words", [])
-                ner_tags = item.get("ner_tags", [])
-                pil_image = item.get("image")
+                ds = load_from_disk(str(hf_cache))
+                ds_splits = list(ds.keys()) if hasattr(ds, "keys") else ["train"]
+                for ds_split in ds_splits:
+                    if ds_split == "test":
+                        continue
+                    if split != "train" and ds_split != split:
+                        continue
+                    split_ds = ds[ds_split] if hasattr(ds, "keys") else ds
+                    for item in split_ds:
+                        words = item.get("words", [])
+                        ner_tags = item.get("ner_tags", [])
+                        pil_image = item.get("image")
+                        if not words or pil_image is None:
+                            continue
+                        gt = self._funsd_remap(words, ner_tags)
+                        rgb = pil_image.convert("RGB")
+                        img_hash = hashlib.md5(rgb.tobytes()).hexdigest()[:8]
+                        img_path = img_dest_dir / f"{ds_split}_{img_hash}.jpg"
+                        if not img_path.exists():
+                            rgb.save(img_path, "JPEG")
+                        samples.append((img_path, gt))
+                _mm.release_hf_dataset(ds)
+                _mm.flush_hf_arrow_cache()
+            except ImportError:
+                _use_inline = True
+            except Exception as exc:
+                raise self._fatal(f"Failed to load Arrow cache: {exc}") from exc
 
-                if not words or pil_image is None:
+        # ── Inline JSONL fallback ─────────────────────────────────────────────
+        if _use_inline:
+            inline_cache = dest / "hf_cache_inline"
+            if not inline_cache.exists():
+                raise self._fatal(
+                    "Neither HF Arrow cache nor inline cache found. "
+                    "Install the `datasets` package or run _hf_download_dataset_inline()."
+                )
+            for row in _hf_load_jsonl_rows(inline_cache, split="train"):
+                if split == "test":
                     continue
-
-                gt = self._funsd_remap(words, ner_tags)
-                rgb = pil_image.convert("RGB")
-                img_hash = hashlib.md5(rgb.tobytes()).hexdigest()[:8]
-                img_path = img_dest_dir / f"{ds_split}_{img_hash}.jpg"
+                words = row.get("words", [])
+                ner_tags = row.get("ner_tags", [])
+                img_val = row.get("image")
+                if not words or img_val is None:
+                    continue
+                img_path = Path(str(img_val))
                 if not img_path.exists():
-                    rgb.save(img_path, "JPEG")
+                    continue
+                gt = self._funsd_remap(words, ner_tags)
                 samples.append((img_path, gt))
 
         if not samples:
             self._warn("FUNSD returned 0 samples — check HF cache.")
-            _mm.release_hf_dataset(ds)
-            _mm.flush_hf_arrow_cache()
             return []
         _log_field_coverage(samples, self.name)
-        # Release the HuggingFace Arrow dataset from memory now that we have
-        # extracted all samples. Without this, the datasets library keeps the
-        # Arrow mmap alive in its module-level cache across all 8 experiments.
-        _mm.release_hf_dataset(ds)
-        _mm.flush_hf_arrow_cache()
         return samples
 
     def validate_cache(self) -> bool:
@@ -981,12 +1167,16 @@ class InvoicesDonutLoader(BaseDatasetLoader):
         dest = self._dest_dir()
         marker = self._marker()
         if marker.exists():
-            if not self._hf_cache().exists():
-                self._warn("Cache marker present but hf_cache/ missing — re-downloading.")
+            if (
+                not self._hf_cache().exists()
+                and not (dest / "hf_cache_inline" / ".done_train").exists()
+            ):
+                self._warn("Cache marker present but cache missing — re-downloading.")
                 marker.unlink(missing_ok=True)
             else:
                 return dest
 
+        hf_token = _read_hf_token()
         try:
             from datasets import load_dataset  # type: ignore
 
@@ -995,6 +1185,15 @@ class InvoicesDonutLoader(BaseDatasetLoader):
             ds.save_to_disk(str(self._hf_cache()))
             marker.touch()
             self._log("Download complete.")
+        except ImportError:
+            self._log("datasets package absent — using inline HF downloader for Invoices-DONUT ...")
+            try:
+                _hf_download_dataset_inline(
+                    "katanaml-org/invoices-donut-data-v1", dest, hf_token, split="train"
+                )
+                marker.touch()
+            except Exception as exc:
+                raise self._fatal(f"Inline download failed: {exc}") from exc
         except Exception as exc:
             raise self._fatal(f"Download failed: {exc}") from exc
         return dest
@@ -1047,45 +1246,64 @@ class InvoicesDonutLoader(BaseDatasetLoader):
     # ── public interface ──────────────────────────────────────────────
 
     def load(self, split: str = "train") -> list[Sample]:
-        """Load Invoices-DONUT and normalize to SROIE schema."""
+        """Load Invoices-DONUT and normalize to SROIE schema.
+
+        Uses HF Arrow cache (datasets library) when available; falls back to
+        the inline JSONL cache written by _hf_download_dataset_inline().
+        """
         dest = self._download()
-        hf_cache = self._hf_cache()
-        if not hf_cache.exists():
-            raise self._fatal("hf_cache/ not found after download.")
-
-        try:
-            from datasets import load_from_disk  # type: ignore
-
-            ds = load_from_disk(str(hf_cache))
-        except Exception as exc:
-            raise self._fatal(f"Failed to load cache: {exc}") from exc
-
         samples: list[Sample] = []
-        splits = list(ds.keys()) if hasattr(ds, "keys") else ["train"]
 
-        for ds_split in splits:
-            if ds_split == "test":
-                continue  # skip test split to avoid contamination
+        # ── HF Arrow path (preferred) ─────────────────────────────────────────
+        hf_cache = self._hf_cache()
+        _use_inline = not hf_cache.exists()
+        if not _use_inline:
+            try:
+                from datasets import load_from_disk  # type: ignore
 
-            if split != "train" and ds_split != split:
-                continue
+                ds = load_from_disk(str(hf_cache))
+                ds_splits = list(ds.keys()) if hasattr(ds, "keys") else ["train"]
+                img_dest_dir = _ensure_dir(dest / "images")
+                for ds_split in ds_splits:
+                    if ds_split == "test":
+                        continue
+                    if split != "train" and ds_split != split:
+                        continue
+                    split_ds = ds[ds_split] if hasattr(ds, "keys") else ds
+                    for idx, item in enumerate(split_ds):
+                        gt = self._invoices_donut_remap(item.get("ground_truth", "{}"))
+                        pil_image = item.get("image")
+                        if pil_image is not None:
+                            img_path = img_dest_dir / f"{ds_split}_{idx:06d}.jpg"
+                            if not img_path.exists():
+                                pil_image.convert("RGB").save(img_path, "JPEG")
+                            samples.append((img_path, gt))
+                _mm.release_hf_dataset(ds)
+                _mm.flush_hf_arrow_cache()
+            except ImportError:
+                _use_inline = True
+            except Exception as exc:
+                raise self._fatal(f"Failed to load Arrow cache: {exc}") from exc
 
-            split_ds = ds[ds_split] if hasattr(ds, "keys") else ds
-            for idx, item in enumerate(split_ds):
-                gt = self._invoices_donut_remap(item.get("ground_truth", "{}"))
-                pil_image = item.get("image")
-                if pil_image is not None:
-                    img_dest_dir = _ensure_dir(dest / "images")
-                    img_path = img_dest_dir / f"{ds_split}_{idx:06d}.jpg"
-                    if not img_path.exists():
-                        pil_image.convert("RGB").save(img_path, "JPEG")
-                    samples.append((img_path, gt))
+        # ── Inline JSONL fallback ─────────────────────────────────────────────
+        if _use_inline:
+            inline_cache = dest / "hf_cache_inline"
+            if not inline_cache.exists():
+                raise self._fatal(
+                    "Neither HF Arrow cache nor inline cache found. "
+                    "Install the `datasets` package or run _hf_download_dataset_inline()."
+                )
+            for row in _hf_load_jsonl_rows(inline_cache, split="train"):
+                if split == "test":
+                    continue
+                gt = self._invoices_donut_remap(row.get("ground_truth", "{}"))
+                img_val = row.get("image")
+                if img_val is not None:
+                    img_path = Path(str(img_val))
+                    if img_path.exists():
+                        samples.append((img_path, gt))
 
         _log_field_coverage(samples, self.name)
-        # Release the HuggingFace Arrow dataset from memory now that we have
-        # extracted all samples.
-        _mm.release_hf_dataset(ds)
-        _mm.flush_hf_arrow_cache()
         return _validate_samples_nonempty(samples, self.name)
 
     def validate_cache(self) -> bool:
@@ -1179,12 +1397,16 @@ class CORDv2Loader(BaseDatasetLoader):
         dest = self._dest_dir()
         marker = self._marker()
         if marker.exists():
-            if not self._hf_cache().exists():
-                self._warn("Marker present but hf_cache/ missing — re-downloading.")
+            if (
+                not self._hf_cache().exists()
+                and not (dest / "hf_cache_inline" / ".done_train").exists()
+            ):
+                self._warn("Marker present but cache missing — re-downloading.")
                 marker.unlink(missing_ok=True)
             else:
                 return dest
 
+        hf_token = _read_hf_token()
         try:
             from datasets import load_dataset  # type: ignore
 
@@ -1193,6 +1415,13 @@ class CORDv2Loader(BaseDatasetLoader):
             ds.save_to_disk(str(self._hf_cache()))
             marker.touch()
             self._log("CORD-v2 download complete.")
+        except ImportError:
+            self._log("datasets package absent — using inline HF downloader for CORD-v2 ...")
+            try:
+                _hf_download_dataset_inline("naver-clova-ix/cord-v2", dest, hf_token, split="train")
+                marker.touch()
+            except Exception as exc:
+                raise self._fatal(f"Inline download failed: {exc}") from exc
         except Exception as exc:
             raise self._fatal(f"CORD-v2 download failed: {exc}") from exc
         return dest

@@ -34,12 +34,95 @@ import math
 import os
 import tempfile
 import threading
+import unittest
 import unittest.mock as mock
 import warnings
 from pathlib import Path
 
-# Third-party
-import pytest
+# Third-party — pytest is optional; falls back to inline unittest stub
+try:
+    import pytest
+except ImportError:
+    import importlib as _importlib
+
+    class _RaisesCtx:
+        """Mimics pytest.raises() context manager."""
+
+        def __init__(self, exc_class, match=None):
+            self.exc_class = exc_class
+            self.match = match
+            self.value = None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            if exc_type is None:
+                raise AssertionError(f"Expected {self.exc_class!r} to be raised")
+            if not issubclass(exc_type, self.exc_class):
+                return False
+            if self.match is not None:
+                import re as _re
+
+                if not _re.search(self.match, str(exc_val)):
+                    raise AssertionError(f"Pattern {self.match!r} not found in {exc_val!r}")
+            self.value = exc_val
+            return True
+
+    class _Mark:
+        @staticmethod
+        def skipif(condition, *, reason=""):
+            return unittest.skipIf(condition, reason)
+
+        @staticmethod
+        def parametrize(argnames, argvalues, **kw):
+            def _dec(func):
+                import functools
+
+                @functools.wraps(func)
+                def _wrapper(self_inner):
+                    names = [n.strip() for n in argnames.split(",")]
+                    first = argvalues[0] if argvalues else ()
+                    vals = first if len(names) > 1 else (first,)
+                    return func(self_inner, *vals)
+
+                return _wrapper
+
+            return _dec
+
+        def __getattr__(self, name):
+            return lambda *a, **kw: lambda f: f
+
+    class _Pytest:
+        mark = _Mark()
+
+        @staticmethod
+        def importorskip(modname, reason=None, **kw):
+            spec = _importlib.util.find_spec(modname)
+            if spec is None:
+                raise unittest.SkipTest(
+                    f"could not import {modname!r}" + (f": {reason}" if reason else "")
+                )
+            return _importlib.import_module(modname)
+
+        @staticmethod
+        def fixture(func=None, *, scope="function", **kw):
+            if func is not None:
+                return func
+            return lambda f: f
+
+        @staticmethod
+        def raises(exc_class, match=None, **kw):
+            return _RaisesCtx(exc_class, match=match)
+
+        @staticmethod
+        def warns(warning_class, **kw):
+            import warnings as _w
+
+            return _w.catch_warnings()
+
+    pytest = _Pytest()
+
 
 # Project imports (do not require torch/transformers)
 import memory_manager as mm
@@ -161,7 +244,7 @@ else:
 # ============================================================================
 
 
-class TestExtractAddressFromSeller:
+class TestExtractAddressFromSeller(unittest.TestCase):
     def test_street_number_split(self):
         """Typical Invoices-DONUT seller string with street number."""
         company, address = extract_address_from_seller(
@@ -225,7 +308,7 @@ class TestExtractAddressFromSeller:
 # ---------------------------------------------------------------------------
 
 
-class TestSROIEKeyFileParsing:
+class TestSROIEKeyFileParsing(unittest.TestCase):
     """Tests for _load_key_file (dataset_loaders) and _parse_txt_key (train)."""
 
     def _write_key_file(self, tmp_path: Path, lines: list[str]) -> Path:
@@ -320,7 +403,7 @@ class TestSROIEKeyFileParsing:
 # ============================================================================
 
 
-class TestDatasetCacheClearing:
+class TestDatasetCacheClearing(unittest.TestCase):
     pytestmark = pytest.mark.skipif(
         not _TORCH_AVAILABLE,
         reason="torch and transformers required",
@@ -406,8 +489,13 @@ class TestDatasetCacheClearing:
 # ---------------------------------------------------------------------------
 
 
-class TestTrainExperimentCleanup:
+class TestTrainExperimentCleanup(unittest.TestCase):
     """AST-based test that clear_caches() is called before del train_ds."""
+
+    def setUp(self):
+        src_path = Path(__file__).resolve().parent.parent / "run_experiments.py"
+        self.run_experiments_source = src_path.read_text()
+        self.run_experiments_ast = ast.parse(self.run_experiments_source)
 
     @pytest.fixture(scope="class")
     def run_experiments_source(self):
@@ -436,7 +524,8 @@ class TestTrainExperimentCleanup:
                 count += 1
         return count
 
-    def test_clear_caches_called_on_train_ds_before_del(self, run_experiments_ast):
+    def test_clear_caches_called_on_train_ds_before_del(self):
+        run_experiments_ast = self.run_experiments_ast
         """train_experiment() must call .clear_caches() at least once before del train_ds.
 
         This is the critical sequence that prevents _pixel_cache tensors
@@ -453,7 +542,8 @@ class TestTrainExperimentCleanup:
             "the 8 sequential experiments."
         )
 
-    def test_clear_caches_called_in_oom_retry(self, run_experiments_ast):
+    def test_clear_caches_called_in_oom_retry(self):
+        run_experiments_ast = self.run_experiments_ast
         """The OOM-retry cleanup block must also call clear_caches().
 
         When CUDA OOM fires mid-training, the same cleanup pattern must be
@@ -475,7 +565,7 @@ class TestTrainExperimentCleanup:
 # ---------------------------------------------------------------------------
 
 
-class TestPrecomputeTensorsFlag:
+class TestPrecomputeTensorsFlag(unittest.TestCase):
     """Verify precompute_tensors=False behaviour in MultiDataset.__init__."""
 
     def _make_dataset(self, precompute_tensors: bool, cache_in_ram: bool = False):
@@ -544,7 +634,7 @@ class TestPrecomputeTensorsFlag:
 # ============================================================================
 
 
-class TestFields:
+class TestFields(unittest.TestCase):
     def test_fields_is_list(self):
         assert isinstance(FIELDS, list)
 
@@ -563,7 +653,7 @@ class TestFields:
             assert f == f.lower()
 
 
-class TestImageExts:
+class TestImageExts(unittest.TestCase):
     def test_image_exts_is_frozenset(self):
         assert isinstance(IMAGE_EXTS, frozenset)
 
@@ -580,7 +670,7 @@ class TestImageExts:
             assert ext == ext.lower()
 
 
-class TestMaxLength:
+class TestMaxLength(unittest.TestCase):
     def test_max_length_is_int(self):
         assert isinstance(MAX_LENGTH, int)
 
@@ -591,7 +681,7 @@ class TestMaxLength:
         assert MAX_LENGTH == 768
 
 
-class TestBaseModel:
+class TestBaseModel(unittest.TestCase):
     def test_base_model_is_string(self):
         assert isinstance(BASE_MODEL, str)
 
@@ -599,7 +689,7 @@ class TestBaseModel:
         assert BASE_MODEL == "naver-clova-ix/donut-base"
 
 
-class TestSeed:
+class TestSeed(unittest.TestCase):
     def test_seed_is_int(self):
         assert isinstance(SEED, int)
 
@@ -607,7 +697,7 @@ class TestSeed:
         assert SEED == 42
 
 
-class TestNewTokens:
+class TestNewTokens(unittest.TestCase):
     def test_new_tokens_is_list(self):
         assert isinstance(NEW_TOKENS, list)
 
@@ -625,7 +715,7 @@ class TestNewTokens:
             assert f"</s_{field}>" in NEW_TOKENS
 
 
-class TestEmptyGT:
+class TestEmptyGT(unittest.TestCase):
     def test_empty_gt_is_dict(self):
         assert isinstance(EMPTY_GT, dict)
 
@@ -661,7 +751,7 @@ class _FakeTokenizer:
         return self.unk_token_id
 
 
-class TestMaskEmptyFieldLabels:
+class TestMaskEmptyFieldLabels(unittest.TestCase):
     pytestmark = pytest.mark.skipif(
         not _TORCH_AVAILABLE,
         reason="torch and transformers required",
@@ -1316,7 +1406,7 @@ def test_get_augmentation_transforms_exported():
 # ============================================================================
 
 
-class TestDatasetLoadError:
+class TestDatasetLoadError(unittest.TestCase):
     def test_attributes(self):
         exc = DatasetLoadError("test_ds", "file not found")
         assert exc.dataset_name == "test_ds"
@@ -1337,7 +1427,7 @@ class TestDatasetLoadError:
 # ---------------------------------------------------------------------------
 
 
-class TestValidateSampleSchema:
+class TestValidateSampleSchema(unittest.TestCase):
     def test_valid_sample(self):
         sample = (Path("/img.jpg"), {"company": "A", "date": "B", "address": "C", "total": "D"})
         assert _validate_sample_schema(sample, "test") is True
@@ -1375,7 +1465,7 @@ class TestValidateSampleSchema:
 # ---------------------------------------------------------------------------
 
 
-class TestValidateSamplesNonempty:
+class TestValidateSamplesNonempty(unittest.TestCase):
     def test_nonempty_passes(self):
         samples = [(Path("/img.jpg"), {"company": "", "date": "", "address": "", "total": ""})]
         result = _validate_samples_nonempty(samples, "test")
@@ -1395,7 +1485,7 @@ class TestValidateSamplesNonempty:
 # ---------------------------------------------------------------------------
 
 
-class TestEnsureDir:
+class TestEnsureDir(unittest.TestCase):
     def test_creates_dir(self, tmp_path):
         new_dir = tmp_path / "a" / "b" / "c"
         result = _ensure_dir(new_dir)
@@ -1413,7 +1503,7 @@ class TestEnsureDir:
 # ---------------------------------------------------------------------------
 
 
-class TestPathHelpers:
+class TestPathHelpers(unittest.TestCase):
     def test_get_datasets_dir_default(self):
         from dataset_loaders import _get_datasets_dir
 
@@ -1470,7 +1560,7 @@ class TestPathHelpers:
 # ---------------------------------------------------------------------------
 
 
-class TestSROIESplitDirectories:
+class TestSROIESplitDirectories(unittest.TestCase):
     """Verify val and test splits use distinct directories (no data leakage)."""
 
     def test_val_and_test_use_different_dirs(self):
@@ -1525,7 +1615,7 @@ class TestSROIESplitDirectories:
 # ---------------------------------------------------------------------------
 
 
-class TestSellerSplitCache:
+class TestSellerSplitCache(unittest.TestCase):
     def test_load_returns_dict(self):
         from dataset_loaders import _load_seller_split_cache
 
@@ -1623,7 +1713,7 @@ def _make_samples(gts: list[dict]) -> list[tuple[Path, dict]]:
     return [(Path(f"/fake/{i}.jpg"), gt) for i, gt in enumerate(gts)]
 
 
-class TestAliasResolution:
+class TestAliasResolution(unittest.TestCase):
     def test_store_name_maps_to_company(self):
         samples = _make_samples(
             [
@@ -1660,7 +1750,7 @@ class TestAliasResolution:
         assert result[0][1]["date"] == "12/12/2023"
 
 
-class TestNAHandling:
+class TestNAHandling(unittest.TestCase):
     def test_na_becomes_empty_string(self):
         samples = _make_samples(
             [{"company": "N/A", "date": "01/01/2024", "address": "Addr", "total": "1.00"}]
@@ -1690,7 +1780,7 @@ class TestNAHandling:
         assert result[0][1]["company"] == ""
 
 
-class TestMissingKeyDefaulting:
+class TestMissingKeyDefaulting(unittest.TestCase):
     def test_missing_keys_default_to_empty_string(self):
         """A dict with only 2 fields should produce all 4 canonical keys."""
         samples = _make_samples([{"company": "ACME", "date": "01/01/2024"}])
@@ -1709,7 +1799,7 @@ class TestMissingKeyDefaulting:
             assert v == ""
 
 
-class TestCoverageCheck:
+class TestCoverageCheck(unittest.TestCase):
     def _full_sample(self, company="ACME", date="01/01/2024", total="1.00"):
         return {"company": company, "date": date, "address": "123 St", "total": total}
 
@@ -1735,7 +1825,7 @@ class TestCoverageCheck:
         assert len(result) == 10
 
 
-class TestCurrencyStripping:
+class TestCurrencyStripping(unittest.TestCase):
     def _sample(self, total: str) -> list[tuple[Path, dict]]:
         return _make_samples(
             [{"company": "Shop", "date": "01/01/2024", "address": "Addr", "total": total}]
@@ -1772,7 +1862,7 @@ class TestCurrencyStripping:
         assert result[0][1]["total"] == "$10.50"
 
 
-class TestConvenienceWrapper:
+class TestConvenienceWrapper(unittest.TestCase):
     def test_normalise_samples_returns_same_as_class(self):
         samples = _make_samples(
             [{"store_name": "X", "date": "01/01/2024", "address": "A", "total": "1.00"}]
@@ -1811,7 +1901,7 @@ def _ast_call_names(source: str) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-class TestGP1ExperimentsImmutability:
+class TestGP1ExperimentsImmutability(unittest.TestCase):
     """GP-1 (CLAUDE.md §19): run_experiment() must use dataclasses.replace().
 
     Python dataclasses are mutable.  ``config = EXPERIMENTS[exp_id]`` is a
@@ -1863,7 +1953,7 @@ class TestGP1ExperimentsImmutability:
 # ---------------------------------------------------------------------------
 
 
-class TestGP2ValidateStepCount:
+class TestGP2ValidateStepCount(unittest.TestCase):
     """GP-2 (CLAUDE.md §19): validate_training_config() must be called before training.
 
     Without step-count validation, a large batch on high-VRAM GPU can reduce
@@ -1916,7 +2006,7 @@ class TestGP2ValidateStepCount:
 # ---------------------------------------------------------------------------
 
 
-class TestGP3ConvertTokensListForm:
+class TestGP3ConvertTokensListForm(unittest.TestCase):
     """GP-3 (CLAUDE.md §19): convert_tokens_to_ids must be called with a list.
 
     The string form iterates over characters, returning the ID for '<' — not
@@ -1966,7 +2056,7 @@ class TestGP3ConvertTokensListForm:
 # ---------------------------------------------------------------------------
 
 
-class TestGP4DecoderStartTokenVerification:
+class TestGP4DecoderStartTokenVerification(unittest.TestCase):
     """GP-4 (CLAUDE.md §19): after setting decoder_start_token_id, the code
     must verify ``tokenizer.decode([token_id]) == '<s_sroie>'`` and raise
     RuntimeError if wrong.
@@ -2011,7 +2101,7 @@ class TestGP4DecoderStartTokenVerification:
 # ---------------------------------------------------------------------------
 
 
-class TestPattern3CompatShim:
+class TestPattern3CompatShim(unittest.TestCase):
     """Pattern 3 (CLAUDE.md §5): The PreTrainedTokenizerBase compat shim must
     be present in dataset_loaders.py.
 
@@ -2075,7 +2165,7 @@ class TestPattern3CompatShim:
 # ---------------------------------------------------------------------------
 
 
-class TestPattern7ImportorskipOrder:
+class TestPattern7ImportorskipOrder(unittest.TestCase):
     """Pattern 7 (CLAUDE.md §16): pytest.importorskip() must appear before
     the import of the package it guards.
 
@@ -2136,7 +2226,7 @@ class TestPattern7ImportorskipOrder:
 # ============================================================================
 
 
-class TestSafe:
+class TestSafe(unittest.TestCase):
     def test_present_value(self):
         assert _safe({"f1": 0.9123}, "f1") == "0.9123"
 
@@ -2161,7 +2251,7 @@ class TestSafe:
 # ---------------------------------------------------------------------------
 
 
-class TestStaticData:
+class TestStaticData(unittest.TestCase):
     def test_exp_names_has_at_least_eight_entries(self):
         assert len(EXP_NAMES) >= 8
 
@@ -2186,7 +2276,7 @@ class TestStaticData:
 # ---------------------------------------------------------------------------
 
 
-class TestPaperInjector:
+class TestPaperInjector(unittest.TestCase):
     def _make_injector(self, tmp_dir, all_exp=None, eval_res=None, template=""):
         """Create a PaperInjector with mock data."""
         results_dir = Path(tmp_dir) / "results"
@@ -2289,7 +2379,7 @@ class TestPaperInjector:
 # ---------------------------------------------------------------------------
 
 
-class TestPartialResultsRobustness:
+class TestPartialResultsRobustness(unittest.TestCase):
     """Paper/presentation generation must not fail when only some experiments
     have completed.  Unresolved \\VAR{} vars should fall back to "---"."""
 
@@ -2381,7 +2471,7 @@ class TestPartialResultsRobustness:
 # ---------------------------------------------------------------------------
 
 
-class TestInjectorRobustness:
+class TestInjectorRobustness(unittest.TestCase):
     """Edge-case robustness for paper/presentation generation."""
 
     def _make_injector(self, tmp_dir, template="x"):
@@ -2491,7 +2581,7 @@ def _source(filename: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-class TestDonutEvaluatorModelPath:
+class TestDonutEvaluatorModelPath(unittest.TestCase):
     def test_model_dir_not_used_in_run_all_zero_shot(self):
         """run_all._run_zero_shot_experiment must NOT pass model_dir= to DonutEvaluator."""
         src = _source("run_all.py")
@@ -2534,7 +2624,7 @@ class TestDonutEvaluatorModelPath:
 # ---------------------------------------------------------------------------
 
 
-class TestRunExperimentFromConfigExported:
+class TestRunExperimentFromConfigExported(unittest.TestCase):
     def test_in_all_list(self):
         """run_experiments.__all__ must include run_experiment_from_config."""
         tree = _parse("run_experiments.py")
@@ -2568,7 +2658,7 @@ class TestRunExperimentFromConfigExported:
 # ---------------------------------------------------------------------------
 
 
-class TestYamlFallbackRaisesError:
+class TestYamlFallbackRaisesError(unittest.TestCase):
     def test_no_return_zero_f1_dict(self):
         """_run_yaml_donut_experiment must NOT return a dict with global_f1: 0.0."""
         src = _source("run_all.py")
@@ -2609,7 +2699,7 @@ class TestYamlFallbackRaisesError:
 # ---------------------------------------------------------------------------
 
 
-class TestTrocrCallsDataPrep:
+class TestTrocrCallsDataPrep(unittest.TestCase):
     def test_stage_trocr_data_prep_called_in_trocr_experiment(self):
         """_run_trocr_yolo_experiment must reference stage_trocr_data_prep."""
         src = _source("run_all.py")
@@ -2633,7 +2723,7 @@ class TestTrocrCallsDataPrep:
 # ---------------------------------------------------------------------------
 
 
-class TestLoggingUtilsImportable:
+class TestLoggingUtilsImportable(unittest.TestCase):
     def test_import(self):
         """logging_utils must be importable without heavy dependencies."""
         mod = importlib.import_module("logging_utils")
@@ -2661,7 +2751,7 @@ class TestLoggingUtilsImportable:
 # ============================================================================
 
 
-class TestImportChain:
+class TestImportChain(unittest.TestCase):
     """Verify every module can be imported without crashing."""
 
     def test_constants_importable(self):
@@ -2752,7 +2842,7 @@ class _CapturingHandler(logging.Handler):
         self.records.append(record)
 
 
-class TestDeduplicatingHandler:
+class TestDeduplicatingHandler(unittest.TestCase):
     def _make_record(self, name: str, level: int, msg: str) -> logging.LogRecord:
         return logging.LogRecord(
             name=name,
@@ -2845,7 +2935,7 @@ class TestDeduplicatingHandler:
         assert len(cap.records) >= 1
 
 
-class TestSuppressNoisyLoggers:
+class TestSuppressNoisyLoggers(unittest.TestCase):
     def test_pil_set_to_warning(self):
         import logging
 
@@ -2868,7 +2958,7 @@ class TestSuppressNoisyLoggers:
 # ============================================================================
 
 
-class TestComputePilMbPerSample:
+class TestComputePilMbPerSample(unittest.TestCase):
     """Tests for compute_pil_mb_per_sample()."""
 
     def test_reference_resolution_1280x960(self):
@@ -2908,7 +2998,7 @@ def _patch_available_ram(available_bytes: int):
     return mock.patch("memory_manager._get_available_ram_bytes", return_value=available_bytes)
 
 
-class TestRamCacheIsSafe:
+class TestRamCacheIsSafe(unittest.TestCase):
     """Tests for ram_cache_is_safe() -- the gate that replaced `len(samples) * 3`."""
 
     def test_small_dataset_at_ref_resolution_is_safe(self):
@@ -2963,7 +3053,7 @@ class TestRamCacheIsSafe:
         assert result_25pct is True, "Should be allowed at 25% safety fraction"
 
 
-class TestFlushHfArrowCache:
+class TestFlushHfArrowCache(unittest.TestCase):
     """Tests for flush_hf_arrow_cache() -- smoke tests only (no network)."""
 
     def test_flush_does_not_crash_when_datasets_installed(self):
@@ -2978,7 +3068,7 @@ class TestFlushHfArrowCache:
             mm.flush_hf_arrow_cache()  # should complete without exception
 
 
-class TestReleaseHfDataset:
+class TestReleaseHfDataset(unittest.TestCase):
     """Tests for release_hf_dataset() -- unit tests with mock datasets."""
 
     def test_none_is_noop(self):
@@ -3003,7 +3093,7 @@ class TestReleaseHfDataset:
         mm.release_hf_dataset(FakeDataset())  # must not raise
 
 
-class TestShutdownDataloaderWorkers:
+class TestShutdownDataloaderWorkers(unittest.TestCase):
     """Tests for shutdown_dataloader_workers() -- smoke tests with mock trainer."""
 
     def test_none_trainer_is_noop(self):
@@ -3033,7 +3123,7 @@ class TestShutdownDataloaderWorkers:
         mock_iter._shutdown_workers.assert_called_once()
 
 
-class TestRamHeadroomMb:
+class TestRamHeadroomMb(unittest.TestCase):
     """Tests for the new ram_headroom_mb() function."""
 
     def test_returns_positive_float_on_real_system(self):
@@ -3063,7 +3153,7 @@ class TestRamHeadroomMb:
         )
 
 
-class TestRamSafetyFractionRegressionGuard:
+class TestRamSafetyFractionRegressionGuard(unittest.TestCase):
     """Regression guard: _RAM_SAFETY_FRACTION must never be raised back to 0.15."""
 
     def test_safety_fraction_is_at_most_0_10(self):
@@ -3093,7 +3183,7 @@ class TestRamSafetyFractionRegressionGuard:
 # ============================================================================
 
 
-class TestNED:
+class TestNED(unittest.TestCase):
     pytestmark = pytest.mark.skipif(
         not _TORCH_AVAILABLE,
         reason="torch and transformers required",
@@ -3135,7 +3225,7 @@ class TestNED:
 # ---------------------------------------------------------------------------
 
 
-class TestParsePredictionListMerge:
+class TestParsePredictionListMerge(unittest.TestCase):
     pytestmark = pytest.mark.skipif(
         not _TORCH_AVAILABLE,
         reason="torch and transformers required",
@@ -3229,7 +3319,7 @@ class TestParsePredictionListMerge:
 # ---------------------------------------------------------------------------
 
 
-class TestUnwrapPrediction:
+class TestUnwrapPrediction(unittest.TestCase):
     pytestmark = pytest.mark.skipif(
         not _TORCH_AVAILABLE,
         reason="torch and transformers required",
@@ -3265,7 +3355,7 @@ class TestUnwrapPrediction:
 # ---------------------------------------------------------------------------
 
 
-class TestComputeMetrics:
+class TestComputeMetrics(unittest.TestCase):
     pytestmark = pytest.mark.skipif(
         not _TORCH_AVAILABLE,
         reason="torch and transformers required",
@@ -3371,7 +3461,7 @@ class TestComputeMetrics:
 # ---------------------------------------------------------------------------
 
 
-class TestLoadModelWithTiedWeights:
+class TestLoadModelWithTiedWeights(unittest.TestCase):
     pytestmark = pytest.mark.skipif(
         not _TORCH_AVAILABLE,
         reason="torch and transformers required",
@@ -3451,7 +3541,7 @@ class TestLoadModelWithTiedWeights:
 # ---------------------------------------------------------------------------
 
 
-class TestAllowHighParseFailures:
+class TestAllowHighParseFailures(unittest.TestCase):
     pytestmark = pytest.mark.skipif(
         not _TORCH_AVAILABLE,
         reason="torch and transformers required",
@@ -3590,7 +3680,7 @@ class TestAllowHighParseFailures:
 # ---------------------------------------------------------------------------
 
 
-class TestRunExperimentsParseFailureCatch:
+class TestRunExperimentsParseFailureCatch(unittest.TestCase):
     pytestmark = pytest.mark.skipif(
         not _TORCH_AVAILABLE,
         reason="torch and transformers required",
@@ -3752,7 +3842,7 @@ def test_token2json_list_output_merged():
 # ---------------------------------------------------------------------------
 
 
-class TestBenchmarkCompareMetricUnification:
+class TestBenchmarkCompareMetricUnification(unittest.TestCase):
     pytestmark = pytest.mark.skipif(
         not _TORCH_AVAILABLE,
         reason="torch and transformers required",
@@ -3847,7 +3937,7 @@ class TestBenchmarkCompareMetricUnification:
 # ---------------------------------------------------------------------------
 
 
-class TestInteractiveSelectionFallback:
+class TestInteractiveSelectionFallback(unittest.TestCase):
     pytestmark = pytest.mark.skipif(
         not _TORCH_AVAILABLE,
         reason="torch and transformers required",
@@ -3906,7 +3996,7 @@ _ROOT = Path(__file__).resolve().parent.parent
 # =============================================================================
 
 
-class TestNormPpf:
+class TestNormPpf(unittest.TestCase):
     """_norm_ppf: rational approximation to the standard-normal inverse CDF."""
 
     def test_median_is_zero(self):
@@ -3936,7 +4026,7 @@ class TestNormPpf:
         assert math.isfinite(_norm_ppf(0.999))
 
 
-class TestTwoProportionMdd:
+class TestTwoProportionMdd(unittest.TestCase):
     """_two_proportion_mdd: minimum detectable difference."""
 
     def test_larger_n_gives_smaller_mdd(self):
@@ -3973,7 +4063,7 @@ class TestTwoProportionMdd:
         assert abs(mdd - 0.089) < 0.005
 
 
-class TestFamilyWiseErrorRate:
+class TestFamilyWiseErrorRate(unittest.TestCase):
     """_family_wise_error_rate: FWER for k independent tests."""
 
     def test_single_test_equals_alpha(self):
@@ -3998,7 +4088,7 @@ class TestFamilyWiseErrorRate:
 # =============================================================================
 
 
-class TestCritiqueFinding:
+class TestCritiqueFinding(unittest.TestCase):
     def _make(self, severity=FindingSeverity.WARNING) -> CritiqueFinding:
         return CritiqueFinding(
             severity=severity,
@@ -4021,7 +4111,7 @@ class TestCritiqueFinding:
             assert key in d
 
 
-class TestCritiqueReport:
+class TestCritiqueReport(unittest.TestCase):
     def _make_report(self, severities: list[FindingSeverity]) -> CritiqueReport:
         findings = [
             CritiqueFinding(
@@ -4079,7 +4169,7 @@ class TestCritiqueReport:
 # =============================================================================
 
 
-class TestStatisticalPowerAudit:
+class TestStatisticalPowerAudit(unittest.TestCase):
     def test_returns_list_of_findings(self):
         findings = StatisticalPowerAudit().run()
         assert isinstance(findings, list)
@@ -4138,7 +4228,7 @@ class TestStatisticalPowerAudit:
 # =============================================================================
 
 
-class TestMultipleTestingAudit:
+class TestMultipleTestingAudit(unittest.TestCase):
     def test_returns_non_empty_list(self):
         findings = MultipleTestingAudit().run()
         assert len(findings) >= 1
@@ -4171,7 +4261,7 @@ class TestMultipleTestingAudit:
 # =============================================================================
 
 
-class TestEpochConfoundAudit:
+class TestEpochConfoundAudit(unittest.TestCase):
     def test_returns_list(self):
         findings = EpochConfoundAudit().run()
         assert isinstance(findings, list)
@@ -4222,7 +4312,7 @@ class TestEpochConfoundAudit:
 # =============================================================================
 
 
-class TestPretrainingBiasAudit:
+class TestPretrainingBiasAudit(unittest.TestCase):
     def test_returns_list(self):
         findings = PretrainingBiasAudit().run()
         assert isinstance(findings, list)
@@ -4261,7 +4351,7 @@ class TestPretrainingBiasAudit:
 # =============================================================================
 
 
-class TestArchitectureAudit:
+class TestArchitectureAudit(unittest.TestCase):
     def test_returns_list(self):
         findings = ArchitectureAudit().run()
         assert isinstance(findings, list)
@@ -4291,7 +4381,7 @@ class TestArchitectureAudit:
 # =============================================================================
 
 
-class TestBenchmarkNarrowness:
+class TestBenchmarkNarrowness(unittest.TestCase):
     def test_returns_list(self):
         findings = BenchmarkNarrowness().run()
         assert isinstance(findings, list)
@@ -4338,7 +4428,7 @@ class TestBenchmarkNarrowness:
 # =============================================================================
 
 
-class TestPipelineCritic:
+class TestPipelineCritic(unittest.TestCase):
     def test_run_returns_critique_report(self):
         report = PipelineCritic().run()
         assert isinstance(report, CritiqueReport)
@@ -4417,7 +4507,7 @@ class TestPipelineCritic:
 # ============================================================================
 
 
-class TestExperimentsImmutability:
+class TestExperimentsImmutability(unittest.TestCase):
     pytestmark = pytest.mark.skipif(
         not _TORCH_AVAILABLE,
         reason="torch and transformers required",
@@ -4467,7 +4557,7 @@ class TestExperimentsImmutability:
         assert EXPERIMENTS[1].gradient_accumulation_steps == 2
 
 
-class TestExperimentConfigFields:
+class TestExperimentConfigFields(unittest.TestCase):
     pytestmark = pytest.mark.skipif(
         not _TORCH_AVAILABLE,
         reason="torch and transformers required",
@@ -4507,7 +4597,7 @@ class TestExperimentConfigFields:
         assert c.batch_size > 0
 
 
-class TestExperimentConfigLoaderCompat:
+class TestExperimentConfigLoaderCompat(unittest.TestCase):
     """Verify cross-class compatibility: both ExperimentConfig classes share a common interface."""
 
     def test_run_experiments_id_property(self):
@@ -4611,7 +4701,7 @@ class TestExperimentConfigLoaderCompat:
         )
 
 
-class TestTrainExperimentSignature:
+class TestTrainExperimentSignature(unittest.TestCase):
     pytestmark = pytest.mark.skipif(
         not _TORCH_AVAILABLE,
         reason="torch and transformers required",
@@ -4637,7 +4727,7 @@ class TestTrainExperimentSignature:
         )
 
 
-class TestExperimentsRegistry:
+class TestExperimentsRegistry(unittest.TestCase):
     pytestmark = pytest.mark.skipif(
         not _TORCH_AVAILABLE,
         reason="torch and transformers required",
@@ -4672,7 +4762,7 @@ class TestExperimentsRegistry:
         )
 
 
-class TestRunCustomExperimentCallable:
+class TestRunCustomExperimentCallable(unittest.TestCase):
     pytestmark = pytest.mark.skipif(
         not _TORCH_AVAILABLE,
         reason="torch and transformers required",
@@ -4694,7 +4784,7 @@ class TestRunCustomExperimentCallable:
 # ============================================================================
 
 
-class TestSeverityLevel:
+class TestSeverityLevel(unittest.TestCase):
     """SeverityLevel enum must export canonical string values."""
 
     def test_critical_value(self):
@@ -4716,7 +4806,7 @@ class TestSeverityLevel:
 # ---------------------------------------------------------------------------
 
 
-class TestCheckStatus:
+class TestCheckStatus(unittest.TestCase):
     """CheckStatus enum must export lowercase values matching CLAUDE.md §12."""
 
     def test_passed_value(self):
@@ -4734,7 +4824,7 @@ class TestCheckStatus:
 # ---------------------------------------------------------------------------
 
 
-class TestCheckResult:
+class TestCheckResult(unittest.TestCase):
     def test_required_fields(self):
         cr = CheckResult(name="constants", status=CheckStatus.PASSED, message="OK")
         assert cr.name == "constants"
@@ -4756,7 +4846,7 @@ class TestCheckResult:
 # ---------------------------------------------------------------------------
 
 
-class TestExperimentMetrics:
+class TestExperimentMetrics(unittest.TestCase):
     """ExperimentMetrics must have zero defaults for all optional fields."""
 
     def test_global_f1_required(self):
@@ -4800,7 +4890,7 @@ class TestExperimentMetrics:
 # ---------------------------------------------------------------------------
 
 
-class TestExperimentResult:
+class TestExperimentResult(unittest.TestCase):
     """ExperimentResult.to_dict() must produce a JSON-compatible dict with
     all required keys from CLAUDE.md §13 (Results Format).
     """
@@ -4873,7 +4963,7 @@ class TestExperimentResult:
 # ---------------------------------------------------------------------------
 
 
-class TestBugPattern:
+class TestBugPattern(unittest.TestCase):
     def test_all_required_fields_settable(self):
         bp = BugPattern(
             severity=SeverityLevel.CRITICAL,
@@ -4891,7 +4981,7 @@ class TestBugPattern:
         assert bp.category == "syntax"
 
 
-class TestBugReport:
+class TestBugReport(unittest.TestCase):
     def test_empty_report_defaults(self):
         report = BugReport()
         assert report.bugs == []
@@ -4955,7 +5045,7 @@ class TestBugReport:
 # ---------------------------------------------------------------------------
 
 
-class TestPipelineResult:
+class TestPipelineResult(unittest.TestCase):
     def test_partial_success_false_without_mode_result(self):
         result = PipelineResult(success=False, mode="ml_training")
         assert result.partial_success is False
@@ -4983,7 +5073,7 @@ class TestPipelineResult:
 # ---------------------------------------------------------------------------
 
 
-class TestValidationReport:
+class TestValidationReport(unittest.TestCase):
     def test_defaults(self):
         r = ValidationReport(passed=True)
         assert r.error is None
@@ -5001,7 +5091,7 @@ class TestValidationReport:
 # ---------------------------------------------------------------------------
 
 
-class TestAggregatedResults:
+class TestAggregatedResults(unittest.TestCase):
     def test_default_experiments_empty(self):
         agg = AggregatedResults()
         assert agg.experiments == []
@@ -5025,7 +5115,7 @@ class TestAggregatedResults:
 # ---------------------------------------------------------------------------
 
 
-class TestDataSplitValidationReport:
+class TestDataSplitValidationReport(unittest.TestCase):
     def test_defaults(self):
         r = DataSplitValidationReport(passed=True)
         assert r.train_count == 0
@@ -5045,7 +5135,7 @@ class TestDataSplitValidationReport:
 # ============================================================================
 
 
-class TestValidateTrainingConfig:
+class TestValidateTrainingConfig(unittest.TestCase):
     """Tests for validate_training_config()."""
 
     def test_sufficient_steps_passes(self):
@@ -5103,7 +5193,7 @@ class TestValidateTrainingConfig:
         assert "optimizer steps" in msg
 
 
-class TestOptimizeHyperparamsHighVRAM:
+class TestOptimizeHyperparamsHighVRAM(unittest.TestCase):
     """Tests for optimize_hyperparams() on high-VRAM GPUs (>24 GB).
 
     This pins the fix for the step starvation bug on A100/H100 class GPUs.
@@ -5167,7 +5257,7 @@ class TestOptimizeHyperparamsHighVRAM:
         assert cfg.decoder_lr > 0.0
 
 
-class TestOptimizeHyperparamsLowVRAM:
+class TestOptimizeHyperparamsLowVRAM(unittest.TestCase):
     """Tests for low-VRAM paths (RTX 4090 and below).
 
     All tests pass image_size=(1280, 960) to keep them independent of the
@@ -5251,7 +5341,7 @@ class TestOptimizeHyperparamsLowVRAM:
         assert steps >= 200, f"Large dataset path still too few steps: {steps} with 5 epochs"
 
 
-class TestImageSizeAwareVRAM:
+class TestImageSizeAwareVRAM(unittest.TestCase):
     """Tests for the image-size-aware VRAM calibration (Task 2 OOM fix).
 
     Pins the fix for Experiment 8 OOM on the Vast.ai RTX 6000 Blackwell 96 GB:
@@ -5329,7 +5419,7 @@ class TestImageSizeAwareVRAM:
         assert cfg.batch_size >= 1
 
 
-class TestExperimentConfigImmutability:
+class TestExperimentConfigImmutability(unittest.TestCase):
     """Tests that ExperimentConfig global state is never mutated."""
 
     def test_dataclasses_replace_does_not_mutate_original(self):
@@ -5360,7 +5450,7 @@ class TestExperimentConfigImmutability:
         assert cfg.batch_size == 99  # Confirms the danger is real
 
 
-class TestOOMRecovery:
+class TestOOMRecovery(unittest.TestCase):
     """Tests for the OOM recovery logic in train_experiment().
 
     Verifies that the recovery path now allows batch_size to be reduced all
@@ -5447,7 +5537,7 @@ class TestOOMRecovery:
 # ============================================================================
 
 
-class TestDecoderStartTokenId:
+class TestDecoderStartTokenId(unittest.TestCase):
     """Tests for correct decoder_start_token_id assignment.
 
     Pins the fix for: convert_tokens_to_ids(string) returns ID of '<',
@@ -5507,7 +5597,7 @@ class TestDecoderStartTokenId:
         )
 
 
-class TestExperimentConfigPropertyAliases:
+class TestExperimentConfigPropertyAliases(unittest.TestCase):
     pytestmark = pytest.mark.skipif(
         not _TORCH_AVAILABLE,
         reason="torch and transformers required",
@@ -5571,7 +5661,7 @@ class TestExperimentConfigPropertyAliases:
             )
 
 
-class TestLabelTokenizationNoSpecialTokens:
+class TestLabelTokenizationNoSpecialTokens(unittest.TestCase):
     pytestmark = pytest.mark.skipif(
         not _TORCH_AVAILABLE,
         reason="torch and transformers required",
@@ -5679,7 +5769,7 @@ if _TORCH_AVAILABLE:
     # ════════════════════════════════════════════════════════════════════════════
 
 
-class TestMaterializeMetaBuffers:
+class TestMaterializeMetaBuffers(unittest.TestCase):
     pytestmark = pytest.mark.skipif(
         not _TORCH_AVAILABLE,
         reason="torch and transformers required",
@@ -5722,7 +5812,7 @@ class TestMaterializeMetaBuffers:
 # ════════════════════════════════════════════════════════════════════════════
 
 
-class TestTrOCRModelID:
+class TestTrOCRModelID(unittest.TestCase):
     pytestmark = pytest.mark.skipif(
         not _TORCH_AVAILABLE,
         reason="torch and transformers required",
@@ -5814,7 +5904,7 @@ def _apply_trocr_config(model, processor):
     model.gradient_checkpointing_enable()
 
 
-class TestGenerationConfig:
+class TestGenerationConfig(unittest.TestCase):
     pytestmark = pytest.mark.skipif(
         not _TORCH_AVAILABLE,
         reason="torch and transformers required",
@@ -5878,7 +5968,7 @@ class TestGenerationConfig:
         )
 
 
-class TestGradientCheckpointing:
+class TestGradientCheckpointing(unittest.TestCase):
     pytestmark = pytest.mark.skipif(
         not _TORCH_AVAILABLE,
         reason="torch and transformers required",
@@ -5906,7 +5996,7 @@ class TestGradientCheckpointing:
 # ════════════════════════════════════════════════════════════════════════════
 
 
-class TestTrOCRReceiptDataset:
+class TestTrOCRReceiptDataset(unittest.TestCase):
     pytestmark = pytest.mark.skipif(
         not _TORCH_AVAILABLE,
         reason="torch and transformers required",
@@ -6011,7 +6101,7 @@ class TestTrOCRReceiptDataset:
 # ════════════════════════════════════════════════════════════════════════════
 
 
-class TestTrOCRLoadReport:
+class TestTrOCRLoadReport(unittest.TestCase):
     pytestmark = pytest.mark.skipif(
         not _TORCH_AVAILABLE,
         reason="torch and transformers required",
@@ -6119,7 +6209,7 @@ class TestTrOCRLoadReport:
 # ════════════════════════════════════════════════════════════════════════════
 
 
-class TestGradientCheckpointingThreshold:
+class TestGradientCheckpointingThreshold(unittest.TestCase):
     pytestmark = pytest.mark.skipif(
         not _TORCH_AVAILABLE,
         reason="torch and transformers required",
@@ -6188,7 +6278,7 @@ class TestGradientCheckpointingThreshold:
 # ============================================================================
 
 
-class TestBugPatternDetectorJsonConfusion:
+class TestBugPatternDetectorJsonConfusion(unittest.TestCase):
     """JSON literal detection in Python source code.
 
     Guards Pattern 2 (CLAUDE.md §5): ``true``/``false``/``null`` pasted from
@@ -6256,7 +6346,7 @@ class TestBugPatternDetectorJsonConfusion:
 # ---------------------------------------------------------------------------
 
 
-class TestBugPatternDetectorSyntax:
+class TestBugPatternDetectorSyntax(unittest.TestCase):
     """Syntax error detection via ast.parse."""
 
     def test_valid_python_no_bugs(self):
@@ -6296,7 +6386,7 @@ class TestBugPatternDetectorSyntax:
 # ---------------------------------------------------------------------------
 
 
-class TestBugPatternDetectorTieWordEmbeddings:
+class TestBugPatternDetectorTieWordEmbeddings(unittest.TestCase):
     """Detection of missing ``tie_word_embeddings = False`` after
     ``resize_token_embeddings()``.
 
@@ -6344,7 +6434,7 @@ class TestBugPatternDetectorTieWordEmbeddings:
 # ---------------------------------------------------------------------------
 
 
-class TestImportChainChecker:
+class TestImportChainChecker(unittest.TestCase):
     """Tests for ImportChainChecker utility methods."""
 
     def test_check_constants_import_succeeds(self):
@@ -6404,7 +6494,7 @@ class TestImportChainChecker:
 # ---------------------------------------------------------------------------
 
 
-class TestModelWeightValidator:
+class TestModelWeightValidator(unittest.TestCase):
     """Tests for ModelWeightValidator.check_missing_keys_after_load.
 
     Exercises the safetensors deduplication guard (BUG B / F1~0.42 pattern).
@@ -6479,7 +6569,7 @@ class TestModelWeightValidator:
 # ---------------------------------------------------------------------------
 
 
-class TestDataSplitValidator:
+class TestDataSplitValidator(unittest.TestCase):
     """Tests for DataSplitValidator.check_no_val_test_leakage.
 
     Guards BUG A (CLAUDE.md §16): val and test must be physically separate
@@ -6561,3 +6651,7 @@ class TestDataSplitValidator:
 
         valid, error = DataSplitValidator.check_no_val_test_leakage(val_dir, test_dir)
         assert valid is False
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
