@@ -56,6 +56,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -118,6 +119,57 @@ def _is_package_missing(package_name: str) -> bool:
         return True
 
 
+class _InstallWatchdog:
+    """Prints elapsed-time progress dots during a pip subprocess install.
+
+    Use as a context manager or call start()/stop() manually.  A background
+    daemon thread wakes every *interval* seconds and prints how long the
+    install has been running.  A warning is printed once the elapsed time
+    exceeds *warn_at* seconds (default 120 s = 2 min) to explain that the
+    hang is likely a CUDA kernel compilation rather than a true freeze.
+    """
+
+    def __init__(self, interval: int = 30, warn_at: int = 120) -> None:
+        self._interval = interval
+        self._warn_at = warn_at
+        self._start: float = 0.0
+        self._warned = False
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        self._start = time.monotonic()
+        self._stop_event.clear()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        if self._thread is not None:
+            self._thread.join(timeout=5)
+
+    def __enter__(self) -> "_InstallWatchdog":
+        self.start()
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.stop()
+
+    def _run(self) -> None:
+        while not self._stop_event.wait(self._interval):
+            elapsed = time.monotonic() - self._start
+            mins, secs = divmod(int(elapsed), 60)
+            print(f"[setup] Still installing... ({mins}m {secs}s elapsed)", flush=True)
+            if not self._warned and elapsed > self._warn_at:
+                self._warned = True
+                print(
+                    "[setup] WARNING: Install taking >2 min — "
+                    "if this is flash-attn, it is compiling CUDA kernels (5–25 min normal). "
+                    "Pre-install via: pip install -r requirements.txt",
+                    flush=True,
+                )
+
+
 def _install_dependencies() -> None:
     """Auto-install packages from requirements.txt if not already installed.
 
@@ -126,16 +178,21 @@ def _install_dependencies() -> None:
 
     Strategy:
     1. Check if critical packages (torch, transformers, datasets, accelerate,
-       editdistance, pandas) are all importable
-    2. If any are missing, run pip install -r requirements.txt — but with
-       flash-attn filtered out (it requires torch to be importable during its
-       own build step, which pip's isolated subprocess cannot satisfy)
-    3. Attempt flash-attn separately with --no-build-isolation; swallow errors
-    4. Gracefully continue even if pip fails (may already have packages)
+       editdistance, pandas) are all importable.
+    2. If any are missing, run ``pip install -r requirements.txt`` (with
+       flash-attn filtered out — it requires a pre-installed torch and can
+       take 5–25 minutes to compile from source on a GPU machine).
+    3. On success, restart the current process via ``os.execv()`` so the
+       newly-installed packages are visible to the fresh Python process.
+       A sentinel environment variable (``_DONUT_RESTARTED=1``) prevents
+       infinite restart loops.
+    4. Gracefully continue even if pip fails (packages may still be present).
 
-    FIX: Changed from checking only torch (which caused false-negatives when torch
-    was pre-installed but other packages missing) to checking a subset of critical
-    packages. This prevents silent failures in mixed conda/pip environments.
+    flash-attn is intentionally **not** auto-installed.  PyTorch 2.x built-in
+    SDPA provides equivalent performance for MAX_LENGTH=768.  To install
+    flash-attn manually after the pipeline runs:
+        pip install flash-attn --no-build-isolation
+    or use a prebuilt wheel from https://flashattn.dev/wheel-finder/
     """
     try:
         req_file = Path(__file__).parent / "requirements.txt"
@@ -143,18 +200,26 @@ def _install_dependencies() -> None:
             return
 
         # Quick check: are all critical packages already installed?
-        # Check a representative subset to avoid false negatives
         missing_packages = [pkg for pkg in _CRITICAL_INSTALL_PACKAGES if _is_package_missing(pkg)]
 
         if not missing_packages:
-            # All critical packages present, assume full installation is complete
+            # All critical packages present; nothing to do.
+            return
+
+        # Guard against infinite restart loops in case os.execv() is invoked
+        # repeatedly (e.g. pip install keeps failing).
+        if os.environ.get("_DONUT_RESTARTED") == "1":
+            # We already restarted once; surface the remaining missing packages
+            # to the caller (_verify_critical_packages) rather than looping.
             return
 
         print(f"[setup] Missing packages: {', '.join(missing_packages)}")
 
-        # Build a filtered requirements list — exclude flash-attn because its
-        # build step imports torch inside an isolated subprocess where torch is
-        # not visible, causing the entire pip run to fail.
+        # Build a filtered requirements list.  flash-attn is excluded because:
+        #  a) its build step requires torch to be importable (not true in the
+        #     isolated pip subprocess), and
+        #  b) on GPU machines the nvcc compilation takes 5–25 minutes with
+        #     capture_output=True, making the terminal appear completely frozen.
         req_lines = [
             stripped
             for line in req_file.read_text().splitlines()
@@ -168,41 +233,33 @@ def _install_dependencies() -> None:
             tmp.write("\n".join(req_lines))
             tmp_path = tmp.name
         try:
-            result = subprocess.run(
-                [sys.executable, "-m", "pip", "install", "-q", "-r", tmp_path],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
+            with _InstallWatchdog():
+                result = subprocess.run(
+                    [sys.executable, "-m", "pip", "install", "-q", "-r", tmp_path],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=300,  # 5-minute cap; avoids indefinite hangs
+                )
             if result.returncode == 0:
-                print("[setup] Dependencies installed successfully")
+                print("[setup] Dependencies installed successfully — restarting to load new packages...")
+                # os.execv replaces the current process (no fork) so terminal.txt
+                # logging is not duplicated.  The sentinel variable prevents loops.
+                os.environ["_DONUT_RESTARTED"] = "1"
+                os.execv(sys.executable, [sys.executable] + sys.argv)
             else:
                 if result.stderr:
                     print(f"[setup] pip warning: {result.stderr[:200]}")
         finally:
-            os.unlink(tmp_path)
-
-        # Now try flash-attn separately with --no-build-isolation so that the
-        # already-installed torch is visible during the build step.
-        fa_result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "--no-build-isolation", "flash-attn>=2.0.0"],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        if fa_result.returncode != 0:
-            log_path = Path(__file__).parent / "flash_attn_install.log"
-            log_content = (
-                f"=== STDOUT ===\n{fa_result.stdout or ''}\n"
-                f"=== STDERR ===\n{fa_result.stderr or ''}"
-            )
-            log_path.write_text(log_content)
-            print(
-                f"[setup] flash-attn optional install failed — full output saved to {log_path}\n"
-                "[setup] To retry: pip install flash-attn --no-build-isolation"
-            )
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+        # flash-attn is NOT auto-installed here.  To install it manually:
+        #   pip install flash-attn --no-build-isolation
+        # or use a prebuilt wheel: https://flashattn.dev/wheel-finder/
     except Exception:
-        # Silently ignore all errors - pipeline may still work if packages are present
+        # Silently ignore all errors — pipeline may still work if packages are present.
         pass
 
 
@@ -2737,6 +2794,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--skip-trocr",
         action="store_true",
         help="Skip TrOCR+YOLO stages (data prep, training, evaluation)",
+    )
+    p.add_argument(
+        "--skip-flash-attn",
+        action="store_true",
+        default=bool(os.environ.get("SKIP_FLASH_ATTN")),
+        help=(
+            "Skip flash-attn and use PyTorch built-in SDPA (default when SKIP_FLASH_ATTN=1). "
+            "flash-attn is optional; PyTorch 2.x SDPA is equally fast for MAX_LENGTH=768."
+        ),
     )
     p.add_argument(
         "--yolo",

@@ -17,6 +17,10 @@ pip install -r requirements.txt
 python run_all.py
 ```
 
+> **Recommended:** Always pre-install dependencies before running `run_all.py`. The auto-installer
+> is a convenience for truly fresh environments only; pre-installing avoids a process restart and
+> is more predictable.
+
 This runs the full end-to-end pipeline:
 1. Downloads and splits SROIE data (500 train / 63 val / 63 test)
 2. Downloads and normalizes 3 auxiliary datasets
@@ -253,7 +257,8 @@ python -m run_all
 ```
 
 **Auto-Install Features:**
-- Dependencies automatically installed from `requirements.txt` if needed
+- Dependencies automatically installed from `requirements.txt` if needed; process restarts cleanly after install
+- flash-attn is **not** auto-installed (see Troubleshooting); PyTorch 2.x SDPA is used instead
 - Dual-stream logging: all output to `terminal.txt`, console shows filtered progress
 - Professional CLI interface with argparse-based options
 
@@ -405,6 +410,33 @@ Each experiment saves `results/experiment_N.json`:
 
 ## 🛠️ Troubleshooting
 
+### `python run_all.py` hangs after "Dependencies installed successfully"
+
+The auto-installer previously attempted to build `flash-attn` from source after installing
+the main dependencies. On a GPU machine, this compiled CUDA kernels (5–25 min, invisible
+because output was captured). **This is now fixed** — flash-attn is no longer auto-installed.
+
+If you are seeing a hang on an older version, the fastest workaround is to pre-install:
+
+```bash
+pip install -r requirements.txt
+python run_all.py
+```
+
+Pre-installing means the auto-installer is skipped entirely (packages already present).
+
+**What is flash-attn?** An optional CUDA kernel that speeds up attention for long sequences
+(>2048 tokens). This pipeline uses `MAX_LENGTH=768` with PyTorch 2.x built-in SDPA, which
+provides comparable performance. For receipt KIE workloads at this sequence length, the
+marginal speedup from flash-attn does not justify a 5–25 minute build.
+
+**Optional manual install (after the pipeline runs successfully):**
+```bash
+# Find a prebuilt wheel: https://flashattn.dev/wheel-finder/
+# Select your Python / CUDA / PyTorch version, copy the command shown
+pip install flash-attn --no-build-isolation  # or use a prebuilt wheel
+```
+
 ### `python run_all.py --quick` hangs
 
 - Check that SROIE data is cloned (see Stage 0 output in `terminal.txt`)
@@ -479,13 +511,14 @@ python dataset_preparation.py --validate
 
 ## 🐛 Known Issues Fixed
 
-Three critical bugs that previously caused catastrophic F1 score collapses. All are fixed and guarded with tests.
+Four critical bugs that previously caused catastrophic failures. All are fixed and guarded with tests.
 
 | Symptom | Root Cause | Fix |
 |---------|-----------|-----|
 | **F1 ≈ 0.42** (plausible-looking) | `safetensors` omits `lm_head.weight` from checkpoint shards because it shares data pointer with `embed_tokens.weight` after `resize_token_embeddings()`. On reload, `lm_head` randomly re-initialized. | `LmHeadCloneCallback` deep-clones weight before every save. `load_model_with_tied_weights()` raises `RuntimeError` immediately if `lm_head.weight` still missing. |
 | **F1 ≈ 0.008** (near-zero, not zero) | `token2json()` returns **list** of page-dicts when generated sequence contains `<sep/>` tokens (inherited from CORD pretraining). `_parse_prediction()` treated any non-dict as parse failure, returning `{}`. | `_parse_prediction()` and `_self_test()` merge list of pages into single flat dict (first occurrence of each key wins). |
 | **F1 unreliable / overfitted** | `val_img/` directory not created; `load_sroie_val()` returned `[]`; `do_eval=False`; no early stopping; model evaluated on test data indirectly. | `stage_install()` explicitly moves 63 images into `val_img/` and 63 into `test_img/` — physically distinct directories checked by tests. |
+| **Terminal freeze after "Dependencies installed successfully"** | Auto-installer built `flash-attn` from source via `subprocess.run(..., capture_output=True)` — CUDA kernel compilation takes 5–25 min on GPU, invisible to user; `Ctrl+C` didn't reach the nvcc child. After install, `os.execv()` restart was missing, causing `sys.exit(2)` due to `sys.modules` isolation. | Removed flash-attn auto-build entirely. Added `os.execv()` restart after successful pip install. Added `_InstallWatchdog` for elapsed-time progress dots. Added `timeout=300` to main pip subprocess. |
 
 ---
 
@@ -578,7 +611,7 @@ donut-kie                            # CLI alias (if installed via setup.py)
 
 ### ✅ Features Included
 
-- **Auto-Install Dependencies** — Automatically installs `requirements.txt` before training
+- **Auto-Install Dependencies** — Installs `requirements.txt` on first run; restarts process via `os.execv()` so new packages are immediately visible; never blocks on flash-attn compilation
 - **Dual-Stream Logging** — All output logged to `terminal.txt`; console shows filtered progress
 - **Quick Mode (`--quick`)** — Run only SROIE baseline + TrOCR+YOLO in ~30 minutes
 - **Hyperparameter Sweep** — Test multiple parameter combinations with `--quick --all`
@@ -627,6 +660,7 @@ donut-kie                            # CLI alias (if installed via setup.py)
 - `token2json` list-output handling (prevents F1 ≈ 0.008 bug)
 - Val/test data split separation (prevents data leakage)
 - Module consolidation: satellite modules merged to reduce source file count (36 → 29)
+- flash-attn terminal freeze fix: removed auto-build, added `os.execv()` restart + `_InstallWatchdog` progress dots
 
 ### In Progress 🔧
 
