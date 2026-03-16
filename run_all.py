@@ -91,12 +91,13 @@ __all__ = [
 _CRITICAL_INSTALL_PACKAGES = [
     "torch",
     "transformers",
-    "datasets",
-    "accelerate",
+    # datasets   → replaced with inline _hf_download_dataset_inline() in dataset_loaders.py
+    # accelerate → never imported; torch.cuda.amp.GradScaler used directly
+    # ultralytics → replaced with inline _YOLO_CLS in train_trocr_yolo.py
     # editdistance → replaced with inline _edit_distance() in donut_evaluator.py
     # pandas → replaced with stdlib csv module
 ]
-_CRITICAL_VERIFY_PACKAGES = ["transformers", "datasets", "accelerate"]
+_CRITICAL_VERIFY_PACKAGES = ["transformers"]
 
 
 def _is_package_missing(package_name: str) -> bool:
@@ -112,8 +113,6 @@ def _is_package_missing(package_name: str) -> bool:
         __import__(package_name)
         # Extra check for datasets: verify load_dataset is actually accessible.
         # A partial/broken install can import the namespace but lack load_dataset.
-        if package_name == "datasets":
-            from datasets import load_dataset  # noqa: F401
         return False
     except ImportError:
         return True

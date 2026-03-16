@@ -701,37 +701,471 @@ except ImportError:
             arr[row] = pixels[:, ::-1]  # BGR → RGB
         return arr
 
-    def _load_jpeg_ctypes(path: str | Path):
-        """Load JPEG via ImageMagick subprocess (system libjpeg fallback)."""
+    def _load_jpeg_pure(path: "str | Path"):  # noqa: C901
+        """Pure-Python + NumPy baseline JPEG decoder (SOF0/SOF1 only).
+
+        Supports YCbCr/Grayscale, 4:4:4 and 4:2:0 sampling, EXIF/JFIF APP markers.
+        Returns H×W×3 uint8 ndarray (RGB) or None on unsupported/corrupt input.
+        """
         import numpy as np
 
-        try:
-            import subprocess as _sp
+        # ── Zigzag inverse lookup (position_in_stream → flat index in 8×8) ──
+        # _ZIGZAG_ORDER[i] = natural-order flat index for the i-th zigzag-scan position.
+        # Used to scatter coefficients from zigzag scan order into 8×8 natural order.
+        _ZIGZAG_ORDER = [
+            0,
+            1,
+            5,
+            6,
+            14,
+            15,
+            27,
+            28,
+            2,
+            4,
+            7,
+            13,
+            16,
+            26,
+            29,
+            42,
+            3,
+            8,
+            12,
+            17,
+            25,
+            30,
+            41,
+            43,
+            9,
+            11,
+            18,
+            24,
+            31,
+            40,
+            44,
+            53,
+            10,
+            19,
+            23,
+            32,
+            39,
+            45,
+            52,
+            54,
+            20,
+            22,
+            33,
+            38,
+            46,
+            51,
+            55,
+            60,
+            21,
+            34,
+            37,
+            47,
+            50,
+            56,
+            59,
+            61,
+            35,
+            36,
+            48,
+            49,
+            57,
+            58,
+            62,
+            63,
+        ]
 
-            result = _sp.run(
-                ["convert", str(path), "-colorspace", "RGB", "ppm:-"],
-                capture_output=True,
-                timeout=10,
-            )
-            if result.returncode == 0:
-                ppm = result.stdout
-                # Parse PPM header
-                lines = ppm.split(b"\n")
-                if lines[0] == b"P6":
-                    dims = lines[1].split()
-                    w, h = int(dims[0]), int(dims[1])
-                    pixel_data = b"\n".join(lines[3:])
-                    arr = np.frombuffer(pixel_data, dtype=np.uint8)
-                    if len(arr) >= h * w * 3:
-                        return arr[: h * w * 3].reshape(h, w, 3)
+        # ── Precompute 2D IDCT cosine matrix ──────────────────────────────────
+        _M = np.array(
+            [[np.cos(np.pi * (2 * n + 1) * k / 16) for k in range(8)] for n in range(8)],
+            dtype=np.float32,
+        )
+
+        def _idct2(block: np.ndarray) -> np.ndarray:
+            """2D IDCT-III for an 8×8 block of DCT coefficients."""
+            s = block.astype(np.float32)
+            s[:, 0] /= np.sqrt(2.0)
+            s[0, :] /= np.sqrt(2.0)
+            return 0.25 * (_M @ s @ _M.T)
+
+        def _build_huffman(counts: list, values: list) -> dict:
+            """Build Huffman decode table: {(code, length): symbol}."""
+            table: dict = {}
+            code = 0
+            idx = 0
+            for length in range(1, 17):
+                for _ in range(counts[length - 1]):
+                    table[(code, length)] = values[idx]
+                    idx += 1
+                    code += 1
+                code <<= 1
+            return table
+
+        # ── Bitstream reader ──────────────────────────────────────────────────
+        class _BitReader:
+            __slots__ = ("_data", "_pos", "_buf", "_bits_left")
+
+            def __init__(self, data: bytes) -> None:
+                self._data = data
+                self._pos = 0
+                self._buf = 0
+                self._bits_left = 0
+
+            def _fill(self) -> None:
+                while self._bits_left <= 24 and self._pos < len(self._data):
+                    b = self._data[self._pos]
+                    self._pos += 1
+                    if b == 0xFF:
+                        b2 = self._data[self._pos] if self._pos < len(self._data) else 0
+                        if b2 == 0x00:
+                            # byte stuffing: emit 0xFF
+                            self._pos += 1
+                        elif 0xD0 <= b2 <= 0xD7:
+                            # restart marker — skip, reset is handled by caller
+                            self._pos += 1
+                            continue
+                        elif b2 == 0xD9:
+                            # EOI inside entropy stream — stop filling
+                            break
+                        else:
+                            # other marker — do not consume, stop
+                            self._pos -= 1
+                            break
+                    self._buf = (self._buf << 8) | b
+                    self._bits_left += 8
+
+            def read_bits(self, n: int) -> int:
+                if n == 0:
+                    return 0
+                if self._bits_left < n:
+                    self._fill()
+                if self._bits_left < n:
+                    raise EOFError("JPEG bitstream truncated")
+                self._bits_left -= n
+                return (self._buf >> self._bits_left) & ((1 << n) - 1)
+
+            def decode_huffman(self, table: dict) -> int:
+                code = 0
+                for length in range(1, 17):
+                    code = (code << 1) | self.read_bits(1)
+                    sym = table.get((code, length))
+                    if sym is not None:
+                        return sym
+                raise ValueError("Invalid Huffman code")
+
+            def skip_to_marker(self) -> int:
+                """Advance until 0xFF <non-zero, non-stuff> is found; return marker byte."""
+                while self._pos < len(self._data):
+                    if self._data[self._pos] == 0xFF:
+                        self._pos += 1
+                        b2 = self._data[self._pos] if self._pos < len(self._data) else 0
+                        if b2 != 0x00 and not (0xD0 <= b2 <= 0xD7):
+                            self._pos += 1
+                            return b2
+                    else:
+                        self._pos += 1
+                return 0
+
+        def _extend(val: int, bits: int) -> int:
+            """JPEG coefficient magnitude extension (sign bit)."""
+            if bits == 0:
+                return 0
+            if val < (1 << (bits - 1)):
+                return val - (1 << bits) + 1
+            return val
+
+        try:
+            data = Path(path).read_bytes()
         except Exception:
+            return None
+
+        if len(data) < 4 or data[0] != 0xFF or data[1] != 0xD8:
+            return None  # not a JPEG
+
+        pos = 2
+        quant_tables: dict[int, np.ndarray] = {}
+        huff_tables: dict[tuple, dict] = {}  # (class, id) → table
+        frame_width = frame_height = 0
+        n_components = 0
+        comp_info: list[dict] = []  # list of {id, h_samp, v_samp, qt_id}
+        sos_data: bytes = b""
+        sos_comp_order: list[dict] = []
+        exif_orientation = 1
+
+        # ── Parse markers ────────────────────────────────────────────────────
+        while pos + 1 < len(data):
+            if data[pos] != 0xFF:
+                pos += 1
+                continue
+            while pos < len(data) and data[pos] == 0xFF:
+                pos += 1
+            if pos >= len(data):
+                break
+            marker = data[pos]
+            pos += 1
+
+            if marker == 0xD8:  # SOI
+                continue
+            if marker == 0xD9:  # EOI
+                break
+            if 0xD0 <= marker <= 0xD7:  # RST
+                continue
+            if pos + 1 >= len(data):
+                break
+            seg_len = struct.unpack_from(">H", data, pos)[0]
+            seg_end = pos + seg_len
+            seg_data = data[pos + 2 : seg_end]
+            pos = seg_end
+
+            if marker == 0xE1:  # APP1 — may contain EXIF
+                try:
+                    if seg_data[:6] == b"Exif\x00\x00":
+                        tiff = seg_data[6:]
+                        byte_order = tiff[:2]
+                        bo = ">" if byte_order == b"MM" else "<"
+                        ifd0_offset = struct.unpack_from(bo + "I", tiff, 4)[0]
+                        n_entries = struct.unpack_from(bo + "H", tiff, ifd0_offset)[0]
+                        for ei in range(n_entries):
+                            eoff = ifd0_offset + 2 + ei * 12
+                            tag = struct.unpack_from(bo + "H", tiff, eoff)[0]
+                            if tag == 0x0112:  # Orientation
+                                exif_orientation = struct.unpack_from(bo + "H", tiff, eoff + 8)[0]
+                                break
+                except Exception:
+                    pass
+
+            elif 0xE0 <= marker <= 0xEF:  # other APP markers — skip
+                pass
+
+            elif marker == 0xDB:  # DQT — quantization table(s)
+                sp = 0
+                while sp < len(seg_data):
+                    pq_tq = seg_data[sp]
+                    sp += 1
+                    pq = pq_tq >> 4  # precision: 0=8bit, 1=16bit
+                    tq = pq_tq & 0x0F
+                    if pq == 0:
+                        raw = np.frombuffer(seg_data[sp : sp + 64], dtype=np.uint8)
+                        sp += 64
+                    else:
+                        raw = np.frombuffer(seg_data[sp : sp + 128], dtype=np.uint16)
+                        raw = raw.byteswap()
+                        sp += 128
+                    # De-zigzag: raw[i] is the quant factor for zigzag position i;
+                    # _ZIGZAG_ORDER[i] is the corresponding natural flat index.
+                    qt = np.zeros(64, dtype=np.float32)
+                    for i in range(64):
+                        qt[_ZIGZAG_ORDER[i]] = float(raw[i])
+                    quant_tables[tq] = qt.reshape(8, 8)
+
+            elif marker in (0xC0, 0xC1):  # SOF0 / SOF1 — baseline DCT
+                precision = seg_data[0]
+                if precision != 8:
+                    return None  # only 8-bit supported
+                frame_height = struct.unpack_from(">H", seg_data, 1)[0]
+                frame_width = struct.unpack_from(">H", seg_data, 3)[0]
+                n_components = seg_data[5]
+                if n_components not in (1, 3):
+                    return None  # CMYK / other not supported
+                comp_info = []
+                for ci in range(n_components):
+                    off = 6 + ci * 3
+                    cid = seg_data[off]
+                    samp = seg_data[off + 1]
+                    qt_id = seg_data[off + 2]
+                    comp_info.append(
+                        {
+                            "id": cid,
+                            "h_samp": samp >> 4,
+                            "v_samp": samp & 0x0F,
+                            "qt_id": qt_id,
+                        }
+                    )
+
+            elif marker == 0xC2:  # SOF2 — progressive (not supported)
+                return None
+
+            elif marker == 0xC4:  # DHT — Huffman table
+                sp = 0
+                while sp < len(seg_data):
+                    tc_th = seg_data[sp]
+                    sp += 1
+                    tc = tc_th >> 4  # class: 0=DC, 1=AC
+                    th = tc_th & 0x0F
+                    counts = list(seg_data[sp : sp + 16])
+                    sp += 16
+                    n_syms = sum(counts)
+                    values = list(seg_data[sp : sp + n_syms])
+                    sp += n_syms
+                    huff_tables[(tc, th)] = _build_huffman(counts, values)
+
+            elif marker == 0xDA:  # SOS — start of scan
+                # Parse SOS header
+                n_comp_scan = seg_data[0]
+                sos_comp_order = []
+                for sci in range(n_comp_scan):
+                    cs = seg_data[1 + sci * 2]
+                    td_ta = seg_data[2 + sci * 2]
+                    sos_comp_order.append(
+                        {
+                            "id": cs,
+                            "dc_id": td_ta >> 4,
+                            "ac_id": td_ta & 0x0F,
+                        }
+                    )
+                # Entropy-coded data is everything from pos onwards until EOI
+                sos_data = data[pos:]
+                break  # done parsing markers
+
+        if not comp_info or not sos_data or frame_width == 0 or frame_height == 0:
+            return None
+
+        # ── Determine sampling factors ────────────────────────────────────────
+        max_h = max(c["h_samp"] for c in comp_info)
+        max_v = max(c["v_samp"] for c in comp_info)
+        # MCU size in pixels
+        mcu_w = max_h * 8
+        mcu_h = max_v * 8
+        mcu_cols = (frame_width + mcu_w - 1) // mcu_w
+        mcu_rows = (frame_height + mcu_h - 1) // mcu_h
+
+        # Map component id → sos entry
+        id_to_sos = {s["id"]: s for s in sos_comp_order}
+
+        # ── Allocate output planes ─────────────────────────────────────────────
+        planes: list[np.ndarray] = []
+        for c in comp_info:
+            ph = mcu_rows * c["v_samp"] * 8
+            pw = mcu_cols * c["h_samp"] * 8
+            planes.append(np.zeros((ph, pw), dtype=np.float32))
+
+        # ── Decode entropy stream ──────────────────────────────────────────────
+        br = _BitReader(sos_data)
+        dc_preds = [0] * n_components
+
+        try:
+            for mcu_row in range(mcu_rows):
+                for mcu_col in range(mcu_cols):
+                    for ci, comp in enumerate(comp_info):
+                        cid = comp["id"]
+                        sos_entry = id_to_sos.get(cid)
+                        if sos_entry is None:
+                            continue
+                        dc_table = huff_tables.get((0, sos_entry["dc_id"]), {})
+                        ac_table = huff_tables.get((1, sos_entry["ac_id"]), {})
+                        qt = quant_tables.get(comp["qt_id"], np.ones((8, 8), dtype=np.float32))
+                        h_blocks = comp["h_samp"]
+                        v_blocks = comp["v_samp"]
+
+                        for vb in range(v_blocks):
+                            for hb in range(h_blocks):
+                                # ── Decode DC coefficient ──────────────────
+                                dc_sym = br.decode_huffman(dc_table)
+                                dc_bits = br.read_bits(dc_sym)
+                                dc_val = _extend(dc_bits, dc_sym)
+                                dc_preds[ci] += dc_val
+
+                                # ── Decode 63 AC coefficients ──────────────
+                                coeffs = np.zeros(64, dtype=np.float32)
+                                coeffs[0] = dc_preds[ci]
+                                k = 1
+                                while k < 64:
+                                    ac_sym = br.decode_huffman(ac_table)
+                                    rrr = ac_sym >> 4
+                                    sss = ac_sym & 0x0F
+                                    if sss == 0:
+                                        if rrr == 0:
+                                            break  # EOB
+                                        else:
+                                            k += 16  # ZRL
+                                            continue
+                                    k += rrr
+                                    if k >= 64:
+                                        break
+                                    ac_bits = br.read_bits(sss)
+                                    coeffs[k] = _extend(ac_bits, sss)
+                                    k += 1
+
+                                # ── Dequantize (zigzag order → natural order) ──
+                                # coeffs[zi] is the coefficient at zigzag position zi;
+                                # _ZIGZAG_ORDER[zi] is its natural flat index;
+                                # qt.flat[_ZIGZAG_ORDER[zi]] is the matching quant factor.
+                                block = np.zeros((8, 8), dtype=np.float32)
+                                for zi in range(64):
+                                    nat = _ZIGZAG_ORDER[zi]
+                                    block.flat[nat] = coeffs[zi] * qt.flat[nat]
+
+                                # ── 2D IDCT ───────────────────────────────
+                                spatial = _idct2(block) + 128.0
+
+                                # ── Write into plane ──────────────────────
+                                pr = mcu_row * v_blocks * 8 + vb * 8
+                                pc = mcu_col * h_blocks * 8 + hb * 8
+                                planes[ci][pr : pr + 8, pc : pc + 8] = spatial
+
+        except Exception:
+            # On bitstream error: return whatever we have (partial decode)
             pass
-        return None
+
+        # ── Crop planes to actual frame dimensions ────────────────────────────
+        if n_components == 1:
+            # Grayscale → replicate to RGB
+            Y = np.clip(planes[0][:frame_height, :frame_width], 0, 255).astype(np.uint8)
+            rgb = np.stack([Y, Y, Y], axis=2)
+        else:
+            # YCbCr → RGB, with upsampling if subsampled
+            yc = comp_info[0]
+            cbc = comp_info[1]
+            crc = comp_info[2]
+
+            Y_plane = planes[0][:frame_height, :frame_width]
+
+            # Upsample Cb and Cr if subsampled relative to Y
+            cb_h = mcu_rows * cbc["v_samp"] * 8
+            cb_w = mcu_cols * cbc["h_samp"] * 8
+            cr_h = mcu_rows * crc["v_samp"] * 8
+            cr_w = mcu_cols * crc["h_samp"] * 8
+            Cb_plane = planes[1][:cb_h, :cb_w]
+            Cr_plane = planes[2][:cr_h, :cr_w]
+
+            v_ratio = yc["v_samp"] // cbc["v_samp"] if cbc["v_samp"] > 0 else 1
+            h_ratio = yc["h_samp"] // cbc["h_samp"] if cbc["h_samp"] > 0 else 1
+
+            if v_ratio > 1 or h_ratio > 1:
+                Cb_plane = np.repeat(np.repeat(Cb_plane, v_ratio, axis=0), h_ratio, axis=1)
+                Cr_plane = np.repeat(np.repeat(Cr_plane, v_ratio, axis=0), h_ratio, axis=1)
+
+            # Trim to frame size after upsampling
+            Cb_plane = Cb_plane[:frame_height, :frame_width]
+            Cr_plane = Cr_plane[:frame_height, :frame_width]
+
+            R = Y_plane + 1.402 * (Cr_plane - 128.0)
+            G = Y_plane - 0.34414 * (Cb_plane - 128.0) - 0.71414 * (Cr_plane - 128.0)
+            B = Y_plane + 1.772 * (Cb_plane - 128.0)
+
+            R = np.clip(R, 0, 255).astype(np.uint8)
+            G = np.clip(G, 0, 255).astype(np.uint8)
+            B = np.clip(B, 0, 255).astype(np.uint8)
+            rgb = np.stack([R, G, B], axis=2)
+
+        # ── Apply EXIF orientation ─────────────────────────────────────────────
+        if exif_orientation == 3:
+            rgb = np.rot90(rgb, 2)
+        elif exif_orientation == 6:
+            rgb = np.rot90(rgb, 3)
+        elif exif_orientation == 8:
+            rgb = np.rot90(rgb, 1)
+
+        return np.ascontiguousarray(rgb, dtype=np.uint8)
 
     def _load_image(path: str | Path):  # type: ignore[misc]
         """Load an image file as an RGB numpy array without PIL.
 
-        Supports PNG (full), BMP (24-bit), and JPEG (via imagemagick/libjpeg).
+        Supports PNG (full), BMP (24-bit), and JPEG (pure-Python baseline DCT).
         For TIFF/WebP: install Pillow (pip install Pillow).
         """
         import numpy as np
@@ -744,12 +1178,12 @@ except ImportError:
         elif suffix in (".bmp",):
             arr = _load_bmp(path)
         elif suffix in (".jpg", ".jpeg"):
-            arr = _load_jpeg_ctypes(path)
+            arr = _load_jpeg_pure(path)
         if arr is None:
             raise RuntimeError(
                 f"Cannot load {path} without Pillow. "
                 "Install Pillow: pip install Pillow\n"
-                "PNG (8-bit RGB/RGBA), BMP (24-bit), and JPEG (via ImageMagick) "
+                "PNG (8-bit RGB/RGBA), BMP (24-bit), and JPEG (baseline DCT) "
                 "are supported natively."
             )
         # Ensure contiguous uint8 RGB

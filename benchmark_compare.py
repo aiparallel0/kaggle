@@ -784,8 +784,8 @@ class TrOCRYOLOPipeline:
         iou_threshold: float = 0.45,
     ):
         from transformers import TrOCRProcessor, VisionEncoderDecoderModel
-        from ultralytics import YOLO
 
+        from train_trocr_yolo import _YOLO_CLS as YOLO
         from train_trocr_yolo import _materialize_meta_buffers
 
         self.device = (
