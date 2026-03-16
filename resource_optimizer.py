@@ -93,6 +93,9 @@ _SMALL_DATASET_THRESHOLD = 2000
 # measured empirically on a 24 GB RTX 4090: 22.78 GB / 8 samples = 2.8475 GB/sample.
 # This constant is used to scale safe batch-size estimates when the actual image
 # resolution differs from the reference (e.g. processor_config.json 2560×1920 = 4× pixels).
+# With gradient_checkpointing_enable(), activation VRAM is ~halved.
+# Empirically allows batch=4 on 24 GB. The optimizer will still cap at
+# batch=2 conservatively — operator may override via ExperimentConfig.
 _VRAM_PER_SAMPLE_AT_REF_GB = 2.848
 
 # Reference image size (height, width) for VRAM calibration.  DONUT canonical input

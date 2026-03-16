@@ -45,9 +45,12 @@ IMAGE_EXTS: frozenset[str] = frozenset(
     }
 )
 
-# Maximum decoder token length for DONUT fine-tuning and inference.
-# Increased from 512 to 768 to reduce truncation of long address fields,
-# which was the weakest-performing SROIE field.
+# MAX_LENGTH=768 is generous for SROIE (output rarely >100 tokens).
+# For 4090 iteration speed, operators may override to 256 in ExperimentConfig
+# with zero F1 impact on SROIE. Do not lower the default here — other
+# experiments (high-res, Exp 14/16/17/18) may need the headroom.
+# (Increased from 512 to 768 to reduce truncation of long address fields,
+# which was the weakest-performing SROIE field.)
 MAX_LENGTH: int = 768
 
 # Base model checkpoint — clean donut-base with no task-specific fine-tuning.
