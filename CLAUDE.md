@@ -196,6 +196,7 @@ Both must exit with code `0`. If either fails, fix the core import chain **befor
 | **`RuntimeError: CRITICAL: decoder.lm_head.weight missing`** | `LmHeadCloneCallback` failed or was removed | Re-register callback in `DonutTrainer.train()`; do NOT remove the check |
 | **`Self-test FAILED: model produced empty dict`** | `token2json` returned list; self-test treated list as empty | `_self_test()` merges list before `_unwrap_prediction()` (Pattern 5 below) |
 | **Experiment results inconsistent across runs** | Mutable global `EXPERIMENTS` dict mutated by `run_experiment()` | Use `dataclasses.replace()` — never assign to `EXPERIMENTS[N].field` |
+| **`ruff check .` fails in CI** | pre-commit hook not installed; `lint.sh` not run before push | Run `./lint.sh` before every `git commit` (see § 10 Mandatory Lint) |
 
 ### Pattern 1: Bracket & Comma Errors
 
@@ -413,6 +414,34 @@ python evaluate_models.py
 | `0` | Success |
 | `1` | One or more experiments had no training data (partial results saved) |
 | `2` | Fatal error (missing SROIE data, unrecoverable failure) |
+
+### Mandatory: Run lint before every commit
+
+CI runs `ruff check .` + `ruff format --check .` — both fail on any unformatted code.
+**Always run before `git commit`:**
+
+```bash
+./lint.sh          # auto-fixes + formats everything (preferred)
+# or equivalently:
+ruff check --fix . && ruff format .
+```
+
+Install the pre-commit hook once to make this automatic:
+
+```bash
+pip install pre-commit && pre-commit install
+```
+
+**Common ruff violations that break CI:**
+
+| Error | Rule | Cause | Fix |
+|---|---|---|---|
+| Import not at top of file | E402 | Intentional late import | Add `# noqa: E402, I001` (see Pattern 7) |
+| Unused import | F401 | Removed dependency still imported | Delete the import line |
+| Import order wrong | I001 | Added import in wrong block | Run `./lint.sh` |
+| f-string without placeholder | F541 | `f"plain string"` | Remove `f` prefix |
+| Comparison to None | E711 | `x == None` | Use `x is None` |
+| Old-style type hint | UP006/UP007 | `Optional[X]`, `List[X]` | Use `X \| None`, `list[X]` |
 
 ---
 

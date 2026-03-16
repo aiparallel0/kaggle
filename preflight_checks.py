@@ -300,8 +300,10 @@ class PreflightChecker:
 
         # Secure token sources
         hf_token = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_HUB_TOKEN")
-        token_source = "env:HF_TOKEN" if os.getenv("HF_TOKEN") else (
-            "env:HUGGINGFACE_HUB_TOKEN" if os.getenv("HUGGINGFACE_HUB_TOKEN") else None
+        token_source = (
+            "env:HF_TOKEN"
+            if os.getenv("HF_TOKEN")
+            else ("env:HUGGINGFACE_HUB_TOKEN" if os.getenv("HUGGINGFACE_HUB_TOKEN") else None)
         )
 
         if not hf_token:

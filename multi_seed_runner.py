@@ -24,6 +24,7 @@ Usage
 Calling from run_all.py (via --seeds flag):
     python run_all.py --experiment 2 --seeds 42,123,7,99,2026
 """
+
 from __future__ import annotations
 
 import argparse
@@ -85,15 +86,12 @@ def run_multi_seed(
             return json.load(fh)
 
     if experiment_id not in EXPERIMENTS:
-        raise ValueError(
-            f"Unknown experiment_id={experiment_id}. Valid: {list(EXPERIMENTS)}"
-        )
+        raise ValueError(f"Unknown experiment_id={experiment_id}. Valid: {list(EXPERIMENTS)}")
 
     base_config = EXPERIMENTS[experiment_id]
     print(
         f"\n[MultiSeed] Experiment {experiment_id}: {base_config.name}\n"
-        f"[MultiSeed] Seeds: {seeds}\n"
-        + "=" * 60
+        f"[MultiSeed] Seeds: {seeds}\n" + "=" * 60
     )
 
     per_seed_results: list[dict] = []
@@ -142,10 +140,7 @@ def run_multi_seed(
         all_metric_keys.update(r.get("metrics", {}).keys())
 
     for key in sorted(all_metric_keys):
-        vals = [
-            float(r.get("metrics", {}).get(key, math.nan))
-            for r in per_seed_results
-        ]
+        vals = [float(r.get("metrics", {}).get(key, math.nan)) for r in per_seed_results]
         vals_ok = [v for v in vals if not math.isnan(v)]
         if not vals_ok:
             continue
@@ -197,10 +192,7 @@ def print_multi_seed_table(results_dir: str | Path = "results/multi_seed") -> No
         f1_stats = data.get("metrics", {}).get("global_f1", {})
         mean = f1_stats.get("mean", float("nan"))
         std = f1_stats.get("std", float("nan"))
-        print(
-            f"{exp_id:<5} {name:<40} {seeds_str:<20} "
-            f"{mean:<10.4f} {std:<8.4f}"
-        )
+        print(f"{exp_id:<5} {name:<40} {seeds_str:<20} {mean:<10.4f} {std:<8.4f}")
     print("=" * len(header) + "\n")
 
 
@@ -209,23 +201,29 @@ def main() -> None:
         description="Run DONUT experiment with multiple seeds to measure variance"
     )
     parser.add_argument(
-        "--experiment", type=int, required=True,
+        "--experiment",
+        type=int,
+        required=True,
         help="Experiment ID to run (1–8)",
     )
     parser.add_argument(
-        "--seeds", default=",".join(str(s) for s in DEFAULT_SEEDS),
+        "--seeds",
+        default=",".join(str(s) for s in DEFAULT_SEEDS),
         help=f"Comma-separated seed list (default: {DEFAULT_SEEDS})",
     )
     parser.add_argument(
-        "--results-dir", default="results/multi_seed",
+        "--results-dir",
+        default="results/multi_seed",
         help="Directory for results (default: results/multi_seed)",
     )
     parser.add_argument(
-        "--force", action="store_true",
+        "--force",
+        action="store_true",
         help="Re-run even if cached result exists",
     )
     parser.add_argument(
-        "--table", action="store_true",
+        "--table",
+        action="store_true",
         help="Print results table and exit (no training)",
     )
     args = parser.parse_args()

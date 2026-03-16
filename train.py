@@ -572,6 +572,7 @@ class LiveDashboardCallback:
     ) -> None:
         try:
             from transformers import TrainerCallback
+
             self.__class__ = type(
                 "LiveDashboardCallback",
                 (self.__class__, TrainerCallback),
@@ -594,6 +595,7 @@ class LiveDashboardCallback:
         if use_rich:
             try:
                 import rich  # noqa: F401
+
                 self._rich_enabled = True
             except ImportError:
                 pass
@@ -640,9 +642,13 @@ class LiveDashboardCallback:
         try:
             from rich.console import Console
             from rich.table import Table
+
             console = Console()
-            table = Table(title=f"Experiment {self._experiment_id} — Training Progress",
-                          show_header=True, header_style="bold cyan")
+            table = Table(
+                title=f"Experiment {self._experiment_id} — Training Progress",
+                show_header=True,
+                header_style="bold cyan",
+            )
             table.add_column("Epoch", justify="right", style="dim")
             table.add_column("Train Loss", justify="right")
             table.add_column("Val Loss", justify="right")

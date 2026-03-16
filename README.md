@@ -653,3 +653,59 @@ donut-kie                            # CLI alias (if installed via setup.py)
 8. CI improvements: `mypy` strict, `ruff format --check`, coverage reporting
 9. FastAPI model-serving endpoint
 10. Multi-GPU training via `accelerate launch`
+
+---
+
+## Dependency Reference
+
+**8 direct dependencies** (down from 22). Install with `pip install -r requirements.txt`.
+
+### Critical — pipeline fails without these
+
+| Package | Purpose |
+|---|---|
+| `torch` | Tensor ops, CUDA, training loop |
+| `transformers` | DONUT + TrOCR model, processor, tokenizer |
+| `datasets` | HuggingFace Arrow dataset download/cache |
+| `Pillow` | Image loading and resizing (960×1280) |
+| `ultralytics` | YOLOv8x text-region detection |
+| `accelerate` | Mixed-precision (fp16) training |
+| `matplotlib` | F1/loss comparison figures |
+| `pytest` | Test suite: `pytest tests/` |
+
+### Installed automatically (transitive deps — do not pin)
+
+`numpy` (via torch), `sentencepiece` (via transformers), `protobuf` (via transformers),
+`huggingface-hub`, `tokenizers`, `safetensors`, `pyyaml` (via huggingface-hub)
+
+### Optional — uncomment in requirements.txt if needed
+
+| Package | Purpose |
+|---|---|
+| `torchvision` | Data augmentation presets DA1/DA2 in `control_suite.py`; pipeline works without it (gracefully returns `None`) |
+| `flash-attn` | Faster attention on Ampere+ GPUs; see requirements.txt for install instructions |
+
+### Removed — replaced with inline implementations (~65 lines total)
+
+| Package | Replacement | Saving |
+|---|---|---|
+| `editdistance` | 14-line Wagner-Fischer `_edit_distance()` in `donut_evaluator.py`, `benchmark_compare.py` | ~200 KB |
+| `tqdm` | 16-line logging generator `_progress()` in each caller file | ~4 MB |
+| `scipy` | 15-line weighted moving-average `_smooth()` in `plot_convergence.py` | ~30 MB |
+| `psutil` | 18-line `/proc/meminfo` reader `_get_total_ram_bytes()` / `_get_available_ram_bytes()` | ~1 MB |
+
+### Removed — never imported anywhere
+
+| Package | Originally declared for | Saving |
+|---|---|---|
+| `opencv-python` | Image processing | `cv2` never imported; PIL handles all I/O | ~200 MB |
+| `pandas` | Data tables | Never imported; stdlib `csv` used | ~30 MB |
+| `scikit-learn` | ML utilities | Never imported | ~30 MB |
+| `timm` | "TrOCR DeiT backbone" | Incorrect comment; TrOCR uses ViT natively in transformers | ~15 MB |
+| `seaborn` | Statistical plots | Never imported; matplotlib used directly | ~4 MB |
+| `jiwer` | WER/CER metrics | Never imported; F1+NED used instead | ~1 MB |
+| `numpy` | Arrays | Guaranteed transitive dep of torch | — |
+| `sentencepiece` | Tokenization | Guaranteed transitive dep of transformers | — |
+| `protobuf` | Serialization | Guaranteed transitive dep of transformers | — |
+
+**Total install savings vs original: ~345 MB**

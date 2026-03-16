@@ -23,16 +23,31 @@ FIX: Imports constants from shared module instead of duplicating.
 """
 
 import json
+import logging
 import time
 from pathlib import Path
 
 import numpy as np
 import torch
 from PIL import Image
-from tqdm import tqdm
 
 from constants import DEVICE, FIELDS, MAX_LENGTH, _get_sroie_dir, _gpu_cleanup
 from dataset_loaders import load_sroie_test
+
+
+def _progress(iterable, desc: str = "", total: int | None = None):
+    """Logging-based progress — replaces tqdm. Emits at 0 %, 10 %, … 100 %."""
+
+    _log = logging.getLogger(__name__)
+    items = list(iterable) if not hasattr(iterable, "__len__") and total is None else iterable
+    n = total if total is not None else len(items)  # type: ignore[arg-type]
+    step = max(1, -(-n // 10))
+    for i, item in enumerate(items):
+        if i % step == 0:
+            _log.info("%s %d/%d (%d%%)", desc, i, n, 100 * i // n if n else 0)
+        yield item
+    _log.info("%s done (%d items)", desc, n)
+
 
 __all__ = [
     "load_test_samples",
@@ -90,7 +105,7 @@ def evaluate_donut_on_test(
     parse_failures = 0
 
     with torch.no_grad():
-        for img_path, _gt in tqdm(test_samples, desc="DONUT eval"):
+        for img_path, _gt in _progress(test_samples, desc="DONUT eval"):
             image = Image.open(img_path).convert("RGB")
             pixel_values = processor(image, return_tensors="pt").pixel_values.to(DEVICE)
             decoder_input_ids = processor.tokenizer(
@@ -168,7 +183,7 @@ def evaluate_trocr_yolo_on_test(
     latencies = []
 
     with torch.no_grad():
-        for img_path, _gt in tqdm(test_samples, desc="TrOCR+YOLO eval"):
+        for img_path, _gt in _progress(test_samples, desc="TrOCR+YOLO eval"):
             t0 = time.perf_counter()
             pred = run_pipeline(img_path, yolo_model, trocr_model, trocr_processor)
             lat = (time.perf_counter() - t0) * 1000
