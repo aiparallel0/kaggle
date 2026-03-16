@@ -583,15 +583,18 @@ except ImportError:
         @classmethod
         def from_pretrained(cls, model_name_or_path, *args, **kwargs):
             raise ImportError(
-                "transformers is required for VisionEncoderDecoderModel. "
-                "Install it: pip install transformers\n"
-                "Alternatively, the inline Swin+BART implementation will be "
-                "added in a future update."
+                "transformers >= 4.37.0 is required but not installed.\n"
+                "Run: pip install transformers>=4.37.0\n"
+                "Or:  pip install -r requirements.txt"
             )
 
         @staticmethod
         def from_encoder_decoder_pretrained(*args, **kwargs):
-            raise ImportError("transformers is required for VisionEncoderDecoderModel.")
+            raise ImportError(
+                "transformers >= 4.37.0 is required but not installed.\n"
+                "Run: pip install transformers>=4.37.0\n"
+                "Or:  pip install -r requirements.txt"
+            )
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Inline image loader — fallback when Pillow is unavailable

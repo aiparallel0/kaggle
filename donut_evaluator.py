@@ -50,12 +50,20 @@ except ImportError:
         class DonutProcessor:  # type: ignore[no-redef]
             @classmethod
             def from_pretrained(cls, *a, **kw):
-                raise ImportError("transformers is required. pip install transformers")
+                raise ImportError(
+                    "transformers >= 4.37.0 is required but not installed.\n"
+                    "Run: pip install transformers>=4.37.0\n"
+                    "Or:  pip install -r requirements.txt"
+                )
 
         class VisionEncoderDecoderModel:  # type: ignore[no-redef]
             @classmethod
             def from_pretrained(cls, *a, **kw):
-                raise ImportError("transformers is required. pip install transformers")
+                raise ImportError(
+                    "transformers >= 4.37.0 is required but not installed.\n"
+                    "Run: pip install transformers>=4.37.0\n"
+                    "Or:  pip install -r requirements.txt"
+                )
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Inline image loader — fallback when Pillow is unavailable

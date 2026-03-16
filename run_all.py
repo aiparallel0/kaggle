@@ -239,7 +239,7 @@ def _install_dependencies() -> None:
                     check=False,
                     capture_output=True,
                     text=True,
-                    timeout=300,  # 5-minute cap; avoids indefinite hangs
+                    timeout=1800,  # 30-minute cap; ultralytics + torch can exceed 5 min on slow connections
                 )
             if result.returncode == 0:
                 print(
@@ -251,7 +251,14 @@ def _install_dependencies() -> None:
                 os.execv(sys.executable, [sys.executable] + sys.argv)
             else:
                 if result.stderr:
-                    print(f"[setup] pip warning: {result.stderr[:200]}")
+                    print(f"[setup] pip stderr: {result.stderr[:1000]}")
+                if result.stdout:
+                    print(f"[setup] pip stdout: {result.stdout[:500]}")
+        except subprocess.TimeoutExpired:
+            print(
+                "[setup] TIMEOUT: pip install exceeded 1800s — packages may be partially installed.\n"
+                "[setup] Run manually: pip install -r requirements.txt"
+            )
         finally:
             try:
                 os.unlink(tmp_path)
