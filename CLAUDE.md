@@ -389,6 +389,15 @@ from constants import FIELDS, IMAGE_EXTS, MAX_LENGTH, BASE_MODEL, SEED, NEW_TOKE
 
 ### Full Pipeline (recommended)
 
+**requirements.txt is now minimal (2 packages: torch + transformers).**
+All other dependencies are inlined:
+- `datasets` → `_hf_download_dataset_inline()` in `dataset_loaders.py`
+- `ultralytics` → `_YOLO_CLS` in `train_trocr_yolo.py`
+- `accelerate` → never used; `torch.cuda.amp.GradScaler` directly
+- `matplotlib` → `_svg_bar_chart/_svg_radar_chart/...` in `benchmark_compare.py`
+- `pytest` → `_Pytest` stub in `tests/test_all.py` (also runs under `python -m unittest discover`)
+- `Pillow` → `_load_png/_load_bmp/_load_jpeg_pure` in `train.py`
+
 ```bash
 pip install -r requirements.txt
 
