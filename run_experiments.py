@@ -555,10 +555,12 @@ def train_experiment(
                 f"convert_tokens_to_ids was called, or the list-wrapping syntax is missing. "
                 f"Use: tokenizer.convert_tokens_to_ids(['<s_sroie>'])[0]"
             )
-        # v2: set max_length on both model config and generation config consistently.
-        _mdl.config.max_length = MAX_LENGTH
+        # FIX: max_length must live on generation_config, NOT model.config.
+        # Newer transformers (>=4.37) raises ValueError at save_pretrained if
+        # generation parameters are found on model.config.
         if hasattr(_mdl, "generation_config"):
             _mdl.generation_config.max_new_tokens = MAX_LENGTH
+            _mdl.generation_config.max_length = MAX_LENGTH
 
         # Only enable gradient checkpointing when VRAM is constrained (< 24 GB).
         # 24 GB covers RTX 3090/4090 (24 GB) and below, where activation memory
