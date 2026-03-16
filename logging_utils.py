@@ -26,6 +26,8 @@ _NOISY_THIRD_PARTY_LOGGERS = [
     "huggingface_hub",
     "huggingface_hub.utils._validators",
     "transformers.tokenization_utils_base",
+    "fsspec",
+    "fsspec.local",
 ]
 
 

@@ -120,8 +120,62 @@ class LmHeadCloneCallback(TrainerCallback):
 
 
 # ---------------------------------------------------------------------------
-# SROIEOnlyValCallback — diagnostic logging of SROIE-only val F1 per epoch
+# MinEpochsBeforeStoppingCallback — prevent early stopping before min_epochs
 # ---------------------------------------------------------------------------
+
+
+class MinEpochsBeforeStoppingCallback(TrainerCallback):
+    """Prevent EarlyStoppingCallback from stopping training before min_epochs.
+
+    Small SROIE datasets (500 samples, ~63 optimizer steps/epoch) exhibit a
+    natural loss plateau in the first few epochs before the model exits the
+    XML-scaffolding phase and starts learning field content.  With patience=3
+    or patience=5 this plateau can still trigger early stopping prematurely.
+
+    This callback intercepts ``on_evaluate`` and, while ``state.epoch <
+    min_epochs``, resets the trainer state's best metric value to the current
+    eval metric, so ``EarlyStoppingCallback`` always believes it just saw a
+    new best and resets its internal patience counter.
+
+    Parameters
+    ----------
+    min_epochs : int
+        Minimum number of complete epochs before early stopping is allowed.
+        Default is 5.
+    """
+
+    def __init__(self, min_epochs: int = 5) -> None:
+        self.min_epochs = min_epochs
+
+    def on_evaluate(self, args, state, control, metrics=None, **kwargs):
+        """Reset best-metric tracker so early stopper cannot fire before min_epochs.
+
+        Works for both minimized metrics (e.g., eval_loss) and maximized metrics
+        (e.g., eval_f1): by setting state.best_metric to the *current* value,
+        EarlyStoppingCallback always sees the latest eval as a new best and
+        resets its internal patience counter, regardless of direction.
+        """
+        if state is None or metrics is None:
+            return control
+        current_epoch = getattr(state, "epoch", 0)
+        if current_epoch < self.min_epochs:
+            # Determine which metric EarlyStoppingCallback tracks
+            metric_key = getattr(args, "metric_for_best_model", "eval_loss")
+            if not metric_key.startswith("eval_"):
+                metric_key = f"eval_{metric_key}"
+            current_value = metrics.get(metric_key)
+            if current_value is not None:
+                # Force the trainer to believe this is the new best so
+                # EarlyStoppingCallback resets its patience counter.
+                state.best_metric = current_value
+                logger.debug(
+                    "MinEpochsBeforeStoppingCallback: epoch %.1f < %d — "
+                    "reset best_metric to %.4f to suppress early stopping",
+                    current_epoch,
+                    self.min_epochs,
+                    current_value,
+                )
+        return control
 
 
 class SROIEOnlyValCallback(TrainerCallback):
@@ -889,6 +943,10 @@ class DonutTrainer:
                 "early_stopping_patience",
                 3,
             )
+            # MinEpochsBeforeStoppingCallback MUST be registered before
+            # EarlyStoppingCallback so that its on_evaluate hook fires first
+            # and resets best_metric before EarlyStoppingCallback checks it.
+            callbacks.append(MinEpochsBeforeStoppingCallback(min_epochs=5))
             callbacks.append(
                 EarlyStoppingCallback(
                     early_stopping_patience=patience,

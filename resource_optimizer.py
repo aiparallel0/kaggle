@@ -26,7 +26,7 @@ CLAUDE.md Reference:
   - Epochs: 10 (fixed per CLAUDE.md convergence analysis, NOT 30)
   - Warmup steps: 40 (fixed per CLAUDE.md LR schedule; see ExperimentConfig.warmup_steps)
   - Learning rates: encoder=5e-5, decoder=1e-4 (fixed, layerwise LR)
-  - Early stopping patience: 3 (fixed)
+  - Early stopping patience: 3 (fixed; 5 for small datasets <1000 samples)
 """
 
 import logging
@@ -388,13 +388,27 @@ def optimize_hyperparams(
     # Early Stopping Patience
     # ───────────────────────────────────────────────────────────────────
     #
-    # Conservative: patience=3 (default). Can increase on very high VRAM
-    # to allow more val-loss monitoring, but Exp 1 shows overfitting at >8 epochs anyway.
+    # For small datasets (<1000 samples), patience=3 is too tight: val loss
+    # can plateau for 3 consecutive epochs in the early training phase (before
+    # the model exits the XML-scaffolding phase) and then resume improving.
+    # Example from Exp 1 with patience=3: training would stop at epoch 5 even
+    # though val loss continues improving all the way to epoch 10 (0.5220 at
+    # epoch 3 → 0.4353 at epoch 10). Using patience=5 gives the model enough
+    # runway to pass early plateau phases on these small datasets.
+    # For larger datasets (≥1000 samples), patience=3 is retained to prevent
+    # overfitting.
 
-    early_stopping_patience = 3
-    explanation_parts.append(
-        "early_stopping_patience=3 (fixed to prevent overfitting on small val set)"
-    )
+    if num_train_samples < 1000:
+        early_stopping_patience = 5
+        explanation_parts.append(
+            "early_stopping_patience=5 (small dataset <1000 samples; patience=3 fires "
+            "too early when val loss plateaus and then resumes improving)"
+        )
+    else:
+        early_stopping_patience = 3
+        explanation_parts.append(
+            "early_stopping_patience=3 (fixed to prevent overfitting on small val set)"
+        )
 
     config_explanation = "; ".join(explanation_parts)
 

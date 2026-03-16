@@ -242,7 +242,9 @@ def _install_dependencies() -> None:
                     timeout=300,  # 5-minute cap; avoids indefinite hangs
                 )
             if result.returncode == 0:
-                print("[setup] Dependencies installed successfully — restarting to load new packages...")
+                print(
+                    "[setup] Dependencies installed successfully — restarting to load new packages..."
+                )
                 # os.execv replaces the current process (no fork) so terminal.txt
                 # logging is not duplicated.  The sentinel variable prevents loops.
                 os.environ["_DONUT_RESTARTED"] = "1"
@@ -339,7 +341,54 @@ class _DualStreamHandler(logging.Handler):
                 return True
             self._last_console_line = msg
             self._console_repeat_count = 0
-        return False
+
+        # Suppress verbose debug/info lines that belong in terminal.txt only
+        _console_suppressed = [
+            "Both `max_new_tokens`",
+            "max_new_tokens` and `max_length`",
+            "field coverage:",
+            "[ResolutionSync]",
+            "[GradCkpt]",
+            "[FreezeEncoder]",
+            "[RAM Cache]",
+            "[Tensor Cache]",
+            "[Label Cache]",
+            "DataLoader: num_workers",
+            "[Token-verify]",
+            "[Pre-resize]",
+            "[Post-resize]",
+            "lm_head.weight",
+            "LmHeadCloneCallback",
+            "Self-test raw token IDs",
+            "Self-test decoder_input_ids",
+            "tie_word_embeddings",
+            "The new embeddings will be initialized",
+            "The new lm_head weights",
+            "Loading weights:",
+            "Writing model shards:",
+            "eval_runtime",
+            "eval_samples_per_second",
+            "eval_steps_per_second",
+        ]
+        if any(x in msg for x in _console_suppressed):
+            return True
+
+        # Suppress per-step eval_loss dicts: lines like "{'eval_loss': ..."
+        # Suppress per-step training loss dicts: lines like "{'loss': ..."
+        stripped = msg.lstrip()
+        if stripped.startswith("{'loss':") or stripped.startswith("{'eval_loss':"):
+            return True
+
+        # Suppress CONFIG_OPTIMIZATION sub-lines (batch_size:, accumulation_steps:, etc.)
+        if stripped.startswith("- batch_size:") or stripped.startswith("- accumulation_steps:"):
+            return True
+        if stripped.startswith("- encoder_lr:") or stripped.startswith("- decoder_lr:"):
+            return True
+        return (
+            stripped.startswith("- early_stopping_patience:")
+            or stripped.startswith("- warmup_steps:")
+            or stripped.startswith("- epochs:")
+        )
 
     def close(self) -> None:
         try:
@@ -388,6 +437,8 @@ def _setup_logging(log_file: Path = Path("terminal.txt")) -> logging.Logger:
         "urllib3",
         "datasets",
         "huggingface_hub",
+        "fsspec",
+        "fsspec.local",
     ]:
         logging.getLogger(pkg).setLevel(logging.WARNING)
 
