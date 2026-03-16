@@ -242,7 +242,9 @@ def _install_dependencies() -> None:
                     timeout=300,  # 5-minute cap; avoids indefinite hangs
                 )
             if result.returncode == 0:
-                print("[setup] Dependencies installed successfully — restarting to load new packages...")
+                print(
+                    "[setup] Dependencies installed successfully — restarting to load new packages..."
+                )
                 # os.execv replaces the current process (no fork) so terminal.txt
                 # logging is not duplicated.  The sentinel variable prevents loops.
                 os.environ["_DONUT_RESTARTED"] = "1"
