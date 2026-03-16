@@ -93,10 +93,10 @@ _CRITICAL_INSTALL_PACKAGES = [
     "transformers",
     "datasets",
     "accelerate",
-    "editdistance",
-    "pandas",
+    # editdistance → replaced with inline _edit_distance() in donut_evaluator.py
+    # pandas → replaced with stdlib csv module
 ]
-_CRITICAL_VERIFY_PACKAGES = ["transformers", "datasets", "accelerate", "editdistance", "pandas"]
+_CRITICAL_VERIFY_PACKAGES = ["transformers", "datasets", "accelerate"]
 
 
 def _is_package_missing(package_name: str) -> bool:
@@ -177,8 +177,8 @@ def _install_dependencies() -> None:
     in fresh environments. Uses -q flag to minimize console spam.
 
     Strategy:
-    1. Check if critical packages (torch, transformers, datasets, accelerate,
-       editdistance, pandas) are all importable.
+    1. Check if critical packages (torch, transformers, datasets, accelerate)
+       are all importable.
     2. If any are missing, run ``pip install -r requirements.txt`` (with
        flash-attn filtered out — it requires a pre-installed torch and can
        take 5–25 minutes to compile from source on a GPU machine).
@@ -3200,8 +3200,6 @@ def main() -> None:
         "accelerate",
         "huggingface_hub",
         "sentencepiece",
-        "editdistance",
-        "pandas",
         "numpy",
         "Pillow",
     ]:

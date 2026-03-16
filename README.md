@@ -183,8 +183,8 @@ Options:
   --quick             Quick test mode: train only Exp 1 + TrOCR+YOLO
   --sroie-dir PATH    Path to SROIE data (default: /workspace/ICDAR-2019-SROIE/data)
   --workspace PATH    Workspace root for model checkpoints (default: /workspace)
-  --paper-template F  LaTeX template to fill (default: paper.tex)
-  --output F          Output filled LaTeX file (default: paper_filled.tex)
+  --paper-template F  LaTeX template to fill (default: paper/paper.tex)
+  --output F          Output filled LaTeX file (default: paper/paper_filled.tex)
 ```
 
 ### `run_experiments.py` — DONUT Only
@@ -198,7 +198,7 @@ python run_experiments.py --all --force      # force re-run
 ### `inject_results.py` — Paper Generation
 
 ```bash
-python inject_results.py --all --paper paper.tex --output paper_filled.tex
+python inject_results.py --all --paper paper/paper.tex --output paper/paper_filled.tex
 ```
 
 ---
@@ -211,10 +211,10 @@ Complete execution log with timestamps for each major stage, training progress, 
 
 Example:
 ```
-2025-02-28 14:32:10 | run_all | INFO | ========================================================================
-2025-02-28 14:32:10 | run_all | INFO | QUICK MODE: Single DONUT Experiment + TrOCR+YOLO
-2025-02-28 14:35:22 | run_all | INFO | [Stage 0] SROIE data install...
-2025-02-28 14:42:15 | run_all | INFO | [Stage 2] Training DONUT Experiment 1 (SROIE baseline)...
+2026-03-16 14:32:10 | run_all | INFO | ========================================================================
+2026-03-16 14:32:10 | run_all | INFO | QUICK MODE: Single DONUT Experiment + TrOCR+YOLO
+2026-03-16 14:35:22 | run_all | INFO | [Stage 0] SROIE data install...
+2026-03-16 14:42:15 | run_all | INFO | [Stage 2] Training DONUT Experiment 1 (SROIE baseline)...
 ```
 
 ### results.tex (Quick Mode)
@@ -258,6 +258,7 @@ python -m run_all
 
 **Auto-Install Features:**
 - Dependencies automatically installed from `requirements.txt` if needed; process restarts cleanly after install
+- The auto-installer checks for: `torch`, `transformers`, `datasets`, `accelerate` (NOT `editdistance` or `pandas` — both have inline replacements and are not in `requirements.txt`)
 - flash-attn is **not** auto-installed (see Troubleshooting); PyTorch 2.x SDPA is used instead
 - Dual-stream logging: all output to `terminal.txt`, console shows filtered progress
 - Professional CLI interface with argparse-based options
@@ -306,7 +307,7 @@ python -m run_all
 
 ```
 kaggle/
-├── run_all.py               # MAIN ENTRY POINT: full dual-architecture pipeline
+├── run_all.py               # MAIN ENTRY POINT: full dual-architecture pipeline (128 KB)
 ├── run_experiments.py       # 8-experiment DONUT orchestrator
 ├── CLAUDE.md                # Authoritative AI guide & project rules
 ├── README.md                # This file
@@ -316,19 +317,39 @@ kaggle/
 ├── dataset_loaders.py       # ABC-based dataset loaders
 ├── train.py                 # DonutTrainer class
 ├── donut_evaluator.py       # Evaluation & metrics computation
-├── inject_results.py        # LaTeX paper generation
+├── inject_results.py        # LaTeX paper generation (PaperInjector)
 ├── resource_optimizer.py    # VRAM-aware hyperparameter tuning
-├── paper.tex                # LaTeX paper template (IEEEtran)
-├── paper_mini.tex           # Conference version of paper template
-├── presentation.tex         # Beamer slide deck template
-├── references.bib           # Bibliography (BibTeX)
+├── memory_manager.py        # Centralized RAM/GPU memory authority
+├── preflight_checks.py      # Pre-flight validators + validate_pipeline()
+├── startup_diagnostics.py   # Stdlib-only startup checks (prefix, GPU zombies)
+├── pipeline_types.py        # All typed dataclasses + pipeline exceptions
+├── validators.py            # BugPatternDetector, ImportChainChecker, etc.
 ├── requirements.txt         # Python dependencies
+├── pyproject.toml           # Package metadata, entry points, ruff/pytest config
+│
+├── [Auxiliary Pipeline Modules]
+├── benchmark_compare.py     # F1/loss comparison figures and tables
+├── cloud_pipeline.py        # Cloud mode orchestrator + GitController + TestRunner
+├── control_suite.py         # Ablation controls, DA configs, TrOCRControlConfig
+├── dag_scheduler.py         # Directed-acyclic-graph stage scheduler
+├── dataset_normalizer.py    # Cross-dataset annotation normalizer
+├── experiment_config_loader.py  # YAML-based experiment config loader
+├── hparam_search.py         # Hyperparameter search orchestrator
+├── logging_utils.py         # Shared logging helpers
+├── multi_seed_runner.py     # Multi-seed experiment runner
+├── pipeline_critic.py       # Automated pipeline code review tool
+├── plot_convergence.py      # Loss-curve convergence plotter
+├── preprocess_seller_split.py   # Seller-aware train/val/test split
 │
 ├── [Standalone/Educational Scripts]
 ├── dataset_preparation.py   # Data prep with validation CLI
-├── train_donut.py           # DONUT training with sweep support
 ├── train_trocr_yolo.py      # TrOCR+YOLO pipeline
 ├── evaluate_models.py       # Unified evaluation + HTML reporting
+│
+├── paper/                   # LaTeX source files
+│   ├── paper.tex            # Main paper template with \VAR{} placeholders (IEEEtran)
+│   ├── references.bib       # Bibliography (BibTeX)
+│   └── presentation.tex     # Beamer slide deck template
 │
 ├── [Runtime Artifacts — results/ NOT gitignored for reference data]
 ├── results/
@@ -338,7 +359,7 @@ kaggle/
 └── [Runtime Artifacts (gitignored)]
     ├── data/                # Cached datasets
     ├── models/              # Checkpoints & fine-tuned weights
-    └── paper_filled.tex     # Generated paper (auto-produced by inject_results.py)
+    └── paper/paper_filled.tex  # Generated paper (auto-produced by inject_results.py)
 ```
 
 ---
@@ -403,12 +424,24 @@ Each experiment saves `results/experiment_N.json`:
 
 **Global F1** over all (image, field) pairs:
 - A pair is **TP** if `predicted_string == ground_truth_string` (case-insensitive, stripped)
-- **NED** (Normalized Edit Distance via `editdistance`) reported per field — lower is better ↓
+- **NED** (Normalized Edit Distance, inline Wagner-Fischer implementation) reported per field — lower is better ↓
 - **Exact Match** counts full 4-field predictions where all fields match
 
 ---
 
 ## 🛠️ Troubleshooting
+
+### `FATAL: The following packages could not be installed: editdistance`
+
+If you see this error, you are running an older version of `run_all.py` where `editdistance`
+was still listed in `_CRITICAL_INSTALL_PACKAGES`. The fix is to `git pull` to get the latest
+version where both `editdistance` and `pandas` have been removed from those lists (they have
+inline replacements and are not in `requirements.txt`).
+
+```bash
+git pull
+python run_all.py
+```
 
 ### `python run_all.py` hangs after "Dependencies installed successfully"
 
@@ -661,6 +694,7 @@ donut-kie                            # CLI alias (if installed via setup.py)
 - Val/test data split separation (prevents data leakage)
 - Module consolidation: satellite modules merged to reduce source file count (36 → 29)
 - flash-attn terminal freeze fix: removed auto-build, added `os.execv()` restart + `_InstallWatchdog` progress dots
+- `editdistance` / `pandas` removed from `_CRITICAL_INSTALL_PACKAGES` and `_CRITICAL_VERIFY_PACKAGES` (both have inline replacements; never in `requirements.txt`)
 
 ### In Progress 🔧
 
@@ -670,7 +704,7 @@ donut-kie                            # CLI alias (if installed via setup.py)
 
 ### Fragile / Known Gaps ⚠️
 
-- **`run_all.py` is a 67 KB monolith** — needs decomposition into `stages/` modules
+- **`run_all.py` is a 128 KB monolith** — needs decomposition into `stages/` modules
 - **No integration tests** — unit + smoke tests exist, but no end-to-end single-epoch test
 - **Hardcoded paths** — several files hardcode `/workspace/`; should be env-var-driven throughout
 - **No type checking / mypy** — type hints are present but `mypy` is not in CI

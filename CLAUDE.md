@@ -155,8 +155,10 @@ Use `benchmark_compare.py` to regenerate loss curves and F1 comparison plots.
 | GPU | Exp 6 est. | Full 7-exp suite est. |
 |---|---|---|
 | A100 (80 GB) | ~25 min | ~4–5 h |
-| RTX 4090 (24 GB) | ~60 min | ~10–12 h |
+| RTX 4090 (24 GB) ← current workspace GPU | ~60 min | ~10–12 h |
 | V100 (16 GB) | ~90 min | ~15–20 h |
+
+The RTX 4090 (24 GB) row matches the current workspace GPU (`GPU 0 (NVIDIA GeForce RTX 4090): 0.0/24.0 GB used`). The Vast.ai RTX 6000 Blackwell figures above are the authoritative reference run; RTX 4090 figures are estimates only.
 
 GPU memory is explicitly freed between stages: `torch.cuda.empty_cache()` + `gc.collect()`.
 
@@ -197,6 +199,7 @@ Both must exit with code `0`. If either fails, fix the core import chain **befor
 | **`Self-test FAILED: model produced empty dict`** | `token2json` returned list; self-test treated list as empty | `_self_test()` merges list before `_unwrap_prediction()` (Pattern 5 below) |
 | **Experiment results inconsistent across runs** | Mutable global `EXPERIMENTS` dict mutated by `run_experiment()` | Use `dataclasses.replace()` — never assign to `EXPERIMENTS[N].field` |
 | **`ruff check .` fails in CI** | pre-commit hook not installed; `lint.sh` not run before push | Run `./lint.sh` before every `git commit` (see § 10 Mandatory Lint) |
+| **`FATAL: The following packages could not be installed: editdistance`** | `_CRITICAL_INSTALL_PACKAGES` still contains `editdistance` which was removed from `requirements.txt` (replaced with inline `_edit_distance()`) | Remove `editdistance` and `pandas` from both `_CRITICAL_INSTALL_PACKAGES` and `_CRITICAL_VERIFY_PACKAGES` in `run_all.py` |
 
 ### Pattern 1: Bracket & Comma Errors
 
@@ -261,12 +264,26 @@ kaggle/
 ├── train.py                  # DonutTrainer OOP wrapper + LiveDashboardCallback (inlined)
 ├── donut_evaluator.py        # DonutEvaluator OOP wrapper (computes F1, NED)
 ├── run_experiments.py        # 8-experiment DONUT orchestrator (ExperimentConfig)
-├── run_all.py                # MAIN ENTRY POINT: full dual-architecture pipeline
+├── run_all.py                # MAIN ENTRY POINT: full dual-architecture pipeline (128 KB)
 ├── inject_results.py         # PaperInjector: generates LaTeX from results JSON + paper_diff (inlined)
 ├── preflight_checks.py       # Pre-flight validators + validate_pipeline()
+├── startup_diagnostics.py    # Stdlib-only startup checks (Python prefix, GPU zombie detection)
 ├── cloud_pipeline.py         # Cloud mode orchestrator + CloudConfig + GitController + TestRunner (inlined)
 ├── validators.py             # All validator classes (BugPatternDetector, ImportChainChecker, etc.)
 ├── pipeline_types.py         # All typed dataclasses + exceptions for pipeline results
+├── memory_manager.py         # Centralized RAM/GPU memory authority
+├── resource_optimizer.py     # VRAM-aware hyperparameter scaling
+├── benchmark_compare.py      # F1/loss comparison figures and tables
+├── control_suite.py          # Ablation controls, DA configs, TrOCRControlConfig
+├── dag_scheduler.py          # Directed-acyclic-graph stage scheduler
+├── dataset_normalizer.py     # Cross-dataset annotation normalizer
+├── experiment_config_loader.py  # YAML-based experiment config loader
+├── hparam_search.py          # Hyperparameter search orchestrator
+├── logging_utils.py          # Shared logging helpers
+├── multi_seed_runner.py      # Multi-seed experiment runner
+├── pipeline_critic.py        # Automated pipeline code review tool
+├── plot_convergence.py       # Loss-curve convergence plotter
+├── preprocess_seller_split.py   # Seller-aware train/val/test split
 ├── requirements.txt          # Python dependencies with version pins
 ├── pyproject.toml            # Package metadata, entry points, ruff/pytest config
 │
@@ -465,7 +482,7 @@ pip install pre-commit && pre-commit install
 SROIE Task-3 **global F1** over all `(image, field)` pairs:
 
 - A pair is **TP** if `predicted_string == ground_truth_string` (case-insensitive, stripped)
-- **NED** (Normalized Edit Distance via `editdistance`) reported per field — lower is better ↓
+- **NED** (Normalized Edit Distance, inline Wagner-Fischer `_edit_distance()`) reported per field — lower is better ↓
 - Parse failures > 50% threshold raise an error to catch broken models early
 
 The evaluator unwraps the `{"sroie": {...}}` wrapper from `token2json()` output before scoring. If this unwrap step is missing, every prediction scores zero.
@@ -561,6 +578,7 @@ Two-stage pipeline in `train_trocr_yolo.py` (called by `run_all.py`):
 | **TrOCR OOM after DONUT experiments** | Prior stages' GPU memory not freed before TrOCR model load | Added defensive `_gpu_cleanup()` at start of `train_trocr()` and `train_yolo()`; explicit cleanup between YOLO and TrOCR in `stage_trocr_experiments()`; VRAM-aware batch auto-scaling halves batch when free VRAM < needed | `train_trocr_yolo.py`, `run_all.py` |
 | **`flash-attn` build fails with nvcc segfault on torch≥2.9+cu126** | Pipeline already falls back to PyTorch SDPA — no action needed. If you want FA2: use prebuilt wheel from https://flashattn.dev/wheel-finder/ (Python 3.12 / CUDA 12.6). Fixed `run_experiments.py` to catch `RuntimeError` in addition to `ImportError`. | `run_experiments.py`, `startup_diagnostics.py` |
 | **Terminal freeze after "Dependencies installed successfully" on GPU machine** | `_install_dependencies()` ran `subprocess.run(..., capture_output=True)` for flash-attn after the main install — CUDA kernel compilation takes 5–25 min, invisible; `Ctrl+C` didn't reach nvcc child. Post-install `_verify_critical_packages()` called `sys.exit(2)` because newly-installed packages aren't visible to the running process (`sys.modules` isolation). | Removed flash-attn auto-build entirely. Added `os.execv()` restart (with `_DONUT_RESTARTED=1` sentinel) after successful pip install. Added `_InstallWatchdog` thread for elapsed-time progress. Added `timeout=300` to main pip subprocess. | `run_all.py` |
+| **`FATAL: editdistance could not be installed` after dependency auto-install** | `editdistance` and `pandas` still in `_CRITICAL_INSTALL_PACKAGES`/`_CRITICAL_VERIFY_PACKAGES` after being removed from `requirements.txt` (both replaced with inline implementations) | Removed both from `_CRITICAL_INSTALL_PACKAGES` and `_CRITICAL_VERIFY_PACKAGES` in `run_all.py` | `run_all.py` |
 
 ### The F1 Collapse Chain (root-cause map for the three worst bugs)
 
