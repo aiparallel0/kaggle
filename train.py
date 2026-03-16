@@ -571,27 +571,1223 @@ except ImportError:
                 result[field] = value.strip()
             return result
 
-    # ── VisionEncoderDecoderModel placeholder ─────────────────────────────
+    # ── HuggingFace Hub downloader (urllib only) ───────────────────────────
 
-    class VisionEncoderDecoderModel:  # type: ignore[no-redef]
-        """Placeholder — requires transformers or the inline Swin+BART implementation.
+    def _hf_hub_download(repo_id: str, dest_dir: str | Path, token: str | None = None) -> Path:
+        """Download a HuggingFace Hub model repository to *dest_dir*.
 
-        Install transformers to use: pip install transformers
-        The full inline Swin+BART architecture is planned for a future phase.
+        Uses only ``urllib`` — no ``huggingface_hub`` package required.
+        Downloads: config.json, tokenizer.model, tokenizer.json,
+        tokenizer_config.json, special_tokens_map.json,
+        processor_config.json, model.safetensors (or pytorch_model.bin).
+
+        Args:
+            repo_id: HuggingFace repo id, e.g. "naver-clova-ix/donut-base"
+            dest_dir: local directory to save files into (created if needed)
+            token: optional HF access token for private repos
+
+        Returns:
+            Path to *dest_dir*
+        """
+        import urllib.request as _urlreq
+
+        dest = Path(dest_dir)
+        dest.mkdir(parents=True, exist_ok=True)
+
+        base_url = f"https://huggingface.co/{repo_id}/resolve/main"
+        files = [
+            "config.json",
+            "tokenizer.model",
+            "tokenizer.json",
+            "tokenizer_config.json",
+            "special_tokens_map.json",
+            "processor_config.json",
+            "model.safetensors",
+        ]
+
+        headers: dict = {}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+
+        for fname in files:
+            out_path = dest / fname
+            if out_path.exists():
+                continue
+            url = f"{base_url}/{fname}"
+            req = _urlreq.Request(url, headers=headers)
+            try:
+                with _urlreq.urlopen(req, timeout=120) as resp:
+                    out_path.write_bytes(resp.read())
+            except Exception:
+                # Non-fatal: some files (e.g. tokenizer.model) may not exist for
+                # every checkpoint; skip silently and continue.
+                pass
+
+        # Fallback: pytorch_model.bin if model.safetensors not downloaded
+        if not (dest / "model.safetensors").exists() and not (dest / "pytorch_model.bin").exists():
+            url = f"{base_url}/pytorch_model.bin"
+            req = _urlreq.Request(url, headers=headers)
+            try:
+                with _urlreq.urlopen(req, timeout=300) as resp:
+                    (dest / "pytorch_model.bin").write_bytes(resp.read())
+            except Exception:
+                pass
+
+        return dest
+
+    # ── Swin Transformer Encoder (matches naver-clova-ix/donut-base weights) ─
+
+    import torch.nn as _nn
+    import torch.nn.functional as _F
+
+    def _window_partition(x: torch.Tensor, window_size: int) -> torch.Tensor:
+        """Partition feature map into non-overlapping windows.
+
+        Args:
+            x: (B, H, W, C)
+            window_size: window height == window width
+
+        Returns:
+            windows: (num_windows*B, window_size, window_size, C)
+        """
+        B, H, W, C = x.shape
+        x = x.view(B, H // window_size, window_size, W // window_size, window_size, C)
+        windows = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(-1, window_size, window_size, C)
+        return windows
+
+    def _window_reverse(windows: torch.Tensor, window_size: int, H: int, W: int) -> torch.Tensor:
+        """Reverse window partitioning.
+
+        Args:
+            windows: (num_windows*B, window_size, window_size, C)
+            window_size: int
+            H, W: spatial dimensions of original feature map
+
+        Returns:
+            x: (B, H, W, C)
+        """
+        B = int(windows.shape[0] / (H * W / window_size / window_size))
+        x = windows.view(B, H // window_size, W // window_size, window_size, window_size, -1)
+        x = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(B, H, W, -1)
+        return x
+
+    class _SwinPatchEmbedding(_nn.Module):
+        """Conv2d patch embedding + LayerNorm.
+
+        Mirrors HuggingFace SwinPatchEmbeddings weight names:
+          embeddings.patch_embeddings.projection.{weight,bias}
+          embeddings.norm.{weight,bias}
         """
 
-        @classmethod
-        def from_pretrained(cls, model_name_or_path, *args, **kwargs):
-            raise ImportError(
-                "transformers is required for VisionEncoderDecoderModel. "
-                "Install it: pip install transformers\n"
-                "Alternatively, the inline Swin+BART implementation will be "
-                "added in a future update."
+        def __init__(self, in_channels: int = 3, embed_dim: int = 128, patch_size: int = 4):
+            super().__init__()
+            self.patch_size = patch_size
+            # Named to match HF: encoder.model.encoder.embeddings.patch_embeddings.projection
+            self.patch_embeddings = _nn.Module()
+            self.patch_embeddings.projection = _nn.Conv2d(
+                in_channels, embed_dim, kernel_size=patch_size, stride=patch_size
             )
+            self.norm = _nn.LayerNorm(embed_dim)
+
+        def forward(self, pixel_values: torch.Tensor):
+            """
+            Args:
+                pixel_values: (B, C, H, W)
+            Returns:
+                embeddings: (B, num_patches, embed_dim)
+                output_dimensions: (H', W') after patch embed
+            """
+            x = self.patch_embeddings.projection(pixel_values)  # (B, embed_dim, H', W')
+            B, C, H, W = x.shape
+            x = x.flatten(2).transpose(1, 2)  # (B, H'*W', embed_dim)
+            x = self.norm(x)
+            return x, (H, W)
+
+    class _SwinWindowAttention(_nn.Module):
+        """Window-based multi-head self-attention with relative position bias.
+
+        Weight names match HuggingFace SwinWindowAttention:
+          attention.self.query/key/value.{weight,bias}
+          attention.output.dense.{weight,bias}
+          relative_position_bias_table
+          relative_position_index
+        """
+
+        def __init__(
+            self,
+            dim: int,
+            num_heads: int,
+            window_size: int,
+            qkv_bias: bool = True,
+            attn_drop: float = 0.0,
+            proj_drop: float = 0.0,
+        ):
+            super().__init__()
+            self.dim = dim
+            self.num_heads = num_heads
+            self.window_size = window_size
+            head_dim = dim // num_heads
+            self.scale = head_dim**-0.5
+
+            # HF uses separate query/key/value projections under attention.self
+            self.attention = _nn.Module()
+            self.attention.self = _nn.Module()
+            self.attention.self.query = _nn.Linear(dim, dim, bias=qkv_bias)
+            self.attention.self.key = _nn.Linear(dim, dim, bias=qkv_bias)
+            self.attention.self.value = _nn.Linear(dim, dim, bias=qkv_bias)
+            self.attention.output = _nn.Module()
+            self.attention.output.dense = _nn.Linear(dim, dim)
+
+            # Relative position bias: table of (2*Wh-1)*(2*Ww-1) entries × num_heads
+            self.relative_position_bias_table = _nn.Parameter(
+                torch.zeros((2 * window_size - 1) * (2 * window_size - 1), num_heads)
+            )
+
+            # Pre-compute relative position index
+            coords_h = torch.arange(window_size)
+            coords_w = torch.arange(window_size)
+            coords = torch.stack(torch.meshgrid(coords_h, coords_w, indexing="ij"))  # (2, Wh, Ww)
+            coords_flat = coords.flatten(1)  # (2, Wh*Ww)
+            relative_coords = coords_flat[:, :, None] - coords_flat[:, None, :]  # (2, N, N)
+            relative_coords = relative_coords.permute(1, 2, 0).contiguous()
+            relative_coords[:, :, 0] += window_size - 1
+            relative_coords[:, :, 1] += window_size - 1
+            relative_coords[:, :, 0] *= 2 * window_size - 1
+            relative_position_index = relative_coords.sum(-1)  # (N, N)
+            self.register_buffer("relative_position_index", relative_position_index)
+
+            self.attn_drop = _nn.Dropout(attn_drop)
+            self.proj_drop = _nn.Dropout(proj_drop)
+
+            _nn.init.trunc_normal_(self.relative_position_bias_table, std=0.02)
+
+        def forward(
+            self,
+            x: torch.Tensor,
+            mask: torch.Tensor | None = None,
+        ) -> torch.Tensor:
+            """
+            Args:
+                x: (num_windows*B, N, C) where N = window_size^2
+                mask: (num_windows, N, N) or None
+            Returns:
+                (num_windows*B, N, C)
+            """
+            B_, N, C = x.shape
+            H = self.num_heads
+            head_dim = C // H
+
+            q = self.attention.self.query(x).reshape(B_, N, H, head_dim).permute(0, 2, 1, 3)
+            k = self.attention.self.key(x).reshape(B_, N, H, head_dim).permute(0, 2, 1, 3)
+            v = self.attention.self.value(x).reshape(B_, N, H, head_dim).permute(0, 2, 1, 3)
+
+            attn = (q @ k.transpose(-2, -1)) * self.scale
+
+            # Relative position bias
+            rel_pos_bias = self.relative_position_bias_table[
+                self.relative_position_index.view(-1)
+            ].view(
+                self.window_size * self.window_size,
+                self.window_size * self.window_size,
+                -1,
+            )
+            rel_pos_bias = rel_pos_bias.permute(2, 0, 1).contiguous()  # (nH, N, N)
+            attn = attn + rel_pos_bias.unsqueeze(0)
+
+            if mask is not None:
+                nW = mask.shape[0]
+                attn = attn.view(B_ // nW, nW, H, N, N) + mask.unsqueeze(1).unsqueeze(0)
+                attn = attn.view(-1, H, N, N)
+
+            attn = _F.softmax(attn, dim=-1)
+            attn = self.attn_drop(attn)
+
+            x = (attn @ v).transpose(1, 2).reshape(B_, N, C)
+            x = self.attention.output.dense(x)
+            x = self.proj_drop(x)
+            return x
+
+    class _SwinIntermediate(_nn.Module):
+        """FFN intermediate (fc1 + activation). HF name: intermediate."""
+
+        def __init__(self, dim: int, mlp_ratio: float = 4.0):
+            super().__init__()
+            hidden = int(dim * mlp_ratio)
+            self.dense = _nn.Linear(dim, hidden)
+            self.intermediate_act_fn = _nn.GELU()
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            return self.intermediate_act_fn(self.dense(x))
+
+    class _SwinOutput(_nn.Module):
+        """FFN output (fc2). HF name: output."""
+
+        def __init__(self, dim: int, mlp_ratio: float = 4.0):
+            super().__init__()
+            hidden = int(dim * mlp_ratio)
+            self.dense = _nn.Linear(hidden, dim)
+            self.dropout = _nn.Dropout(0.0)
+
+        def forward(self, x: torch.Tensor, _input_tensor: torch.Tensor) -> torch.Tensor:
+            return self.dropout(self.dense(x))
+
+    class _SwinBlock(_nn.Module):
+        """One Swin Transformer block (W-MSA or SW-MSA).
+
+        Weight names mirror HuggingFace SwinLayer:
+          layernorm_before.{weight,bias}
+          attention.self.{query,key,value}.{weight,bias}
+          attention.output.dense.{weight,bias}
+          relative_position_bias_table
+          layernorm_after.{weight,bias}
+          intermediate.dense.{weight,bias}
+          output.dense.{weight,bias}
+          layer_scale_parameter1 / layer_scale_parameter2  (absent in base — ignored)
+        """
+
+        def __init__(
+            self,
+            dim: int,
+            num_heads: int,
+            window_size: int = 8,
+            shift_size: int = 0,
+            mlp_ratio: float = 4.0,
+            qkv_bias: bool = True,
+            drop_path: float = 0.0,
+        ):
+            super().__init__()
+            self.dim = dim
+            self.window_size = window_size
+            self.shift_size = shift_size
+
+            self.layernorm_before = _nn.LayerNorm(dim)
+            self.attention = _SwinWindowAttention(
+                dim=dim,
+                num_heads=num_heads,
+                window_size=window_size,
+                qkv_bias=qkv_bias,
+            )
+            self.layernorm_after = _nn.LayerNorm(dim)
+            self.intermediate = _SwinIntermediate(dim, mlp_ratio)
+            self.output = _SwinOutput(dim, mlp_ratio)
+
+            self.drop_path_prob = drop_path
+            # Store computed attn_mask lazily based on input spatial size
+            self._attn_mask: torch.Tensor | None = None
+            self._mask_hw: tuple = (-1, -1)
+
+        def _get_attn_mask(self, H: int, W: int, device) -> torch.Tensor | None:
+            if self.shift_size == 0:
+                return None
+            if self._mask_hw == (H, W) and self._attn_mask is not None:
+                return self._attn_mask.to(device)
+            ws = self.window_size
+            img_mask = torch.zeros(1, H, W, 1, device=device)
+            h_slices = [
+                slice(0, -ws),
+                slice(-ws, -self.shift_size),
+                slice(-self.shift_size, None),
+            ]
+            w_slices = [
+                slice(0, -ws),
+                slice(-ws, -self.shift_size),
+                slice(-self.shift_size, None),
+            ]
+            cnt = 0
+            for hs in h_slices:
+                for ws_ in w_slices:
+                    img_mask[:, hs, ws_, :] = cnt
+                    cnt += 1
+            mask_windows = _window_partition(img_mask, ws)
+            mask_windows = mask_windows.view(-1, ws * ws)
+            attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
+            attn_mask = attn_mask.masked_fill(attn_mask != 0, -100.0).masked_fill(
+                attn_mask == 0, 0.0
+            )
+            self._attn_mask = attn_mask
+            self._mask_hw = (H, W)
+            return attn_mask
+
+        @staticmethod
+        def _drop_path(x: torch.Tensor, drop_prob: float, training: bool) -> torch.Tensor:
+            if not training or drop_prob == 0.0:
+                return x
+            keep = 1.0 - drop_prob
+            shape = (x.shape[0],) + (1,) * (x.ndim - 1)
+            noise = torch.empty(shape, device=x.device, dtype=x.dtype).bernoulli_(keep).div_(keep)
+            return x * noise
+
+        def forward(self, hidden_states: torch.Tensor, input_dimensions: tuple) -> torch.Tensor:
+            """
+            Args:
+                hidden_states: (B, H*W, C)
+                input_dimensions: (H, W)
+            Returns:
+                (B, H*W, C)
+            """
+            H, W = input_dimensions
+            B, L, C = hidden_states.shape
+
+            shortcut = hidden_states
+            hidden_states = self.layernorm_before(hidden_states)
+            hidden_states = hidden_states.view(B, H, W, C)
+
+            # Cyclic shift
+            if self.shift_size > 0:
+                shifted = torch.roll(
+                    hidden_states, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2)
+                )
+            else:
+                shifted = hidden_states
+
+            # Partition into windows
+            windows = _window_partition(shifted, self.window_size)  # (nW*B, ws, ws, C)
+            windows = windows.view(-1, self.window_size * self.window_size, C)
+
+            # Attention
+            attn_mask = self._get_attn_mask(H, W, hidden_states.device)
+            attn_out = self.attention(windows, mask=attn_mask)
+
+            # Reverse windows
+            attn_out = attn_out.view(-1, self.window_size, self.window_size, C)
+            shifted_out = _window_reverse(attn_out, self.window_size, H, W)
+
+            # Reverse cyclic shift
+            if self.shift_size > 0:
+                hidden_states = torch.roll(
+                    shifted_out, shifts=(self.shift_size, self.shift_size), dims=(1, 2)
+                )
+            else:
+                hidden_states = shifted_out
+            hidden_states = hidden_states.view(B, H * W, C)
+            hidden_states = shortcut + self._drop_path(
+                hidden_states, self.drop_path_prob, self.training
+            )
+
+            # MLP
+            mlp_in = self.layernorm_after(hidden_states)
+            mlp_mid = self.intermediate(mlp_in)
+            mlp_out = self.output(mlp_mid, mlp_in)
+            hidden_states = hidden_states + self._drop_path(
+                mlp_out, self.drop_path_prob, self.training
+            )
+
+            return hidden_states
+
+    class _SwinPatchMerging(_nn.Module):
+        """Patch merging layer (downsampling 2× in spatial dims, 2× channels).
+
+        Weight names mirror HuggingFace SwinPatchMerging:
+          reduction.{weight}   (Linear, no bias)
+          norm.{weight,bias}
+        """
+
+        def __init__(self, input_resolution: tuple, dim: int):
+            super().__init__()
+            self.input_resolution = input_resolution
+            self.dim = dim
+            self.reduction = _nn.Linear(4 * dim, 2 * dim, bias=False)
+            self.norm = _nn.LayerNorm(4 * dim)
+
+        def forward(self, x: torch.Tensor, input_dimensions: tuple) -> tuple:
+            """
+            Args:
+                x: (B, H*W, C)
+                input_dimensions: (H, W)
+            Returns:
+                (B, H/2*W/2, 2C), (H/2, W/2)
+            """
+            H, W = input_dimensions
+            B, _, C = x.shape
+            x = x.view(B, H, W, C)
+
+            x0 = x[:, 0::2, 0::2, :]
+            x1 = x[:, 1::2, 0::2, :]
+            x2 = x[:, 0::2, 1::2, :]
+            x3 = x[:, 1::2, 1::2, :]
+            x = torch.cat([x0, x1, x2, x3], dim=-1)
+            x = x.view(B, -1, 4 * C)
+            x = self.norm(x)
+            x = self.reduction(x)
+            return x, (H // 2, W // 2)
+
+    class _SwinStage(_nn.Module):
+        """One Swin Transformer stage (a sequence of SwinBlocks + optional PatchMerging).
+
+        HF weight path: encoder.model.encoder.layers.{stage_idx}.blocks.{block_idx}.*
+        Downsample (if present): encoder.model.encoder.layers.{stage_idx}.downsample.*
+        """
+
+        def __init__(
+            self,
+            dim: int,
+            input_resolution: tuple,
+            depth: int,
+            num_heads: int,
+            window_size: int = 8,
+            mlp_ratio: float = 4.0,
+            qkv_bias: bool = True,
+            drop_path_rates: list | None = None,
+            downsample: bool = False,
+        ):
+            super().__init__()
+            if drop_path_rates is None:
+                drop_path_rates = [0.0] * depth
+
+            self.blocks = _nn.ModuleList(
+                [
+                    _SwinBlock(
+                        dim=dim,
+                        num_heads=num_heads,
+                        window_size=window_size,
+                        shift_size=0 if (i % 2 == 0) else window_size // 2,
+                        mlp_ratio=mlp_ratio,
+                        qkv_bias=qkv_bias,
+                        drop_path=drop_path_rates[i],
+                    )
+                    for i in range(depth)
+                ]
+            )
+            self.downsample: _nn.Module | None = None
+            if downsample:
+                self.downsample = _SwinPatchMerging(input_resolution, dim)
+
+        def forward(self, hidden_states: torch.Tensor, input_dimensions: tuple) -> tuple:
+            """
+            Args:
+                hidden_states: (B, H*W, C)
+                input_dimensions: (H, W)
+            Returns:
+                hidden_states: (B, H'*W', C')
+                output_dimensions: (H', W')
+            """
+            for block in self.blocks:
+                hidden_states = block(hidden_states, input_dimensions)
+            if self.downsample is not None:
+                hidden_states, input_dimensions = self.downsample(hidden_states, input_dimensions)
+            return hidden_states, input_dimensions
+
+    class _SwinEncoderBody(_nn.Module):
+        """Swin encoder body: stack of stages.
+
+        HF weight path prefix: encoder.model.encoder.layers.*
+        Followed by a final LayerNorm: encoder.model.encoder.layernorm.*
+        """
+
+        def __init__(
+            self,
+            embed_dim: int = 128,
+            depths: list | None = None,
+            num_heads: list | None = None,
+            image_size: list | None = None,
+            patch_size: int = 4,
+            window_size: int = 8,
+            mlp_ratio: float = 4.0,
+            qkv_bias: bool = True,
+            drop_path_rate: float = 0.1,
+        ):
+            super().__init__()
+            if depths is None:
+                depths = [2, 2, 14, 2]
+            if num_heads is None:
+                num_heads = [4, 8, 16, 32]
+            if image_size is None:
+                image_size = [1280, 960]
+
+            num_stages = len(depths)
+            # Stochastic depth decay rule
+            total_depth = sum(depths)
+            dpr = [x.item() for x in torch.linspace(0, drop_path_rate, total_depth)]
+
+            # Spatial resolution after patch embed
+            H_patches = image_size[0] // patch_size
+            W_patches = image_size[1] // patch_size
+
+            self.layers = _nn.ModuleList()
+            dp_cursor = 0
+            for i in range(num_stages):
+                dim_i = int(embed_dim * (2**i))
+                res_h = H_patches // (2**i)
+                res_w = W_patches // (2**i)
+                stage = _SwinStage(
+                    dim=dim_i,
+                    input_resolution=(res_h, res_w),
+                    depth=depths[i],
+                    num_heads=num_heads[i],
+                    window_size=window_size,
+                    mlp_ratio=mlp_ratio,
+                    qkv_bias=qkv_bias,
+                    drop_path_rates=dpr[dp_cursor : dp_cursor + depths[i]],
+                    downsample=(i < num_stages - 1),  # all stages except last get downsample
+                )
+                self.layers.append(stage)
+                dp_cursor += depths[i]
+
+            # Final norm: LayerNorm on last stage output dim
+            final_dim = int(embed_dim * (2 ** (num_stages - 1)))
+            self.layernorm = _nn.LayerNorm(final_dim)
+
+        def forward(self, hidden_states: torch.Tensor, input_dimensions: tuple) -> torch.Tensor:
+            """
+            Args:
+                hidden_states: (B, H*W, embed_dim)  — after patch embed
+                input_dimensions: (H, W) after patch embed
+            Returns:
+                (B, H_final*W_final, final_dim)  — last stage output after layernorm
+            """
+            for stage in self.layers:
+                hidden_states, input_dimensions = stage(hidden_states, input_dimensions)
+            hidden_states = self.layernorm(hidden_states)
+            return hidden_states
+
+    class _SwinModel(_nn.Module):
+        """SwinModel — patch embed + encoder body.
+
+        Mirrors HF weight prefix: encoder.model.encoder.*
+        """
+
+        def __init__(self, config_dict: dict):
+            super().__init__()
+            self.embeddings = _SwinPatchEmbedding(
+                in_channels=config_dict.get("num_channels", 3),
+                embed_dim=config_dict.get("embed_dim", 128),
+                patch_size=config_dict.get("patch_size", 4),
+            )
+            self.encoder = _SwinEncoderBody(
+                embed_dim=config_dict.get("embed_dim", 128),
+                depths=config_dict.get("depths", [2, 2, 14, 2]),
+                num_heads=config_dict.get("num_heads", [4, 8, 16, 32]),
+                image_size=config_dict.get("image_size", [1280, 960]),
+                patch_size=config_dict.get("patch_size", 4),
+                window_size=config_dict.get("window_size", 8),
+                mlp_ratio=config_dict.get("mlp_ratio", 4.0),
+                qkv_bias=config_dict.get("qkv_bias", True),
+                drop_path_rate=config_dict.get("drop_path_rate", 0.1),
+            )
+
+        def forward(self, pixel_values: torch.Tensor) -> torch.Tensor:
+            embeddings, dims = self.embeddings(pixel_values)
+            return self.encoder(embeddings, dims)
+
+    class _SwinWrapper(_nn.Module):
+        """Wrapper matching HF weight path: encoder.model.*
+
+        HF weight structure for SwinModel inside VisionEncoderDecoder:
+          encoder.model.encoder.embeddings.*
+          encoder.model.encoder.layers.*
+          encoder.model.encoder.layernorm.*
+        """
+
+        def __init__(self, config_dict: dict):
+            super().__init__()
+            self.encoder = _SwinModel(config_dict)
+
+        def forward(self, pixel_values: torch.Tensor) -> torch.Tensor:
+            return self.encoder(pixel_values)
+
+    class _SwinEncoderModule(_nn.Module):
+        """Top-level encoder: encoder.model.
+
+        Exposes named_parameters() whose paths start with 'model.encoder.*'
+        consistent with the VisionEncoderDecoderModel's 'encoder.*' prefix.
+        """
+
+        def __init__(self, config_dict: dict):
+            super().__init__()
+            self.model = _SwinWrapper(config_dict)
+
+        def forward(self, pixel_values: torch.Tensor) -> torch.Tensor:
+            return self.model(pixel_values)
+
+        def named_parameters(self, prefix="", recurse=True, remove_duplicate=True):
+            return super().named_parameters(prefix=prefix, recurse=recurse)
+
+    # ── BART Decoder (matches naver-clova-ix/donut-base weights) ──────────
+
+    class _BARTLearnedPositionalEmbedding(_nn.Embedding):
+        """Learned positional embedding with offset (BART uses offset=2)."""
+
+        def __init__(self, num_embeddings: int, embedding_dim: int, padding_idx: int = 1):
+            # BART offset: positions are stored starting at offset=2
+            self.offset = 2
+            super().__init__(num_embeddings + self.offset, embedding_dim, padding_idx=padding_idx)
+
+        def forward(self, input_ids_shape, past_key_values_length: int = 0):
+            bsz, seq_len = input_ids_shape
+            positions = torch.arange(
+                past_key_values_length,
+                past_key_values_length + seq_len,
+                dtype=torch.long,
+                device=self.weight.device,
+            )
+            return super().forward(positions + self.offset)
+
+    class _BARTDecoderLayer(_nn.Module):
+        """One BART decoder layer.
+
+        HF weight names (under decoder.model.decoder.layers.{i}):
+          self_attn.k_proj / q_proj / v_proj / out_proj
+          self_attn_layer_norm
+          encoder_attn.k_proj / q_proj / v_proj / out_proj
+          encoder_attn_layer_norm
+          fc1 / fc2
+          final_layer_norm
+        """
+
+        def __init__(
+            self,
+            d_model: int = 1024,
+            decoder_attention_heads: int = 16,
+            decoder_ffn_dim: int = 4096,
+            dropout: float = 0.0,
+            activation_dropout: float = 0.0,
+        ):
+            super().__init__()
+            self.embed_dim = d_model
+            self.self_attn = _nn.MultiheadAttention(
+                d_model, decoder_attention_heads, dropout=dropout, batch_first=True
+            )
+            self.self_attn_layer_norm = _nn.LayerNorm(d_model)
+
+            self.encoder_attn = _nn.MultiheadAttention(
+                d_model, decoder_attention_heads, dropout=dropout, batch_first=True
+            )
+            self.encoder_attn_layer_norm = _nn.LayerNorm(d_model)
+
+            self.fc1 = _nn.Linear(d_model, decoder_ffn_dim)
+            self.fc2 = _nn.Linear(decoder_ffn_dim, d_model)
+            self.final_layer_norm = _nn.LayerNorm(d_model)
+
+            self.dropout_p = dropout
+            self.activation_dropout_p = activation_dropout
+
+        def forward(
+            self,
+            hidden_states: torch.Tensor,
+            attention_mask: torch.Tensor | None = None,
+            encoder_hidden_states: torch.Tensor | None = None,
+            encoder_attention_mask: torch.Tensor | None = None,
+            past_key_value: tuple | None = None,
+            use_cache: bool = False,
+        ) -> tuple:
+            """
+            Args:
+                hidden_states: (B, tgt_len, d_model)
+                attention_mask: (B, 1, tgt_len, tgt_len) or (tgt_len, tgt_len) causal mask
+                encoder_hidden_states: (B, src_len, d_model)
+                encoder_attention_mask: unused (kept for API compat)
+                past_key_value: (self_k, self_v, cross_k, cross_v) or None
+                use_cache: whether to return present key/values
+
+            Returns:
+                (hidden_states, present_key_value)
+            """
+            residual = hidden_states
+
+            # Self-attention (pre-norm)
+            hidden_states = self.self_attn_layer_norm(hidden_states)
+            tgt_len = hidden_states.shape[1]
+
+            # Build causal mask for self-attention
+            if past_key_value is not None:
+                # Incremental decoding: no causal mask needed (single new token)
+                self_past_k, self_past_v = past_key_value[0], past_key_value[1]
+                # key / value = concat past + current
+                k_in = torch.cat([self_past_k, hidden_states], dim=1)
+                v_in = torch.cat([self_past_v, hidden_states], dim=1)
+                attn_mask_self = None
+            else:
+                k_in = hidden_states
+                v_in = hidden_states
+                # Causal mask: upper-triangular with -inf
+                attn_mask_self = torch.full(
+                    (tgt_len, k_in.shape[1]),
+                    float("-inf"),
+                    device=hidden_states.device,
+                    dtype=hidden_states.dtype,
+                )
+                attn_mask_self = torch.triu(attn_mask_self, diagonal=1)
+
+            self_attn_out, _ = self.self_attn(
+                query=hidden_states,
+                key=k_in,
+                value=v_in,
+                attn_mask=attn_mask_self,
+                need_weights=False,
+            )
+
+            # Store present key/value (current hidden_states before attn as k/v cache)
+            present_self_k = k_in
+            present_self_v = v_in
+
+            self_attn_out = _F.dropout(self_attn_out, p=self.dropout_p, training=self.training)
+            hidden_states = residual + self_attn_out
+
+            # Cross-attention (encoder attention) — pre-norm
+            residual = hidden_states
+            hidden_states = self.encoder_attn_layer_norm(hidden_states)
+
+            if past_key_value is not None and len(past_key_value) >= 4:
+                cross_k = past_key_value[2]
+                cross_v = past_key_value[3]
+            else:
+                cross_k = encoder_hidden_states
+                cross_v = encoder_hidden_states
+
+            cross_attn_out, _ = self.encoder_attn(
+                query=hidden_states,
+                key=cross_k,
+                value=cross_v,
+                need_weights=False,
+            )
+            cross_attn_out = _F.dropout(cross_attn_out, p=self.dropout_p, training=self.training)
+            hidden_states = residual + cross_attn_out
+
+            # FFN (pre-norm)
+            residual = hidden_states
+            hidden_states = self.final_layer_norm(hidden_states)
+            hidden_states = _F.gelu(self.fc1(hidden_states))
+            hidden_states = _F.dropout(
+                hidden_states, p=self.activation_dropout_p, training=self.training
+            )
+            hidden_states = self.fc2(hidden_states)
+            hidden_states = _F.dropout(hidden_states, p=self.dropout_p, training=self.training)
+            hidden_states = residual + hidden_states
+
+            present_key_value = (present_self_k, present_self_v, cross_k, cross_v)
+            return hidden_states, present_key_value
+
+    class _BARTDecoderModel(_nn.Module):
+        """BART decoder backbone.
+
+        HF weight path: decoder.model.decoder.*
+          embed_tokens.weight
+          embed_positions.weight
+          layers.{i}.*
+          layernorm_embedding.{weight,bias}
+        """
+
+        def __init__(self, config_dict: dict):
+            super().__init__()
+            self.d_model = config_dict.get("d_model", 1024)
+            vocab_size = config_dict.get("vocab_size", 57580)
+            max_pos = config_dict.get("max_position_embeddings", 1536)
+            n_layers = config_dict.get("decoder_layers", 4)
+            n_heads = config_dict.get("decoder_attention_heads", 16)
+            ffn_dim = config_dict.get("decoder_ffn_dim", 4096)
+            pad_id = config_dict.get("pad_token_id", 1)
+
+            self.embed_tokens = _nn.Embedding(vocab_size, self.d_model, padding_idx=pad_id)
+            self.embed_positions = _BARTLearnedPositionalEmbedding(max_pos, self.d_model)
+            self.layers = _nn.ModuleList(
+                [
+                    _BARTDecoderLayer(
+                        d_model=self.d_model,
+                        decoder_attention_heads=n_heads,
+                        decoder_ffn_dim=ffn_dim,
+                    )
+                    for _ in range(n_layers)
+                ]
+            )
+            self.layernorm_embedding = _nn.LayerNorm(self.d_model)
+
+        def forward(
+            self,
+            input_ids: torch.Tensor,
+            encoder_hidden_states: torch.Tensor,
+            past_key_values: list | None = None,
+            use_cache: bool = False,
+        ) -> tuple:
+            """
+            Args:
+                input_ids: (B, tgt_len)
+                encoder_hidden_states: (B, src_len, d_model)
+                past_key_values: list of per-layer (sk, sv, ck, cv) or None
+                use_cache: if True, return present key/values
+            Returns:
+                (hidden_states: (B, tgt_len, d_model), present_kvs: list or None)
+            """
+            past_len = 0
+            if (
+                past_key_values is not None
+                and len(past_key_values) > 0
+                and past_key_values[0] is not None
+            ):
+                past_len = past_key_values[0][0].shape[1]
+
+            token_emb = self.embed_tokens(input_ids)
+            pos_emb = self.embed_positions(input_ids.shape, past_key_values_length=past_len)
+            hidden_states = self.layernorm_embedding(token_emb + pos_emb)
+
+            present_kvs = [] if use_cache else None
+            for i, layer in enumerate(self.layers):
+                pkv = past_key_values[i] if past_key_values is not None else None
+                hidden_states, new_pkv = layer(
+                    hidden_states,
+                    encoder_hidden_states=encoder_hidden_states,
+                    past_key_value=pkv,
+                    use_cache=use_cache,
+                )
+                if use_cache:
+                    present_kvs.append(new_pkv)  # type: ignore[union-attr]
+
+            return hidden_states, present_kvs
+
+    class _BARTModelWrapper(_nn.Module):
+        """Wrapper so weight paths read decoder.model.decoder.*
+
+        HF nests as: MBartForCausalLM → model → decoder → layers
+        Resulting in weight prefix: decoder.model.decoder.*
+        """
+
+        def __init__(self, config_dict: dict):
+            super().__init__()
+            self.decoder = _BARTDecoderModel(config_dict)
+
+        def forward(self, input_ids, encoder_hidden_states, past_key_values=None, use_cache=False):
+            return self.decoder(input_ids, encoder_hidden_states, past_key_values, use_cache)
+
+    class _SimpleConfig:
+        """Minimal config object carrying key attributes."""
+
+        def __init__(self, **kwargs):
+            for k, v in kwargs.items():
+                setattr(self, k, v)
+
+    class _BARTDecoderWrapper(_nn.Module):
+        """MBartForCausalLM-like wrapper with lm_head.
+
+        HF weight prefix: decoder.*
+          model.decoder.*        (backbone)
+          lm_head.weight         (output projection, no bias)
+        """
+
+        def __init__(self, config_dict: dict):
+            super().__init__()
+            self.config = _SimpleConfig(
+                tie_word_embeddings=False,
+                pad_token_id=config_dict.get("pad_token_id", 1),
+                decoder_start_token_id=None,
+                use_cache=True,
+                vocab_size=config_dict.get("vocab_size", 57580),
+                d_model=config_dict.get("d_model", 1024),
+            )
+            self.model = _BARTModelWrapper(config_dict)
+            vocab_size = config_dict.get("vocab_size", 57580)
+            d_model = config_dict.get("d_model", 1024)
+            self.lm_head = _nn.Linear(d_model, vocab_size, bias=False)
+
+        def resize_token_embeddings(self, new_size: int):
+            """Resize embed_tokens and lm_head to new_size."""
+            old_size, d_model = self.model.decoder.embed_tokens.weight.shape
+            if new_size == old_size:
+                return
+
+            # Resize embed_tokens
+            new_embed = _nn.Embedding(new_size, d_model)
+            _nn.init.normal_(new_embed.weight, mean=0.0, std=d_model**-0.5)
+            copy_rows = min(old_size, new_size)
+            new_embed.weight.data[:copy_rows] = self.model.decoder.embed_tokens.weight.data[
+                :copy_rows
+            ]
+            new_embed.padding_idx = self.model.decoder.embed_tokens.padding_idx
+            self.model.decoder.embed_tokens = new_embed
+
+            # Resize lm_head
+            new_lm = _nn.Linear(d_model, new_size, bias=False)
+            _nn.init.normal_(new_lm.weight, mean=0.0, std=d_model**-0.5)
+            new_lm.weight.data[:copy_rows] = self.lm_head.weight.data[:copy_rows]
+            self.lm_head = new_lm
+
+        def forward(
+            self,
+            input_ids: torch.Tensor,
+            encoder_hidden_states: torch.Tensor,
+            past_key_values: list | None = None,
+            use_cache: bool = False,
+        ) -> tuple:
+            hidden_states, present_kvs = self.model(
+                input_ids, encoder_hidden_states, past_key_values, use_cache
+            )
+            logits = self.lm_head(hidden_states)
+            return logits, present_kvs
+
+    # ── VisionEncoderDecoderModel full implementation ──────────────────────
+
+    class _ModelOutput:
+        """Minimal output container with .loss and .logits."""
+
+        def __init__(self, loss=None, logits=None):
+            self.loss = loss
+            self.logits = logits
+
+    class VisionEncoderDecoderModel(_nn.Module):  # type: ignore[no-redef]
+        """Inline Swin-B encoder + BART decoder matching naver-clova-ix/donut-base.
+
+        Mirrors the HuggingFace VisionEncoderDecoderModel API:
+          - from_pretrained(path_or_repo_id, token=None)
+          - forward(pixel_values, decoder_input_ids, labels)  → _ModelOutput
+          - generate(pixel_values, decoder_start_token_id, max_length, bad_words_ids)
+          - resize_token_embeddings(new_size)   (delegates to decoder)
+          - gradient_checkpointing_enable()
+          - .encoder  /  .decoder  sub-modules
+          - .config.tie_word_embeddings
+          - .decoder.lm_head.weight  (for LmHeadCloneCallback)
+          - .device  property
+
+        Weight names EXACTLY match the HuggingFace checkpoint so that
+        load_state_dict(state_dict, strict=False) works without remapping.
+        """
+
+        def __init__(self, encoder_config: dict, decoder_config: dict):
+            super().__init__()
+            self.encoder = _SwinEncoderModule(encoder_config)
+            self.decoder = _BARTDecoderWrapper(decoder_config)
+            self.config = _SimpleConfig(
+                tie_word_embeddings=False,
+                pad_token_id=decoder_config.get("pad_token_id", 1),
+                decoder_start_token_id=None,
+                use_cache=True,
+                is_encoder_decoder=True,
+            )
+            self._use_gradient_checkpointing = False
+
+        # ── Properties ────────────────────────────────────────────────────
+
+        @property
+        def device(self) -> torch.device:
+            try:
+                return next(self.parameters()).device
+            except StopIteration:
+                return torch.device("cpu")
+
+        # ── Gradient checkpointing ─────────────────────────────────────────
+
+        def gradient_checkpointing_enable(self, gradient_checkpointing_kwargs=None):
+            """Enable gradient checkpointing (reduces VRAM at cost of speed)."""
+            self._use_gradient_checkpointing = True
+
+        # ── Token embedding resize ─────────────────────────────────────────
+
+        def resize_token_embeddings(self, new_size: int):
+            """Resize decoder embed_tokens and lm_head to *new_size*."""
+            self.decoder.resize_token_embeddings(new_size)
+
+        # ── Forward pass ──────────────────────────────────────────────────
+
+        def forward(
+            self,
+            pixel_values: torch.Tensor | None = None,
+            decoder_input_ids: torch.Tensor | None = None,
+            labels: torch.Tensor | None = None,
+            **kwargs,
+        ) -> "_ModelOutput":
+            """
+            Args:
+                pixel_values: (B, 3, H, W)
+                decoder_input_ids: (B, tgt_len)  — shifted-right target ids
+                labels: (B, tgt_len)  — target ids for loss; -100 at padding
+            Returns:
+                _ModelOutput with .loss (scalar if labels given) and .logits (B, tgt_len, V)
+            """
+            # Encode image
+            encoder_out = self.encoder(pixel_values)  # (B, src_len, 1024)
+
+            # Decode
+            logits, _ = self.decoder(
+                decoder_input_ids, encoder_out, use_cache=False
+            )  # (B, tgt_len, V)
+
+            loss = None
+            if labels is not None:
+                # Shift: logits[t] predicts labels[t]
+                shift_logits = logits[:, :-1, :].contiguous()
+                shift_labels = labels[:, 1:].contiguous()
+                loss = _F.cross_entropy(
+                    shift_logits.view(-1, shift_logits.size(-1)),
+                    shift_labels.view(-1),
+                    ignore_index=-100,
+                )
+
+            return _ModelOutput(loss=loss, logits=logits)
+
+        # ── Autoregressive generation ──────────────────────────────────────
+
+        @torch.no_grad()
+        def generate(
+            self,
+            pixel_values: torch.Tensor,
+            decoder_start_token_id: int = 0,
+            max_length: int = 768,
+            bad_words_ids: list | None = None,
+            **kwargs,
+        ) -> torch.Tensor:
+            """Greedy autoregressive generation.
+
+            Args:
+                pixel_values: (B, 3, H, W)
+                decoder_start_token_id: id of the first decoder input token
+                max_length: maximum number of generated tokens
+                bad_words_ids: list of [[token_id], ...] to block (ignored by greedy;
+                    kept for API compatibility with transformers)
+            Returns:
+                generated_ids: (B, seq_len) including the start token
+            """
+            device = self.device
+            pixel_values = pixel_values.to(device)
+            B = pixel_values.shape[0]
+
+            # Encode once
+            encoder_out = self.encoder(pixel_values)  # (B, src_len, 1024)
+
+            # Build bad-words set for masking
+            bad_word_ids_set: set = set()
+            if bad_words_ids:
+                for bw in bad_words_ids:
+                    if bw:
+                        bad_word_ids_set.update(bw)
+
+            # Init decoder input with start token
+            generated = torch.full((B, 1), decoder_start_token_id, dtype=torch.long, device=device)
+            past_key_values: list | None = None
+
+            for _ in range(max_length - 1):
+                # Feed only the last token (with past_key_values for speed)
+                if past_key_values is not None:
+                    cur_input = generated[:, -1:]
+                else:
+                    cur_input = generated
+
+                logits, past_key_values = self.decoder(
+                    cur_input, encoder_out, past_key_values=past_key_values, use_cache=True
+                )
+                next_logits = logits[:, -1, :]  # (B, V)
+
+                # Block bad words
+                if bad_word_ids_set:
+                    for bw_id in bad_word_ids_set:
+                        next_logits[:, bw_id] = float("-inf")
+
+                next_token = next_logits.argmax(dim=-1, keepdim=True)  # (B, 1)
+                generated = torch.cat([generated, next_token], dim=1)
+
+                # Stop if all sequences hit eos (pad token used as eos in DONUT)
+                pad_id = self.config.pad_token_id
+                if pad_id is not None and (next_token == pad_id).all():
+                    break
+
+            return generated
+
+        # ── Checkpoint loading ─────────────────────────────────────────────
+
+        @classmethod
+        def from_pretrained(
+            cls,
+            model_name_or_path: str | Path,
+            token: str | None = None,
+            **kwargs,
+        ) -> "VisionEncoderDecoderModel":
+            """Load model weights from a local directory or HuggingFace Hub repo.
+
+            Priority:
+              1. Local directory (if it exists and contains config.json)
+              2. HuggingFace Hub download (via _hf_hub_download)
+
+            After loading, verifies that decoder.lm_head.weight is present in the
+            checkpoint (guards against the safetensors deduplication bug described
+            in CLAUDE.md §16).
+
+            Args:
+                model_name_or_path: local path or HF repo id (e.g. "naver-clova-ix/donut-base")
+                token: optional HF token for private repos
+
+            Returns:
+                Loaded VisionEncoderDecoderModel
+            """
+            model_path = Path(model_name_or_path)
+
+            # If the path doesn't exist locally, attempt HF Hub download
+            if not model_path.exists() or not (model_path / "config.json").exists():
+                # Try to read token from hf_token.txt if not provided
+                if token is None:
+                    token_file = Path("hf_token.txt")
+                    if token_file.exists():
+                        token = token_file.read_text().strip() or None
+                cache_dir = Path.home() / ".cache" / "donut" / model_path.name
+                model_path = _hf_hub_download(str(model_name_or_path), cache_dir, token=token)
+
+            # Load config.json
+            config_path = model_path / "config.json"
+            if not config_path.exists():
+                raise FileNotFoundError(f"config.json not found in {model_path}")
+            with open(config_path) as f:
+                full_config = json.load(f)
+
+            encoder_cfg = full_config.get("encoder", {})
+            decoder_cfg = full_config.get("decoder", {})
+            # Propagate top-level pad_token_id to decoder config if not set
+            if "pad_token_id" not in decoder_cfg and "pad_token_id" in full_config:
+                decoder_cfg["pad_token_id"] = full_config["pad_token_id"]
+
+            model = cls(encoder_cfg, decoder_cfg)
+
+            # Load weights — prefer model.safetensors, fall back to pytorch_model.bin
+            st_path = model_path / "model.safetensors"
+            bin_path = model_path / "pytorch_model.bin"
+
+            state_dict: dict = {}
+            if st_path.exists():
+                state_dict = _load_safetensors(st_path)
+            elif bin_path.exists():
+                state_dict = torch.load(bin_path, map_location="cpu", weights_only=True)
+            else:
+                raise FileNotFoundError(
+                    f"No model.safetensors or pytorch_model.bin found in {model_path}"
+                )
+
+            # Guard: detect safetensors deduplication bug (lm_head.weight missing)
+            # If tie_word_embeddings is False and lm_head.weight is absent, copy
+            # embed_tokens.weight as a starting point (will be overwritten by fine-tuning).
+            lm_head_key = "decoder.lm_head.weight"
+            embed_key = "decoder.model.decoder.embed_tokens.weight"
+            if lm_head_key not in state_dict and embed_key in state_dict:
+                state_dict[lm_head_key] = state_dict[embed_key].clone()
+
+            missing, unexpected = model.load_state_dict(state_dict, strict=False)
+            # Filter out expected missing keys (position_ids buffer, etc.)
+            truly_missing = [
+                k
+                for k in missing
+                if not k.endswith("relative_position_index")
+                and not k.endswith("_attn_mask")
+                and "num_batches_tracked" not in k
+            ]
+            if truly_missing:
+                import logging as _logging_fr
+
+                _logging_fr.getLogger(__name__).warning(
+                    "VisionEncoderDecoderModel.from_pretrained: %d missing keys (first 10): %s",
+                    len(truly_missing),
+                    truly_missing[:10],
+                )
+            if unexpected:
+                import logging as _logging_fr2
+
+                _logging_fr2.getLogger(__name__).debug(
+                    "VisionEncoderDecoderModel.from_pretrained: %d unexpected keys (first 5): %s",
+                    len(unexpected),
+                    unexpected[:5],
+                )
+
+            return model
 
         @staticmethod
         def from_encoder_decoder_pretrained(*args, **kwargs):
-            raise ImportError("transformers is required for VisionEncoderDecoderModel.")
+            raise NotImplementedError(
+                "from_encoder_decoder_pretrained is not implemented in the inline "
+                "VisionEncoderDecoderModel. Use from_pretrained() with a local directory "
+                "containing config.json and model.safetensors."
+            )
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Inline image loader — fallback when Pillow is unavailable
