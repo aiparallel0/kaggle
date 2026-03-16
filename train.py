@@ -895,9 +895,13 @@ class MinEpochsBeforeStoppingCallback(TrainerCallback):
     or patience=5 this plateau can still trigger early stopping prematurely.
 
     This callback intercepts ``on_evaluate`` and, while ``state.epoch <
-    min_epochs``, resets the trainer state's best metric value to the current
-    eval metric, so ``EarlyStoppingCallback`` always believes it just saw a
-    new best and resets its internal patience counter.
+    min_epochs``, resets ``control.should_training_stop`` to ``False`` if
+    ``EarlyStoppingCallback`` (registered before this callback) just set it
+    to ``True``.
+
+    Registration order: this callback MUST be registered AFTER
+    ``EarlyStoppingCallback`` so that it fires second and can override the
+    stop signal that ESC just set.
 
     Parameters
     ----------
@@ -910,33 +914,25 @@ class MinEpochsBeforeStoppingCallback(TrainerCallback):
         self.min_epochs = min_epochs
 
     def on_evaluate(self, args, state, control, metrics=None, **kwargs):
-        """Reset best-metric tracker so early stopper cannot fire before min_epochs.
+        """Suppress early-stopping signal before min_epochs.
 
-        Works for both minimized metrics (e.g., eval_loss) and maximized metrics
-        (e.g., eval_f1): by setting state.best_metric to the *current* value,
-        EarlyStoppingCallback always sees the latest eval as a new best and
-        resets its internal patience counter, regardless of direction.
+        ``EarlyStoppingCallback`` fires first (it is registered before this
+        callback) and may set ``control.should_training_stop = True``.  We
+        reset it to ``False`` while ``state.epoch < min_epochs`` so the model
+        is guaranteed to train for at least ``min_epochs`` epochs regardless
+        of the val-loss trajectory.
         """
-        if state is None or metrics is None:
+        if state is None:
             return control
         current_epoch = getattr(state, "epoch", 0)
-        if current_epoch < self.min_epochs:
-            # Determine which metric EarlyStoppingCallback tracks
-            metric_key = getattr(args, "metric_for_best_model", "eval_loss")
-            if not metric_key.startswith("eval_"):
-                metric_key = f"eval_{metric_key}"
-            current_value = metrics.get(metric_key)
-            if current_value is not None:
-                # Force the trainer to believe this is the new best so
-                # EarlyStoppingCallback resets its patience counter.
-                state.best_metric = current_value
-                logger.debug(
-                    "MinEpochsBeforeStoppingCallback: epoch %.1f < %d — "
-                    "reset best_metric to %.4f to suppress early stopping",
-                    current_epoch,
-                    self.min_epochs,
-                    current_value,
-                )
+        if current_epoch < self.min_epochs and getattr(control, "should_training_stop", False):
+            control.should_training_stop = False
+            logger.debug(
+                "MinEpochsBeforeStoppingCallback: epoch %.1f < %d — "
+                "suppressed early-stopping signal",
+                current_epoch,
+                self.min_epochs,
+            )
         return control
 
 
@@ -1705,15 +1701,16 @@ class DonutTrainer:
                 "early_stopping_patience",
                 3,
             )
-            # MinEpochsBeforeStoppingCallback MUST be registered before
-            # EarlyStoppingCallback so that its on_evaluate hook fires first
-            # and resets best_metric before EarlyStoppingCallback checks it.
-            callbacks.append(MinEpochsBeforeStoppingCallback(min_epochs=5))
+            # EarlyStoppingCallback MUST be registered BEFORE
+            # MinEpochsBeforeStoppingCallback so that ESC fires first and may
+            # set control.should_training_stop = True, then MinEpochs fires
+            # second and resets it to False while state.epoch < min_epochs.
             callbacks.append(
                 EarlyStoppingCallback(
                     early_stopping_patience=patience,
                 )
             )
+            callbacks.append(MinEpochsBeforeStoppingCallback(min_epochs=5))
 
         # Register SROIE-only val F1 diagnostic callback when a pure SROIE
         # validation split is available.  This allows auditing whether
