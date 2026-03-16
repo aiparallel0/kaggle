@@ -208,7 +208,7 @@ class ExperimentConfig:
     lr: float = 5e-5
     batch_size: int = 8
     seed: int = SEED
-    early_stopping_patience: int = 3  # Per CLAUDE.md: patience=3 is optimal. Prevents overfitting.
+    early_stopping_patience: int = 5  # Per CLAUDE.md §3: patience=5 for small datasets (<1000 samples); patience=3 fires too early when val loss plateaus then resumes improving.
     base_model: str = BASE_MODEL
     warmup_steps: int = 40  # Fix: 500 exceeded total steps for small datasets (~312 for Exp 1); 40 is safe across all 8 experiments
     weight_decay: float = 0.01
