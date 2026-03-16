@@ -40,32 +40,794 @@ TRAIN_CONFIG.
 """
 
 import csv
+import json
 import logging
 import math
 import os
+import struct
 import time
+import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import torch
-from PIL import Image
 from torch.utils.data import Dataset
-from transformers import (
-    DonutProcessor,
-    EarlyStoppingCallback,
-    Seq2SeqTrainer,
-    Seq2SeqTrainingArguments,
-    TrainerCallback,
-    VisionEncoderDecoderModel,
-)
 
-import memory_manager as _mm
+# ─────────────────────────────────────────────────────────────────────────────
+# Inline transformers fallback — used when the transformers package is absent
+# ─────────────────────────────────────────────────────────────────────────────
+
+try:
+    from transformers import (
+        DonutProcessor,
+        EarlyStoppingCallback,
+        Seq2SeqTrainer,
+        Seq2SeqTrainingArguments,
+        TrainerCallback,
+        VisionEncoderDecoderModel,
+    )
+
+    _TRANSFORMERS_AVAILABLE = True
+except ImportError:
+    _TRANSFORMERS_AVAILABLE = False
+    import math as _math_tr
+
+    # ── TrainerCallback base ──────────────────────────────────────────────
+
+    class TrainerCallback:  # type: ignore[no-redef]
+        """Minimal TrainerCallback base (mirrors transformers API)."""
+
+        def on_init_end(self, args, state, control, **kw):
+            pass
+
+        def on_train_begin(self, args, state, control, **kw):
+            pass
+
+        def on_train_end(self, args, state, control, **kw):
+            pass
+
+        def on_epoch_begin(self, args, state, control, **kw):
+            pass
+
+        def on_epoch_end(self, args, state, control, **kw):
+            pass
+
+        def on_step_begin(self, args, state, control, **kw):
+            pass
+
+        def on_step_end(self, args, state, control, **kw):
+            pass
+
+        def on_evaluate(self, args, state, control, metrics=None, **kw):
+            pass
+
+        def on_save(self, args, state, control, model=None, **kw):
+            pass
+
+        def on_log(self, args, state, control, logs=None, **kw):
+            pass
+
+    # ── Control / State objects ───────────────────────────────────────────
+
+    class _TrainerControl:
+        should_training_stop: bool = False
+        should_epoch_stop: bool = False
+        should_save: bool = False
+        should_evaluate: bool = False
+        should_log: bool = False
+
+    class _TrainerState:
+        epoch: int = 0
+        global_step: int = 0
+        log_history: list = field(default_factory=list)
+        best_metric: float | None = None
+        best_model_checkpoint: str | None = None
+
+        def __init__(self):
+            self.epoch = 0
+            self.global_step = 0
+            self.log_history = []
+            self.best_metric = None
+            self.best_model_checkpoint = None
+
+    # ── EarlyStoppingCallback ─────────────────────────────────────────────
+
+    class EarlyStoppingCallback(TrainerCallback):  # type: ignore[no-redef]
+        """Patience-based early stopping."""
+
+        def __init__(self, early_stopping_patience: int = 3, early_stopping_threshold: float = 0.0):
+            self._patience = early_stopping_patience
+            self._threshold = early_stopping_threshold
+            self._best = float("inf")
+            self._counter = 0
+
+        def on_evaluate(self, args, state, control, metrics=None, **kw):
+            val_loss = (metrics or {}).get("eval_loss", float("inf"))
+            if val_loss < self._best - self._threshold:
+                self._best = val_loss
+                self._counter = 0
+            else:
+                self._counter += 1
+                if self._counter >= self._patience:
+                    control.should_training_stop = True
+
+    # ── Seq2SeqTrainingArguments ──────────────────────────────────────────
+
+    class Seq2SeqTrainingArguments:  # type: ignore[no-redef]
+        """Minimal subset of transformers.Seq2SeqTrainingArguments."""
+
+        def __init__(
+            self,
+            output_dir: str = ".",
+            num_train_epochs: int = 3,
+            per_device_train_batch_size: int = 8,
+            per_device_eval_batch_size: int = 8,
+            gradient_accumulation_steps: int = 1,
+            learning_rate: float = 5e-5,
+            warmup_steps: int = 0,
+            weight_decay: float = 0.0,
+            save_strategy: str = "epoch",
+            eval_strategy: str = "no",
+            save_total_limit: int = 3,
+            load_best_model_at_end: bool = False,
+            metric_for_best_model: str | None = None,
+            greater_is_better: bool | None = None,
+            predict_with_generate: bool = False,
+            bf16: bool = False,
+            fp16: bool = False,
+            logging_steps: int = 500,
+            dataloader_num_workers: int = 0,
+            dataloader_pin_memory: bool = False,
+            dataloader_prefetch_factor: int | None = None,
+            dataloader_persistent_workers: bool = False,
+            remove_unused_columns: bool = True,
+            seed: int = 42,
+            **kwargs,
+        ):
+            self.output_dir = output_dir
+            self.num_train_epochs = num_train_epochs
+            self.per_device_train_batch_size = per_device_train_batch_size
+            self.per_device_eval_batch_size = per_device_eval_batch_size
+            self.gradient_accumulation_steps = gradient_accumulation_steps
+            self.learning_rate = learning_rate
+            self.warmup_steps = warmup_steps
+            self.weight_decay = weight_decay
+            self.save_strategy = save_strategy
+            self.eval_strategy = eval_strategy
+            self.save_total_limit = save_total_limit
+            self.load_best_model_at_end = load_best_model_at_end
+            self.metric_for_best_model = metric_for_best_model
+            self.greater_is_better = greater_is_better
+            self.predict_with_generate = predict_with_generate
+            self.bf16 = bf16
+            self.fp16 = fp16
+            self.logging_steps = logging_steps
+            self.dataloader_num_workers = dataloader_num_workers
+            self.dataloader_pin_memory = dataloader_pin_memory
+            self.dataloader_prefetch_factor = dataloader_prefetch_factor
+            self.dataloader_persistent_workers = dataloader_persistent_workers
+            self.remove_unused_columns = remove_unused_columns
+            self.seed = seed
+
+    # ── Seq2SeqTrainer inline ─────────────────────────────────────────────
+
+    class Seq2SeqTrainer:  # type: ignore[no-redef]
+        """Inline Seq2Seq training loop replacing transformers.Seq2SeqTrainer.
+
+        Supports the same constructor signature and .train() method used by
+        DonutTrainer.  Gradient accumulation, AMP, early stopping, and
+        callback lifecycle hooks are all implemented.
+        """
+
+        def __init__(
+            self,
+            model=None,
+            args=None,
+            train_dataset=None,
+            eval_dataset=None,
+            callbacks=None,
+            optimizers=(None, None),
+            **kwargs,
+        ):
+            self.model = model
+            self.args = args or Seq2SeqTrainingArguments()
+            self.train_dataset = train_dataset
+            self.eval_dataset = eval_dataset
+            self.callbacks = callbacks or []
+            self._optimizer, self._scheduler = optimizers
+            self.state = _TrainerState()
+
+        def _call_callbacks(self, event: str, control=None, **kw):
+            if control is None:
+                control = _TrainerControl()
+            for cb in self.callbacks:
+                getattr(cb, event, lambda *a, **k: None)(self.args, self.state, control, **kw)
+            return control
+
+        def _eval_loop(self, dataloader) -> float:
+            """Run evaluation; returns mean eval_loss."""
+            self.model.eval()
+            total_loss = 0.0
+            n = 0
+            with torch.no_grad():
+                for batch in dataloader:
+                    batch = {
+                        k: v.to(self.model.device) if hasattr(v, "to") else v
+                        for k, v in batch.items()
+                    }
+                    out = self.model(**batch)
+                    if hasattr(out, "loss") and out.loss is not None:
+                        total_loss += out.loss.item()
+                        n += 1
+            self.model.train()
+            return total_loss / max(n, 1)
+
+        def _save_checkpoint(self, output_dir: str, step: int):
+
+            ckpt_dir = Path(output_dir) / f"checkpoint-{step}"
+            ckpt_dir.mkdir(parents=True, exist_ok=True)
+            # Fire on_save callbacks (e.g. LmHeadCloneCallback)
+            control = _TrainerControl()
+            control.should_save = True
+            self._call_callbacks("on_save", control, model=self.model)
+            torch.save(self.model.state_dict(), ckpt_dir / "pytorch_model.bin")
+            return str(ckpt_dir)
+
+        def train(self):
+            from torch.utils.data import DataLoader as _DataLoader
+
+            args = self.args
+            device = next(self.model.parameters()).device
+            use_amp = args.fp16 or args.bf16
+            amp_dtype = torch.bfloat16 if args.bf16 else torch.float16
+            scaler = torch.cuda.amp.GradScaler(enabled=use_amp and torch.cuda.is_available())
+
+            train_loader = _DataLoader(
+                self.train_dataset,
+                batch_size=args.per_device_train_batch_size,
+                shuffle=True,
+                num_workers=args.dataloader_num_workers,
+                pin_memory=args.dataloader_pin_memory,
+            )
+            eval_loader = None
+            if self.eval_dataset is not None and args.eval_strategy != "no":
+                eval_loader = _DataLoader(
+                    self.eval_dataset,
+                    batch_size=args.per_device_eval_batch_size,
+                    shuffle=False,
+                    num_workers=args.dataloader_num_workers,
+                )
+
+            optimizer = self._optimizer
+            if optimizer is None:
+                optimizer = torch.optim.AdamW(
+                    self.model.parameters(),
+                    lr=args.learning_rate,
+                    weight_decay=args.weight_decay,
+                )
+
+            total_steps = (
+                len(train_loader) * args.num_train_epochs // args.gradient_accumulation_steps
+            )
+            scheduler = self._scheduler
+            if scheduler is None and args.warmup_steps > 0:
+
+                def _lr_lambda(step):
+                    if step < args.warmup_steps:
+                        return float(step) / float(max(1, args.warmup_steps))
+                    progress = float(step - args.warmup_steps) / float(
+                        max(1, total_steps - args.warmup_steps)
+                    )
+                    return max(0.0, 0.5 * (1.0 + _math_tr.cos(_math_tr.pi * progress)))
+
+                scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, _lr_lambda)
+
+            self.model.train()
+            control = _TrainerControl()
+            self._call_callbacks("on_train_begin", control)
+            best_ckpt = None
+            best_eval_loss = float("inf")
+            output_dir = args.output_dir
+            Path(output_dir).mkdir(parents=True, exist_ok=True)
+            global_step = 0
+            accum_loss = 0.0
+
+            for epoch in range(int(args.num_train_epochs)):
+                self.state.epoch = epoch
+                self._call_callbacks("on_epoch_begin", control)
+                for step, batch in enumerate(train_loader):
+                    self._call_callbacks("on_step_begin", control)
+                    batch = {k: v.to(device) if hasattr(v, "to") else v for k, v in batch.items()}
+                    with torch.cuda.amp.autocast(enabled=use_amp, dtype=amp_dtype):
+                        out = self.model(**batch)
+                        loss = out.loss / args.gradient_accumulation_steps
+                    scaler.scale(loss).backward()
+                    accum_loss += loss.item()
+
+                    if (step + 1) % args.gradient_accumulation_steps == 0:
+                        scaler.unscale_(optimizer)
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+                        scaler.step(optimizer)
+                        scaler.update()
+                        optimizer.zero_grad()
+                        if scheduler is not None:
+                            scheduler.step()
+                        global_step += 1
+                        self.state.global_step = global_step
+
+                        if global_step % args.logging_steps == 0:
+                            logs = {"loss": accum_loss, "step": global_step, "epoch": epoch}
+                            self.state.log_history.append(logs)
+                            self._call_callbacks("on_log", control, logs=logs)
+                            accum_loss = 0.0
+
+                    self._call_callbacks("on_step_end", control)
+                    if control.should_training_stop:
+                        break
+
+                # End of epoch: evaluate + checkpoint
+                eval_loss = float("inf")
+                if eval_loader is not None:
+                    eval_loss = self._eval_loop(eval_loader)
+                    metrics = {"eval_loss": eval_loss}
+                    self.state.log_history.append({**metrics, "epoch": epoch})
+                    self._call_callbacks("on_evaluate", control, metrics=metrics)
+
+                if args.save_strategy == "epoch":
+                    ckpt = self._save_checkpoint(output_dir, global_step)
+                    if eval_loss < best_eval_loss:
+                        best_eval_loss = eval_loss
+                        best_ckpt = ckpt
+                        self.state.best_model_checkpoint = ckpt
+
+                self._call_callbacks("on_epoch_end", control)
+                if control.should_training_stop:
+                    break
+
+            # Load best model if requested
+            if args.load_best_model_at_end and best_ckpt and Path(best_ckpt).exists():
+                sd = torch.load(
+                    Path(best_ckpt) / "pytorch_model.bin", map_location=device, weights_only=True
+                )
+                self.model.load_state_dict(sd, strict=False)
+
+            self._call_callbacks("on_train_end", control)
+
+    # ── DonutProcessor inline ─────────────────────────────────────────────
+
+    class DonutProcessor:  # type: ignore[no-redef]
+        """Minimal DonutProcessor: image resize/normalize + sentencepiece tokenizer.
+
+        Loads from a checkpoint directory.  Image processing uses bilinear
+        resize to (W=960, H=1280) and ImageNet normalization.
+
+        Tokenization: wraps sentencepiece.SentencePieceProcessor if available,
+        else falls back to a character-level tokenizer from vocab.txt.
+        """
+
+        _MEAN = [0.485, 0.456, 0.406]
+        _STD = [0.229, 0.224, 0.225]
+
+        def __init__(self, pretrained_model_name_or_path: str | Path, **kwargs):
+            import numpy as _np
+
+            self._np = _np
+            self._model_dir = Path(pretrained_model_name_or_path)
+            self._size = {"height": 1280, "width": 960}
+            self._sp = None
+            self._vocab: dict = {}
+            self._id2tok: dict = {}
+            self._special_tokens: dict = {}
+            self._added_tokens: dict = {}
+
+            # Load config for size override
+            cfg_path = self._model_dir / "processor_config.json"
+            if cfg_path.exists():
+                with open(cfg_path) as f:
+                    cfg = json.load(f)
+                if "size" in cfg:
+                    self._size = cfg["size"]
+
+            # Try sentencepiece
+            sp_path = self._model_dir / "tokenizer.model"
+            if sp_path.exists():
+                try:
+                    import sentencepiece as _spm  # noqa: PLC0415
+
+                    self._sp = _spm.SentencePieceProcessor()
+                    self._sp.Load(str(sp_path))
+                except ImportError:
+                    pass
+
+            if self._sp is None:
+                # Fall back to tokenizer.json BPE vocab
+                tok_path = self._model_dir / "tokenizer.json"
+                if tok_path.exists():
+                    with open(tok_path) as f:
+                        tok_data = json.load(f)
+                    vocab = tok_data.get("model", {}).get("vocab", tok_data.get("vocab", {}))
+                    if isinstance(vocab, list):
+                        vocab = {t: i for i, t in enumerate(vocab)}
+                    self._vocab = vocab
+                    self._id2tok = {v: k for k, v in vocab.items()}
+
+        @classmethod
+        def from_pretrained(cls, pretrained_model_name_or_path, **kwargs):
+            return cls(pretrained_model_name_or_path, **kwargs)
+
+        @property
+        def tokenizer(self):
+            return self  # self acts as tokenizer too
+
+        def _resize_and_normalize(self, img) -> torch.Tensor:
+            """Resize to (H, W), normalize, return [3, H, W] float32 tensor."""
+            import numpy as _np
+
+            target_h = self._size.get("height", 1280)
+            target_w = self._size.get("width", 960)
+
+            if isinstance(img, _np.ndarray):
+                arr = img
+            elif hasattr(img, "__array__"):
+                arr = _np.array(img)
+            else:
+                raise TypeError(f"Expected numpy array or PIL Image, got {type(img)}")
+
+            # Resize with basic bilinear via torch
+            t = torch.from_numpy(arr).permute(2, 0, 1).float().div(255.0).unsqueeze(0)
+            t = torch.nn.functional.interpolate(
+                t, size=(target_h, target_w), mode="bilinear", align_corners=False
+            )
+            # Normalize
+            mean = torch.tensor(self._MEAN).view(1, 3, 1, 1)
+            std = torch.tensor(self._STD).view(1, 3, 1, 1)
+            return (t - mean) / std
+
+        def _process_image(self, images, return_tensors: str = "pt", **kwargs):
+            """Process image(s) → {pixel_values: tensor}."""
+            import numpy as _np
+
+            if isinstance(images, _np.ndarray) or hasattr(images, "__array__"):
+                pixel_values = self._resize_and_normalize(images)
+            elif isinstance(images, list):
+                pixel_values = torch.cat([self._resize_and_normalize(im) for im in images], 0)
+            elif hasattr(images, "tobytes"):  # PIL Image
+                pixel_values = self._resize_and_normalize(_np.array(images))
+            else:
+                raise TypeError(f"Unsupported image type: {type(images)}")
+
+            class _Out:
+                pass
+
+            out = _Out()
+            out.pixel_values = pixel_values
+            return out
+
+        def __call__(self, *args, **kwargs):
+            """Dispatch: image processing or tokenizer call."""
+            if args and isinstance(args[0], str):
+                # Tokenizer call: processor(text, ...)
+                text = args[0]
+                ids = self.encode(text)
+                t = torch.tensor([ids], dtype=torch.long)
+
+                class _TokOut:
+                    input_ids = t
+
+                return _TokOut()
+            # Image call
+            return self._process_image(*args, **kwargs)
+
+        # ── Tokenizer interface ────────────────────────────────────────────
+
+        def add_special_tokens(self, tokens: dict | list) -> int:
+            if isinstance(tokens, dict):
+                tokens = tokens.get("additional_special_tokens", [])
+            added = 0
+            n = len(self._vocab) + len(self._added_tokens)
+            for tok in tokens:
+                if tok not in self._added_tokens and tok not in self._vocab:
+                    self._added_tokens[tok] = n
+                    self._id2tok[n] = tok
+                    n += 1
+                    added += 1
+            return added
+
+        def convert_tokens_to_ids(self, tokens):
+            def _tok2id(t):
+                if t in self._added_tokens:
+                    return self._added_tokens[t]
+                if self._sp is not None:
+                    return self._sp.PieceToId(t)
+                return self._vocab.get(t, 0)
+
+            if isinstance(tokens, list):
+                return [_tok2id(t) for t in tokens]
+            return _tok2id(tokens)
+
+        def encode(self, text: str, **kwargs) -> list[int]:
+            if self._sp is not None:
+                return self._sp.Encode(text)
+            return [self._vocab.get(c, 0) for c in text]
+
+        def decode(self, ids, skip_special_tokens: bool = False, **kwargs) -> str:
+            if self._sp is not None:
+                pieces = [self._sp.IdToPiece(i) for i in ids]
+                if skip_special_tokens:
+                    pieces = [p for p in pieces if not p.startswith("<")]
+                return "".join(pieces).replace("▁", " ").strip()
+            return "".join(self._id2tok.get(i, "") for i in ids)
+
+        def batch_decode(self, ids_list, **kwargs) -> list[str]:
+            return [self.decode(ids, **kwargs) for ids in ids_list]
+
+        def token2json(self, tokens: str, **kwargs) -> dict:
+            """Parse <s_field>VALUE</s_field> sequences into a dict."""
+            import re as _re
+
+            result: dict = {}
+            for field, value in _re.findall(r"<s_(\w+)>(.*?)</s_\1>", tokens, _re.DOTALL):
+                result[field] = value.strip()
+            return result
+
+    # ── VisionEncoderDecoderModel placeholder ─────────────────────────────
+
+    class VisionEncoderDecoderModel:  # type: ignore[no-redef]
+        """Placeholder — requires transformers or the inline Swin+BART implementation.
+
+        Install transformers to use: pip install transformers
+        The full inline Swin+BART architecture is planned for a future phase.
+        """
+
+        @classmethod
+        def from_pretrained(cls, model_name_or_path, *args, **kwargs):
+            raise ImportError(
+                "transformers is required for VisionEncoderDecoderModel. "
+                "Install it: pip install transformers\n"
+                "Alternatively, the inline Swin+BART implementation will be "
+                "added in a future update."
+            )
+
+        @staticmethod
+        def from_encoder_decoder_pretrained(*args, **kwargs):
+            raise ImportError("transformers is required for VisionEncoderDecoderModel.")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Inline image loader — fallback when Pillow is unavailable
+# ─────────────────────────────────────────────────────────────────────────────
+
+try:
+    from PIL import Image as _PILImage
+
+    def _load_image(path: str | Path) -> "_PILImage.Image":  # type: ignore[name-defined]
+        return _PILImage.open(path).convert("RGB")
+
+    _PIL_AVAILABLE = True
+except ImportError:
+    _PIL_AVAILABLE = False
+
+    def _png_unfilter(scanlines: list, width: int, bpp: int) -> bytes:
+        """Apply PNG row de-filtering (Sub/Up/Average/Paeth)."""
+        out = []
+        prev = bytes(width * bpp)
+        for ftype, raw in scanlines:
+            row = bytearray(raw)
+            if ftype == 1:  # Sub
+                for i in range(bpp, len(row)):
+                    row[i] = (row[i] + row[i - bpp]) & 0xFF
+            elif ftype == 2:  # Up
+                for i in range(len(row)):
+                    row[i] = (row[i] + prev[i]) & 0xFF
+            elif ftype == 3:  # Average
+                for i in range(len(row)):
+                    a = row[i - bpp] if i >= bpp else 0
+                    row[i] = (row[i] + (a + prev[i]) // 2) & 0xFF
+            elif ftype == 4:  # Paeth
+                for i in range(len(row)):
+                    a = row[i - bpp] if i >= bpp else 0
+                    b = prev[i]
+                    c = prev[i - bpp] if i >= bpp else 0
+                    p = a + b - c
+                    pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+                    pr = a if pa <= pb and pa <= pc else (b if pb <= pc else c)
+                    row[i] = (row[i] + pr) & 0xFF
+            out.append(bytes(row))
+            prev = bytes(row)
+        return b"".join(out)
+
+    def _load_png(path: str | Path) -> "torch.Tensor | None":
+        """Minimal PNG decoder → RGB numpy-compatible bytes."""
+        import numpy as np
+
+        data = Path(path).read_bytes()
+        if data[:8] != b"\x89PNG\r\n\x1a\n":
+            return None
+        pos = 8
+        width = height = bit_depth = color_type = 0
+        idat = b""
+        while pos < len(data):
+            length = struct.unpack(">I", data[pos : pos + 4])[0]
+            ctype = data[pos + 4 : pos + 8]
+            chunk = data[pos + 8 : pos + 8 + length]
+            pos += 12 + length
+            if ctype == b"IHDR":
+                width, height, bit_depth, color_type = struct.unpack(">IIBB", chunk[:10])
+            elif ctype == b"IDAT":
+                idat += chunk
+            elif ctype == b"IEND":
+                break
+        raw = zlib.decompress(idat)
+        # Only handle 8-bit RGB (type 2) and RGBA (type 6)
+        if bit_depth != 8 or color_type not in (2, 6):
+            return None
+        channels = 3 if color_type == 2 else 4
+        row_bytes = width * channels
+        scanlines = []
+        r = 0
+        for _ in range(height):
+            ftype = raw[r]
+            scanlines.append((ftype, raw[r + 1 : r + 1 + row_bytes]))
+            r += row_bytes + 1
+        pixel_data = _png_unfilter(scanlines, width, channels)
+        arr = np.frombuffer(pixel_data, dtype=np.uint8).reshape(height, width, channels)
+        if channels == 4:  # Drop alpha
+            arr = arr[:, :, :3]
+        return arr
+
+    def _load_bmp(path: str | Path) -> "torch.Tensor | None":
+        """Minimal BMP decoder for 24-bit uncompressed BMP → RGB numpy array."""
+        import numpy as np
+
+        data = Path(path).read_bytes()
+        if data[:2] != b"BM":
+            return None
+        pixel_offset = struct.unpack_from("<I", data, 10)[0]
+        width = struct.unpack_from("<i", data, 18)[0]
+        height = struct.unpack_from("<i", data, 22)[0]
+        bits_per_pixel = struct.unpack_from("<H", data, 28)[0]
+        compression = struct.unpack_from("<I", data, 30)[0]
+        if bits_per_pixel != 24 or compression != 0:
+            return None
+        flipped = height > 0
+        height = abs(height)
+        row_size = (width * 3 + 3) & ~3  # 4-byte aligned rows
+        arr = np.zeros((height, width, 3), dtype=np.uint8)
+        for row in range(height):
+            src_row = (height - 1 - row) if flipped else row
+            start = pixel_offset + src_row * row_size
+            raw_row = data[start : start + width * 3]
+            pixels = np.frombuffer(raw_row, dtype=np.uint8).reshape(width, 3)
+            arr[row] = pixels[:, ::-1]  # BGR → RGB
+        return arr
+
+    def _load_jpeg_ctypes(path: str | Path):
+        """Load JPEG via ImageMagick subprocess (system libjpeg fallback)."""
+        import numpy as np
+
+        try:
+            import subprocess as _sp
+
+            result = _sp.run(
+                ["convert", str(path), "-colorspace", "RGB", "ppm:-"],
+                capture_output=True,
+                timeout=10,
+            )
+            if result.returncode == 0:
+                ppm = result.stdout
+                # Parse PPM header
+                lines = ppm.split(b"\n")
+                if lines[0] == b"P6":
+                    dims = lines[1].split()
+                    w, h = int(dims[0]), int(dims[1])
+                    pixel_data = b"\n".join(lines[3:])
+                    arr = np.frombuffer(pixel_data, dtype=np.uint8)
+                    if len(arr) >= h * w * 3:
+                        return arr[: h * w * 3].reshape(h, w, 3)
+        except Exception:
+            pass
+        return None
+
+    def _load_image(path: str | Path):  # type: ignore[misc]
+        """Load an image file as an RGB numpy array without PIL.
+
+        Supports PNG (full), BMP (24-bit), and JPEG (via imagemagick/libjpeg).
+        For TIFF/WebP: install Pillow (pip install Pillow).
+        """
+        import numpy as np
+
+        path = Path(path)
+        suffix = path.suffix.lower()
+        arr = None
+        if suffix == ".png":
+            arr = _load_png(path)
+        elif suffix in (".bmp",):
+            arr = _load_bmp(path)
+        elif suffix in (".jpg", ".jpeg"):
+            arr = _load_jpeg_ctypes(path)
+        if arr is None:
+            raise RuntimeError(
+                f"Cannot load {path} without Pillow. "
+                "Install Pillow: pip install Pillow\n"
+                "PNG (8-bit RGB/RGBA), BMP (24-bit), and JPEG (via ImageMagick) "
+                "are supported natively."
+            )
+        # Ensure contiguous uint8 RGB
+        return np.ascontiguousarray(arr, dtype=np.uint8)
+
+    # Provide a minimal Image-like namespace so code that does `from PIL import Image`
+    # and calls Image.open(p).convert("RGB") can use `_load_image` as a shim.
+    class _ImageModule:
+        @staticmethod
+        def open(path):
+            class _FakeImg:
+                def __init__(self, arr):
+                    self._arr = arr
+
+                def convert(self, mode):
+                    return self  # already RGB
+
+                @property
+                def size(self):
+                    h, w = self._arr.shape[:2]
+                    return w, h
+
+            return _FakeImg(_load_image(path))
+
+    Image = _ImageModule()  # type: ignore[assignment]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Inline safetensors reader — fallback when safetensors package is unavailable
+# ─────────────────────────────────────────────────────────────────────────────
+
+_ST_DTYPE_MAP: dict = {
+    "F64": torch.float64,
+    "F32": torch.float32,
+    "F16": torch.float16,
+    "BF16": torch.bfloat16,
+    "I64": torch.int64,
+    "I32": torch.int32,
+    "I16": torch.int16,
+    "I8": torch.int8,
+    "U8": torch.uint8,
+    "BOOL": torch.bool,
+}
+
+
+def _load_safetensors(path: str | Path) -> dict:
+    """Load a .safetensors checkpoint file without the safetensors package.
+
+    The safetensors binary format is simple:
+      [8-byte header_size: uint64 LE][header_size bytes of UTF-8 JSON][tensor bytes]
+
+    The JSON maps tensor_name → {"dtype": str, "shape": list[int], "data_offsets": [start, end]}.
+    """
+    with open(path, "rb") as f:
+        header_size = struct.unpack("<Q", f.read(8))[0]
+        header = json.loads(f.read(header_size).decode("utf-8"))
+        data_start = 8 + header_size
+        tensors: dict = {}
+        for name, meta in header.items():
+            if name == "__metadata__":
+                continue
+            offset_start, offset_end = meta["data_offsets"]
+            f.seek(data_start + offset_start)
+            raw = f.read(offset_end - offset_start)
+            dtype = _ST_DTYPE_MAP.get(meta["dtype"], torch.float32)
+            tensor = torch.frombuffer(bytearray(raw), dtype=dtype)
+            shape = meta.get("shape", [])
+            if shape:
+                tensor = tensor.reshape(shape)
+            tensors[name] = tensor.clone()  # clone to detach from buffer
+    return tensors
+
+
+import memory_manager as _mm  # noqa: E402
 
 # FIX: Previously FIELDS, MAX_LENGTH, IMAGE_EXTS, NEW_TOKENS, BASE_MODEL,
 # SEED were defined independently here and in 4 other files, risking silent
 # drift if any file was updated without updating the others.
-from constants import (
+from constants import (  # noqa: E402
     BASE_MODEL,
     FIELDS,
     MAX_LENGTH,
@@ -166,7 +928,7 @@ class SROIEOnlyValCallback(TrainerCallback):
             with torch.no_grad():
                 for img_path, gt in self._samples:
                     try:
-                        image = Image.open(img_path).convert("RGB")
+                        image = _load_image(img_path)
                         pixel_values = self._processor(image, return_tensors="pt").pixel_values.to(
                             device
                         )
@@ -311,7 +1073,7 @@ class SROIEDataset(Dataset):
 
     def __getitem__(self, idx: int) -> dict[str, Any]:
         img_path, gt = self.samples[idx]
-        image = Image.open(img_path).convert("RGB")
+        image = _load_image(img_path)
 
         target = "<s_sroie>"
         for f in FIELDS:
@@ -384,7 +1146,7 @@ class MultiDataset(Dataset):
                 def _load_one(idx_path):
                     idx, path = idx_path
                     try:
-                        return idx, Image.open(path).convert("RGB")
+                        return idx, _load_image(path)
                     except Exception:
                         return idx, None
 
@@ -517,7 +1279,7 @@ class MultiDataset(Dataset):
             if idx in self._image_cache:
                 image = self._image_cache[idx]
             else:
-                image = Image.open(img_path).convert("RGB")
+                image = _load_image(img_path)
             pixel_values = self.processor(image, return_tensors="pt").pixel_values.squeeze()
 
         # Use precomputed label tensor if available (eliminates per-step tokenisation).

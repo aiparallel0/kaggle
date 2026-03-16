@@ -26,15 +26,184 @@ Critical bug fixes in this version:
 import json
 import logging
 import os
+import struct
 import sys
+import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import torch
-from PIL import Image
-from transformers import DonutProcessor, VisionEncoderDecoderModel
+
+try:
+    from transformers import DonutProcessor, VisionEncoderDecoderModel
+
+    _TRANSFORMERS_AVAILABLE = True
+except ImportError:
+    _TRANSFORMERS_AVAILABLE = False
+    # Import inline fallbacks from train.py (which has the full inline implementation)
+    try:
+        from train import DonutProcessor, VisionEncoderDecoderModel  # noqa: E402, I001
+    except ImportError:
+        # train.py also not importable — define minimal stubs
+        class DonutProcessor:  # type: ignore[no-redef]
+            @classmethod
+            def from_pretrained(cls, *a, **kw):
+                raise ImportError("transformers is required. pip install transformers")
+
+        class VisionEncoderDecoderModel:  # type: ignore[no-redef]
+            @classmethod
+            def from_pretrained(cls, *a, **kw):
+                raise ImportError("transformers is required. pip install transformers")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Inline image loader — fallback when Pillow is unavailable
+# ─────────────────────────────────────────────────────────────────────────────
+
+try:
+    from PIL import Image as _PILImage
+
+    def _load_image(path: "str | Path") -> "_PILImage.Image":  # type: ignore[name-defined]
+        return _PILImage.open(path).convert("RGB")
+
+    _PIL_AVAILABLE = True
+except ImportError:
+    _PIL_AVAILABLE = False
+
+    def _png_unfilter(scanlines: list, width: int, bpp: int) -> bytes:
+        """Apply PNG row de-filtering (Sub/Up/Average/Paeth)."""
+        out = []
+        prev = bytes(width * bpp)
+        for ftype, raw in scanlines:
+            row = bytearray(raw)
+            if ftype == 1:  # Sub
+                for i in range(bpp, len(row)):
+                    row[i] = (row[i] + row[i - bpp]) & 0xFF
+            elif ftype == 2:  # Up
+                for i in range(len(row)):
+                    row[i] = (row[i] + prev[i]) & 0xFF
+            elif ftype == 3:  # Average
+                for i in range(len(row)):
+                    a = row[i - bpp] if i >= bpp else 0
+                    row[i] = (row[i] + (a + prev[i]) // 2) & 0xFF
+            elif ftype == 4:  # Paeth
+                for i in range(len(row)):
+                    a = row[i - bpp] if i >= bpp else 0
+                    b = prev[i]
+                    c = prev[i - bpp] if i >= bpp else 0
+                    p = a + b - c
+                    pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+                    pr = a if pa <= pb and pa <= pc else (b if pb <= pc else c)
+                    row[i] = (row[i] + pr) & 0xFF
+            out.append(bytes(row))
+            prev = bytes(row)
+        return b"".join(out)
+
+    def _load_png(path: "str | Path") -> "np.ndarray | None":
+        """Minimal PNG decoder → RGB numpy array."""
+        data = Path(path).read_bytes()
+        if data[:8] != b"\x89PNG\r\n\x1a\n":
+            return None
+        pos = 8
+        width = height = bit_depth = color_type = 0
+        idat = b""
+        while pos < len(data):
+            length = struct.unpack(">I", data[pos : pos + 4])[0]
+            ctype = data[pos + 4 : pos + 8]
+            chunk = data[pos + 8 : pos + 8 + length]
+            pos += 12 + length
+            if ctype == b"IHDR":
+                width, height, bit_depth, color_type = struct.unpack(">IIBB", chunk[:10])
+            elif ctype == b"IDAT":
+                idat += chunk
+            elif ctype == b"IEND":
+                break
+        raw = zlib.decompress(idat)
+        if bit_depth != 8 or color_type not in (2, 6):
+            return None
+        channels = 3 if color_type == 2 else 4
+        row_bytes = width * channels
+        scanlines = []
+        r = 0
+        for _ in range(height):
+            ftype = raw[r]
+            scanlines.append((ftype, raw[r + 1 : r + 1 + row_bytes]))
+            r += row_bytes + 1
+        pixel_data = _png_unfilter(scanlines, width, channels)
+        arr = np.frombuffer(pixel_data, dtype=np.uint8).reshape(height, width, channels)
+        if channels == 4:
+            arr = arr[:, :, :3]
+        return arr
+
+    def _load_bmp(path: "str | Path") -> "np.ndarray | None":
+        """Minimal BMP decoder for 24-bit uncompressed BMP → RGB numpy array."""
+        data = Path(path).read_bytes()
+        if data[:2] != b"BM":
+            return None
+        pixel_offset = struct.unpack_from("<I", data, 10)[0]
+        width = struct.unpack_from("<i", data, 18)[0]
+        height = struct.unpack_from("<i", data, 22)[0]
+        bits_per_pixel = struct.unpack_from("<H", data, 28)[0]
+        compression = struct.unpack_from("<I", data, 30)[0]
+        if bits_per_pixel != 24 or compression != 0:
+            return None
+        flipped = height > 0
+        height = abs(height)
+        row_size = (width * 3 + 3) & ~3
+        arr = np.zeros((height, width, 3), dtype=np.uint8)
+        for row in range(height):
+            src_row = (height - 1 - row) if flipped else row
+            start = pixel_offset + src_row * row_size
+            raw_row = data[start : start + width * 3]
+            pixels = np.frombuffer(raw_row, dtype=np.uint8).reshape(width, 3)
+            arr[row] = pixels[:, ::-1]  # BGR → RGB
+        return arr
+
+    def _load_jpeg_ctypes(path: "str | Path"):
+        """Load JPEG via ImageMagick subprocess (system libjpeg fallback)."""
+        import subprocess as _sp
+
+        try:
+            result = _sp.run(
+                ["convert", str(path), "-colorspace", "RGB", "ppm:-"],
+                capture_output=True,
+                timeout=10,
+            )
+            if result.returncode == 0:
+                ppm = result.stdout
+                lines = ppm.split(b"\n")
+                if lines[0] == b"P6":
+                    dims = lines[1].split()
+                    w, h = int(dims[0]), int(dims[1])
+                    pixel_data = b"\n".join(lines[3:])
+                    arr = np.frombuffer(pixel_data, dtype=np.uint8)
+                    if len(arr) >= h * w * 3:
+                        return arr[: h * w * 3].reshape(h, w, 3)
+        except Exception:
+            pass
+        return None
+
+    def _load_image(path: "str | Path"):  # type: ignore[misc]
+        """Load an image file as an RGB numpy array without PIL."""
+        path = Path(path)
+        suffix = path.suffix.lower()
+        arr = None
+        if suffix == ".png":
+            arr = _load_png(path)
+        elif suffix in (".bmp",):
+            arr = _load_bmp(path)
+        elif suffix in (".jpg", ".jpeg"):
+            arr = _load_jpeg_ctypes(path)
+        if arr is None:
+            raise RuntimeError(
+                f"Cannot load {path} without Pillow. "
+                "Install Pillow: pip install Pillow\n"
+                "PNG (8-bit RGB/RGBA), BMP (24-bit), and JPEG (via ImageMagick) "
+                "are supported natively."
+            )
+        return np.ascontiguousarray(arr, dtype=np.uint8)
+
 
 # FIX: Import shared constants from single source of truth (constants.py)
 # instead of duplicating FIELDS/IMAGE_EXTS independently in this file.
@@ -486,7 +655,7 @@ class DonutEvaluator:
         logger.debug("Self-test: running inference on %s", img_path)
 
         # Run raw generation to capture token sequence for diagnostics
-        image = Image.open(img_path).convert("RGB")
+        image = _load_image(img_path)
         pixel_values = self.processor(image, return_tensors="pt").pixel_values.to(self.device)
         decoder_input_ids = self.processor.tokenizer(
             self.task_prompt, add_special_tokens=False, return_tensors="pt"
@@ -605,7 +774,7 @@ class DonutEvaluator:
         self,
         image_path: Path,
         task_prompt: str,
-        preloaded_image: Image.Image | None = None,
+        preloaded_image: "Any | None" = None,
     ) -> dict:
         """Run inference on a single image and return parsed dict.
 
@@ -619,7 +788,7 @@ class DonutEvaluator:
         if preloaded_image is not None:
             image = preloaded_image
         else:
-            image = Image.open(image_path).convert("RGB")
+            image = _load_image(image_path)
 
         pixel_values = self.processor(image, return_tensors="pt").pixel_values.to(self.device)
         decoder_input_ids = self.processor.tokenizer(
@@ -807,7 +976,7 @@ def run_inference(model, processor, image_path, task_prompt, max_length=512, pre
     if preloaded_image is not None:
         image = preloaded_image
     else:
-        image = Image.open(image_path).convert("RGB")
+        image = _load_image(image_path)
     pixel_values = processor(image, return_tensors="pt").pixel_values.to(DEVICE)
     decoder_input_ids = processor.tokenizer(
         task_prompt, add_special_tokens=False, return_tensors="pt"
