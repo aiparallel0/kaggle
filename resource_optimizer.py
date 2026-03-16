@@ -50,14 +50,29 @@ __all__ = [
 ]
 
 try:
-    import psutil
-except ImportError:
-    psutil = None
-
-try:
     import torch
 except ImportError:
     torch = None
+
+
+def _get_total_ram_bytes() -> int:
+    """Total system RAM without psutil — uses /proc/meminfo (Linux) or os.sysconf."""
+    try:
+        with open("/proc/meminfo", encoding="ascii") as _f:
+            for _line in _f:
+                if _line.startswith("MemTotal:"):
+                    return int(_line.split()[1]) * 1024
+    except OSError:
+        pass
+    try:
+        _page = os.sysconf("SC_PAGE_SIZE")
+        _pages = os.sysconf("SC_PHYS_PAGES")
+        if _page > 0 and _pages > 0:
+            return _page * _pages
+    except (AttributeError, ValueError, OSError):
+        pass
+    return 0  # caller falls back to 16 GB assumption
+
 
 logger = logging.getLogger(__name__)
 
@@ -142,13 +157,8 @@ def detect_system_resources() -> SystemResources:
             device_name = torch.cuda.get_device_name(0)
 
     # Detect RAM
-    ram_gb = 0.0
-    if psutil is not None:
-        ram_bytes = psutil.virtual_memory().total
-        ram_gb = ram_bytes / (1024**3)
-    else:
-        # Fallback: assume 16GB if psutil unavailable
-        ram_gb = 16.0
+    ram_bytes = _get_total_ram_bytes()
+    ram_gb = ram_bytes / (1024**3) if ram_bytes > 0 else 16.0  # fallback: 16 GB
 
     # Detect CPU cores
     cpu_cores = os.cpu_count() or 4  # Fallback to 4 if detection fails

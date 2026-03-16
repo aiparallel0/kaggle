@@ -28,6 +28,7 @@ Install optional dependency
 ---------------------------
     pip install "optuna>=3.0.0"
 """
+
 from __future__ import annotations
 
 import argparse
@@ -93,9 +94,7 @@ def run_hparam_search(
 
     base_config = EXPERIMENTS.get(experiment_id)
     if base_config is None:
-        raise ValueError(
-            f"Unknown experiment_id={experiment_id}. Valid: {list(EXPERIMENTS)}"
-        )
+        raise ValueError(f"Unknown experiment_id={experiment_id}. Valid: {list(EXPERIMENTS)}")
 
     # Suppress Optuna's per-trial INFO logs in non-verbose mode
     _optuna.logging.set_verbosity(_optuna.logging.WARNING)
@@ -133,12 +132,16 @@ def run_hparam_search(
         metrics = result.get("metrics", {})
         global_f1 = float(metrics.get("global_f1", 0.0))
         # Use training loss as proxy for val loss when val_loss not available
-        val_loss = float(
-            metrics.get("eval_loss", metrics.get("val_loss", float("inf")))
-        )
+        val_loss = float(metrics.get("eval_loss", metrics.get("val_loss", float("inf"))))
         logger.info(
             "[HparamSearch] Trial %d: lr=%.2e bs=%d warmup=%d wd=%.3f → F1=%.4f loss=%.4f",
-            trial.number, lr, batch_size, warmup_steps, weight_decay, global_f1, val_loss,
+            trial.number,
+            lr,
+            batch_size,
+            warmup_steps,
+            weight_decay,
+            global_f1,
+            val_loss,
         )
         return global_f1, val_loss
 
@@ -159,9 +162,7 @@ def run_hparam_search(
     print(f"\n[HparamSearch] Completed {len(study.trials)} trial(s)")
     print(f"[HparamSearch] Pareto-front size: {len(study.best_trials)}")
     for t in study.best_trials[:5]:
-        print(
-            f"  Trial {t.number}: values={t.values}  params={t.params}"
-        )
+        print(f"  Trial {t.number}: values={t.values}  params={t.params}")
     print(f"[HparamSearch] Study DB: {db_path}")
 
     return study
@@ -170,23 +171,31 @@ def run_hparam_search(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Optuna hyperparameter sweep for DONUT SROIE")
     parser.add_argument(
-        "--experiment", type=int, default=2,
+        "--experiment",
+        type=int,
+        default=2,
         help="Base experiment ID to sweep over (default: 2)",
     )
     parser.add_argument(
-        "--n-trials", type=int, default=20,
+        "--n-trials",
+        type=int,
+        default=20,
         help="Number of Optuna trials (default: 20)",
     )
     parser.add_argument(
-        "--study-name", default="donut_sroie_sweep",
+        "--study-name",
+        default="donut_sroie_sweep",
         help="Optuna study name (default: donut_sroie_sweep)",
     )
     parser.add_argument(
-        "--results-dir", default="results/optuna",
+        "--results-dir",
+        default="results/optuna",
         help="Directory for study.db and trial JSONs (default: results/optuna)",
     )
     parser.add_argument(
-        "--timeout", type=int, default=None,
+        "--timeout",
+        type=int,
+        default=None,
         help="Wall-clock timeout in seconds (default: unlimited)",
     )
     args = parser.parse_args()

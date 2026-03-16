@@ -35,18 +35,18 @@ import json
 from collections.abc import Sequence
 from pathlib import Path
 
-# Optional scientific computing imports — used for cubic spline smoothing.
-# Both scipy and numpy are listed in requirements.txt.  If unavailable, the
-# module degrades gracefully to passing raw (unsmoothed) data points.
-try:
-    import numpy as _np
-    from scipy.interpolate import CubicSpline as _CubicSpline
 
-    _SCIPY_AVAILABLE = True
-except ImportError:
-    _np = None  # type: ignore[assignment]
-    _CubicSpline = None  # type: ignore[assignment,misc]
-    _SCIPY_AVAILABLE = False
+def _smooth(ys: list, window: int = 5) -> list:
+    """Weighted moving-average smoothing — replaces scipy.interpolate.CubicSpline."""
+    n = len(ys)
+    out = []
+    for i in range(n):
+        lo, hi = max(0, i - window), min(n, i + window + 1)
+        weights = [1.0 - abs(j - i) / (window + 1) for j in range(lo, hi)]
+        s = sum(w * ys[j] for j, w in zip(range(lo, hi), weights))
+        out.append(s / sum(weights))
+    return out
+
 
 # ---------------------------------------------------------------------------
 # Colour palette — 12-colour qualitative palette (ColorBrewer Set1 + Set2 mix)
@@ -136,35 +136,18 @@ def smooth_curve(
     n_points: int = 200,
 ) -> tuple[list[float] | None, list[float] | None]:
     """
-    Cubic spline interpolation.  Skips None / NaN values.
+    Weighted moving-average smoothing.  Skips None / NaN values.
 
     Returns (x_smooth, y_smooth) or (None, None) if fewer than 2 valid points.
-    Falls back to returning raw data points if scipy/numpy are unavailable.
+    ``n_points`` is accepted for API compatibility but ignored (output length
+    equals the number of valid input points).
     """
-    if not _SCIPY_AVAILABLE:
-        # scipy / numpy unavailable — return raw data without smoothing
-        valid = [(e, v) for e, v in zip(epochs, values) if v is not None]
-        if len(valid) < 2:
-            return None, None
-        xs = [p[0] for p in valid]
-        ys = [p[1] for p in valid]
-        return xs, ys
-
     valid = [(e, v) for e, v in zip(epochs, values) if v is not None and not _is_nan(v)]
     if len(valid) < 2:
         return None, None
-
-    x = _np.array([p[0] for p in valid], dtype=float)
-    y = _np.array([p[1] for p in valid], dtype=float)
-
-    try:
-        cs = _CubicSpline(x, y)
-        x_smooth = _np.linspace(x[0], x[-1], n_points)
-        y_smooth = cs(x_smooth)
-        return x_smooth.tolist(), y_smooth.tolist()
-    except Exception:
-        # Fallback if CubicSpline fails (e.g. repeated x values)
-        return x.tolist(), y.tolist()
+    xs = [float(p[0]) for p in valid]
+    ys = [float(p[1]) for p in valid]
+    return xs, _smooth(ys)
 
 
 def _is_nan(v: float) -> bool:

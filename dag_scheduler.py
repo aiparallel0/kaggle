@@ -36,6 +36,7 @@ Standalone
 ----------
     python dag_scheduler.py --list          # print dependency graph
 """
+
 from __future__ import annotations
 
 import concurrent.futures
@@ -92,6 +93,7 @@ class DAGScheduler:
         """Return max safe concurrent workers."""
         try:
             import torch
+
             num_gpus = torch.cuda.device_count()
         except ImportError:
             num_gpus = 0
@@ -102,13 +104,15 @@ class DAGScheduler:
         if check_vram:
             try:
                 from resource_optimizer import detect_system_resources
+
                 res = detect_system_resources()
                 # Each DONUT experiment needs ~8 GB VRAM
                 vram_workers = max(1, int(res.vram_gb / 8))
                 workers = min(num_gpus, vram_workers)
                 logger.info(
                     "[DAGScheduler] VRAM=%.1f GB → capping to %d worker(s)",
-                    res.vram_gb, workers,
+                    res.vram_gb,
+                    workers,
                 )
                 return workers
             except Exception as exc:
@@ -175,9 +179,7 @@ class DAGScheduler:
 
         remaining = list(order)  # process in topological order
 
-        with concurrent.futures.ThreadPoolExecutor(
-            max_workers=self._max_workers
-        ) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self._max_workers) as executor:
             futures: dict[concurrent.futures.Future, int] = {}
 
             def _submit_ready() -> None:
@@ -187,7 +189,8 @@ class DAGScheduler:
                     if failed & deps:
                         logger.warning(
                             "[DAGScheduler] Exp %d skipped — dependency failed: %s",
-                            eid, failed & deps,
+                            eid,
+                            failed & deps,
                         )
                         failed.add(eid)
                         remaining.remove(eid)
@@ -216,7 +219,9 @@ class DAGScheduler:
                     except Exception as exc:
                         logger.error(
                             "[DAGScheduler] Exp %d FAILED: %s: %s",
-                            eid, type(exc).__name__, exc,
+                            eid,
+                            type(exc).__name__,
+                            exc,
                         )
                         failed.add(eid)
                         results[eid] = {"error": str(exc)}
@@ -244,17 +249,20 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description="Show or test the experiment DAG")
     parser.add_argument(
-        "--list", action="store_true",
+        "--list",
+        action="store_true",
         help="List all experiments with their dependencies and exit",
     )
     parser.add_argument(
-        "--experiments-dir", default="experiments",
+        "--experiments-dir",
+        default="experiments",
         help="Path to YAML experiments directory (default: experiments/)",
     )
     args = parser.parse_args()
 
     try:
         from experiment_config_loader import load_all_experiments
+
         configs = load_all_experiments(args.experiments_dir)
     except Exception as exc:
         print(f"[DAGScheduler] Could not load experiments: {exc}")

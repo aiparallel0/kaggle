@@ -603,15 +603,12 @@ def _print_all_params() -> None:
     except Exception:
         print("  GPU  : torch not available")
     try:
-        import psutil
+        from memory_manager import _get_available_ram_bytes
 
-        mem = psutil.virtual_memory()
-        print(
-            f"  RAM  : {mem.total / (1024**3):.1f} GB total, "
-            f"{mem.available / (1024**3):.1f} GB available"
-        )
+        _avail = _get_available_ram_bytes()
+        print(f"  RAM  : {_avail / (1024**3):.1f} GB available")
     except Exception:
-        print("  RAM  : psutil not available")
+        print("  RAM  : unavailable")
 
     # TrOCR + YOLO parameters from control_suite
     print("\n  TrOCR + YOLO (CONTROL_SUITE)")
@@ -1309,6 +1306,7 @@ def stage_experiments(args) -> StageResult:
             def _parallel_run_fn(cfg):
                 """Single-experiment runner for the DAG scheduler thread pool."""
                 import run_experiments as _re_mod
+
                 yaml_cfg_inner = _yaml_cfg_map.get(cfg.id)
                 arch = getattr(cfg, "arch_type", "donut")
                 is_zs = getattr(cfg, "is_zero_shot", False)
@@ -1435,9 +1433,11 @@ def stage_experiments(args) -> StageResult:
         # starts instantiating Seq2SeqTrainingArguments (which calls
         # torch.cuda.set_device() and may OOM if VRAM is still fragmented).
         import gc
+
         gc.collect()
         try:
             import torch
+
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
                 torch.cuda.synchronize()
@@ -2248,7 +2248,9 @@ def _quick_mode_handler(args, logger: logging.Logger) -> int:
                     donut_metrics = metrics.get("metrics", {})
                 logger.info("✓ Results loaded from experiment_1.json: %s", donut_metrics)
             else:
-                logger.warning("results/experiment_1.json not found; skipping results.tex generation")
+                logger.warning(
+                    "results/experiment_1.json not found; skipping results.tex generation"
+                )
         except Exception as e:
             logger.warning(f"Could not generate results.tex: {e}")
 
@@ -2376,7 +2378,10 @@ def _quick_all_mode_handler(args, logger: logging.Logger) -> int:
         # Generate comparison results.tex
         logger.info("Generating comprehensive results.tex with parameter comparisons...")
         try:
-            logger.info("✓ Parameter sweep complete. Sweep results: %d entries", len(sweep_results) if isinstance(sweep_results, (list, dict)) else 0)
+            logger.info(
+                "✓ Parameter sweep complete. Sweep results: %d entries",
+                len(sweep_results) if isinstance(sweep_results, (list, dict)) else 0,
+            )
         except Exception as e:
             logger.warning(f"Could not generate results.tex: {e}")
 
@@ -3094,6 +3099,7 @@ def main() -> None:
         logger.info("--hparam-search flag detected: launching Optuna sweep")
         try:
             from hparam_search import run_hparam_search
+
             exp_id = getattr(args, "experiment", None) or 2
             run_hparam_search(experiment_id=exp_id)
         except ImportError as _hs_exc:
@@ -3111,6 +3117,7 @@ def main() -> None:
         logger.info("--seeds detected: running Exp %d with seeds %s", exp_id, seed_list)
         try:
             from multi_seed_runner import run_multi_seed
+
             run_multi_seed(experiment_id=exp_id, seeds=seed_list)
         except RuntimeError as _ms_exc:
             logger.error("Multi-seed run failed: %s", _ms_exc)
@@ -3159,14 +3166,11 @@ def main() -> None:
     print(f"  SROIE dir    : {args.sroie_dir}")
     print(f"  CWD          : {Path.cwd()}")
     try:
-        import psutil
+        from memory_manager import _get_available_ram_bytes
 
-        mem = psutil.virtual_memory()
-        print(
-            f"  RAM          : {mem.total / (1024**3):.1f} GB total, "
-            f"{mem.available / (1024**3):.1f} GB available"
-        )
-    except ImportError:
+        _avail = _get_available_ram_bytes()
+        print(f"  RAM          : {_avail / (1024**3):.1f} GB available")
+    except Exception:
         pass
     print(f"  CPU cores    : {os.cpu_count()}")
 

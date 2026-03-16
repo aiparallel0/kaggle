@@ -105,14 +105,13 @@ from resource_optimizer import (
 try:
     import torch
     import transformers as _transformers_mod  # noqa: F401
+
     _TORCH_AVAILABLE = True
 except ImportError:
     torch = None  # type: ignore[assignment]
     _TORCH_AVAILABLE = False
 
-_needs_torch = pytest.mark.skipif(
-    not _TORCH_AVAILABLE, reason="torch and transformers required"
-)
+_needs_torch = pytest.mark.skipif(not _TORCH_AVAILABLE, reason="torch and transformers required")
 
 # Guarded project imports — only reachable when torch + transformers are present
 if _TORCH_AVAILABLE:
@@ -157,10 +156,10 @@ else:
     _print_trocr_load_report = None  # type: ignore[assignment]
 
 
-
 # ============================================================================
 # From test_address_extractor.py
 # ============================================================================
+
 
 class TestExtractAddressFromSeller:
     def test_street_number_split(self):
@@ -319,6 +318,7 @@ class TestSROIEKeyFileParsing:
 # ============================================================================
 # From test_cache_lifecycle.py
 # ============================================================================
+
 
 class TestDatasetCacheClearing:
     pytestmark = pytest.mark.skipif(
@@ -543,6 +543,7 @@ class TestPrecomputeTensorsFlag:
 # From test_constants.py
 # ============================================================================
 
+
 class TestFields:
     def test_fields_is_list(self):
         assert isinstance(FIELDS, list)
@@ -732,6 +733,7 @@ class TestMaskEmptyFieldLabels:
 # ============================================================================
 # From test_control_suite.py
 # ============================================================================
+
 
 def test_control_suite_singleton_is_correct_type():
     """CONTROL_SUITE module-level singleton is a ControlSuite instance."""
@@ -1313,6 +1315,7 @@ def test_get_augmentation_transforms_exported():
 # From test_dataset_loaders.py
 # ============================================================================
 
+
 class TestDatasetLoadError:
     def test_attributes(self):
         exc = DatasetLoadError("test_ds", "file not found")
@@ -1613,6 +1616,7 @@ def test_val_test_no_overlap():
 # ============================================================================
 # From test_dataset_normalizer.py
 # ============================================================================
+
 
 def _make_samples(gts: list[dict]) -> list[tuple[Path, dict]]:
     """Build a list of (Path, dict) samples from a list of raw gt dicts."""
@@ -2130,6 +2134,7 @@ class TestPattern7ImportorskipOrder:
 # ============================================================================
 # From test_inject_results.py
 # ============================================================================
+
 
 class TestSafe:
     def test_present_value(self):
@@ -2655,6 +2660,7 @@ class TestLoggingUtilsImportable:
 # From test_integration_smoke.py
 # ============================================================================
 
+
 class TestImportChain:
     """Verify every module can be imported without crashing."""
 
@@ -2733,6 +2739,7 @@ class TestImportChain:
 # ============================================================================
 # From test_logging_utils.py
 # ============================================================================
+
 
 class _CapturingHandler(logging.Handler):
     """Minimal handler that stores formatted records for inspection."""
@@ -2860,6 +2867,7 @@ class TestSuppressNoisyLoggers:
 # From test_memory_manager.py
 # ============================================================================
 
+
 class TestComputePilMbPerSample:
     """Tests for compute_pil_mb_per_sample()."""
 
@@ -2893,15 +2901,11 @@ class TestComputePilMbPerSample:
         assert mm.compute_pil_mb_per_sample(1280, 0) == 0.0
 
 
-def _make_psutil_mock(available_bytes: int):
-    """Return a mock psutil module with virtual_memory().available set."""
+def _patch_available_ram(available_bytes: int):
+    """Context manager: patch memory_manager._get_available_ram_bytes to return a fixed value."""
     import unittest.mock as mock
 
-    mock_psutil = mock.MagicMock()
-    mock_vm = mock.MagicMock()
-    mock_vm.available = available_bytes
-    mock_psutil.virtual_memory.return_value = mock_vm
-    return mock_psutil
+    return mock.patch("memory_manager._get_available_ram_bytes", return_value=available_bytes)
 
 
 class TestRamCacheIsSafe:
@@ -2909,10 +2913,7 @@ class TestRamCacheIsSafe:
 
     def test_small_dataset_at_ref_resolution_is_safe(self):
         """500 samples x 3.516 MB = 1,758 MB -- safe on any machine with > 12 GB RAM."""
-        import unittest.mock as mock
-
-        mock_psutil = _make_psutil_mock(64 * 1024 * 1024 * 1024)  # 64 GB
-        with mock.patch.dict("sys.modules", {"psutil": mock_psutil}):
+        with _patch_available_ram(64 * 1024 * 1024 * 1024):  # 64 GB
             result = mm.ram_cache_is_safe(500, 1280, 960)
         assert result is True, "500 samples at 1280x960 should be safe on 64 GB RAM"
 
@@ -2922,10 +2923,7 @@ class TestRamCacheIsSafe:
         55 GB > 192 GB x 15% = 28.8 GB threshold -> rejected.
         This is the exact Experiment 8 scenario that caused 192 GB RAM exhaustion.
         """
-        import unittest.mock as mock
-
-        mock_psutil = _make_psutil_mock(192 * 1024 * 1024 * 1024)  # 192 GB
-        with mock.patch.dict("sys.modules", {"psutil": mock_psutil}):
+        with _patch_available_ram(192 * 1024 * 1024 * 1024):  # 192 GB
             result = mm.ram_cache_is_safe(3940, 2560, 1920)
         assert result is False, (
             "3940 samples x 14.06 MB = 55.4 GB must be rejected at 15% of 192 GB (28.8 GB threshold). "
@@ -2938,30 +2936,23 @@ class TestRamCacheIsSafe:
         Uses 256 GB RAM to ensure the correct resolution (1280x960) is allowed
         even with the conservative 6% safety fraction.
         """
-        import unittest.mock as mock
-
-        mock_psutil = _make_psutil_mock(256 * 1024 * 1024 * 1024)  # 256 GB
-        with mock.patch.dict("sys.modules", {"psutil": mock_psutil}):
+        with _patch_available_ram(256 * 1024 * 1024 * 1024):  # 256 GB
             result = mm.ram_cache_is_safe(3940, 1280, 960)
         assert result is True, (
             "3940 samples x 3.516 MB = 13.8 GB should be allowed at 6% of 256 GB (15.7 GB threshold)."
         )
 
     def test_psutil_import_error_returns_false(self):
-        """If psutil raises ImportError, caching is disabled (safe default)."""
-        import unittest.mock as mock
-
-        with mock.patch.dict("sys.modules", {"psutil": None}):
+        """If RAM detection fails (returns 0), caching is disabled (safe default)."""
+        with _patch_available_ram(0):  # simulate unknown/unavailable
             result = mm.ram_cache_is_safe(100, 1280, 960)
         assert isinstance(result, bool)
+        assert result is False, "Unknown RAM should disable caching"
 
     def test_custom_safety_fraction(self):
         """Custom safety_fraction parameter is respected."""
-        import unittest.mock as mock
-
         # 10 GB available = 10,240 MB
-        mock_psutil = _make_psutil_mock(10 * 1024 * 1024 * 1024)
-        with mock.patch.dict("sys.modules", {"psutil": mock_psutil}):
+        with _patch_available_ram(10 * 1024 * 1024 * 1024):
             # 500 x 3.516 MB = 1758 MB; 10,240 MB x 0.10 = 1,024 MB threshold
             # 1758 > 1024 -> REJECTED at 10% safety
             result_10pct = mm.ram_cache_is_safe(500, 1280, 960, safety_fraction=0.10)
@@ -3046,28 +3037,23 @@ class TestRamHeadroomMb:
     """Tests for the new ram_headroom_mb() function."""
 
     def test_returns_positive_float_on_real_system(self):
-        """ram_headroom_mb() must return a positive float on any machine with psutil."""
+        """ram_headroom_mb() must return a non-negative float on any machine."""
         result = mm.ram_headroom_mb()
         assert isinstance(result, float), f"Expected float, got {type(result).__name__}"
         assert result >= 0.0, f"Expected non-negative value, got {result}"
 
-    def test_returns_float_with_mock_psutil(self):
-        """ram_headroom_mb() returns available / 1024**2 from psutil.virtual_memory()."""
-        import unittest.mock as mock
-
-        mock_psutil = _make_psutil_mock(8 * 1024 * 1024 * 1024)  # 8 GB
-        with mock.patch.dict("sys.modules", {"psutil": mock_psutil}):
+    def test_returns_float_with_mock_available_ram(self):
+        """ram_headroom_mb() returns available_bytes / 1024**2 from _get_available_ram_bytes()."""
+        with _patch_available_ram(8 * 1024 * 1024 * 1024):  # 8 GB
             result = mm.ram_headroom_mb()
         expected = 8 * 1024  # 8 GB in MB = 8192
         assert abs(result - expected) < 1.0, f"Expected ~{expected} MB, got {result:.1f} MB"
 
-    def test_returns_zero_on_psutil_error(self):
-        """ram_headroom_mb() returns 0.0 when psutil is unavailable."""
-        import unittest.mock as mock
-
-        with mock.patch.dict("sys.modules", {"psutil": None}):
+    def test_returns_zero_when_ram_unknown(self):
+        """ram_headroom_mb() returns 0.0 when RAM detection returns 0."""
+        with _patch_available_ram(0):
             result = mm.ram_headroom_mb()
-        assert result == 0.0, f"Expected 0.0 on psutil error, got {result}"
+        assert result == 0.0, f"Expected 0.0 when RAM unknown, got {result}"
 
     def test_exported_in_all(self):
         """ram_headroom_mb must be listed in memory_manager.__all__."""
@@ -3106,11 +3092,13 @@ class TestRamSafetyFractionRegressionGuard:
 # From test_metrics.py
 # ============================================================================
 
+
 class TestNED:
     pytestmark = pytest.mark.skipif(
         not _TORCH_AVAILABLE,
         reason="torch and transformers required",
     )
+
     def test_identical_strings(self):
         assert normalized_edit_distance("hello", "hello") == 0.0
 
@@ -3246,6 +3234,7 @@ class TestUnwrapPrediction:
         not _TORCH_AVAILABLE,
         reason="torch and transformers required",
     )
+
     def test_sroie_unwrap(self):
         parsed = {"sroie": {"company": "ACME", "total": "10.00"}}
         result = _unwrap_prediction(parsed, "<s_sroie>")
@@ -3281,6 +3270,7 @@ class TestComputeMetrics:
         not _TORCH_AVAILABLE,
         reason="torch and transformers required",
     )
+
     def test_perfect_predictions(self):
         gt = [{"company": "ACME", "date": "01/01/2024", "address": "123 Main St", "total": "10.00"}]
         preds = [
@@ -4426,6 +4416,7 @@ class TestPipelineCritic:
 # From test_pipeline_smoke.py
 # ============================================================================
 
+
 class TestExperimentsImmutability:
     pytestmark = pytest.mark.skipif(
         not _TORCH_AVAILABLE,
@@ -4547,6 +4538,7 @@ class TestExperimentConfigLoaderCompat:
         if not _TORCH_AVAILABLE:
             pytest.skip("torch required")
         from constants import BASE_MODEL
+
         c = ExperimentConfig(experiment_id=1, name="test", datasets=["sroie"])
         assert c.base_checkpoint == c.base_model
         assert c.base_model == BASE_MODEL
@@ -4568,6 +4560,7 @@ class TestExperimentConfigLoaderCompat:
         """experiment_config_loader.ExperimentConfig.experiment_id must alias id."""
         import experiment_config_loader as _ecl
         from experiment_config_loader import DatasetEntry
+
         c = _ecl.ExperimentConfig(
             id=5,
             name="yaml_test",
@@ -4580,6 +4573,7 @@ class TestExperimentConfigLoaderCompat:
         """experiment_config_loader.ExperimentConfig.base_model must alias base_checkpoint."""
         import experiment_config_loader as _ecl
         from experiment_config_loader import DatasetEntry
+
         c = _ecl.ExperimentConfig(
             id=5,
             name="yaml_test",
@@ -4593,6 +4587,7 @@ class TestExperimentConfigLoaderCompat:
         """experiment_config_loader.ExperimentConfig.dataset_names returns list[str]."""
         import experiment_config_loader as _ecl
         from experiment_config_loader import DatasetEntry
+
         c = _ecl.ExperimentConfig(
             id=2,
             name="yaml_test2",
@@ -4604,6 +4599,7 @@ class TestExperimentConfigLoaderCompat:
         """experiment_config_loader.ExperimentConfig warmup_steps default must be 40."""
         import experiment_config_loader as _ecl
         from experiment_config_loader import DatasetEntry
+
         c = _ecl.ExperimentConfig(
             id=1,
             name="yaml_test",
@@ -4696,6 +4692,7 @@ class TestRunCustomExperimentCallable:
 # ============================================================================
 # From test_pipeline_types.py
 # ============================================================================
+
 
 class TestSeverityLevel:
     """SeverityLevel enum must export canonical string values."""
@@ -5046,6 +5043,7 @@ class TestDataSplitValidationReport:
 # ============================================================================
 # From test_resource_optimizer.py
 # ============================================================================
+
 
 class TestValidateTrainingConfig:
     """Tests for validate_training_config()."""
@@ -5448,6 +5446,7 @@ class TestOOMRecovery:
 # From test_train_invariants.py
 # ============================================================================
 
+
 class TestDecoderStartTokenId:
     """Tests for correct decoder_start_token_id assignment.
 
@@ -5652,6 +5651,7 @@ class TestLabelTokenizationNoSpecialTokens:
 # ============================================================================
 
 if _TORCH_AVAILABLE:
+
     class _ModuleWithMetaBuffer(torch.nn.Module):
         """Toy module with a non-persistent buffer on the meta device."""
 
@@ -5660,7 +5660,6 @@ if _TORCH_AVAILABLE:
             buf = torch.empty(4, device="meta")
             self.register_buffer("sinusoidal", buf, persistent=False)
 
-
     class _ModuleWithMetaFloatTensor(torch.nn.Module):
         """Toy module with a plain ``_float_tensor`` attribute on the meta device."""
 
@@ -5668,14 +5667,12 @@ if _TORCH_AVAILABLE:
             super().__init__()
             self._float_tensor = torch.empty(4, device="meta")
 
-
     class _ModuleWithNormalBuffer(torch.nn.Module):
         """Toy module with a CPU buffer — nothing to fix."""
 
         def __init__(self):
             super().__init__()
             self.register_buffer("weights", torch.zeros(4))
-
 
     # ════════════════════════════════════════════════════════════════════════════
     # 1.  _materialize_meta_buffers — PR #81 meta-device fix
@@ -6189,6 +6186,7 @@ class TestGradientCheckpointingThreshold:
 # ============================================================================
 # From test_validators.py
 # ============================================================================
+
 
 class TestBugPatternDetectorJsonConfusion:
     """JSON literal detection in Python source code.

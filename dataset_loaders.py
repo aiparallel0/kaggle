@@ -1268,6 +1268,7 @@ class CORDv2Loader(BaseDatasetLoader):
                 # Sometimes company and address are concatenated in store_addr
                 if addr and not gt["company"]:
                     from dataset_normalizer import extract_address_from_seller
+
                     gt["company"], gt["address"] = extract_address_from_seller(addr)
                 else:
                     gt["address"] = addr
@@ -1358,6 +1359,7 @@ class CORDv2Loader(BaseDatasetLoader):
 
     def clear_cache(self) -> None:
         import shutil
+
         dest = self._dest_dir()
         if dest.exists():
             shutil.rmtree(dest, ignore_errors=True)

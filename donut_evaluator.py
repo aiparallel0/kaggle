@@ -31,11 +31,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import editdistance
 import numpy as np
 import torch
 from PIL import Image
-from tqdm import tqdm
 from transformers import DonutProcessor, VisionEncoderDecoderModel
 
 # FIX: Import shared constants from single source of truth (constants.py)
@@ -43,6 +41,31 @@ from transformers import DonutProcessor, VisionEncoderDecoderModel
 from constants import BASE_MODEL, DEVICE, EMPTY_GT, FIELDS, MAX_LENGTH
 
 __all__ = ["DonutEvaluator", "EvaluationResult", "compute_metrics", "normalized_edit_distance"]
+
+
+def _edit_distance(s1: str, s2: str) -> int:
+    """Levenshtein distance — replaces the editdistance package."""
+    m, n = len(s1), len(s2)
+    dp = list(range(n + 1))
+    for i in range(1, m + 1):
+        prev, dp[0] = dp[0], i
+        for j in range(1, n + 1):
+            prev, dp[j] = dp[j], prev if s1[i - 1] == s2[j - 1] else 1 + min(prev, dp[j], dp[j - 1])
+    return dp[n]
+
+
+def _progress(iterable, desc: str = "", total: int | None = None):
+    """Logging-based progress — replaces tqdm. Emits at 0 %, 10 %, … 100 %."""
+    _log = logging.getLogger(__name__)
+    items = list(iterable) if not hasattr(iterable, "__len__") and total is None else iterable
+    n = total if total is not None else len(items)  # type: ignore[arg-type]
+    step = max(1, -(-n // 10))  # ceiling division by 10
+    for i, item in enumerate(items):
+        if i % step == 0:
+            _log.info("%s %d/%d (%d%%)", desc, i, n, 100 * i // n if n else 0)
+        yield item
+    _log.info("%s done (%d items)", desc, n)
+
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -351,6 +374,7 @@ class DonutEvaluator:
         # (lm_head present, vocab size match)
         try:
             from validators import validate_checkpoint
+
             validate_checkpoint(
                 model_path=self.model_path,
                 expected_vocab_size=(
@@ -358,9 +382,7 @@ class DonutEvaluator:
                 ),
             )
         except Exception as _ckpt_exc:
-            logger.warning(
-                "[DonutEvaluator] Checkpoint validation warning: %s", _ckpt_exc
-            )
+            logger.warning("[DonutEvaluator] Checkpoint validation warning: %s", _ckpt_exc)
 
         self.model = load_model_with_tied_weights(
             str(self.model_path), device=self.device, processor=self.processor
@@ -396,7 +418,9 @@ class DonutEvaluator:
         self._inference_call_count = 0
 
         with torch.no_grad():
-            for img_path, _gt in tqdm(self.test_dataset, desc="Evaluating"):
+            for img_path, _gt in _progress(
+                self.test_dataset, desc="Evaluating", total=len(self.test_dataset)
+            ):
                 pred = self._run_inference(img_path, self.task_prompt)
                 predictions.append(pred)
 
@@ -960,7 +984,7 @@ def normalized_edit_distance(pred, gt):
     pred, gt = str(pred).lower().strip(), str(gt).lower().strip()
     if len(gt) == 0:
         return 0.0 if len(pred) == 0 else 1.0
-    return editdistance.eval(pred, gt) / max(len(pred), len(gt))
+    return _edit_distance(pred, gt) / max(len(pred), len(gt))
 
 
 def compute_metrics(predictions, ground_truths):
@@ -1110,7 +1134,7 @@ def main():
     finetuned_preds = []
 
     with torch.no_grad():
-        for img_path in tqdm(image_paths, desc="Inference"):
+        for img_path in _progress(image_paths, desc="Inference"):
             # Pretrained (CORD) → remap
             raw = run_inference(pre_model, pre_processor, img_path, "<s_cord-v2>")
             pretrained_preds.append(remap_cord_to_sroie(raw))

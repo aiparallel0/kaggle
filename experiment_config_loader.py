@@ -71,10 +71,9 @@ __all__ = [
 # ---------------------------------------------------------------------------
 try:
     from run_experiments import ExperimentConfig as _CanonicalConfig  # noqa: E402
+
     if not hasattr(_CanonicalConfig, "experiment_id"):
-        raise RuntimeError(
-            "run_experiments.ExperimentConfig must have 'experiment_id' field"
-        )
+        raise RuntimeError("run_experiments.ExperimentConfig must have 'experiment_id' field")
 except ImportError:
     pass  # run_experiments not available in torch-free test envs
 
@@ -163,7 +162,9 @@ class ExperimentConfig:
 
     # Scheduler
     scheduler_type: str = "cosine"
-    warmup_steps: int = 40  # matches run_experiments.ExperimentConfig default; 500 is capped for small datasets
+    warmup_steps: int = (
+        40  # matches run_experiments.ExperimentConfig default; 500 is capped for small datasets
+    )
 
     # Early stopping
     early_stopping_enabled: bool = True
@@ -487,7 +488,9 @@ def _yaml_to_config(path: str | Path) -> ExperimentConfig:
     _depends_raw = raw.get("depends_on", [])
     if isinstance(_depends_raw, (int, str)):
         _depends_raw = [_depends_raw]
-    depends_on = [int(d) for d in (_depends_raw or []) if str(d).strip().isdigit() or isinstance(d, int)]
+    depends_on = [
+        int(d) for d in (_depends_raw or []) if str(d).strip().isdigit() or isinstance(d, int)
+    ]
 
     return ExperimentConfig(
         id=exp_id,

@@ -137,7 +137,7 @@ RESULTS_DIR = Path("results")
 # 1280×960 is the standard community fine-tuning resolution that fits
 # comfortably in 24 GB VRAM at batch_size=8.
 _FINETUNE_H: int = 1280  # height (tall receipts)
-_FINETUNE_W: int = 960   # width
+_FINETUNE_W: int = 960  # width
 
 
 def _apply_resolution_sync(
@@ -179,7 +179,10 @@ def _apply_resolution_sync(
     logger.info(
         "[ResolutionSync] processor.image_processor.size = {height: %d, width: %d}  |  "
         "model.config.encoder.image_size = [%d, %d]  ✓",
-        height, width, height, width,
+        height,
+        width,
+        height,
+        width,
     )
 
 
@@ -493,7 +496,8 @@ def train_experiment(
         # are set (non-default values trigger the sync; default _FINETUNE_H/_FINETUNE_W
         # values always apply the sync for correctness).
         _apply_resolution_sync(
-            _proc, _mdl,
+            _proc,
+            _mdl,
             height=config.finetune_height,
             width=config.finetune_width,
         )

@@ -553,9 +553,7 @@ def _check_vocab_size(model_path: Path, expected_vocab_size: int) -> None:
                 f"does not match expected {expected_vocab_size}.  "
                 f"The tokenizer has different special tokens than expected."
             )
-        _log_ckpt.debug(
-            "[CheckpointValidator] vocab_size=%d matches expected ✓", vocab_size
-        )
+        _log_ckpt.debug("[CheckpointValidator] vocab_size=%d matches expected ✓", vocab_size)
     except CheckpointCorruptionError:
         raise
     except Exception as exc:

@@ -606,11 +606,17 @@ class TestRunner:
                 asyncio.to_thread(
                     subprocess.run,
                     ["python", "-m", "ruff", "check", str(check_dir)],
-                    capture_output=True, text=True, timeout=60,
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
                 )
             )
-            report = RuffReport(passed=result.returncode == 0, stdout=result.stdout,
-                                stderr=result.stderr, exit_code=result.returncode)
+            report = RuffReport(
+                passed=result.returncode == 0,
+                stdout=result.stdout,
+                stderr=result.stderr,
+                exit_code=result.returncode,
+            )
             if result.stdout:
                 report.issues = [l.strip() for l in result.stdout.split("\n") if l.strip()]
             if report.passed:
@@ -632,11 +638,19 @@ class TestRunner:
         try:
             result = await asyncio.create_task(
                 asyncio.to_thread(
-                    subprocess.run, cmd, capture_output=True, text=True, timeout=60,
+                    subprocess.run,
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
                 )
             )
-            report = RuffFormatReport(passed=result.returncode == 0, stdout=result.stdout,
-                                      stderr=result.stderr, exit_code=result.returncode)
+            report = RuffFormatReport(
+                passed=result.returncode == 0,
+                stdout=result.stdout,
+                stderr=result.stderr,
+                exit_code=result.returncode,
+            )
             if report.passed:
                 logger.info("✓ Ruff format passed")
             else:
@@ -663,12 +677,20 @@ class TestRunner:
         try:
             result = await asyncio.create_task(
                 asyncio.to_thread(
-                    subprocess.run, cmd, capture_output=True, text=True, timeout=timeout,
+                    subprocess.run,
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
                 )
             )
-            report = PytestReport(passed=result.returncode == 0, stdout=result.stdout,
-                                  stderr=result.stderr, exit_code=result.returncode,
-                                  details=result.stdout)
+            report = PytestReport(
+                passed=result.returncode == 0,
+                stdout=result.stdout,
+                stderr=result.stderr,
+                exit_code=result.returncode,
+                details=result.stdout,
+            )
             for line in result.stdout.split("\n"):
                 if " passed" in line:
                     try:
@@ -692,8 +714,9 @@ class TestRunner:
                 logger.error(f"❌ Tests failed: {report.tests_failed} failed")
             return report
         except asyncio.TimeoutError:
-            return PytestReport(passed=False, stderr=f"Pytest timed out after {timeout}s",
-                                exit_code=1)
+            return PytestReport(
+                passed=False, stderr=f"Pytest timed out after {timeout}s", exit_code=1
+            )
         except Exception as e:
             return PytestReport(passed=False, stderr=str(e), exit_code=1)
 
@@ -714,9 +737,12 @@ class TestRunner:
         all_passed = ruff_report.passed and ruff_format_report.passed
         if pytest_report:
             all_passed = all_passed and pytest_report.passed
-        report = AllChecksReport(passed=all_passed, ruff_report=ruff_report,
-                                 ruff_format_report=ruff_format_report,
-                                 pytest_report=pytest_report)
+        report = AllChecksReport(
+            passed=all_passed,
+            ruff_report=ruff_report,
+            ruff_format_report=ruff_format_report,
+            pytest_report=pytest_report,
+        )
         logger.info("=" * 70)
         if report.passed:
             logger.info("✓ ALL CHECKS PASSED")

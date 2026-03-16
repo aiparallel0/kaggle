@@ -179,8 +179,7 @@ class PaperInjector:
                 return json.load(fh)
         except json.JSONDecodeError as exc:
             warnings.warn(
-                f"Could not parse {path} as JSON ({exc}); "
-                "pretrained metrics will show N/A.",
+                f"Could not parse {path} as JSON ({exc}); pretrained metrics will show N/A.",
                 stacklevel=3,
             )
             return {}
@@ -1089,8 +1088,15 @@ def compute_diff(old_text: str, new_text: str) -> list[dict]:
                     direction = "↑" if delta > 0 else ("↓" if delta < 0 else "=")
                 except ValueError:
                     pass
-            changes.append({"line": i + 1, "old": old_line, "new": new_line,
-                             "delta": delta, "direction": direction})
+            changes.append(
+                {
+                    "line": i + 1,
+                    "old": old_line,
+                    "new": new_line,
+                    "delta": delta,
+                    "direction": direction,
+                }
+            )
     return changes
 
 
@@ -1103,6 +1109,7 @@ def print_diff_table(
     if use_rich is None:
         try:
             import rich  # noqa: F401
+
             use_rich = True
         except ImportError:
             use_rich = False
@@ -1117,7 +1124,9 @@ def print_diff_table(
         old_short = c["old"][:28].replace("\n", "").replace("\r", "")
         new_short = c["new"][:28].replace("\n", "").replace("\r", "")
         delta_str = f"{c['delta']:+.4f}" if c["delta"] is not None else ""
-        lines.append(f"{c['line']:<6} {old_short:<30} {new_short:<30} {delta_str:<12} {c['direction']:<4}")
+        lines.append(
+            f"{c['line']:<6} {old_short:<30} {new_short:<30} {delta_str:<12} {c['direction']:<4}"
+        )
     lines.append("=" * 80)
     plain_text = "\n".join(lines)
 
@@ -1125,9 +1134,13 @@ def print_diff_table(
         try:
             from rich.console import Console
             from rich.table import Table
+
             console = Console()
-            table = Table(title=f"Paper Diff — {len(changes)} line(s) changed",
-                          show_header=True, header_style="bold magenta")
+            table = Table(
+                title=f"Paper Diff — {len(changes)} line(s) changed",
+                show_header=True,
+                header_style="bold magenta",
+            )
             table.add_column("Line", justify="right", style="dim", width=6)
             table.add_column("Old value", style="red")
             table.add_column("New value", style="green")
@@ -1135,9 +1148,18 @@ def print_diff_table(
             table.add_column("Dir", justify="center")
             for c in changes:
                 delta_str = f"{c['delta']:+.4f}" if c["delta"] is not None else ""
-                dir_colour = "green" if c["direction"] == "↑" else ("red" if c["direction"] == "↓" else "yellow")
-                table.add_row(str(c["line"]), c["old"][:35], c["new"][:35], delta_str,
-                              f"[{dir_colour}]{c['direction']}[/{dir_colour}]")
+                dir_colour = (
+                    "green"
+                    if c["direction"] == "↑"
+                    else ("red" if c["direction"] == "↓" else "yellow")
+                )
+                table.add_row(
+                    str(c["line"]),
+                    c["old"][:35],
+                    c["new"][:35],
+                    delta_str,
+                    f"[{dir_colour}]{c['direction']}[/{dir_colour}]",
+                )
             console.print(table)
         except Exception:
             print(plain_text)
@@ -1160,6 +1182,7 @@ def run_paper_diff(
 ) -> None:
     """Compare old and new filled paper text; print and save the diff."""
     from datetime import datetime, timezone
+
     changes = compute_diff(old_text, new_text)
     if not changes:
         print("[PaperDiff] No changes detected in paper_filled.tex.")

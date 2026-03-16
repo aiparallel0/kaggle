@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import re
 import sys
 import time
@@ -68,11 +69,9 @@ import numpy as np
 _HEAVY_DEPS_AVAILABLE: bool = True
 _HEAVY_DEPS_ERROR: str = ""
 try:
-    import editdistance
     import matplotlib
     import torch
     from PIL import Image
-    from tqdm import tqdm
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -80,9 +79,33 @@ except ImportError as e:
     _HEAVY_DEPS_AVAILABLE = False
     _HEAVY_DEPS_ERROR = (
         f"FATAL: missing dependency — {e}\n"
-        "Run: pip install torch torchvision transformers "
-        "ultralytics pillow editdistance matplotlib tqdm numpy"
+        "Run: pip install torch transformers ultralytics Pillow matplotlib"
     )
+
+
+def _edit_distance(s1: str, s2: str) -> int:
+    """Levenshtein distance — replaces the editdistance package."""
+    m, n = len(s1), len(s2)
+    dp = list(range(n + 1))
+    for i in range(1, m + 1):
+        prev, dp[0] = dp[0], i
+        for j in range(1, n + 1):
+            prev, dp[j] = dp[j], prev if s1[i - 1] == s2[j - 1] else 1 + min(prev, dp[j], dp[j - 1])
+    return dp[n]
+
+
+def _progress(iterable, desc: str = "", total: int | None = None):
+    """Logging-based progress — replaces tqdm. Emits at 0 %, 10 %, … 100 %."""
+    _log = logging.getLogger(__name__)
+    items = list(iterable) if not hasattr(iterable, "__len__") and total is None else iterable
+    n = total if total is not None else len(items)  # type: ignore[arg-type]
+    step = max(1, -(-n // 10))
+    for i, item in enumerate(items):
+        if i % step == 0:
+            _log.info("%s %d/%d (%d%%)", desc, i, n, 100 * i // n if n else 0)
+        yield item
+    _log.info("%s done (%d items)", desc, n)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Constants — imported from single source of truth (constants.py)
@@ -197,7 +220,7 @@ def _ned(pred: str, gold: str) -> float:
     maxlen = max(len(pred), len(gold))
     if maxlen == 0:
         return 0.0
-    return editdistance.eval(pred, gold) / maxlen
+    return _edit_distance(pred, gold) / maxlen
 
 
 def _exact(pred: str, gold: str) -> float:
@@ -393,7 +416,8 @@ class DonutPipeline:
         # Process in batches to improve GPU utilisation.
         # DONUT generation is still autoregressive per-token, but the image encoder
         # runs in parallel across the batch — improving throughput on high-VRAM cards.
-        for i in tqdm(range(0, len(pairs), batch_size), desc=desc, unit="batch"):
+        n_batches = -(-len(pairs) // batch_size)  # ceiling division
+        for i in _progress(range(0, len(pairs), batch_size), desc=desc, total=n_batches):
             batch_pairs = pairs[i : i + batch_size]
             images = [Image.open(p).convert("RGB") for p, _ in batch_pairs]
 
@@ -737,7 +761,7 @@ class TrOCRYOLOPipeline:
         self, pairs: list[tuple[Path, dict]], desc: str = "YOLO+TrOCR+Regex"
     ) -> BenchmarkResult:
         result = BenchmarkResult(method="YOLOv8+TrOCR+Regex")
-        for img_path, gt in tqdm(pairs, desc=desc, unit="img"):
+        for img_path, gt in _progress(pairs, desc=desc):
             img = Image.open(img_path).convert("RGB")
             pred, ms = self.predict(img)
             result.samples.append(

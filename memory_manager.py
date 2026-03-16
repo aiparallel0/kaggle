@@ -63,6 +63,29 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
+
+def _get_available_ram_bytes() -> int:
+    """Available system RAM without psutil — uses /proc/meminfo (Linux) or os.sysconf."""
+    import os
+
+    try:
+        with open("/proc/meminfo", encoding="ascii") as _f:
+            for _line in _f:
+                if _line.startswith("MemAvailable:"):
+                    return int(_line.split()[1]) * 1024
+    except OSError:
+        pass
+    # POSIX fallback: total physical pages (not exact "available" but acceptable)
+    try:
+        _page = os.sysconf("SC_PAGE_SIZE")
+        _pages = os.sysconf("SC_PHYS_PAGES")
+        if _page > 0 and _pages > 0:
+            return _page * _pages
+    except (AttributeError, ValueError, OSError):
+        pass
+    return 0  # unknown
+
+
 # ---------------------------------------------------------------------------
 # Reference image dimensions — DONUT native pretrained resolution.
 # All arithmetic in this module is parameterised by actual H×W, but these
@@ -131,16 +154,11 @@ def ram_cache_is_safe(
     mb_per_sample = compute_pil_mb_per_sample(height, width)
     estimated_mb = n_samples * mb_per_sample
 
-    try:
-        import psutil
-
-        available_mb = psutil.virtual_memory().available / (1024 * 1024)
-    except ImportError:
-        logger.warning(
-            "[memory_manager] psutil not available; disabling PIL image cache "
-            "(install psutil to enable adaptive caching)."
-        )
+    available_bytes = _get_available_ram_bytes()
+    if available_bytes <= 0:
+        logger.warning("[memory_manager] available RAM unknown; disabling PIL image cache.")
         return False
+    available_mb = available_bytes / (1024 * 1024)
 
     if available_mb <= 0:
         return False
@@ -172,12 +190,8 @@ def ram_headroom_mb() -> float:
     Returns a conservative 0.0 on any error so callers treat an unknown
     RAM state as "no headroom available".
     """
-    try:
-        import psutil
-
-        return psutil.virtual_memory().available / (1024 * 1024)
-    except Exception:
-        return 0.0
+    available_bytes = _get_available_ram_bytes()
+    return available_bytes / (1024 * 1024) if available_bytes > 0 else 0.0
 
 
 def release_hf_dataset(ds) -> None:
