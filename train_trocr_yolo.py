@@ -69,14 +69,18 @@ except ImportError:
         @classmethod
         def from_pretrained(cls, *a, **kw):
             raise ImportError(
-                "transformers is required for TrOCRProcessor. pip install transformers"
+                "transformers >= 4.37.0 is required but not installed.\n"
+                "Run: pip install transformers>=4.37.0\n"
+                "Or:  pip install -r requirements.txt"
             )
 
     class VisionEncoderDecoderModel:  # type: ignore[no-redef]
         @classmethod
         def from_pretrained(cls, *a, **kw):
             raise ImportError(
-                "transformers is required for VisionEncoderDecoderModel. pip install transformers"
+                "transformers >= 4.37.0 is required but not installed.\n"
+                "Run: pip install transformers>=4.37.0\n"
+                "Or:  pip install -r requirements.txt"
             )
 
 # ─────────────────────────────────────────────────────────────────────────────

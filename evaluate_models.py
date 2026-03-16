@@ -29,7 +29,27 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from PIL import Image
+
+try:
+    from PIL import Image
+
+    _PIL_AVAILABLE = True
+except ImportError:
+    from donut_evaluator import _load_image  # noqa: E402, I001
+
+    class _ImageShim:  # type: ignore[misc]
+        @staticmethod
+        def open(path):
+            class _Img:
+                def __init__(self, arr):
+                    self._arr = arr
+
+                def convert(self, mode):
+                    return self
+
+            return _Img(_load_image(path))
+
+    Image = _ImageShim()  # type: ignore[assignment]
 
 from constants import DEVICE, FIELDS, MAX_LENGTH, _get_sroie_dir, _gpu_cleanup
 from dataset_loaders import load_sroie_test
