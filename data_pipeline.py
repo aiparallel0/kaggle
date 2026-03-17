@@ -32,6 +32,11 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
 
+# Ensure sibling modules are importable regardless of CWD.
+_SCRIPT_DIR = str(Path(__file__).resolve().parent)
+if _SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPT_DIR)
+
 # ── Transformers compat shim ──────────────────────────────────────────
 # In transformers ≥4.47 PreTrainedTokenizerBase moved to
 # transformers.tokenization_utils_base.  The `datasets` library still
@@ -48,9 +53,9 @@ try:
 except Exception:
     pass
 
-import resource_manager as _mm
-from constants import EMPTY_GT, FIELDS, SEED, _get_sroie_dir
-from constants import IMAGE_EXTS as _IMAGE_EXTS_SET
+import resource_manager as _mm  # noqa: E402
+from constants import EMPTY_GT, FIELDS, SEED, _get_sroie_dir  # noqa: E402
+from constants import IMAGE_EXTS as _IMAGE_EXTS_SET  # noqa: E402
 
 __all__ = [
     "Sample",
@@ -2421,9 +2426,15 @@ DATA_DIR = Path("data")
 YOLO_DIR = DATA_DIR / "yolo"
 TROCR_DIR = DATA_DIR / "trocr"
 
-# FIX: Use existing SROIE directories from run_all.py stage_install,
-# not a HuggingFace download that is broken upstream.
-SROIE_DATA_DIR = Path(os.environ.get("SROIE_DATA_DIR", "/workspace/ICDAR-2019-SROIE/data"))
+# FIX: Use _get_sroie_dir() at call time (not module-load time) so that
+# env vars set by run_all.py after import are respected.  The property-like
+# helper is used everywhere instead of the old module-level constant.
+
+
+def _sroie_data_dir() -> Path:
+    """Return SROIE data root, re-reading the env var each call."""
+    return _get_sroie_dir()
+
 
 # Map split names to (img_subdir, key_subdir) in the SROIE tree
 SPLIT_MAP = SROIELoader._SPLIT_DIRS  # single source of truth
@@ -2448,7 +2459,7 @@ _BOX_EXTENSIONS = [".txt", ".csv"]
 def _find_box_dir(split: str) -> Path | None:
     """Return the first existing box annotation directory for a split, or None."""
     for candidate in BOX_DIR_CANDIDATES.get(split, []):
-        p = SROIE_DATA_DIR / candidate
+        p = _sroie_data_dir() / candidate
         if p.exists() and any(p.iterdir()):
             return p
     return None
@@ -2570,7 +2581,7 @@ def build_yolo_split(split: str) -> int:
     Single class 0 = 'text_region'.
     """
     img_subdir, key_subdir = SPLIT_MAP[split]
-    img_dir = SROIE_DATA_DIR / img_subdir
+    img_dir = _sroie_data_dir() / img_subdir
 
     if not img_dir.exists():
         print(f"  [YOLO] {split}: {img_subdir}/ not found — skipping")
@@ -2606,7 +2617,7 @@ def build_yolo_split(split: str) -> int:
         if not boxes and box_dir is None:
             # Load key file to confirm the image contains receipt content
             _, key_subdir_local = SPLIT_MAP[split]
-            key_dir = SROIE_DATA_DIR / key_subdir_local
+            key_dir = _sroie_data_dir() / key_subdir_local
             gt = _load_key_file(key_dir, img_path.stem)
             if any(v for v in gt.values()):
                 # 95% of image width/height centred — gives YOLO room to learn
@@ -2656,7 +2667,7 @@ def build_yolo_split(split: str) -> int:
         raise RuntimeError(
             f"[YOLO] build_yolo_split('{split}'): {count} images processed but "
             f"every label file is empty — YOLO would train on pure background. "
-            f"Check SROIE_DATA_DIR={SROIE_DATA_DIR} and that box/ or key/ files exist."
+            f"Check SROIE_DATA_DIR={_sroie_data_dir()} and that box/ or key/ files exist."
         )
     if box_dir is None and count > 0:
         print(
@@ -2680,8 +2691,8 @@ def build_trocr_split(split: str) -> int:
     non-zero TrOCR training data.
     """
     img_subdir, key_subdir = SPLIT_MAP[split]
-    img_dir = SROIE_DATA_DIR / img_subdir
-    key_dir = SROIE_DATA_DIR / key_subdir
+    img_dir = _sroie_data_dir() / img_subdir
+    key_dir = _sroie_data_dir() / key_subdir
 
     if not img_dir.exists():
         print(f"  [TrOCR] {split}: {img_subdir}/ not found — skipping")

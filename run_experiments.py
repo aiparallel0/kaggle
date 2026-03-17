@@ -53,12 +53,18 @@ import logging
 import math
 import os
 import re
+import sys
 import time
 import warnings
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar
+
+# Ensure sibling modules are importable regardless of CWD.
+_SCRIPT_DIR = str(Path(__file__).resolve().parent)
+if _SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPT_DIR)
 
 # Set before torch initializes to reduce GPU memory fragmentation.
 os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")

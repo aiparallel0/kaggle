@@ -23,7 +23,12 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from constants import FIELDS, WORKSPACE, _edit_distance, _progress
+# Ensure sibling modules are importable regardless of CWD.
+_SCRIPT_DIR = str(Path(__file__).resolve().parent)
+if _SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPT_DIR)
+
+from constants import FIELDS, WORKSPACE, _edit_distance, _progress  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Optional heavy dependencies (torch, PIL, matplotlib, numpy)

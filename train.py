@@ -45,14 +45,20 @@ import logging
 import math
 import os
 import struct
+import sys
 import time
 import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import torch
-from torch.utils.data import Dataset
+# Ensure sibling modules are importable regardless of CWD.
+_SCRIPT_DIR = str(Path(__file__).resolve().parent)
+if _SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPT_DIR)
+
+import torch  # noqa: E402
+from torch.utils.data import Dataset  # noqa: E402
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Inline transformers fallback — used when the transformers package is absent
@@ -3466,21 +3472,30 @@ class DonutTrainer:
         self.model.gradient_checkpointing_enable()
         logging.info("Gradient checkpointing enabled")
 
-        # Guard: transformers trainer._get_dataloader() does
+        # Guard: transformers Seq2SeqTrainer does
         #   isinstance(dataset, datasets.Dataset)
-        # With HuggingFace datasets 3.x lazy-loading, a prior
-        # `from datasets import load_dataset` only partially initialises the
-        # module, leaving datasets.Dataset inaccessible (AttributeError).
-        # Fully initialise it here so the isinstance check never crashes.
+        # With HuggingFace datasets 3.x lazy-loading, a prior partial import
+        # can leave datasets.Dataset inaccessible (AttributeError).
         # Our MultiDataset is a torch.utils.data.Dataset, so isinstance returns
         # False regardless — this guard only prevents the AttributeError.
         try:
             import datasets as _hf_ds
 
             if not hasattr(_hf_ds, "Dataset"):
-                _hf_ds.Dataset = _hf_ds.arrow_dataset.Dataset
-        except Exception:
-            pass
+                try:
+                    _hf_ds.Dataset = _hf_ds.arrow_dataset.Dataset
+                except AttributeError:
+                    # Last resort: stub class so isinstance() returns False
+                    # for our torch Dataset without raising AttributeError.
+                    _hf_ds.Dataset = type("_HFDatasetStub", (), {})
+        except ImportError:
+            # datasets not installed at all — inject a stub module so that
+            # Seq2SeqTrainer's isinstance check doesn't crash.
+            import types as _types
+
+            _hf_ds = _types.ModuleType("datasets")
+            _hf_ds.Dataset = type("_HFDatasetStub", (), {})  # type: ignore[attr-defined]
+            sys.modules["datasets"] = _hf_ds
 
         trainer = Seq2SeqTrainer(
             model=self.model,

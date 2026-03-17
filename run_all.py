@@ -69,6 +69,12 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+# Ensure the script's own directory is on sys.path so sibling modules
+# (constants, reporting, data_pipeline, …) are importable regardless of CWD.
+_SCRIPT_DIR = str(Path(__file__).resolve().parent)
+if _SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPT_DIR)
+
 # Set before constants.py triggers torch import to reduce GPU memory fragmentation.
 os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
 
@@ -1615,31 +1621,23 @@ def _run_zero_shot_experiment(args, cfg) -> dict:
 def _run_yaml_donut_experiment(args, cfg, base_processor=None, base_model=None) -> dict:
     """
     Run a DONUT experiment defined purely in YAML (IDs 9+ not in legacy EXPERIMENTS dict).
-    Delegates to run_experiments.run_experiment_from_config() if available,
-    otherwise falls back to re-using the legacy run_experiment() mechanism.
+    Delegates to run_experiments.run_experiment_from_config().
     """
     print(f"  [dispatch] arch=donut (YAML-only exp {cfg.id}) → DONUT training path")
-    try:
-        import run_experiments as re_mod
+    import run_experiments as re_mod
 
-        if hasattr(re_mod, "run_experiment_from_config"):
-            return re_mod.run_experiment_from_config(
-                cfg,
-                base_processor=base_processor,
-                base_model=base_model,
-                overrides=getattr(args, "param_overrides", None) or None,
-            )
-    except Exception as exc:
-        print(
-            f"  [dispatch] run_experiment_from_config failed ({exc}); "
-            "experiment not run (YAML-only experiments require run_experiments.py support)"
+    if not hasattr(re_mod, "run_experiment_from_config"):
+        raise RuntimeError(
+            f"[Exp {cfg.id}] run_experiment_from_config not available in run_experiments.py. "
+            "Add run_experiment_from_config() to run_experiments.py and its __all__."
         )
-    # run_experiment_from_config is not available — raise loud error so it is
-    # never mistaken for a real zero-F1 result.
-    raise RuntimeError(
-        f"[Exp {cfg.id}] run_experiment_from_config not available in run_experiments.py. "
-        "This experiment cannot run until the function is implemented. "
-        "Add run_experiment_from_config() to run_experiments.py and its __all__."
+    # Let exceptions propagate with their real traceback instead of masking
+    # them behind a misleading "not available" message.
+    return re_mod.run_experiment_from_config(
+        cfg,
+        base_processor=base_processor,
+        base_model=base_model,
+        overrides=getattr(args, "param_overrides", None) or None,
     )
 
 
