@@ -2813,7 +2813,7 @@ class MultiDataset(Dataset):
             # be closed. memory_manager.ram_cache_is_safe() uses the real formula:
             #   3 × H × W / 1_048_576 MB per sample.
             try:
-                from resource_optimizer import get_image_size_from_processor_config
+                from resource_manager import get_image_size_from_processor_config
 
                 _img_h, _img_w = get_image_size_from_processor_config()
             except Exception:

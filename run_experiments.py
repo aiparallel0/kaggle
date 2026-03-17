@@ -1005,7 +1005,7 @@ def run_experiment(
     # ── Guardrail: validate optimizer step count ───────────────────────────
     # skip_step_validation=True is set only by micro/mini modes where a small
     # dataset + few epochs is intentional (smoke-test, not full convergence).
-    from resource_optimizer import validate_training_config
+    from resource_manager import validate_training_config
 
     if not getattr(config, "skip_step_validation", False):
         validate_training_config(
