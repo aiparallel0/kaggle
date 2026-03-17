@@ -53,9 +53,11 @@ import logging
 import math
 import os
 import re
+import struct
 import sys
 import time
 import warnings
+import zlib
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -100,10 +102,6 @@ try:
     import yaml  # noqa: E402
 except ImportError as e:
     raise ImportError("PyYAML is required: pip install pyyaml") from e
-
-import struct  # noqa: E402
-import sys  # noqa: E402
-import zlib  # noqa: E402
 
 try:
     import flash_attn  # noqa: F401
