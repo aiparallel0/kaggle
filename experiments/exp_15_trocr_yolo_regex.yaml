@@ -13,7 +13,7 @@
 #   Pipeline total: ~279M
 # ============================================================
 experiment_id: 15
-name: "trocr_yolo_regex_pipeline"
+name: "trocr_yolo_regex_pipeline_sroie_only"
 description: >
   TrOCR+YOLO two-stage pipeline with SROIE-only training data.
   Minimal/fastest configuration for architecture comparison baseline.

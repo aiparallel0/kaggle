@@ -1,5 +1,6 @@
 # ============================================================
-# DAG Dependency Example — Experiment 5 (depends on Exp 1 baseline)
+# DAG Dependency Example — Experiment 100
+# (Template demonstrating the depends_on field — not a production experiment)
 #
 # This YAML illustrates the `depends_on` field used by dag_scheduler.py
 # when --parallel is enabled.
@@ -7,18 +8,29 @@
 # depends_on: [1]  means this experiment waits for Experiment 1 to
 # complete before starting.  On a multi-GPU setup, experiments without
 # unmet dependencies run concurrently.
+#
+# NOTE: experiment_id: 100 is intentionally outside the 1–18 production
+# range so this template does not conflict with any real experiment.
 # ============================================================
 
-experiment_id: 5
-name: "sroie_2x_wildreceipt_dag_example"
+experiment_id: 100
+name: "dag_example_sroie_2x_wildreceipt"
 description: >
-  Example: SROIE + WildReceipt with 2× SROIE oversampling.
+  Template: SROIE + WildReceipt with 2× SROIE oversampling.
   Demonstrates depends_on: this experiment waits for the baseline (exp 1)
   so we can compare results side-by-side.
+  This is a documentation template — use exp_05_sroie_2x_wildreceipt.yaml
+  for the production Experiment 5 config.
 
 # DAG dependency — wait for the baseline experiment to complete first.
 # Remove or leave empty to allow parallel execution with no prerequisite.
 depends_on: [1]
+
+# ------------------------------------------------------------------
+# ARCH
+# ------------------------------------------------------------------
+arch:
+  type: donut
 
 # ------------------------------------------------------------------
 # MODEL
@@ -27,14 +39,15 @@ model:
   base_checkpoint: "naver-clova-ix/donut-base"
   tie_word_embeddings: false
   full_parameter_finetuning: true
-  image_height: 1280
-  image_width: 960
-  max_length: 768
-  arch_type: donut
 
 # ------------------------------------------------------------------
 # DATA
 # ------------------------------------------------------------------
+data:
+  image_height: 1280
+  image_width: 960
+  max_decode_length: 768
+
 datasets:
   - name: sroie
     split: train
@@ -79,6 +92,6 @@ validation:
 # OUTPUT
 # ------------------------------------------------------------------
 output:
-  results_file: "results/experiment_5.json"
-  checkpoint_dir: "models/donut_exp5/"
-  log_file: "logs/experiment_5.log"
+  results_file: "results/experiment_100.json"
+  checkpoint_dir: "models/donut_exp100/"
+  log_file: "logs/experiment_100.log"
