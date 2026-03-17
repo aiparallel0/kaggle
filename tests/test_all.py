@@ -125,7 +125,7 @@ except ImportError:
 
 
 # Project imports (do not require torch/transformers)
-from dataset_normalizer import DatasetNormalizer, extract_address_from_seller, normalise_samples
+from data_pipeline import DatasetNormalizer, extract_address_from_seller, normalise_samples
 
 import resource_manager as mm
 from cloud_orchestration import (

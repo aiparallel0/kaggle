@@ -13,8 +13,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import numpy as np
-import torch
+try:
+    import numpy as np
+    import torch
+except ImportError:
+    np = None  # type: ignore[assignment]
+    torch = None  # type: ignore[assignment]
 
 try:
     from transformers import DonutProcessor, VisionEncoderDecoderModel
@@ -1324,6 +1328,8 @@ if __name__ == "__main__":
 # ---------------------------------------------------------------------------
 # Unified model evaluation (from evaluate_models.py)
 # ---------------------------------------------------------------------------
+from constants import DEVICE, FIELDS, MAX_LENGTH, _get_sroie_dir, _gpu_cleanup  # noqa: E402, I001
+from dataset_loaders import load_sroie_test  # noqa: E402, I001
 
 __all__ = [
     "load_test_samples",
@@ -1345,7 +1351,8 @@ SROIE_DATA_DIR = _get_sroie_dir()
 # ════════════════════════════════════════════════════════════════════════════
 # Import compute_metrics from donut_evaluator — single source of truth for
 # SROIE Task-3 F1/NED/exact-match shared across DONUT and TrOCR+YOLO.
-from donut_evaluator import compute_metrics as compute_sroie_metrics  # noqa: E402
+# compute_metrics is defined earlier in this same merged file (from donut_evaluator section)
+compute_sroie_metrics = compute_metrics  # noqa: F821 (defined above in merged file)
 
 
 # ════════════════════════════════════════════════════════════════════════════
