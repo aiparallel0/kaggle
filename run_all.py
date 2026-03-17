@@ -18,12 +18,10 @@ Calling this one script does everything:
   6. Generates cross-architecture comparison plots and tables
   7. Fills paper.tex with all real metrics → paper_filled.tex
 
-FIX: Added TrOCR+YOLO pipeline stages (3-5) for dual-architecture comparison.
-FIX: GPU memory cleanup between all stages to prevent OOM.
-FIX: Imports constants from shared module.
-FIX: Integrated benchmark_compare.py as Stage 5 for live head-to-head evaluation.
-FIX: Added -quick mode for fast testing with hyperparameter sweep support.
-FIX: Auto-install dependencies and dual-stream logging (console + terminal.txt).
+All stages run sequentially on a single GPU; GPU memory is explicitly freed
+between stages via _gpu_cleanup() to prevent VRAM fragmentation.
+Dependencies are auto-installed from requirements.txt on first run.
+Dual-stream logging writes to both terminal.txt (full) and stdout (filtered).
 
 All stages run SEQUENTIALLY to prevent GPU memory contention.
 
@@ -47,17 +45,26 @@ Exit codes
 """
 
 import argparse
+import copy
+import dataclasses
+import gc
+import glob
+import importlib
+import itertools
 import json
 import logging
 import math
 import os
+import platform
 import random
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+import traceback
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -65,7 +72,7 @@ from pathlib import Path
 # Set before constants.py triggers torch import to reduce GPU memory fragmentation.
 os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
 
-from constants import BASE_MODEL, IMAGE_EXTS, SEED  # noqa: E402, I001
+from constants import BASE_MODEL, IMAGE_EXTS, SEED, _gpu_cleanup  # noqa: E402, I001
 
 __all__ = [
     "PipelineOrchestrator",
@@ -292,6 +299,50 @@ class _DualStreamHandler(logging.Handler):
     - DEBUG written to file only
     """
 
+    # Substrings that trigger progress-dedup (checked against full message).
+    _PROGRESS_TRIGGERS: tuple[str, ...] = ("Epoch ", "Step ", "[====", "%|", "batch")
+
+    # Substrings whose presence means the line is file-only (never console).
+    # Built once at class definition — not rebuilt per log record.
+    _SUPPRESS_SUBSTRINGS: tuple[str, ...] = (
+        "Both `max_new_tokens`",
+        "max_new_tokens` and `max_length`",
+        "field coverage:",
+        "[ResolutionSync]",
+        "[GradCkpt]",
+        "[FreezeEncoder]",
+        "[RAM Cache]",
+        "[Tensor Cache]",
+        "[Label Cache]",
+        "DataLoader: num_workers",
+        "[Token-verify]",
+        "[Pre-resize]",
+        "[Post-resize]",
+        "lm_head.weight",
+        "LmHeadCloneCallback",
+        "Self-test raw token IDs",
+        "Self-test decoder_input_ids",
+        "tie_word_embeddings",
+        "The new embeddings will be initialized",
+        "The new lm_head weights",
+        "Loading weights:",
+        "Writing model shards:",
+        "eval_runtime",
+        "eval_samples_per_second",
+        "eval_steps_per_second",
+    )
+
+    # CONFIG_OPTIMIZATION sub-line prefixes that are file-only.
+    _SUPPRESS_CONFIG_PREFIXES: tuple[str, ...] = (
+        "- batch_size:",
+        "- accumulation_steps:",
+        "- encoder_lr:",
+        "- decoder_lr:",
+        "- early_stopping_patience:",
+        "- warmup_steps:",
+        "- epochs:",
+    )
+
     def __init__(self, file_path: Path, collapse_after: int = 3):
         super().__init__()
         self.file_path = file_path
@@ -340,61 +391,32 @@ class _DualStreamHandler(logging.Handler):
             self.file_handle.flush()
 
     def _should_suppress_console(self, msg: str) -> bool:
-        """Skip repetitive progress logs on console."""
-        if any(x in msg for x in ["Epoch ", "Step ", "[====", "%|", "batch"]):
+        """Return True if this log line should be omitted from console output.
+
+        Progress lines (epoch/step counters) are dedup-collapsed.
+        Verbose internal diagnostic lines are routed to terminal.txt only.
+        Per-step loss dicts and CONFIG_OPTIMIZATION sub-lines are also suppressed.
+        """
+        # Dedup repetitive progress lines (tqdm-style bars, epoch counters).
+        if any(x in msg for x in self._PROGRESS_TRIGGERS):
             if msg == self._last_console_line:
                 self._console_repeat_count += 1
                 return True
             self._last_console_line = msg
             self._console_repeat_count = 0
 
-        # Suppress verbose debug/info lines that belong in terminal.txt only
-        _console_suppressed = [
-            "Both `max_new_tokens`",
-            "max_new_tokens` and `max_length`",
-            "field coverage:",
-            "[ResolutionSync]",
-            "[GradCkpt]",
-            "[FreezeEncoder]",
-            "[RAM Cache]",
-            "[Tensor Cache]",
-            "[Label Cache]",
-            "DataLoader: num_workers",
-            "[Token-verify]",
-            "[Pre-resize]",
-            "[Post-resize]",
-            "lm_head.weight",
-            "LmHeadCloneCallback",
-            "Self-test raw token IDs",
-            "Self-test decoder_input_ids",
-            "tie_word_embeddings",
-            "The new embeddings will be initialized",
-            "The new lm_head weights",
-            "Loading weights:",
-            "Writing model shards:",
-            "eval_runtime",
-            "eval_samples_per_second",
-            "eval_steps_per_second",
-        ]
-        if any(x in msg for x in _console_suppressed):
+        # Verbose internal lines that belong in terminal.txt only.
+        if any(x in msg for x in self._SUPPRESS_SUBSTRINGS):
             return True
 
-        # Suppress per-step eval_loss dicts: lines like "{'eval_loss': ..."
-        # Suppress per-step training loss dicts: lines like "{'loss': ..."
         stripped = msg.lstrip()
+
+        # Per-step loss dicts: "{'loss': ...}" and "{'eval_loss': ...}"
         if stripped.startswith("{'loss':") or stripped.startswith("{'eval_loss':"):
             return True
 
-        # Suppress CONFIG_OPTIMIZATION sub-lines (batch_size:, accumulation_steps:, etc.)
-        if stripped.startswith("- batch_size:") or stripped.startswith("- accumulation_steps:"):
-            return True
-        if stripped.startswith("- encoder_lr:") or stripped.startswith("- decoder_lr:"):
-            return True
-        return (
-            stripped.startswith("- early_stopping_patience:")
-            or stripped.startswith("- warmup_steps:")
-            or stripped.startswith("- epochs:")
-        )
+        # CONFIG_OPTIMIZATION sub-lines (indented hyperparameter listings).
+        return stripped.startswith(self._SUPPRESS_CONFIG_PREFIXES)
 
     def close(self) -> None:
         try:
@@ -696,8 +718,6 @@ def _apply_params_override(args) -> None:
     - Unknown keys are logged as warnings and ignored.
     - Parsing errors are printed and the function returns without modifying anything.
     """
-    import dataclasses
-
     override_path_str = getattr(args, "params_override", None)
     if not override_path_str:
         # Try default location
@@ -1027,9 +1047,9 @@ def stage_download(args) -> StageResult:
             file=sys.stderr,
         )
 
-    # Inline (blocking) model pre-download — NO background thread.
-    # This ensures the model is fully cached before any training starts,
-    # preventing GPU memory contention from concurrent downloads.
+    # Blocking model pre-download — ensures the model is fully HF-cached
+    # before any training starts, preventing GPU memory contention from
+    # concurrent downloads during the first experiment.
     logging.getLogger(__name__).info("Pre-downloading base model (blocking) ...")
     try:
         from transformers import DonutProcessor, VisionEncoderDecoderModel
@@ -1040,9 +1060,8 @@ def stage_download(args) -> StageResult:
         _preload_proc = DonutProcessor.from_pretrained(model_id)
         _preload_model = VisionEncoderDecoderModel.from_pretrained(model_id)
         logging.getLogger(__name__).info("Base model cached")
-        # FIX: explicitly free model weights before stage 1.5 loads the CORD model.
-        # Without this, both models (~1.6 GB combined) are simultaneously resident
-        # in RAM when the pixel-tensor cache is allocated, causing OOM kill.
+        # Free base model weights before stage 1.5 loads the CORD model.
+        # Both models together (~1.6 GB) would compete with the pixel-tensor cache.
         del _preload_proc, _preload_model
         _gpu_cleanup()
     except Exception as e:
@@ -1127,8 +1146,6 @@ def stage_pretrained_baseline(args) -> StageResult:
     # NOTE: local references MUST be deleted before _gpu_cleanup() is called,
     # otherwise the garbage collector cannot free them (still referenced here).
     del pre_model, pre_processor
-    from constants import _gpu_cleanup
-
     _gpu_cleanup()
 
     return StageResult(name="Pretrained Eval", duration=0.0, exit_status=0, warnings=warnings)
@@ -1252,7 +1269,7 @@ def _load_experiment_configs_for_run(args) -> "list":
         except Exception as exc:
             print(f"  WARNING: --experiments flag failed: {exc}; falling through")
 
-    # Priority 2 (non-interactive path) — experiment_selection.json
+    # Priority 3 (non-interactive path) — experiment_selection.json
     sel_file = Path("experiment_selection.json")
     try:
         configs = load_experiment_selection(sel_file, experiments_dir)
@@ -1445,8 +1462,6 @@ def stage_experiments(args) -> StageResult:
                     overrides=getattr(args, "param_overrides", None) or None,
                 )
         except Exception as exc:
-            import traceback
-
             elapsed = time.monotonic() - t0
             ts_end = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
             w = f"Experiment {exp_id} ({exp_name}) crashed: {type(exc).__name__}: {exc}"
@@ -1455,8 +1470,6 @@ def stage_experiments(args) -> StageResult:
             traceback.print_exc()
             # Clean up any GPU memory leaked by the crashed experiment so that
             # subsequent experiments start with a clean, defragmented GPU.
-            import gc
-
             gc.collect()
             try:
                 import torch
@@ -1489,8 +1502,6 @@ def stage_experiments(args) -> StageResult:
         # Flush any GPU memory left by this experiment before the next one
         # starts instantiating Seq2SeqTrainingArguments (which calls
         # torch.cuda.set_device() and may OOM if VRAM is still fragmented).
-        import gc
-
         gc.collect()
         try:
             import torch
@@ -1539,10 +1550,8 @@ def _run_trocr_yolo_experiment(args, cfg) -> dict:
     # Load result from file if it exists
     results_file = Path(cfg.results_file) if cfg.results_file else None
     if results_file and results_file.exists():
-        import json as _json
-
         with open(results_file) as fh:
-            return _json.load(fh)
+            return json.load(fh)
     return {
         "experiment_id": cfg.id,
         "name": cfg.name,
@@ -1563,10 +1572,8 @@ def _run_zero_shot_experiment(args, cfg) -> dict:
     results_file = Path(cfg.results_file) if cfg.results_file else None
     # If a result already exists and --force is not set, return it
     if results_file and results_file.exists() and not getattr(args, "force", False):
-        import json as _json
-
         with open(results_file) as fh:
-            return _json.load(fh)
+            return json.load(fh)
     # Attempt zero-shot evaluation using DonutEvaluator
     try:
         from transformers import DonutProcessor
@@ -1590,11 +1597,9 @@ def _run_zero_shot_experiment(args, cfg) -> dict:
             "metrics": metrics,
         }
         if results_file:
-            import json as _json
-
             results_file.parent.mkdir(parents=True, exist_ok=True)
             with open(results_file, "w") as fh:
-                _json.dump(result, fh, indent=2)
+                json.dump(result, fh, indent=2)
         return result
     except Exception as exc:
         print(f"  [zero-shot] Evaluation failed: {exc}; returning empty metrics")
@@ -1646,9 +1651,9 @@ def _run_yaml_donut_experiment(args, cfg, base_processor=None, base_model=None) 
 def stage_trocr_data_prep(args) -> StageResult:
     """Prepare YOLO bbox labels and TrOCR line crops from existing SROIE split.
 
-    FIX: Uses the existing SROIE split created in stage_install() (500/63/63)
-    instead of re-downloading from HuggingFace.  This ensures both DONUT and
-    TrOCR+YOLO use the EXACT same train/val/test images.
+    Uses the SROIE split created by stage_install() (500/63/63), ensuring
+    DONUT and TrOCR+YOLO train and evaluate on the exact same images.
+    Idempotent: skips if output directories already exist.
     """
     _banner("STAGE 3 — TrOCR+YOLO dataset preparation")
     warnings: list[str] = []
@@ -1682,12 +1687,10 @@ def stage_trocr_data_prep(args) -> StageResult:
 
 
 def stage_trocr_experiments(args) -> StageResult:
-    """Train YOLOv8 + TrOCR and evaluate on the SAME 63 SROIE test images.
+    """Train YOLOv8 + TrOCR and evaluate on the same 63 SROIE test images.
 
-    FIX: Runs the SAME 8 dataset combinations as DONUT for matched
-    experimental design.  In the current implementation, YOLO and TrOCR
-    are trained once on the SROIE data; the 8 "experiments" use the same
-    models but evaluate field assignment with different training-set context.
+    YOLO and TrOCR are each trained once on SROIE data (the same 500/63/63
+    split used by DONUT), keeping the experimental design matched.
     Results are saved to results/trocr_yolo_results.json.
     """
 
@@ -1702,8 +1705,6 @@ def stage_trocr_experiments(args) -> StageResult:
 
         # Stage 4a: Train YOLO
         # Ensure GPU is clean from DONUT experiment stage before loading YOLO.
-        from constants import _gpu_cleanup
-
         _gpu_cleanup()
         yolo_output = workspace / "models" / "yolo_finetuned"
         yolo_weights = yolo_output / "run" / "weights" / "best.pt"
@@ -1781,9 +1782,7 @@ def stage_trocr_experiments(args) -> StageResult:
                 print(f"  WARNING: {w}", file=sys.stderr)
                 warnings.append(w)
 
-        # FIX: GPU cleanup after TrOCR+YOLO stage
-        from constants import _gpu_cleanup
-
+        # GPU cleanup after TrOCR+YOLO stage.
         _gpu_cleanup()
 
     except Exception as exc:
@@ -1804,15 +1803,18 @@ def stage_trocr_experiments(args) -> StageResult:
 
 
 def stage_benchmark(args) -> StageResult:
-    """Run benchmark_compare.py: load both trained models, run inference on
-    the same SROIE test images, and produce side-by-side F1 / accuracy / speed
-    metrics with journal-ready plots.
+    """Run head-to-head benchmark: DONUT vs YOLOv8+TrOCR+Regex on the SROIE test set.
 
     Automatically selects the best DONUT experiment model (highest global F1)
-    and the trained YOLO best.pt from Stage 4.
+    and the trained YOLO best.pt from Stage 4. Produces side-by-side F1 /
+    accuracy / speed metrics and journal-ready plots.
     """
     _banner("STAGE 5 — Head-to-head benchmark (DONUT vs YOLOv8+TrOCR+Regex)")
     warnings: list[str] = []
+    # Defensive GPU flush: prior stages may not have cleaned up if they failed
+    # mid-way (e.g. TrOCR+YOLO aborting on missing cv2). Loading DONUT on a
+    # fragmented 18 GB VRAM budget will OOM without this.
+    _gpu_cleanup()
 
     sroie_dir = Path(args.sroie_dir)
     test_img_dir = sroie_dir / "test_img"
@@ -1895,6 +1897,8 @@ def stage_benchmark(args) -> StageResult:
 
     # --- Run benchmark_compare programmatically ---
     try:
+        import torch
+
         import reporting as bench_mod
 
         pairs = bench_mod.find_pairs(test_img_dir, test_key_dir)
@@ -1909,11 +1913,7 @@ def stage_benchmark(args) -> StageResult:
         donut_result = bench_mod.compute_metrics(donut_result)
         all_results.append(donut_result)
 
-        # Free GPU before next pipeline
-        import gc
-
-        import torch
-
+        # Free GPU before next pipeline.
         del donut_pipe
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -1966,8 +1966,8 @@ def stage_benchmark(args) -> StageResult:
 def stage_comparison(args) -> StageResult:
     """Generate cross-architecture comparison plots and tables.
 
-    FIX: New stage — produces plots and LaTeX-injectable content comparing
-    DONUT vs TrOCR+YOLO across all 8 experiments.
+    Produces plots and LaTeX-injectable content comparing DONUT vs
+    TrOCR+YOLO across all 8 experiments.
     """
     _banner("STAGE 6 — Cross-architecture comparison")
     warnings: list[str] = []
@@ -2189,8 +2189,8 @@ class PipelineOrchestrator:
                 exit_code = r.exit_status
 
         # Stage 3 — TrOCR+YOLO dataset preparation
-        # FIX: New stage — prepares YOLO bbox + TrOCR line crop data from
-        # the existing SROIE split (same 500/63/63 split used by DONUT).
+        # Prepares YOLO bbox + TrOCR line crop data from the existing SROIE
+        # split (same 500/63/63 used by DONUT) for matched experimental design.
         if not getattr(self.args, "skip_trocr", False):
             self._run_stage("TrOCR Data Prep", stage_trocr_data_prep)
 
@@ -2226,8 +2226,7 @@ class PipelineOrchestrator:
         hdr = f"  {'Stage':<24}| {'Duration':>8} | {'Status':<7} | {'Warnings':<20}"
         lines.append(f"|{hdr:<{W}}|")
 
-        sep = f"{'-' * 25}+-{'-' * 10}-+-{'-' * 9}-+-{'-' * (W - 48)}-"
-        lines.append(f"+{sep}+")
+        lines.append(f"+{'-' * W}+")
 
         # Stage labels for display order
         stage_labels = {
@@ -2338,8 +2337,6 @@ def _quick_mode_handler(args, logger: logging.Logger) -> int:
 
     except Exception as e:
         logger.error(f"Quick mode failed: {e}")
-        import traceback
-
         traceback.print_exc()
         return 2
 
@@ -2354,8 +2351,6 @@ def _quick_all_mode_handler(args, logger: logging.Logger) -> int:
         Exit code (0=success, 2=fatal)
     """
     try:
-        import itertools
-
         logger.info("=" * 72)
         logger.info("QUICK MODE WITH HYPERPARAMETER SWEEP")
         logger.info("=" * 72)
@@ -2419,8 +2414,6 @@ def _quick_all_mode_handler(args, logger: logging.Logger) -> int:
                 result_file = Path("results") / f"sweep_{key}.json"
 
                 # Run experiment
-                import time
-
                 start_time = time.time()
                 result = run_custom_experiment(custom_config, result_file)
                 elapsed_time = time.time() - start_time
@@ -2451,8 +2444,6 @@ def _quick_all_mode_handler(args, logger: logging.Logger) -> int:
                     "training_time": 0.0,
                     "error": str(e),
                 }
-                import traceback
-
                 traceback.print_exc()
 
         # Generate comparison results.tex
@@ -2469,8 +2460,6 @@ def _quick_all_mode_handler(args, logger: logging.Logger) -> int:
 
     except Exception as e:
         logger.error(f"Quick sweep mode failed: {e}")
-        import traceback
-
         traceback.print_exc()
         return 2
 
@@ -2486,8 +2475,6 @@ def _mini_mode_handler(args, logger: logging.Logger) -> int:
     Produces paper_mini.tex with all \\VAR{} placeholders resolved.
     Target: ~20 min on RTX 4090.
     """
-    import copy
-
     import run_experiments as re_mod
     import train_trocr_yolo as tty
 
@@ -2510,9 +2497,7 @@ def _mini_mode_handler(args, logger: logging.Logger) -> int:
     # ── Stage 2: DONUT Exp 1 with reduced epochs ──────────────────────────
     logger.info("[Mini Stage 2] DONUT Experiment 1 (5 epochs)...")
     # Use dataclasses.replace() to build an isolated mini config without
-    # mutating any fields of the global EXPERIMENTS dict entry.
-    import dataclasses
-
+    # mutating any fields of the global EXPERIMENTS dict entry (GP-1).
     original_config = re_mod.EXPERIMENTS[1]
     mini_config = dataclasses.replace(original_config, epochs=5, early_stopping_patience=2)
     re_mod.EXPERIMENTS[1] = mini_config
@@ -2576,9 +2561,6 @@ def _micro_mode_handler(args, logger: logging.Logger) -> int:
 
     Produces paper_micro.tex with all \\VAR{} placeholders resolved.
     """
-    import copy
-    import dataclasses
-
     import run_experiments as re_mod
     import train_trocr_yolo as tty
 
@@ -2701,11 +2683,9 @@ def _generate_mini_paper(args, logger: logging.Logger) -> int:
     Falls back to a minimal compilable stub when the results file or template
     are absent.
     """
-    import re as _re
-
     import reporting as ir
 
-    _VAR_RE = _re.compile(r"\\VAR\{([^}]+)\}")
+    _VAR_RE = re.compile(r"\\VAR\{([^}]+)\}")
 
     results_path = Path("results") / "all_experiments.json"
     if not results_path.exists():
@@ -2760,8 +2740,6 @@ def _write_mini_paper_stub(output_path: str, logger: logging.Logger) -> int:
     Used when the paper template is unavailable or results are empty.
     Generates a self-contained, compilable article with no external dependencies.
     """
-    from datetime import datetime
-
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     stub = rf"""\documentclass{{article}}
 \usepackage{{booktabs}}
@@ -2804,13 +2782,10 @@ Benchmark        & See results/benchmark\_results.json \\
 def _max_experiment_id() -> int:
     """Return the highest experiment_id found in experiments/*.yaml, or 12 as fallback."""
     try:
-        import glob as _glob
-        import re as _re
-
         ids = []
-        for p in _glob.glob("experiments/*.yaml") + _glob.glob("experiments/*.yml"):
+        for p in glob.glob("experiments/*.yaml") + glob.glob("experiments/*.yml"):
             with open(p) as f:
-                m = _re.search(r"experiment_id\s*:\s*(\d+)", f.read())
+                m = re.search(r"experiment_id\s*:\s*(\d+)", f.read())
             if m:
                 ids.append(int(m.group(1)))
         return max(ids) if ids else 12
@@ -3208,9 +3183,6 @@ def main() -> None:
         logger.info("--yolo flag detected: starting from TrOCR+YOLO stages (Stage 3+)")
 
     # ── Diagnostic: environment snapshot ──────────────────────────────────
-    import importlib
-    import platform
-
     import torch
 
     _banner("ENVIRONMENT DIAGNOSTICS")
