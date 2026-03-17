@@ -2597,7 +2597,8 @@ def print_table5_trocr_yolo(trocr_exp: dict) -> None:
     """
     print("% === TABLE 5: TrOCR+YOLO Per-Experiment Results ===")
     print("% Exp & Training Data & Train Samples & Precision & Recall & F1 & Exact Match \\\\")
-    for exp_id_str in sorted(trocr_exp, key=lambda x: int(x)):
+    numeric_keys = [k for k in trocr_exp if k.lstrip("-").isdigit()]
+    for exp_id_str in sorted(numeric_keys, key=lambda x: int(x)):
         res = trocr_exp[exp_id_str]
         m = res.get("metrics", {})
         name = EXP_NAMES.get(exp_id_str, res.get("name", ""))

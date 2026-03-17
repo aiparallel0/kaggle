@@ -691,12 +691,13 @@ except ImportError:
                     # Resize to imgsz × imgsz
                     import numpy as _np
 
-                    h, w = raw.shape[:2]
+                    raw_arr = _np.array(raw) if not isinstance(raw, _np.ndarray) else raw
+                    h, w = raw_arr.shape[:2]
                     scale = imgsz / max(h, w)
                     nh, nw = int(h * scale), int(w * scale)
                     import cv2 as _cv2  # noqa: PLC0415 — soft dep for training only
 
-                    resized = _cv2.resize(raw, (nw, nh), interpolation=_cv2.INTER_LINEAR)
+                    resized = _cv2.resize(raw_arr, (nw, nh), interpolation=_cv2.INTER_LINEAR)
                     padded = _np.zeros((imgsz, imgsz, 3), dtype=_np.uint8)
                     padded[:nh, :nw] = resized
                     t = (
