@@ -1,0 +1,121 @@
+# experiments_sroie.yml — CI: validate experiment YAML configs on every PR.
+#
+# The core reason errors slip through PRs is that experiment YAML files are
+# never automatically parsed or validated. A developer can introduce a broken
+# config (duplicate experiment_id, misplaced fields, invalid resolution, bad
+# tie_word_embeddings, etc.) and no check fires until the full training run.
+#
+# This workflow fixes that by:
+#   1. Running ruff lint/format checks on all Python files.
+#   2. Running scripts/validate_yaml_experiments.py against experiments/*.yaml,
+#      which catches the following classes of bugs WITHOUT needing torch:
+#
+#        • Duplicate experiment_id values across files   (load_experiment() ambiguity)
+#        • Duplicate name values across files            (reporting confusion)
+#        • Fields placed in the wrong YAML section       (silently ignored at runtime)
+#        • tie_word_embeddings: true                     (causes F1=0.00 on reload)
+#        • Image resolution > 1280×960 without allow_high_res (4× RAM explosion)
+#        • validation.precompute_tensors: true           (OOM during training)
+#        • Invalid mixed_precision / arch.type values    (runtime crash)
+#        • Empty datasets list on a non-zero-shot exp    (silent empty training set)
+#        • Missing required fields (experiment_id, name) (KeyError at load time)
+#
+# See CLAUDE.md § 5 "The ~2-PR Bug Pattern" for full context.
+
+name: Validate SROIE Experiment Configs
+
+on:
+  push:
+    branches: ["main", "master"]
+    paths:
+      - "experiments/**"
+      - "scripts/validate_yaml_experiments.py"
+      - "requirements.txt"
+      - "**.py"
+  pull_request:
+    paths:
+      - "experiments/**"
+      - "scripts/validate_yaml_experiments.py"
+      - "requirements.txt"
+      - "**.py"
+
+jobs:
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: ruff check
+        run: ruff check .
+
+      - name: ruff format check
+        run: ruff format --check .
+
+  validate-yaml:
+    name: Validate experiment YAML configs
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pyyaml
+        # pyyaml is the only dependency the validator needs.
+        # It is also listed in requirements.txt so this doubles as a check
+        # that the package can actually be installed in a clean environment.
+        run: pip install "pyyaml>=6.0"
+
+      - name: Validate experiment YAML configs
+        run: python scripts/validate_yaml_experiments.py experiments/
+
+  import-chain:
+    name: Verify core import chain (no torch required)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install stdlib-only deps
+        # constants.py and validation.py must be importable without torch.
+        # These are the two modules referenced in CLAUDE.md § 5 sanity check.
+        run: pip install "pyyaml>=6.0"
+
+      - name: Verify constants.py imports
+        # Mirrors the sanity check from CLAUDE.md § 5:
+        #   python -c "from constants import FIELDS, BASE_MODEL, SEED"
+        # constants.py must NOT import torch at module level.
+        env:
+          PYTHONPATH: .
+        run: python -c "import constants; print('constants OK — FIELDS:', constants.FIELDS)"
+
+      - name: Verify cloud_orchestration.py imports
+        env:
+          PYTHONPATH: .
+        run: python -c "import cloud_orchestration; print('cloud_orchestration OK')"
+
+      - name: Verify validation.py imports
+        env:
+          PYTHONPATH: .
+        run: python -c "import validation; print('validation OK')"
