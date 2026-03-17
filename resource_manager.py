@@ -302,6 +302,13 @@ __all__ = [
     # Absorbed from training_config.py
     "TrainingConfig",
     "PARAM_GRIDS_DEFAULT",
+    # Absorbed from memory_manager.py
+    "compute_pil_mb_per_sample",
+    "ram_cache_is_safe",
+    "ram_headroom_mb",
+    "release_hf_dataset",
+    "flush_hf_arrow_cache",
+    "shutdown_dataloader_workers",
 ]
 
 try:

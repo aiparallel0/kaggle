@@ -31,17 +31,45 @@ from constants import FIELDS, WORKSPACE
 
 __all__ = [
     # From benchmark_compare
-    "SampleResult", "BenchmarkResult", "compare_all", "benchmark_compare_main",
-    "_token_f1", "_token_f1_squad", "DonutPipeline", "TrOCRYOLOPipeline",
-    "find_pairs", "compute_metrics", "plot_results",
+    "SampleResult",
+    "BenchmarkResult",
+    "compare_all",
+    "benchmark_compare_main",
+    "_token_f1",
+    "_token_f1_squad",
+    "DonutPipeline",
+    "TrOCRYOLOPipeline",
+    "find_pairs",
+    "compute_metrics",
+    "plot_results",
+    "print_report",
+    "save_json",
     # From plot_convergence
-    "generate_all", "generate_combined_paper", "generate_combined_slides",
-    "generate_grid_1_8", "generate_grid_9_18", "smooth_curve",
+    "generate_all",
+    "generate_combined_paper",
+    "generate_combined_slides",
+    "generate_grid_1_8",
+    "generate_grid_9_18",
+    "smooth_curve",
+    "generate_training_plots",
+    "generate_convergence_data",
+    "generate_convergence_tex",
+    "generate_f1_barchart_tex",
     # From inject_results
-    "PaperInjector", "UnresolvedVarError", "LEADERBOARD", "DONUT_PUBLISHED_F1",
-    "EXP_NAMES", "build_var_map", "fill_paper",
-    "print_table1_dataset_stats", "print_table2_experiments",
-    "print_table3_perfield", "print_table4_leaderboard", "ResultsAggregator",
+    "PaperInjector",
+    "UnresolvedVarError",
+    "LEADERBOARD",
+    "DONUT_PUBLISHED_F1",
+    "EXP_NAMES",
+    "build_var_map",
+    "fill_paper",
+    "print_table1_dataset_stats",
+    "print_table2_experiments",
+    "print_table3_perfield",
+    "print_table4_leaderboard",
+    "ResultsAggregator",
+    "print_table5_trocr_yolo",
+    "print_table6_cross_architecture",
     "compile_pdf",
     "main",
 ]
@@ -1557,6 +1585,7 @@ if __name__ == "__main__":
 # Convergence plot generation (from plot_convergence.py)
 # ---------------------------------------------------------------------------
 
+
 def _smooth(ys: list, window: int = 5) -> list:
     """Weighted moving-average smoothing — replaces scipy.interpolate.CubicSpline."""
     n = len(ys)
@@ -1993,6 +2022,7 @@ def _plot_convergence_main() -> None:
 
 # ── LaTeX PDF compilation ──────────────────────────────────────────────────
 
+
 def compile_pdf(tex_file: str | Path, work_dir: str | Path | None = None) -> Path | None:
     """Compile a LaTeX .tex file to PDF using pdflatex / latexmk / xelatex.
 
@@ -2029,25 +2059,34 @@ def compile_pdf(tex_file: str | Path, work_dir: str | Path | None = None) -> Pat
 
     # compiler → build command (tex_file inserted at end)
     compilers = [
-        ("pdflatex", [
+        (
             "pdflatex",
-            "-interaction=nonstopmode",
-            f"-output-directory={work_dir}",
-            str(tex_path),
-        ]),
-        ("latexmk", [
+            [
+                "pdflatex",
+                "-interaction=nonstopmode",
+                f"-output-directory={work_dir}",
+                str(tex_path),
+            ],
+        ),
+        (
             "latexmk",
-            "-pdf",
-            "-interaction=nonstopmode",
-            f"-outdir={work_dir}",
-            str(tex_path),
-        ]),
-        ("xelatex", [
+            [
+                "latexmk",
+                "-pdf",
+                "-interaction=nonstopmode",
+                f"-outdir={work_dir}",
+                str(tex_path),
+            ],
+        ),
+        (
             "xelatex",
-            "-interaction=nonstopmode",
-            f"-output-directory={work_dir}",
-            str(tex_path),
-        ]),
+            [
+                "xelatex",
+                "-interaction=nonstopmode",
+                f"-output-directory={work_dir}",
+                str(tex_path),
+            ],
+        ),
     ]
 
     for compiler_name, cmd in compilers:
@@ -2062,7 +2101,9 @@ def compile_pdf(tex_file: str | Path, work_dir: str | Path | None = None) -> Pat
                     cwd=str(work_dir),
                 )
             if pdf_path.exists():
-                log.info("[PDF] Compiled %s → %s (using %s)", tex_path.name, pdf_path, compiler_name)
+                log.info(
+                    "[PDF] Compiled %s → %s (using %s)", tex_path.name, pdf_path, compiler_name
+                )
                 return pdf_path
         except FileNotFoundError:
             continue  # compiler not installed — try next
