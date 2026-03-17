@@ -83,6 +83,7 @@ from constants import (
     set_seed,
 )
 from data_pipeline import load_sroie_test
+from resource_manager import TrainingAuditLogger
 
 try:
     import yaml

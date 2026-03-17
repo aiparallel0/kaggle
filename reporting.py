@@ -2621,7 +2621,8 @@ def print_table6_cross_architecture(donut_exp: dict, trocr_exp: dict) -> None:
     """
     print("% === TABLE 6: Cross-Architecture Comparison ===")
     print("% Exp & Training Data & DONUT F1 & TrOCR+YOLO F1 & Delta \\\\")
-    for exp_id_str in sorted(set(donut_exp) | set(trocr_exp), key=lambda x: int(x)):
+    numeric_keys = {k for k in set(donut_exp) | set(trocr_exp) if k.isdigit()}
+    for exp_id_str in sorted(numeric_keys, key=lambda x: int(x)):
         name = EXP_NAMES.get(exp_id_str, f"Exp {exp_id_str}")
         d_f1 = donut_exp.get(exp_id_str, {}).get("metrics", {}).get("global_f1", 0.0)
         t_f1 = trocr_exp.get(exp_id_str, {}).get("metrics", {}).get("global_f1", 0.0)
