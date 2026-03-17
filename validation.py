@@ -1,28 +1,36 @@
-"""Validators for cloud pipeline safety checks.
+"""validation.py — Merged validation, pre-flight checks, and startup diagnostics.
 
-Consolidated from the former validators/ package. Contains all validator
-classes and functions for the DONUT SROIE multi-dataset pipeline.
+Consolidates: validators.py, preflight_checks.py, startup_diagnostics.py
 """
 
 from __future__ import annotations
 
 import ast
+import asyncio
 import importlib
 import json
 import logging
+import os
 import random
 import re
 import struct
+import subprocess
+import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from pipeline_types import (
+from cloud_orchestration import (
     BugPattern,
     BugReport,
     CheckpointCorruptionError,
+    CheckResult,
+    CheckStatus,
     DataSplitValidationReport,
+    PreflightReport,
     SeverityLevel,
 )
+from constants import _get_sroie_dir
 
 __all__ = [
     "ImportChainChecker",
@@ -32,6 +40,8 @@ __all__ = [
     "SeedValidator",
     "CheckpointCorruptionError",
     "validate_checkpoint",
+    "PreflightChecker",
+    "validate_pipeline",
 ]
 
 # ---------------------------------------------------------------------------
@@ -44,6 +54,8 @@ _log_split = logging.getLogger("validators.data_split_validator")
 _log_chain = logging.getLogger("validators.import_chain_checker")
 _log_weight = logging.getLogger("validators.model_weight_validator")
 _log_seed = logging.getLogger("validators.seed_validator")
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -795,7 +807,7 @@ class ImportChainChecker:
             (success: bool, error_message: str)
         """
         try:
-            from dataset_loaders import SROIELoader
+            from data_pipeline import SROIELoader
 
             _ = SROIELoader()  # Try instantiating to catch runtime issues
             return True, ""
@@ -1131,3 +1143,771 @@ class SeedValidator:
             errors.append(f"❌ RNG consistency check failed: {msg}")
 
         return len(errors) == 0, errors
+
+
+# ── preflight_checks ──────────────────────────────────────────────────────
+
+
+class PreflightChecker:
+    """Run comprehensive preflight validation before pipeline execution."""
+
+    def __init__(self, sroie_dir: Path | None = None):
+        self.sroie_dir = sroie_dir or _get_sroie_dir()
+
+    async def check_import_chain(self) -> CheckResult:
+        """Check if constants.py import works (CRITICAL)."""
+        logger.info("Checking import chain...")
+        success, errors = ImportChainChecker.check_all()
+
+        if not errors:
+            result_status = CheckStatus.PASSED
+            message = "All imports working"
+        else:
+            result_status = CheckStatus.FAILED
+            message = "; ".join(errors)
+
+        return CheckResult(
+            name="import_chain",
+            status=result_status,
+            message=message,
+        )
+
+    async def check_constants_integrity(self) -> CheckResult:
+        """Check if all required constants are defined."""
+        logger.info("Checking constants integrity...")
+
+        try:
+            from constants import (
+                BASE_MODEL,
+                FIELDS,
+                IMAGE_EXTS,
+                SEED,
+            )
+
+            errors = []
+            if not FIELDS:
+                errors.append("FIELDS is empty")
+            if not BASE_MODEL:
+                errors.append("BASE_MODEL is empty")
+            if not IMAGE_EXTS:
+                errors.append("IMAGE_EXTS is empty")
+
+            if errors:
+                return CheckResult(
+                    name="constants",
+                    status=CheckStatus.FAILED,
+                    message="; ".join(errors),
+                )
+
+            return CheckResult(
+                name="constants",
+                status=CheckStatus.PASSED,
+                message=f"All constants valid (FIELDS={FIELDS}, SEED={SEED})",
+            )
+
+        except ImportError as e:
+            return CheckResult(
+                name="constants",
+                status=CheckStatus.FAILED,
+                message=f"Import error: {e}",
+            )
+
+    async def check_data_split_integrity(self) -> CheckResult:
+        """Check SROIE data split (val_img != test_img)."""
+        logger.info("Checking SROIE data split...")
+
+        if not self.sroie_dir.exists():
+            return CheckResult(
+                name="data_split",
+                status=CheckStatus.FAILED,
+                message=f"SROIE directory not found: {self.sroie_dir}",
+            )
+
+        report = DataSplitValidator.validate_sroie_split(self.sroie_dir)
+
+        if report.passed:
+            return CheckResult(
+                name="data_split",
+                status=CheckStatus.PASSED,
+                message=f"Split valid: {report.train_count}/{report.val_count}/{report.test_count}",
+            )
+        else:
+            return CheckResult(
+                name="data_split",
+                status=CheckStatus.FAILED,
+                message="; ".join(report.errors),
+            )
+
+    async def check_seed_consistency(self) -> CheckResult:
+        """Check seed reproducibility."""
+        logger.info("Checking seed consistency...")
+
+        success, errors = SeedValidator.check_all()
+
+        if success:
+            return CheckResult(
+                name="seed",
+                status=CheckStatus.PASSED,
+                message="Seed=42 and RNG consistent",
+            )
+        else:
+            return CheckResult(
+                name="seed",
+                status=CheckStatus.WARNING,
+                message="; ".join(errors),
+            )
+
+    async def check_gpu_availability(self) -> CheckResult:
+        """Check if GPU is available."""
+        logger.info("Checking GPU availability...")
+
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                device_count = torch.cuda.device_count()
+                device_name = torch.cuda.get_device_name(0)
+                return CheckResult(
+                    name="gpu",
+                    status=CheckStatus.PASSED,
+                    message=f"GPU available: {device_count}x {device_name}",
+                )
+            else:
+                return CheckResult(
+                    name="gpu",
+                    status=CheckStatus.WARNING,
+                    message="No GPU detected (will use CPU, training will be slow)",
+                )
+
+        except ImportError:
+            return CheckResult(
+                name="gpu",
+                status=CheckStatus.WARNING,
+                message="torch not installed (cannot check GPU)",
+            )
+
+    async def check_disk_space(self, min_gb: int = 100) -> CheckResult:
+        """Check available disk space."""
+        logger.info("Checking disk space...")
+
+        try:
+            import shutil
+
+            stat = shutil.disk_usage("/")
+            available_gb = stat.free / (1024**3)
+
+            if available_gb >= min_gb:
+                return CheckResult(
+                    name="disk_space",
+                    status=CheckStatus.PASSED,
+                    message=f"Disk space OK: {available_gb:.1f} GB available",
+                )
+            else:
+                return CheckResult(
+                    name="disk_space",
+                    status=CheckStatus.WARNING,
+                    message=f"Low disk space: {available_gb:.1f} GB available (need {min_gb} GB)",
+                )
+
+        except Exception as e:
+            return CheckResult(
+                name="disk_space",
+                status=CheckStatus.WARNING,
+                message=f"Could not check disk space: {e}",
+            )
+
+    async def check_git_state(self) -> CheckResult:
+        """Check git working directory state."""
+        logger.info("Checking git state...")
+
+        try:
+            # Check if we're in a git repo
+            result = subprocess.run(
+                ["git", "rev-parse", "--git-dir"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+
+            if result.returncode != 0:
+                return CheckResult(
+                    name="git",
+                    status=CheckStatus.FAILED,
+                    message="Not in a git repository",
+                )
+
+            # Check current branch
+            result = subprocess.run(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+
+            if result.returncode == 0:
+                branch = result.stdout.strip()
+                return CheckResult(
+                    name="git",
+                    status=CheckStatus.PASSED,
+                    message=f"Git ready on branch: {branch}",
+                )
+            else:
+                return CheckResult(
+                    name="git",
+                    status=CheckStatus.FAILED,
+                    message="Could not determine current branch",
+                )
+
+        except Exception as e:
+            return CheckResult(
+                name="git",
+                status=CheckStatus.WARNING,
+                message=f"Git check failed: {e}",
+            )
+
+    async def check_cloud_credentials(self) -> CheckResult:
+        """Check cloud storage credentials."""
+        logger.info("Checking cloud credentials...")
+
+        # Note: Based on user feedback, we commit results to GitHub (via git)
+        # No S3/GCS needed, so this is just informational
+        has_aws = os.getenv("AWS_ACCESS_KEY_ID") is not None
+        has_gcs = os.getenv("GOOGLE_APPLICATION_CREDENTIALS") is not None
+        has_github = os.getenv("GITHUB_TOKEN") is not None
+
+        status_msg = "GitHub: "
+        status_msg += "✓" if has_github else "✗"
+        if has_aws:
+            status_msg += " AWS: ✓"
+        if has_gcs:
+            status_msg += " GCS: ✓"
+
+        if has_github:
+            return CheckResult(
+                name="credentials",
+                status=CheckStatus.PASSED,
+                message=status_msg,
+            )
+        else:
+            return CheckResult(
+                name="credentials",
+                status=CheckStatus.WARNING,
+                message=status_msg + " (GitHub token recommended for git operations)",
+            )
+
+    async def check_hf_token(self) -> CheckResult:
+        """Check that a HuggingFace token is available from a secure source.
+
+        Reads the token from (in priority order):
+          1. ``HF_TOKEN`` environment variable.
+          2. ``HUGGINGFACE_HUB_TOKEN`` environment variable (legacy name).
+          3. ``~/.huggingface/token`` (the HF CLI default location).
+
+        Never reads from a file in the repository root (e.g. ``hf_token.txt``).
+        If the token is found in the repo root file but not in any secure
+        location, emits a WARNING and suggests migrating to the env var.
+        """
+        logger.info("Checking HuggingFace token ...")
+
+        # Secure token sources
+        hf_token = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_HUB_TOKEN")
+        token_source = (
+            "env:HF_TOKEN"
+            if os.getenv("HF_TOKEN")
+            else ("env:HUGGINGFACE_HUB_TOKEN" if os.getenv("HUGGINGFACE_HUB_TOKEN") else None)
+        )
+
+        if not hf_token:
+            hf_cli_token_path = Path.home() / ".huggingface" / "token"
+            if hf_cli_token_path.exists():
+                try:
+                    hf_token = hf_cli_token_path.read_text().strip()
+                    token_source = str(hf_cli_token_path)
+                except OSError:
+                    pass
+
+        if hf_token:
+            return CheckResult(
+                name="hf_token",
+                status=CheckStatus.PASSED,
+                message=f"HuggingFace token found ({token_source})",
+            )
+
+        # Check if insecure repo-root file exists
+        insecure_file = Path("hf_token.txt")
+        if insecure_file.exists():
+            return CheckResult(
+                name="hf_token",
+                status=CheckStatus.WARNING,
+                message=(
+                    "hf_token.txt found in repo root (insecure). "
+                    "Set HF_TOKEN env var instead: export HF_TOKEN=$(cat hf_token.txt). "
+                    "Pipeline will still work but token may be exposed."
+                ),
+            )
+
+        return CheckResult(
+            name="hf_token",
+            status=CheckStatus.WARNING,
+            message=(
+                "No HuggingFace token found. "
+                "Set HF_TOKEN env var for authenticated downloads (5-10× faster). "
+                "Unauthenticated mode will be used — downloads may be rate-limited."
+            ),
+        )
+
+    async def run_all(self) -> PreflightReport:
+        """Run all preflight checks.
+
+        Returns:
+            PreflightReport with all results
+        """
+        report = PreflightReport(passed=False)
+
+        logger.info("=" * 70)
+        logger.info("PREFLIGHT CHECKS")
+        logger.info("=" * 70)
+
+        # CRITICAL: Import chain must work first
+        import_result = await self.check_import_chain()
+        report.checks["import_chain"] = import_result
+
+        if import_result.status == CheckStatus.FAILED:
+            logger.error("❌ CRITICAL: Import chain broken, cannot proceed")
+            report.errors.append(f"Import chain: {import_result.message}")
+            return report
+
+        # Other checks can run in parallel
+        results = await asyncio.gather(
+            self.check_constants_integrity(),
+            self.check_data_split_integrity(),
+            self.check_seed_consistency(),
+            self.check_gpu_availability(),
+            self.check_disk_space(),
+            self.check_git_state(),
+            self.check_cloud_credentials(),
+            self.check_hf_token(),
+        )
+
+        check_names = [
+            "constants",
+            "data_split",
+            "seed",
+            "gpu",
+            "disk_space",
+            "git",
+            "credentials",
+            "hf_token",
+        ]
+
+        for name, result in zip(check_names, results):
+            report.checks[name] = result
+
+            if result.status == CheckStatus.FAILED:
+                report.errors.append(f"{name}: {result.message}")
+            elif result.status == CheckStatus.WARNING:
+                report.warnings.append(f"{name}: {result.message}")
+
+        # Determine overall pass/fail
+        # Pass if no FAILED checks, warnings are OK
+        critical_failures = [
+            c
+            for c in report.checks.values()
+            if c.status == CheckStatus.FAILED and c.name in ["import_chain", "data_split"]
+        ]
+
+        report.passed = len(critical_failures) == 0
+
+        # Log summary
+        logger.info("=" * 70)
+        if report.passed:
+            logger.info("✓ PREFLIGHT CHECKS PASSED")
+            if report.warnings:
+                logger.warning(f"  Warnings: {len(report.warnings)}")
+        else:
+            logger.error("❌ PREFLIGHT CHECKS FAILED")
+            for error in report.errors:
+                logger.error(f"  - {error}")
+
+        logger.info("=" * 70)
+
+        return report
+
+
+def validate_pipeline() -> bool:
+    """Validate that the evaluation pipeline can load and initialize models.
+
+    Migrated from evaluate.py (now deleted) so this logic lives alongside
+    the other preflight validators.
+
+    Returns:
+        True if all checks pass, False otherwise.
+    """
+    print("\n🔍 Validating evaluation pipeline...\n")
+
+    checks = {
+        "constants": False,
+        "donut_evaluator": False,
+        "device": False,
+        "device_type": False,
+    }
+
+    try:
+        from constants import BASE_MODEL, FIELDS, MAX_LENGTH  # noqa: F401
+
+        print(f"  ✓ Constants loaded: {len(FIELDS)} fields, max_length={MAX_LENGTH}")
+        checks["constants"] = True
+    except Exception as e:
+        print(f"  ✗ Failed to load constants: {e}")
+
+    try:
+        from evaluation import DonutEvaluator  # noqa: F401
+
+        print("  ✓ DonutEvaluator class available")
+        checks["donut_evaluator"] = True
+    except Exception as e:
+        print(f"  ✗ Failed to load DonutEvaluator: {e}")
+
+    try:
+        import torch  # noqa: F401
+
+        print(f"  ✓ PyTorch loaded: {torch.__version__}")
+        checks["device"] = True
+    except Exception as e:
+        print(f"  ✗ Failed to load PyTorch: {e}")
+
+    try:
+        from evaluation import DEVICE  # noqa: F401
+
+        print(f"  ✓ Detected device: {DEVICE}")
+        checks["device_type"] = True
+    except Exception as e:
+        print(f"  ✗ Failed to detect device: {e}")
+
+    print(f"\n{'=' * 50}")
+    if all(checks.values()):
+        print("✅ Pipeline validation PASSED")
+        return True
+    else:
+        print("❌ Pipeline validation FAILED:")
+        for check, result in checks.items():
+            status = "✓" if result else "✗"
+            print(f"   {status} {check}")
+        return False
+
+
+# ── startup_diagnostics ──────────────────────────────────────────────────
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+EXPECTED_VENV_PREFIX = "/venv/main"
+
+
+def run(log_file: str = "startup.log", *, skip: bool = False) -> None:
+    """Run startup diagnostics: write log file and print compact summary.
+
+    Args:
+        log_file: Path for the written log (relative to CWD or absolute).
+        skip:     If True, silently return without doing anything. Used for
+                  CI/automated runs where the check adds no value.
+    """
+    if skip:
+        return
+
+    try:
+        _run_impl(log_file)
+    except Exception as exc:
+        # Startup diagnostics must NEVER crash the pipeline.
+        print(f"[startup] diagnostics failed: {exc}", file=sys.stderr)
+
+
+# ---------------------------------------------------------------------------
+# Implementation — internal helpers
+# ---------------------------------------------------------------------------
+
+
+def _run_impl(log_file: str) -> None:
+    """Collect diagnostics, write log, print summary."""
+    lines: list[str] = []  # log file lines
+
+    now_iso = datetime.now(tz=timezone.utc).isoformat()
+    _append(lines, f"# startup_diagnostics — {now_iso}")
+    _append(lines, "")
+
+    # -------------------------------------------------------------------
+    # 1. Python environment
+    # -------------------------------------------------------------------
+    executable = sys.executable
+    prefix = getattr(sys, "prefix", "?")
+    base_prefix = getattr(sys, "base_prefix", "?")
+    real_prefix = getattr(sys, "real_prefix", None)  # set by virtualenv
+
+    virtual_env = os.environ.get("VIRTUAL_ENV", "")
+    conda_prefix = os.environ.get("CONDA_PREFIX", "")
+    conda_env = os.environ.get("CONDA_DEFAULT_ENV", "")
+
+    in_venv_main = EXPECTED_VENV_PREFIX in executable
+
+    _append(lines, "## Python Environment")
+    _append(lines, f"  executable    : {executable}")
+    _append(lines, f"  sys.prefix    : {prefix}")
+    _append(lines, f"  sys.base_prefix: {base_prefix}")
+    if real_prefix:
+        _append(lines, f"  sys.real_prefix: {real_prefix}")
+    _append(lines, f"  VIRTUAL_ENV   : {virtual_env or '(not set)'}")
+    _append(lines, f"  CONDA_PREFIX  : {conda_prefix or '(not set)'}")
+    _append(lines, f"  CONDA_DEFAULT_ENV: {conda_env or '(not set)'}")
+    _append(lines, f"  in /venv/main : {in_venv_main}")
+    _append(lines, "")
+
+    # Detect prefix mismatch
+    prefix_mismatch = False
+    active_prefix = virtual_env or conda_prefix
+    if active_prefix and active_prefix not in executable and active_prefix not in prefix:
+        prefix_mismatch = True
+        _append(lines, f"  WARNING: sys.executable is NOT under activated prefix ({active_prefix})")
+        _append(lines, "  WARNING: pip installs will go to the wrong location!")
+        _append(lines, "")
+
+    # -------------------------------------------------------------------
+    # 2. nvidia-smi — total/free VRAM per GPU
+    # -------------------------------------------------------------------
+    _append(lines, "## GPU VRAM (nvidia-smi)")
+    gpu_summary, zombie_pids = _collect_gpu_info(lines)
+
+    # -------------------------------------------------------------------
+    # 3. pip show — package install locations
+    # -------------------------------------------------------------------
+    _append(lines, "## Package Locations (pip show)")
+    _collect_pip_show(lines)
+
+    # -------------------------------------------------------------------
+    # 4. Optional packages
+    # -------------------------------------------------------------------
+    _append(lines, "## Optional Packages")
+    try:
+        import flash_attn
+
+        _append(lines, f"  flash-attn : {getattr(flash_attn, '__version__', 'unknown')}")
+    except Exception as e:
+        _append(lines, f"  flash-attn : NOT AVAILABLE ({type(e).__name__}: {e})")
+    _append(lines, "")
+
+    # -------------------------------------------------------------------
+    # Write log file
+    # -------------------------------------------------------------------
+    try:
+        log_path = Path(log_file)
+        log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    except Exception as exc:
+        # Can't write log; still print summary
+        print(f"[startup] WARNING: could not write {log_file}: {exc}")
+
+    # -------------------------------------------------------------------
+    # Print compact summary to stdout
+    # -------------------------------------------------------------------
+    _print_summary(
+        executable=executable,
+        prefix=prefix,
+        active_prefix=active_prefix,
+        prefix_mismatch=prefix_mismatch,
+        in_venv_main=in_venv_main,
+        gpu_summary=gpu_summary,
+        zombie_pids=zombie_pids,
+    )
+
+
+# ---------------------------------------------------------------------------
+# GPU helpers
+# ---------------------------------------------------------------------------
+
+
+def _collect_gpu_info(lines: list[str]) -> tuple[str, list[tuple[int, int]]]:
+    """Run nvidia-smi; parse VRAM and zombie processes.
+
+    Returns:
+        gpu_summary: Human-readable VRAM string for the compact summary.
+        zombie_pids: List of (pid, used_mb) tuples for processes on GPU.
+    """
+    zombie_pids: list[tuple[int, int]] = []
+    gpu_summary = "N/A (nvidia-smi not available)"
+
+    # --- Main query: memory per GPU ---
+    try:
+        result = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=index,name,memory.used,memory.total,memory.free",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        if result.returncode == 0:
+            gpu_lines = [ln.strip() for ln in result.stdout.strip().splitlines() if ln.strip()]
+            if gpu_lines:
+                summaries = []
+                for gpu_line in gpu_lines:
+                    parts = [p.strip() for p in gpu_line.split(",")]
+                    if len(parts) >= 5:
+                        idx, name, used_mb, total_mb, free_mb = parts[:5]
+                        try:
+                            used_gb = int(used_mb) / 1024
+                            total_gb = int(total_mb) / 1024
+                            summaries.append(
+                                f"GPU {idx} ({name}): {used_gb:.1f}/{total_gb:.1f} GB used"
+                            )
+                        except ValueError:
+                            summaries.append(gpu_line)
+                    else:
+                        summaries.append(gpu_line)
+                    _append(lines, f"  {gpu_line}")
+                gpu_summary = "; ".join(summaries)
+            else:
+                _append(lines, "  (no GPUs detected)")
+                gpu_summary = "no GPUs detected"
+        else:
+            _append(lines, f"  nvidia-smi exited with code {result.returncode}")
+            if result.stderr:
+                _append(lines, f"  stderr: {result.stderr.strip()[:200]}")
+    except FileNotFoundError:
+        _append(lines, "  nvidia-smi not found (CPU-only environment)")
+        gpu_summary = "N/A (nvidia-smi not found)"
+    except subprocess.TimeoutExpired:
+        _append(lines, "  nvidia-smi timed out")
+    except Exception as exc:
+        _append(lines, f"  error running nvidia-smi: {exc}")
+
+    _append(lines, "")
+
+    # --- Per-process query: find zombies ---
+    _append(lines, "## GPU Compute Processes (nvidia-smi --query-compute-apps)")
+    try:
+        proc_result = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-compute-apps=pid,used_memory,name",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        if proc_result.returncode == 0:
+            proc_lines = [
+                ln.strip() for ln in proc_result.stdout.strip().splitlines() if ln.strip()
+            ]
+            if proc_lines:
+                for pline in proc_lines:
+                    _append(lines, f"  {pline}")
+                    parts = [p.strip() for p in pline.split(",")]
+                    if len(parts) >= 2:
+                        try:
+                            pid = int(parts[0])
+                            used_mb = int(parts[1])
+                            zombie_pids.append((pid, used_mb))
+                        except ValueError:
+                            pass
+            else:
+                _append(lines, "  (no compute processes)")
+        else:
+            _append(lines, "  (query-compute-apps not supported or no processes)")
+    except (FileNotFoundError, subprocess.TimeoutExpired, Exception) as exc:
+        _append(lines, f"  error: {exc}")
+
+    _append(lines, "")
+    return gpu_summary, zombie_pids
+
+
+# ---------------------------------------------------------------------------
+# pip show helper
+# ---------------------------------------------------------------------------
+
+_PIP_SHOW_PACKAGES = ["transformers", "datasets", "accelerate"]
+
+
+def _collect_pip_show(lines: list[str]) -> None:
+    """Run `pip show` for critical packages and record install locations."""
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "show"] + _PIP_SHOW_PACKAGES,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode == 0 and result.stdout:
+            for pip_line in result.stdout.splitlines():
+                _append(lines, f"  {pip_line}")
+        else:
+            _append(lines, "  (pip show failed or packages not installed)")
+            if result.stderr:
+                _append(lines, f"  stderr: {result.stderr.strip()[:200]}")
+    except Exception as exc:
+        _append(lines, f"  error running pip show: {exc}")
+    _append(lines, "")
+
+
+# ---------------------------------------------------------------------------
+# Summary printer
+# ---------------------------------------------------------------------------
+
+
+def _print_summary(
+    *,
+    executable: str,
+    prefix: str,
+    active_prefix: str,
+    prefix_mismatch: bool,
+    in_venv_main: bool,
+    gpu_summary: str,
+    zombie_pids: list[tuple[int, int]],
+) -> None:
+    """Print a compact startup summary to stdout."""
+    print(f"[startup] Python  : {executable}")
+
+    if prefix_mismatch:
+        print(
+            f"[startup] WARNING : sys.executable NOT under {active_prefix!r} — "
+            "pip will install to wrong prefix!"
+        )
+    elif active_prefix:
+        match_sym = "✓" if (active_prefix in executable or active_prefix in prefix) else "~"
+        print(f"[startup] Prefix  : {prefix}  ← {active_prefix} {match_sym}")
+    else:
+        print(f"[startup] Prefix  : {prefix}")
+
+    # GPU line
+    if zombie_pids:
+        biggest_pid, biggest_mb = max(zombie_pids, key=lambda t: t[1])
+        biggest_gb = biggest_mb / 1024
+        all_used_gb = sum(mb for _, mb in zombie_pids) / 1024
+        print(
+            f"[startup] GPU VRAM: {all_used_gb:.1f} GB used — "
+            f"ZOMBIE PROCESS DETECTED (pid {biggest_pid}, {biggest_gb:.1f} GB)"
+        )
+        print(f"[startup] FATAL   : Kill zombie before running: kill {biggest_pid}")
+    else:
+        print(f"[startup] GPU VRAM: {gpu_summary}")
+        print("[startup] Zombies : none")
+
+
+# ---------------------------------------------------------------------------
+# Utility
+# ---------------------------------------------------------------------------
+
+
+def _append(lines: list[str], text: str) -> None:
+    """Append a line to the log accumulator."""
+    lines.append(text)
+
+
+# ---------------------------------------------------------------------------
+# Allow running standalone for debugging
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    run()

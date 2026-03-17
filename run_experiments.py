@@ -210,7 +210,7 @@ class ExperimentConfig:
     seed: int = SEED
     early_stopping_patience: int = 5  # Per CLAUDE.md §3: patience=5 for small datasets (<1000 samples); patience=3 fires too early when val loss plateaus then resumes improving.
     base_model: str = BASE_MODEL
-    warmup_steps: int = 40  # Fix: 500 exceeded total steps for small datasets (~312 for Exp 1); 40 is safe across all 8 experiments
+    warmup_steps: int = 500  # train.py caps this to ≤10% of total opt-steps (min 10), so 500 is safe for all dataset sizes
     weight_decay: float = 0.01
     max_length: int = MAX_LENGTH
     gradient_accumulation_steps: int = 2

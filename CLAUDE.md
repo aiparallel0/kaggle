@@ -126,16 +126,19 @@ All encoder and decoder parameters are updated during fine-tuning. This is appro
 |---|---|
 | Optimizer | AdamW (`weight_decay=0.01`) |
 | Learning rate | `5e-5` encoder / `1e-4` decoder (layerwise LR) |
-| LR scheduler | Cosine with 500 warm-up steps |
-| Epochs | 10 (default, configurable via `ExperimentConfig`) |
+| LR scheduler | Cosine, warmup = `min(500, max(10, total_steps // 10))` — adaptive cap in `train.py` |
+| Label smoothing | `0.1` — reduces overconfident predictions on rare SROIE tokens |
+| Epochs | 10 (Exps 1–4), 15 (Exps 5–8, configurable via `ExperimentConfig`) |
 | Batch size | 8 per GPU, gradient accumulation = 2 → effective batch 16 |
 | Max decode length | `MAX_LENGTH = 768` tokens |
-| Mixed precision | `fp16` via Accelerate (falls back to `fp32` on CPU) |
-| Early stopping | Patience = 3 on val loss |
+| Mixed precision | `bf16` on Ampere/Ada, `fp16` fallback, `fp32` on CPU |
+| Early stopping | Patience = 5 on val loss |
 | Seed | `SEED = 42` (set globally at pipeline start) |
 
-The optimal settings (bs=8, epochs=10) give Global F1 ≈ 0.871 on Exp 1 (SROIE baseline).
-Use `benchmark_compare.py` to regenerate loss curves and F1 comparison plots.
+> **Warmup note:** `ExperimentConfig.warmup_steps = 500`. `DonutTrainer.train()` automatically caps this to ≤10% of total optimizer steps (minimum 10) so it is safe for all dataset sizes (Exp 1 with ~320 total steps → effective warmup ≈ 32).
+
+The optimal settings give Global F1 ≈ 0.8503 on Exp 1 (SROIE baseline), 0.8982 on Exp 6 (BEST).
+Use `python reporting.py` to regenerate loss curves and F1 comparison plots.
 
 ---
 
@@ -198,7 +201,7 @@ Both must exit with code `0`. If either fails, fix the core import chain **befor
 | **`RuntimeError: CRITICAL: decoder.lm_head.weight missing`** | `LmHeadCloneCallback` failed or was removed | Re-register callback in `DonutTrainer.train()`; do NOT remove the check |
 | **`Self-test FAILED: model produced empty dict`** | `token2json` returned list; self-test treated list as empty | `_self_test()` merges list before `_unwrap_prediction()` (Pattern 5 below) |
 | **Experiment results inconsistent across runs** | Mutable global `EXPERIMENTS` dict mutated by `run_experiment()` | Use `dataclasses.replace()` — never assign to `EXPERIMENTS[N].field` |
-| **`ruff check .` fails in CI** | pre-commit hook not installed; `lint.sh` not run before push | Run `./lint.sh` before every `git commit` (see § 10 Mandatory Lint) |
+| **`ruff check .` fails in CI** | pre-commit hook not installed; `lint.sh` not run before push | Run `.github/lint.sh` before every `git commit` (see § 10 Mandatory Lint) |
 | **`FATAL: The following packages could not be installed: editdistance`** | `_CRITICAL_INSTALL_PACKAGES` still contains `editdistance` which was removed from `requirements.txt` (replaced with inline `_edit_distance()`) | Remove `editdistance` and `pandas` from both `_CRITICAL_INSTALL_PACKAGES` and `_CRITICAL_VERIFY_PACKAGES` in `run_all.py` |
 
 ### Pattern 1: Bracket & Comma Errors
@@ -259,37 +262,34 @@ After any `pip install --upgrade` or dependency version bump, check these 5 thin
 
 ```
 kaggle/
-├── constants.py              # SINGLE SOURCE OF TRUTH for all shared constants
-├── dataset_loaders.py        # ABC-based download & normalization for all datasets
+├── constants.py              # SINGLE SOURCE OF TRUTH for all shared constants + logging utils
+├── data_pipeline.py          # Merged: dataset_loaders + dataset_normalizer + preprocess_seller_split
+├── evaluation.py             # Merged: donut_evaluator + evaluate_models
+├── reporting.py              # Merged: benchmark_compare + plot_convergence + inject_results
+├── validation.py             # Merged: validators + preflight_checks + startup_diagnostics
+├── cloud_orchestration.py    # Merged: pipeline_types + pipeline_critic + dag_scheduler + cloud_pipeline
+├── sweep.py                  # Merged: hparam_search + multi_seed_runner
+├── experiment_config.py      # Merged: experiment_config_loader + control_suite
+├── resource_manager.py       # Merged: memory_manager + resource_optimizer
+│
 ├── train.py                  # DonutTrainer OOP wrapper + LiveDashboardCallback (inlined)
-├── donut_evaluator.py        # DonutEvaluator OOP wrapper (computes F1, NED)
 ├── run_experiments.py        # 8-experiment DONUT orchestrator (ExperimentConfig)
 ├── run_all.py                # MAIN ENTRY POINT: full dual-architecture pipeline (128 KB)
-├── inject_results.py         # PaperInjector: generates LaTeX from results JSON + paper_diff (inlined)
-├── preflight_checks.py       # Pre-flight validators + validate_pipeline()
-├── startup_diagnostics.py    # Stdlib-only startup checks (Python prefix, GPU zombie detection)
-├── cloud_pipeline.py         # Cloud mode orchestrator + CloudConfig + GitController + TestRunner (inlined)
-├── validators.py             # All validator classes (BugPatternDetector, ImportChainChecker, etc.)
-├── pipeline_types.py         # All typed dataclasses + exceptions for pipeline results
-├── memory_manager.py         # Centralized RAM/GPU memory authority
-├── resource_optimizer.py     # VRAM-aware hyperparameter scaling
-├── benchmark_compare.py      # F1/loss comparison figures and tables
-├── control_suite.py          # Ablation controls, DA configs, TrOCRControlConfig
-├── dag_scheduler.py          # Directed-acyclic-graph stage scheduler
-├── dataset_normalizer.py     # Cross-dataset annotation normalizer
-├── experiment_config_loader.py  # YAML-based experiment config loader
-├── hparam_search.py          # Hyperparameter search orchestrator
-├── logging_utils.py          # Shared logging helpers
-├── multi_seed_runner.py      # Multi-seed experiment runner
-├── pipeline_critic.py        # Automated pipeline code review tool
-├── plot_convergence.py       # Loss-curve convergence plotter
-├── preprocess_seller_split.py   # Seller-aware train/val/test split
-├── requirements.txt          # Python dependencies with version pins
-├── pyproject.toml            # Package metadata, entry points, ruff/pytest config
-│
 ├── train_trocr_yolo.py       # TrOCR+YOLO training (also called by run_all.py)
-├── evaluate_models.py        # Alternative: unified evaluation
 ├── dataset_preparation.py    # Alternative standalone: dataset prep
+│
+├── dataset_loaders.py        # Re-export shim → data_pipeline.py
+├── donut_evaluator.py        # Re-export shim → evaluation.py
+├── inject_results.py         # Re-export shim → reporting.py (run_all.py late-imports)
+├── benchmark_compare.py      # Re-export shim → reporting.py (run_all.py late-imports)
+├── dag_scheduler.py          # Re-export shim → cloud_orchestration.py (run_all.py late-imports)
+├── startup_diagnostics.py    # Re-export shim → validation.py (run_all.py late-imports)
+├── memory_manager.py         # Re-export shim → resource_manager.py
+├── resource_optimizer.py     # Re-export shim → resource_manager.py
+├── control_suite.py          # Re-export shim → experiment_config.py
+│
+├── requirements.txt          # Python dependencies with version pins (2 required: torch, transformers)
+├── pyproject.toml            # Package metadata, entry points, ruff/pytest config
 │
 ├── paper/                    # LaTeX source files
 │   ├── paper.tex             # Main paper template with \VAR{} placeholders
@@ -310,12 +310,12 @@ kaggle/
 **Canonical entry point:** `run_all.py`. The standalone scripts are a simplified alternative workflow for standalone use only.
 
 **Consolidation notes:**
-- `live_dashboard.py` → inlined into `train.py` (LiveDashboardCallback and _EpochRow classes)
-- `paper_diff.py` → inlined into `inject_results.py` (compute_diff, print_diff_table, run_paper_diff)
-- `test_runner.py` → inlined into `cloud_pipeline.py` (TestRunner, RuffReport, PytestReport, etc.)
-- `validators/` directory → merged into single `validators.py`
-- `pipeline_types/` directory → merged into single `pipeline_types.py`
-- `tests/test_*.py` (20 files) → merged into single `tests/test_all.py`
+- `live_dashboard.py` → inlined into `train.py` as `LiveDashboardCallback` + `_EpochRow` (lines ~2990–3110 in train.py). Uses `rich.live.Live` for an in-place updating lab panel. Set `DISABLE_LIVE_DASHBOARD=1` to suppress.
+- `paper_diff.py` → inlined into `reporting.py` (compute_diff, print_diff_table, run_paper_diff). Re-exported via `inject_results.py` shim.
+- `test_runner.py` → inlined into `cloud_orchestration.py` (TestRunner, RuffReport, PytestReport, etc.). Was previously called `cloud_pipeline.py` before consolidation.
+- `validators/` directory → merged into `validation.py`
+- `pipeline_types/` directory → merged into `cloud_orchestration.py` (not into a `pipeline_types.py` file — no such file exists)
+- `tests/test_*.py` (20 files) → merged into `tests/test_all.py`
 - Deleted dead code: `run_experiments_v2.py`, `train_donut.py`, `results_browser.py`, `tui_console.py`, `quick_results_generator.py`
 
 ---
@@ -355,7 +355,7 @@ from constants import FIELDS, IMAGE_EXTS, MAX_LENGTH, BASE_MODEL, SEED, NEW_TOKE
 | 5 | SROIE + WR (2× SROIE) | 1,886 | **0.8514** | Marginal gain with oversampling |
 | **6** | **SROIE + Invoices (2× SROIE)** | **1,332** | **0.8982 ← BEST** | Early stop ep.8, 39.6 min |
 | 7 | SROIE + All (2× SROIE) | 2,218 | **0.8503** | Matches baseline (competing signals cancel) |
-| 8 | SROIE + WR + Invoices (3× SROIE) | ~3,940 | **OOM** | OOM at 2560×1920; fixed in resource_optimizer.py |
+| 8 | SROIE + WR + Invoices (3× SROIE) | ~3,940 | **OOM** | OOM at 2560×1920; fixed in resource_manager.py |
 
 **Key insight:** SROIE oversampling (2×) is a prerequisite for auxiliary data to help. Without it, Exps 2–4 all score at or below the baseline.
 
@@ -383,11 +383,28 @@ from constants import FIELDS, IMAGE_EXTS, MAX_LENGTH, BASE_MODEL, SEED, NEW_TOKE
 
 **HF Token:** Place your token in `hf_token.txt` (single line). Gitignored — never commit. Enables parallel accelerated downloads.
 
+**Dataset version pinning:** If a dataset repo updates and breaks the pipeline, pin to a known-good commit via env vars:
+```bash
+export HF_FUNSD_REVISION=<commit-sha>       # nielsr/funsd
+export HF_INVOICES_REVISION=<commit-sha>    # katanaml-org/invoices-donut-data-v1
+export HF_CORD_REVISION=<commit-sha>        # naver-clova-ix/cord-v2
+```
+Delete the dataset's `.done` marker file to force re-download with the new revision.
+
 ---
 
 ## 10. Development Workflows
 
 ### Full Pipeline (recommended)
+
+**requirements.txt is now minimal (2 packages: torch + transformers).**
+All other dependencies are inlined:
+- `datasets` → `_hf_download_dataset_inline()` in `dataset_loaders.py`
+- `ultralytics` → `_YOLO_CLS` in `train_trocr_yolo.py`
+- `accelerate` → never used; `torch.cuda.amp.GradScaler` directly
+- `matplotlib` → `_svg_bar_chart/_svg_radar_chart/...` in `benchmark_compare.py`
+- `pytest` → `_Pytest` stub in `tests/test_all.py` (also runs under `python -m unittest discover`)
+- `Pillow` → `_load_png/_load_bmp/_load_jpeg_pure` in `train.py`
 
 ```bash
 pip install -r requirements.txt
@@ -415,6 +432,41 @@ python run_experiments.py --all --force      # force re-run
 python inject_results.py --all --paper paper/paper.tex --output paper/paper_filled.tex
 ```
 
+### Paper PDF Compilation
+
+`stage_paper()` in `run_all.py` automatically compiles both filled `.tex` files to PDF if a LaTeX compiler is found:
+- Tries `pdflatex` → `latexmk` → `xelatex` in order
+- Runs each compiler **twice** to resolve `\ref` / `\cite` cross-references
+- Outputs: `paper/paper_filled.pdf` and `paper/presentation_filled.pdf`
+- Falls back gracefully with an install hint if no compiler is present
+
+Install a compiler: `apt-get install texlive-latex-base texlive-fonts-recommended` (Linux)
+or download [MiKTeX](https://miktex.org/) (Windows/macOS).
+
+```python
+# Programmatic usage from Python:
+from reporting import compile_pdf
+pdf = compile_pdf("paper/paper_filled.tex")   # returns Path or None
+```
+
+### Console Lab (LiveDashboardCallback)
+
+When `rich` is installed, a persistent in-place table is rendered during training:
+
+```
+┌────────────────────────────────────────────────┐
+│  Exp 6 — Training [8/15]                       │
+├────┬──────────┬──────────┬────────────┬────────┤
+│ Ep │ Train ↓  │ Val ↓    │  Best F1 ↑ │  Δ F1  │
+├────┼──────────┼──────────┼────────────┼────────┤
+│  1 │   2.1234 │   1.8901 │     0.4120 │     —  │
+│  2 │   1.4210 │   1.2345 │     0.6310 │+0.2190 │
+│  8 │   0.3891 │   0.4102 │     0.8982 │+0.0120 │
+└────┴──────────┴──────────┴────────────┴────────┘
+```
+
+The table updates in-place after every epoch. Disable with `DISABLE_LIVE_DASHBOARD=1`.
+
 ### Alternative Standalone Workflow
 
 ```bash
@@ -438,7 +490,7 @@ CI runs `ruff check .` + `ruff format --check .` — both fail on any unformatte
 **Always run before `git commit`:**
 
 ```bash
-./lint.sh          # auto-fixes + formats everything (preferred)
+.github/lint.sh          # auto-fixes + formats everything (preferred)
 # or equivalently:
 ruff check --fix . && ruff format .
 ```
@@ -455,7 +507,7 @@ pip install pre-commit && pre-commit install
 |---|---|---|---|
 | Import not at top of file | E402 | Intentional late import | Add `# noqa: E402, I001` (see Pattern 7) |
 | Unused import | F401 | Removed dependency still imported | Delete the import line |
-| Import order wrong | I001 | Added import in wrong block | Run `./lint.sh` |
+| Import order wrong | I001 | Added import in wrong block | Run `.github/lint.sh` |
 | f-string without placeholder | F541 | `f"plain string"` | Remove `f` prefix |
 | Comparison to None | E711 | `x == None` | Use `x is None` |
 | Old-style type hint | UP006/UP007 | `Optional[X]`, `List[X]` | Use `X \| None`, `list[X]` |
@@ -780,10 +832,10 @@ config = dataclasses.replace(EXPERIMENTS[exp_id], batch_size=4)
 
 ### GP-2 — Always Validate Optimizer Step Count Before Training
 
-After any resource-optimizer override, call `validate_training_config()` from `resource_optimizer.py`:
+After any resource-optimizer override, call `validate_training_config()` from `resource_manager.py`:
 
 ```python
-from resource_optimizer import validate_training_config
+from resource_manager import validate_training_config
 validate_training_config(
     batch_size=config.batch_size,
     gradient_accumulation_steps=config.gradient_accumulation_steps,
@@ -829,7 +881,7 @@ if _decoded != "<s_sroie>":
 ## § 9. Memory Management Rules (Added 2026-03-08)
 
 ### The Authority Module
-All memory budget decisions go through `memory_manager.py`. Do not hardcode per-sample MB estimates anywhere else. Do not add `* 3` or `* 14.2` or `* 56.6` constants to any file.
+All memory budget decisions go through `resource_manager.py`. Do not hardcode per-sample MB estimates anywhere else. Do not add `* 3` or `* 14.2` or `* 56.6` constants to any file.
 
 ### RAM Memory Map (at 1280×960 — the correct DONUT native resolution)
 
@@ -838,11 +890,11 @@ All memory budget decisions go through `memory_manager.py`. Do not hardcode per-
 | DONUT model weights | GPU VRAM | ~800 MB | After `del model` + `torch.cuda.empty_cache()` |
 | AdamW optimizer (m+v moments) | GPU VRAM | ~1,600 MB | After `del trainer` |
 | Gradient activations | GPU VRAM | ~4,000 MB at batch=8 | After each backward pass |
-| DataLoader prefetch buffers | System RAM (worker procs) | ~230 MB × n_workers | After `memory_manager.shutdown_dataloader_workers(trainer)` |
+| DataLoader prefetch buffers | System RAM (worker procs) | ~230 MB × n_workers | After `resource_manager.shutdown_dataloader_workers(trainer)` |
 | PIL image cache (`_image_cache`) | System RAM | 3.516 MB × n_samples | After `train_ds.clear_caches()` |
 | Float32 pixel cache (`_pixel_cache`) | System RAM | 14.064 MB × n_samples | After `train_ds.clear_caches()` |
 | Label tensor cache (`_label_cache`) | System RAM | ~0.003 MB × n_samples | After `train_ds.clear_caches()` |
-| HF Arrow mmaps (FUNSD/InvoicesDonut) | System RAM | 50–200 MB | After `memory_manager.release_hf_dataset(ds)` + `flush_hf_arrow_cache()` |
+| HF Arrow mmaps (FUNSD/InvoicesDonut) | System RAM | 50–200 MB | After `resource_manager.release_hf_dataset(ds)` + `flush_hf_arrow_cache()` |
 | Processor (tokenizer + image processor) | System RAM | ~100 MB | After `del processor` |
 | Base model pre-load copy | System RAM | ~800 MB | After all experiments + `del _base_model` |
 
@@ -850,7 +902,7 @@ All memory budget decisions go through `memory_manager.py`. Do not hardcode per-
 
 ```python
 # 1. Shutdown DataLoader workers FIRST (before del trainer)
-memory_manager.shutdown_dataloader_workers(trainer)
+resource_manager.shutdown_dataloader_workers(trainer)
 # 2. Capture log history (plain list, safe to keep)
 log_history = result.log_history
 # 3. Clear dataset caches in-place (empties dicts without waiting for GC)
@@ -872,9 +924,9 @@ _gpu_cleanup()   # gc.collect() + torch.cuda.empty_cache()
 The model was pretrained at 1280×960. Higher resolutions:
 - Do NOT improve quality (out-of-distribution for pretrained weights)
 - Multiply RAM per sample by `(H × W) / (1280 × 960)` — at 2560×1920 this is 4×
-- All threshold constants in `resource_optimizer.py` (`_REF_IMAGE_SIZE`, `_VRAM_PER_SAMPLE_AT_REF_GB`) are calibrated to 1280×960
+- All threshold constants in `resource_manager.py` (`_REF_IMAGE_SIZE`, `_VRAM_PER_SAMPLE_AT_REF_GB`) are calibrated to 1280×960
 
-If you want to experiment with resolution: update `_REF_IMAGE_SIZE` and `_VRAM_PER_SAMPLE_AT_REF_GB` in `resource_optimizer.py` to match, so all threshold arithmetic stays correct.
+If you want to experiment with resolution: update `_REF_IMAGE_SIZE` and `_VRAM_PER_SAMPLE_AT_REF_GB` in `resource_manager.py` to match, so all threshold arithmetic stays correct.
 
 ### Val Dataset Rule (2026-03-08 fix)
 
@@ -900,13 +952,13 @@ val_ds = MultiDataset(val_samples, processor, max_length=config.max_length)
 
 ### `_RAM_SAFETY_FRACTION` Rule (2026-03-08 fix)
 
-`_RAM_SAFETY_FRACTION` in `memory_manager.py` is **0.06** (6%), not 0.15.
+`_RAM_SAFETY_FRACTION` in `resource_manager.py` is **0.06** (6%), not 0.15.
 
 The previous 15% was calibrated for a single allocation. Across sequential train→val allocations within the same experiment, the effective headroom needed is much higher. At 6%:
 - Exp 6 train PIL check: 4683 MB vs 6% × 37637 MB = **2258 MB threshold → SKIP** (belt+suspenders catch that blocks the drain before the val check runs)
 - 500-sample baseline: 1758 MB vs 6% × 65536 MB = 3932 MB → still ALLOW on 64 GB RAM
 
-**Never raise `_RAM_SAFETY_FRACTION` above 0.10.** The regression test in `tests/test_memory_manager.py` enforces this.
+**Never raise `_RAM_SAFETY_FRACTION` above 0.10.** The regression test in `tests/test_resource_manager.py` enforces this.
 
 ### Adding a New Dataset
 
@@ -914,9 +966,9 @@ The previous 15% was calibrated for a single allocation. Across sequential train
 2. Normalize annotations to SROIE schema: `{"company": "", "date": "", "address": "", "total": ""}`
 3. Add entry to `datasets_registry.json` in repository root
 4. Add loader class to `dataset_loaders.py` following `BaseDatasetLoader` ABC
-5. If loader uses `load_from_disk()` or `load_dataset()`: call `memory_manager.release_hf_dataset(ds)` + `memory_manager.flush_hf_arrow_cache()` after sample extraction
+5. If loader uses `load_from_disk()` or `load_dataset()`: call `resource_manager.release_hf_dataset(ds)` + `resource_manager.flush_hf_arrow_cache()` after sample extraction
 6. Add dataset name to relevant `ExperimentConfig.datasets` lists in `run_experiments.py`
-7. No changes to `memory_manager.py`, `train.py`, `constants.py`, or `resource_optimizer.py`
+7. No changes to `resource_manager.py`, `train.py`, `constants.py`, or `resource_manager.py`
 
 ### Why 20 Previous PRs Failed
 

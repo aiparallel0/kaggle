@@ -125,9 +125,54 @@ except ImportError:
 
 
 # Project imports (do not require torch/transformers)
-import memory_manager as mm
-from constants import BASE_MODEL, EMPTY_GT, FIELDS, IMAGE_EXTS, MAX_LENGTH, NEW_TOKENS, SEED
-from control_suite import (
+import resource_manager as mm
+from cloud_orchestration import (
+    AggregatedResults,
+    ArchitectureAudit,
+    BenchmarkNarrowness,
+    BugPattern,
+    BugReport,
+    CheckResult,
+    CheckStatus,
+    CritiqueFinding,
+    CritiqueReport,
+    DataSplitValidationReport,
+    EpochConfoundAudit,
+    ExperimentMetrics,
+    ExperimentResult,
+    FindingSeverity,
+    MultipleTestingAudit,
+    PipelineCritic,
+    PipelineResult,
+    PretrainingBiasAudit,
+    SeverityLevel,
+    StatisticalPowerAudit,
+    ValidationReport,
+    _family_wise_error_rate,
+    _norm_ppf,
+    _two_proportion_mdd,
+)
+from constants import (
+    BASE_MODEL,
+    EMPTY_GT,
+    FIELDS,
+    IMAGE_EXTS,
+    MAX_LENGTH,
+    NEW_TOKENS,
+    SEED,
+    DeduplicatingHandler,
+    suppress_noisy_loggers,
+)
+from data_pipeline import (
+    DatasetLoadError,
+    DatasetNormalizer,
+    _ensure_dir,
+    _validate_sample_schema,
+    _validate_samples_nonempty,
+    extract_address_from_seller,
+    normalise_samples,
+)
+from experiment_config import (
     CONTROL_SUITE,
     ControlSuite,
     DonutControlConfig,
@@ -136,44 +181,8 @@ from control_suite import (
     get_augmentation_transforms,
     validate_sroie_oversample,
 )
-from dataset_loaders import (
-    DatasetLoadError,
-    _ensure_dir,
-    _validate_sample_schema,
-    _validate_samples_nonempty,
-)
-from dataset_normalizer import DatasetNormalizer, extract_address_from_seller, normalise_samples
-from inject_results import EXP_NAMES, LEADERBOARD, PaperInjector, UnresolvedVarError, _safe
-from logging_utils import DeduplicatingHandler, suppress_noisy_loggers
-from pipeline_critic import (
-    ArchitectureAudit,
-    BenchmarkNarrowness,
-    EpochConfoundAudit,
-    MultipleTestingAudit,
-    PipelineCritic,
-    PretrainingBiasAudit,
-    StatisticalPowerAudit,
-    _family_wise_error_rate,
-    _norm_ppf,
-    _two_proportion_mdd,
-)
-from pipeline_types import (
-    AggregatedResults,
-    BugPattern,
-    BugReport,
-    CheckResult,
-    CheckStatus,
-    CritiqueFinding,
-    CritiqueReport,
-    DataSplitValidationReport,
-    ExperimentMetrics,
-    ExperimentResult,
-    FindingSeverity,
-    PipelineResult,
-    SeverityLevel,
-    ValidationReport,
-)
-from resource_optimizer import (
+from reporting import EXP_NAMES, LEADERBOARD, PaperInjector, UnresolvedVarError, _safe
+from resource_manager import (
     ResourceOptimizedConfig,
     optimize_hyperparams,
     validate_training_config,
@@ -2602,8 +2611,8 @@ class TestDonutEvaluatorModelPath(unittest.TestCase):
 
     def test_donut_evaluator_constructor_has_model_path_param(self):
         """DonutEvaluator.__init__ must accept model_path (not model_dir)."""
-        tree = _parse("donut_evaluator.py")
-        src = _source("donut_evaluator.py")
+        tree = _parse("evaluation.py")
+        src = _source("evaluation.py")
         for node in ast.walk(tree):
             if isinstance(node, ast.ClassDef) and node.name == "DonutEvaluator":
                 for item in ast.walk(node):
@@ -2734,13 +2743,13 @@ class TestLoggingUtilsImportable(unittest.TestCase):
     def test_suppress_noisy_loggers_callable(self):
         import logging
 
-        from logging_utils import suppress_noisy_loggers
+        from constants import suppress_noisy_loggers
 
         # Should not raise
         suppress_noisy_loggers(logging.WARNING)
 
     def test_noisy_logger_list_contains_pil(self):
-        from logging_utils import _NOISY_THIRD_PARTY_LOGGERS
+        from constants import _NOISY_THIRD_PARTY_LOGGERS
 
         assert "PIL" in _NOISY_THIRD_PARTY_LOGGERS
         assert "PIL.PngImagePlugin" in _NOISY_THIRD_PARTY_LOGGERS
@@ -2782,18 +2791,18 @@ class TestImportChain(unittest.TestCase):
 
     def test_pipeline_config_importable(self):
         # PipelineMode merged into cloud_pipeline.py
-        from cloud_pipeline import PipelineMode
+        from cloud_orchestration import PipelineMode
 
         assert PipelineMode.AUTO.value == "auto"
 
     def test_retro_ui_importable(self):
         # RetroUIFormatter moved to cloud_pipeline.py
-        from cloud_pipeline import RetroUIFormatter
+        from cloud_orchestration import RetroUIFormatter
 
         assert RetroUIFormatter.bold("x")
 
     def test_test_runner_importable(self):
-        from cloud_pipeline import TestRunner
+        from cloud_orchestration import TestRunner
 
         assert hasattr(TestRunner, "run_all_checks")
 
@@ -2806,14 +2815,14 @@ class TestImportChain(unittest.TestCase):
 
     def test_storage_manager_importable(self):
         # StorageManager merged into cloud_pipeline.py
-        from cloud_pipeline import StorageManager
+        from cloud_orchestration import StorageManager
 
         sm = StorageManager(results_dir=Path("/tmp"))
         assert sm is not None
 
     def test_git_controller_importable(self):
         # GitController merged into cloud_pipeline.py
-        from cloud_pipeline import GitController
+        from cloud_orchestration import GitController
 
         assert hasattr(GitController, "get_current_branch")
 
@@ -4648,8 +4657,8 @@ class TestExperimentConfigLoaderCompat(unittest.TestCase):
 
     def test_loader_experiment_id_property(self):
         """experiment_config_loader.ExperimentConfig.experiment_id must alias id."""
-        import experiment_config_loader as _ecl
-        from experiment_config_loader import DatasetEntry
+        import experiment_config as _ecl
+        from experiment_config import DatasetEntry
 
         c = _ecl.ExperimentConfig(
             id=5,
@@ -4661,8 +4670,8 @@ class TestExperimentConfigLoaderCompat(unittest.TestCase):
 
     def test_loader_base_model_property(self):
         """experiment_config_loader.ExperimentConfig.base_model must alias base_checkpoint."""
-        import experiment_config_loader as _ecl
-        from experiment_config_loader import DatasetEntry
+        import experiment_config as _ecl
+        from experiment_config import DatasetEntry
 
         c = _ecl.ExperimentConfig(
             id=5,
@@ -4675,8 +4684,8 @@ class TestExperimentConfigLoaderCompat(unittest.TestCase):
 
     def test_loader_dataset_names_property(self):
         """experiment_config_loader.ExperimentConfig.dataset_names returns list[str]."""
-        import experiment_config_loader as _ecl
-        from experiment_config_loader import DatasetEntry
+        import experiment_config as _ecl
+        from experiment_config import DatasetEntry
 
         c = _ecl.ExperimentConfig(
             id=2,
@@ -4687,8 +4696,8 @@ class TestExperimentConfigLoaderCompat(unittest.TestCase):
 
     def test_loader_warmup_steps_default(self):
         """experiment_config_loader.ExperimentConfig warmup_steps default must be 40."""
-        import experiment_config_loader as _ecl
-        from experiment_config_loader import DatasetEntry
+        import experiment_config as _ecl
+        from experiment_config import DatasetEntry
 
         c = _ecl.ExperimentConfig(
             id=1,
@@ -6334,8 +6343,9 @@ class TestBugPatternDetectorJsonConfusion(unittest.TestCase):
         assert "True" in bugs[0].fix_suggestion
 
     def test_severity_is_critical(self):
-        from pipeline_types import SeverityLevel
         from validators import BugPatternDetector
+
+        from cloud_orchestration import SeverityLevel
 
         bugs = BugPatternDetector.detect_python_json_confusion("x = false", Path("test.py"))
         assert bugs[0].severity == SeverityLevel.CRITICAL
@@ -6420,8 +6430,9 @@ class TestBugPatternDetectorTieWordEmbeddings(unittest.TestCase):
         assert bugs == []
 
     def test_severity_is_critical(self):
-        from pipeline_types import SeverityLevel
         from validators import BugPatternDetector
+
+        from cloud_orchestration import SeverityLevel
 
         code = "model.resize_token_embeddings(len(tokenizer))\npass"
         bugs = BugPatternDetector.detect_missing_tie_word_embeddings(code, Path("train.py"))

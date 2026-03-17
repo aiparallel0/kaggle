@@ -91,12 +91,13 @@ __all__ = [
 _CRITICAL_INSTALL_PACKAGES = [
     "torch",
     "transformers",
-    "datasets",
-    "accelerate",
+    # datasets   → replaced with inline _hf_download_dataset_inline() in dataset_loaders.py
+    # accelerate → never imported; torch.cuda.amp.GradScaler used directly
+    # ultralytics → replaced with inline _YOLO_CLS in train_trocr_yolo.py
     # editdistance → replaced with inline _edit_distance() in donut_evaluator.py
     # pandas → replaced with stdlib csv module
 ]
-_CRITICAL_VERIFY_PACKAGES = ["transformers", "datasets", "accelerate"]
+_CRITICAL_VERIFY_PACKAGES = ["transformers"]
 
 
 def _is_package_missing(package_name: str) -> bool:
@@ -112,8 +113,6 @@ def _is_package_missing(package_name: str) -> bool:
         __import__(package_name)
         # Extra check for datasets: verify load_dataset is actually accessible.
         # A partial/broken install can import the namespace but lack load_dataset.
-        if package_name == "datasets":
-            from datasets import load_dataset  # noqa: F401
         return False
     except ImportError:
         return True
@@ -1696,8 +1695,8 @@ def stage_trocr_experiments(args) -> StageResult:
     warnings: list[str] = []
 
     try:
-        import evaluate_models as eval_mod
-        import train_trocr_yolo as trocr_yolo
+        import evaluate_models as eval_mod  # noqa: I001
+        import train_trocr_yolo as trocr_yolo  # noqa: I001
 
         workspace = Path(args.workspace)
 
@@ -2070,6 +2069,21 @@ def stage_paper(args) -> StageResult:
             w = f"fill_paper failed for {paper_template}: {exc}"
             print(f"  WARNING: {w}")
             warnings.append(w)
+
+        # ── Compile paper → PDF ────────────────────────────────────────────
+        try:
+            paper_pdf = ir.compile_pdf(output_paper, work_dir=output_paper.parent)
+            if paper_pdf:
+                print(f"  PDF compiled   -> {paper_pdf}")
+            else:
+                print(
+                    "  INFO: No LaTeX compiler found — install texlive-latex-base "
+                    "or MiKTeX to auto-compile PDFs."
+                )
+        except Exception as exc:
+            w = f"PDF compilation failed: {exc}"
+            print(f"  WARNING: {w}")
+            warnings.append(w)
     else:
         w = f"paper template not found at {paper_template}; skipping paper_filled.tex generation."
         print(f"  WARNING: {w}")
@@ -2086,6 +2100,14 @@ def stage_paper(args) -> StageResult:
             w = f"fill_paper failed for {pres_template}: {exc}"
             print(f"  WARNING: {w}")
             warnings.append(w)
+
+        # ── Compile presentation → PDF ─────────────────────────────────────
+        try:
+            pres_pdf = ir.compile_pdf(pres_output, work_dir=pres_output.parent)
+            if pres_pdf:
+                print(f"  PDF compiled   -> {pres_pdf}")
+        except Exception as exc:
+            warnings.append(f"Presentation PDF compilation failed: {exc}")
     else:
         print(f"  INFO: {pres_template} not found; skipping presentation_filled.tex generation.")
 

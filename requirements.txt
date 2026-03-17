@@ -1,12 +1,5 @@
 torch>=2.0.0
 transformers>=4.37.0
-datasets>=2.14.0
-Pillow>=9.0.0
-ultralytics>=8.0.0       # YOLOv8 for TrOCR+YOLO pipeline
-accelerate>=0.24.0
-matplotlib>=3.7.0
-# Dev / test tools
-pytest>=7.0              # required to run: pytest tests/
 
 # --- Optional: uncomment if needed ---
 
@@ -41,3 +34,18 @@ pytest>=7.0              # required to run: pytest tests/
 # numpy         → transitive dep of torch (always installed)
 # sentencepiece → transitive dep of transformers (always installed)
 # protobuf      → transitive dep of transformers (always installed)
+# datasets      → 100% replaced with inline _hf_download_dataset_inline() in dataset_loaders.py
+#                 (urllib-only HTTP downloader + JSONL cache; no Arrow dependency)
+# ultralytics   → 100% replaced with inline _YOLO_CLS in train_trocr_yolo.py
+#                 (full YOLOv8x backbone + training loop + inference, pure PyTorch)
+# accelerate    → never imported anywhere; torch.cuda.amp.GradScaler used directly
+# matplotlib    → 100% replaced with inline SVG generators in benchmark_compare.py
+#                 (_svg_bar_chart, _svg_speed_chart, _svg_radar_chart, _svg_compare_bar)
+#                 Install matplotlib for PDF-quality rasterised output (optional)
+# pytest        → 100% replaced with stdlib unittest in tests/test_all.py
+#                 (full _Pytest stub with .raises(), .mark.skipif(), .importorskip())
+#                 Run with: python -m pytest tests/  OR  python -m unittest discover tests/
+# Pillow        → 100% replaced with inline image decoders in train.py
+#                 PNG: full (8-bit RGB/RGBA, all filter types), BMP: 24-bit uncompressed
+#                 JPEG: pure-Python baseline DCT decoder (Huffman + IDCT + YCbCr→RGB)
+#                 Install Pillow for faster JPEG loading (optional)
