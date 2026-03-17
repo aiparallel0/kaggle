@@ -291,7 +291,7 @@ from dataclasses import dataclass  # noqa: E402, I001
 from datetime import datetime  # noqa: E402, I001
 from pathlib import Path  # noqa: E402, I001
 
-__all__ = [
+__all__ += [
     "ResourceOptimizedConfig",
     "SystemResources",
     "detect_system_resources",

@@ -2452,7 +2452,7 @@ def _load_safetensors(path: str | Path) -> dict:
     return tensors
 
 
-import memory_manager as _mm  # noqa: E402
+import resource_manager as _mm  # noqa: E402
 
 # FIX: Previously FIELDS, MAX_LENGTH, IMAGE_EXTS, NEW_TOKENS, BASE_MODEL,
 # SEED were defined independently here and in 4 other files, risking silent

@@ -34,7 +34,7 @@ try:
 
     _PIL_AVAILABLE = True
 except ImportError:
-    from donut_evaluator import _load_image  # noqa: E402, I001
+    from evaluation import _load_image  # noqa: E402, I001
 
     class _ImageShim:  # type: ignore[misc]
         @staticmethod
@@ -51,7 +51,7 @@ except ImportError:
     Image = _ImageShim()  # type: ignore[assignment]
 
 from constants import FIELDS, IMAGE_EXTS
-from dataset_loaders import SROIELoader, _load_key_file
+from data_pipeline import SROIELoader, _load_key_file
 
 __all__ = [
     "group_words_into_lines",
