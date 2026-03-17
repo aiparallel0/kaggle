@@ -47,7 +47,7 @@ try:
 except Exception:
     pass
 
-import memory_manager as _mm
+import resource_manager as _mm
 from constants import EMPTY_GT, FIELDS, SEED, _get_sroie_dir
 from constants import IMAGE_EXTS as _IMAGE_EXTS_SET
 

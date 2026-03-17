@@ -127,7 +127,7 @@ except ImportError:
 # Project imports (do not require torch/transformers)
 from dataset_normalizer import DatasetNormalizer, extract_address_from_seller, normalise_samples
 
-import memory_manager as mm
+import resource_manager as mm
 from cloud_orchestration import (
     AggregatedResults,
     ArchitectureAudit,
@@ -172,7 +172,7 @@ from dataset_loaders import (
 )
 from reporting import EXP_NAMES, LEADERBOARD, PaperInjector, UnresolvedVarError, _safe
 from constants import DeduplicatingHandler, suppress_noisy_loggers
-from resource_optimizer import (
+from resource_manager import (
     ResourceOptimizedConfig,
     optimize_hyperparams,
     validate_training_config,
