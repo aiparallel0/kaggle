@@ -3226,13 +3226,8 @@ def generate_json_summary(results: dict) -> None:
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
-RESULTS_DIR = Path("results")
-
-# ---------------------------------------------------------------------------
 # v2 resolution-sync constants and helper
+# (RESULTS_DIR already defined at line ~2979 — do not redefine here)
 # ---------------------------------------------------------------------------
 
 # Canonical fine-tuning resolution for DONUT on SROIE.
@@ -3529,7 +3524,7 @@ def train_experiment(
     exp_id: int,
     samples: list[tuple[Path, dict]],
     output_dir: Path,
-    val_samples: list[tuple[Path, dict]] = None,
+    val_samples: list[tuple[Path, dict]] | None = None,
     base_processor=None,
     base_model=None,
     config=None,
@@ -4094,16 +4089,14 @@ def run_experiment(
         )
     )
 
-    # ── Guardrail: verify global EXPERIMENTS dict was NOT mutated ──────────
-    if (
-        config.batch_size != EXPERIMENTS[exp_id].batch_size
-        or config.gradient_accumulation_steps != EXPERIMENTS[exp_id].gradient_accumulation_steps
-    ):
-        assert config is not EXPERIMENTS[exp_id], (
-            "INVARIANT VIOLATION: config is the same object as EXPERIMENTS[exp_id] "
-            "after the dataclasses.replace() call. This indicates a logic error in the "
-            "override block — the replace() result was not assigned back to config."
-        )
+    # ── Guardrail: verify global EXPERIMENTS dict was NOT mutated (GP-1) ──
+    # The assert must be unconditional — the old version only checked when
+    # values differed, but same-object implies same-values, making it inert.
+    assert config is not EXPERIMENTS[exp_id], (
+        "INVARIANT VIOLATION: config is the same object as EXPERIMENTS[exp_id]. "
+        "dataclasses.replace() was not applied — mutations would corrupt the "
+        "global singleton. Ensure replace() result is assigned back to config."
+    )
 
     # ── Guardrail: validate optimizer step count ───────────────────────────
     # skip_step_validation=True is set only by micro/mini modes where a small

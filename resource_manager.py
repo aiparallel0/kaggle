@@ -107,8 +107,8 @@ def ram_cache_is_safe(
     height, width : int
         Image dimensions in pixels (read from processor_config.json).
     safety_fraction : float
-        Maximum fraction of available RAM the cache may use. Default 0.15 (15%).
-        This leaves 85% for: model weights, optimizer states, activations,
+        Maximum fraction of available RAM the cache may use. Default 0.06 (6%).
+        This leaves 94% for: model weights, optimizer states, activations,
         DataLoader worker prefetch buffers, and OS overhead.
 
     Returns
@@ -124,9 +124,6 @@ def ram_cache_is_safe(
         logger.warning("[memory_manager] available RAM unknown; disabling PIL image cache.")
         return False
     available_mb = available_bytes / (1024 * 1024)
-
-    if available_mb <= 0:
-        return False
 
     threshold_mb = available_mb * safety_fraction
     is_safe = estimated_mb < threshold_mb
@@ -285,8 +282,8 @@ def shutdown_dataloader_workers(trainer) -> None:
                 _iter._shutdown_workers()
                 logger.debug("[memory_manager] Eval DataLoader workers shut down.")
         del eval_dl
-    except Exception:
-        pass  # eval dl may not exist; always best-effort
+    except Exception as exc:
+        logger.debug("[memory_manager] shutdown eval dl workers: %s", exc)
 
     gc.collect()
 
@@ -640,6 +637,9 @@ def optimize_hyperparams(
             f"accumulation_steps reduced {old_accum}→{accumulation_steps} "
             f"(self-heal: {total_steps} steps < {_MIN_OPTIMIZER_STEPS} minimum with accum={old_accum})"
         )
+
+    # Postcondition: accumulation_steps is always ≥ 1 after self-healing.
+    assert accumulation_steps >= 1, f"accumulation_steps must be ≥ 1, got {accumulation_steps}"
 
     # ───────────────────────────────────────────────────────────────────
     # Fixed Hyperparameters (per CLAUDE.md § 3)
