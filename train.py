@@ -2999,11 +2999,15 @@ class _EpochRow:
 
 
 class LiveDashboardCallback:
-    """Trainer callback that writes CSV rows and optionally redraws a rich table.
+    """Trainer callback — per-epoch CSV + rich.live.Live table for a lab-style console.
 
-    Compatible with HuggingFace ``TrainerCallback`` interface: the callback
-    class inherits from ``transformers.TrainerCallback`` lazily (at __init__
-    time) to avoid importing transformers at module level.
+    When ``rich`` is installed the table is rendered in-place (overwriting previous
+    rows) rather than appending, giving a persistent "lab panel" feel throughout the
+    entire experiment run.  Falls back silently to plain logging when rich is absent
+    or when DISABLE_LIVE_DASHBOARD=1 is set.
+
+    Compatible with HuggingFace ``TrainerCallback`` — class is patched at __init__
+    time to inherit TrainerCallback without a top-level transformers import.
     """
 
     def __init__(
@@ -3011,6 +3015,7 @@ class LiveDashboardCallback:
         csv_path: "str | Path | None" = None,
         experiment_id: int = 0,
         use_rich: "bool | None" = None,
+        total_epochs: int = 0,
     ) -> None:
         try:
             from transformers import TrainerCallback
@@ -3027,8 +3032,10 @@ class LiveDashboardCallback:
             csv_path = f"convergence_exp{experiment_id}.csv"
         self._csv_path = Path(csv_path)
         self._experiment_id = experiment_id
+        self._total_epochs = total_epochs
         self._rows: list[_EpochRow] = []
         self._best_f1: float = float("nan")
+        self._live: Any = None  # rich.live.Live instance when active
 
         if use_rich is None:
             use_rich = os.environ.get("DISABLE_LIVE_DASHBOARD", "0") != "1"
@@ -3042,6 +3049,9 @@ class LiveDashboardCallback:
             except ImportError:
                 pass
 
+        if self._rich_enabled:
+            self._start_live()
+
         if not self._csv_path.exists():
             try:
                 self._csv_path.parent.mkdir(parents=True, exist_ok=True)
@@ -3050,6 +3060,57 @@ class LiveDashboardCallback:
                     writer.writerow(["epoch", "train_loss", "val_loss", "best_f1"])
             except OSError as exc:
                 logger.warning("[LiveDashboard] Could not create CSV %s: %s", self._csv_path, exc)
+
+    def _start_live(self) -> None:
+        """Start a rich.live.Live context for in-place table updates."""
+        try:
+            from rich.live import Live
+
+            self._live = Live(self._build_table(), refresh_per_second=4, transient=False)
+            self._live.start()
+        except Exception as exc:
+            logger.debug("[LiveDashboard] Could not start rich.live.Live: %s", exc)
+            self._live = None
+
+    def _build_table(self) -> "Any":
+        """Build the rich Table renderable from current row data."""
+        try:
+            from rich.table import Table
+            from rich.text import Text
+
+            epoch_str = (
+                f"[{len(self._rows)}/{self._total_epochs}]" if self._total_epochs else ""
+            )
+            table = Table(
+                title=f"[bold cyan]Exp {self._experiment_id}[/] — Training {epoch_str}",
+                show_header=True,
+                header_style="bold dim",
+                border_style="dim",
+                expand=False,
+            )
+            table.add_column("Ep", justify="right", style="dim", width=4)
+            table.add_column("Train ↓", justify="right", width=9)
+            table.add_column("Val ↓", justify="right", width=9)
+            table.add_column("Best F1 ↑", justify="right", style="bold green", width=10)
+            table.add_column("Δ F1", justify="right", style="dim", width=8)
+
+            prev_f1 = float("nan")
+            for r in self._rows[-15:]:
+                tl = f"{r.train_loss:.4f}" if r.train_loss == r.train_loss else "—"
+                vl = f"{r.val_loss:.4f}" if r.val_loss == r.val_loss else "—"
+                bf = f"{r.best_f1:.4f}" if r.best_f1 == r.best_f1 else "—"
+                if r.best_f1 == r.best_f1 and prev_f1 == prev_f1:
+                    delta = r.best_f1 - prev_f1
+                    delta_str = f"{delta:+.4f}"
+                    delta_cell = Text(delta_str, style="green" if delta >= 0 else "red")
+                else:
+                    delta_cell = Text("—", style="dim")
+                if r.best_f1 == r.best_f1:
+                    prev_f1 = r.best_f1
+                table.add_row(str(r.epoch), tl, vl, bf, delta_cell)
+            return table
+        except Exception:
+            return ""
 
     def on_epoch_end(self, args: "Any", state: "Any", control: "Any", **kwargs: "Any") -> None:
         log = state.log_history if state is not None else []
@@ -3072,40 +3133,39 @@ class LiveDashboardCallback:
         except OSError as exc:
             logger.warning("[LiveDashboard] CSV write failed: %s", exc)
         if self._rich_enabled:
-            self._redraw()
+            if self._live is not None:
+                try:
+                    self._live.update(self._build_table())
+                except Exception as exc:
+                    logger.debug("[LiveDashboard] live.update failed: %s", exc)
+            else:
+                # Fallback: plain console.print
+                try:
+                    from rich.console import Console
+
+                    Console().print(self._build_table())
+                except Exception:
+                    pass
 
     def update_best_f1(self, f1: float) -> None:
         if f1 > self._best_f1 or self._best_f1 != self._best_f1:
             self._best_f1 = f1
             if self._rows:
                 self._rows[-1].best_f1 = f1
-
-    def _redraw(self) -> None:
-        try:
-            from rich.console import Console
-            from rich.table import Table
-
-            console = Console()
-            table = Table(
-                title=f"Experiment {self._experiment_id} — Training Progress",
-                show_header=True,
-                header_style="bold cyan",
-            )
-            table.add_column("Epoch", justify="right", style="dim")
-            table.add_column("Train Loss", justify="right")
-            table.add_column("Val Loss", justify="right")
-            table.add_column("Best F1", justify="right", style="green")
-            for r in self._rows[-10:]:
-                tl = f"{r.train_loss:.4f}" if r.train_loss == r.train_loss else "—"
-                vl = f"{r.val_loss:.4f}" if r.val_loss == r.val_loss else "—"
-                bf = f"{r.best_f1:.4f}" if r.best_f1 == r.best_f1 else "—"
-                table.add_row(str(r.epoch), tl, vl, bf)
-            console.print(table)
-        except Exception as exc:
-            logger.debug("[LiveDashboard] rich redraw failed: %s", exc)
+            if self._live is not None:
+                try:
+                    self._live.update(self._build_table())
+                except Exception:
+                    pass
 
     def close(self) -> None:
-        pass
+        """Stop the rich.live.Live context (called at end of training)."""
+        if self._live is not None:
+            try:
+                self._live.stop()
+            except Exception:
+                pass
+            self._live = None
 
 
 # ---------------------------------------------------------------------------
@@ -3257,6 +3317,11 @@ class DonutTrainer:
             learning_rate=getattr(self.config, "encoder_lr", self.config.learning_rate),
             warmup_steps=_eff_warmup,
             weight_decay=getattr(self.config, "weight_decay", 0.01),
+            # Label smoothing 0.1: regularises the lm_head distribution; reduces
+            # overconfident predictions on rare SROIE tokens (e.g. RM amounts).
+            # 0.1 is the standard recommendation for seq2seq token classification;
+            # values >0.15 degrade exact-match in SROIE Task-3 (field must match exactly).
+            label_smoothing_factor=0.1,
             save_strategy="epoch",
             eval_strategy="epoch" if do_eval else "no",
             save_total_limit=3,
@@ -3387,6 +3452,7 @@ class DonutTrainer:
                 _live_cb = LiveDashboardCallback(
                     csv_path=_csv_path,
                     experiment_id=exp_id,
+                    total_epochs=self.config.max_epochs,
                 )
                 callbacks.append(_live_cb)
                 logger.debug("[LiveDashboard] Callback registered for experiment %d", exp_id)
@@ -3414,6 +3480,11 @@ class DonutTrainer:
         )
 
         trainer.train()
+
+        # Close the live dashboard (stops rich.live.Live so terminal is clean).
+        for cb in callbacks or []:
+            if isinstance(cb, LiveDashboardCallback):
+                cb.close()
 
         # Shut down persistent DataLoader worker subprocesses BEFORE returning.
         # Without this, worker processes holding prefetch buffers stay alive

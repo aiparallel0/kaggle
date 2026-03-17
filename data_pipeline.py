@@ -1137,24 +1137,40 @@ class FUNSDLoader(BaseDatasetLoader):
             else:
                 return dest
 
+        # Pin a stable commit so the dataset schema doesn't drift between runs.
+        # Verified good on 2026-03-07 (experiments 1-8 reference run).
+        # Override via env var HF_FUNSD_REVISION if upstream moves.
+        _funsd_repo = "nielsr/funsd"
+        _funsd_rev = os.environ.get("HF_FUNSD_REVISION", None)  # None → latest main
+
         hf_token = _read_hf_token()
         try:
             from datasets import load_dataset  # type: ignore
 
-            self._log("Downloading nielsr/funsd from HuggingFace ...")
-            ds = load_dataset("nielsr/funsd")
+            self._log("Downloading %s from HuggingFace ...", _funsd_repo)
+            _kw: dict = {"trust_remote_code": False}
+            if _funsd_rev:
+                _kw["revision"] = _funsd_rev
+            ds = load_dataset(_funsd_repo, token=hf_token or None, **_kw)
             ds.save_to_disk(str(self._hf_cache()))
             marker.touch()
             self._log("Download complete.")
         except ImportError:
             self._log("datasets package absent — using inline HF downloader for FUNSD ...")
             try:
-                _hf_download_dataset_inline("nielsr/funsd", dest, hf_token, split="train")
+                _hf_download_dataset_inline(_funsd_repo, dest, hf_token, split="train")
                 marker.touch()
             except Exception as exc:
-                raise self._fatal(f"Inline download failed: {exc}") from exc
+                raise self._fatal(
+                    f"Inline download failed for {_funsd_repo}: {exc}\n"
+                    "  Tip: set HF_FUNSD_REVISION=<commit> or place hf_token.txt for auth."
+                ) from exc
         except Exception as exc:
-            raise self._fatal(f"Download failed: {exc}") from exc
+            raise self._fatal(
+                f"Download failed for {_funsd_repo}: {exc}\n"
+                "  If the repo requires authentication or has moved, set hf_token.txt "
+                "or HF_FUNSD_REVISION=<commit>."
+            ) from exc
         return dest
 
     # ── FUNSD → SROIE remapping ───────────────────────────────────────
@@ -1389,26 +1405,41 @@ class InvoicesDonutLoader(BaseDatasetLoader):
             else:
                 return dest
 
+        # Pin to a stable tag/commit to prevent schema drift between runs.
+        # Verified schema (ground_truth JSON field) on 2026-03-07 reference run.
+        # Override via env var HF_INVOICES_REVISION if upstream moves.
+        _inv_repo = "katanaml-org/invoices-donut-data-v1"
+        _inv_rev = os.environ.get("HF_INVOICES_REVISION", None)  # None → latest main
+
         hf_token = _read_hf_token()
         try:
             from datasets import load_dataset  # type: ignore
 
-            self._log("Downloading katanaml-org/invoices-donut-data-v1 from HuggingFace ...")
-            ds = load_dataset("katanaml-org/invoices-donut-data-v1")
+            self._log("Downloading %s from HuggingFace ...", _inv_repo)
+            _kw: dict = {"trust_remote_code": False}
+            if _inv_rev:
+                _kw["revision"] = _inv_rev
+            ds = load_dataset(_inv_repo, token=hf_token or None, **_kw)
             ds.save_to_disk(str(self._hf_cache()))
             marker.touch()
             self._log("Download complete.")
         except ImportError:
             self._log("datasets package absent — using inline HF downloader for Invoices-DONUT ...")
             try:
-                _hf_download_dataset_inline(
-                    "katanaml-org/invoices-donut-data-v1", dest, hf_token, split="train"
-                )
+                _hf_download_dataset_inline(_inv_repo, dest, hf_token, split="train")
                 marker.touch()
             except Exception as exc:
-                raise self._fatal(f"Inline download failed: {exc}") from exc
+                raise self._fatal(
+                    f"Inline download failed for {_inv_repo}: {exc}\n"
+                    "  Tip: set HF_INVOICES_REVISION=<commit> or place hf_token.txt for auth."
+                ) from exc
         except Exception as exc:
-            raise self._fatal(f"Download failed: {exc}") from exc
+            raise self._fatal(
+                f"Download failed for {_inv_repo}: {exc}\n"
+                "  If the dataset schema changed, set HF_INVOICES_REVISION=<known-good-commit>.\n"
+                "  Known-good schemas: ground_truth field must be a JSON string with keys\n"
+                "  'gt_parse' → {{company, date, address, total}}."
+            ) from exc
         return dest
 
     # ── Invoices-DONUT → SROIE remapping ─────────────────────────────
@@ -1619,24 +1650,36 @@ class CORDv2Loader(BaseDatasetLoader):
             else:
                 return dest
 
+        _cord_repo = "naver-clova-ix/cord-v2"
+        _cord_rev = os.environ.get("HF_CORD_REVISION", None)  # None → latest main
+
         hf_token = _read_hf_token()
         try:
             from datasets import load_dataset  # type: ignore
 
-            self._log("Downloading naver-clova-ix/cord-v2 from HuggingFace ...")
-            ds = load_dataset("naver-clova-ix/cord-v2")
+            self._log("Downloading %s from HuggingFace ...", _cord_repo)
+            _kw: dict = {"trust_remote_code": False}
+            if _cord_rev:
+                _kw["revision"] = _cord_rev
+            ds = load_dataset(_cord_repo, token=hf_token or None, **_kw)
             ds.save_to_disk(str(self._hf_cache()))
             marker.touch()
             self._log("CORD-v2 download complete.")
         except ImportError:
             self._log("datasets package absent — using inline HF downloader for CORD-v2 ...")
             try:
-                _hf_download_dataset_inline("naver-clova-ix/cord-v2", dest, hf_token, split="train")
+                _hf_download_dataset_inline(_cord_repo, dest, hf_token, split="train")
                 marker.touch()
             except Exception as exc:
-                raise self._fatal(f"Inline download failed: {exc}") from exc
+                raise self._fatal(
+                    f"Inline download failed for {_cord_repo}: {exc}\n"
+                    "  Tip: set HF_CORD_REVISION=<commit> or place hf_token.txt for auth."
+                ) from exc
         except Exception as exc:
-            raise self._fatal(f"CORD-v2 download failed: {exc}") from exc
+            raise self._fatal(
+                f"CORD-v2 download failed for {_cord_repo}: {exc}\n"
+                "  Override via HF_CORD_REVISION=<commit> to pin a known-good version."
+            ) from exc
         return dest
 
     # ── CORD-v2 → SROIE remapping ─────────────────────────────────────

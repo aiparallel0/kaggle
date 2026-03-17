@@ -126,16 +126,19 @@ All encoder and decoder parameters are updated during fine-tuning. This is appro
 |---|---|
 | Optimizer | AdamW (`weight_decay=0.01`) |
 | Learning rate | `5e-5` encoder / `1e-4` decoder (layerwise LR) |
-| LR scheduler | Cosine with 500 warm-up steps |
-| Epochs | 10 (default, configurable via `ExperimentConfig`) |
+| LR scheduler | Cosine, warmup = `min(500, max(10, total_steps // 10))` — adaptive cap in `train.py` |
+| Label smoothing | `0.1` — reduces overconfident predictions on rare SROIE tokens |
+| Epochs | 10 (Exps 1–4), 15 (Exps 5–8, configurable via `ExperimentConfig`) |
 | Batch size | 8 per GPU, gradient accumulation = 2 → effective batch 16 |
 | Max decode length | `MAX_LENGTH = 768` tokens |
-| Mixed precision | `fp16` via Accelerate (falls back to `fp32` on CPU) |
-| Early stopping | Patience = 3 on val loss |
+| Mixed precision | `bf16` on Ampere/Ada, `fp16` fallback, `fp32` on CPU |
+| Early stopping | Patience = 5 on val loss |
 | Seed | `SEED = 42` (set globally at pipeline start) |
 
-The optimal settings (bs=8, epochs=10) give Global F1 ≈ 0.871 on Exp 1 (SROIE baseline).
-Use `benchmark_compare.py` to regenerate loss curves and F1 comparison plots.
+> **Warmup note:** `ExperimentConfig.warmup_steps = 500`. `DonutTrainer.train()` automatically caps this to ≤10% of total optimizer steps (minimum 10) so it is safe for all dataset sizes (Exp 1 with ~320 total steps → effective warmup ≈ 32).
+
+The optimal settings give Global F1 ≈ 0.8503 on Exp 1 (SROIE baseline), 0.8982 on Exp 6 (BEST).
+Use `python reporting.py` to regenerate loss curves and F1 comparison plots.
 
 ---
 
@@ -307,12 +310,12 @@ kaggle/
 **Canonical entry point:** `run_all.py`. The standalone scripts are a simplified alternative workflow for standalone use only.
 
 **Consolidation notes:**
-- `live_dashboard.py` → inlined into `train.py` (LiveDashboardCallback and _EpochRow classes)
-- `paper_diff.py` → inlined into `inject_results.py` (compute_diff, print_diff_table, run_paper_diff)
-- `test_runner.py` → inlined into `cloud_pipeline.py` (TestRunner, RuffReport, PytestReport, etc.)
-- `validators/` directory → merged into single `validators.py`
-- `pipeline_types/` directory → merged into single `pipeline_types.py`
-- `tests/test_*.py` (20 files) → merged into single `tests/test_all.py`
+- `live_dashboard.py` → inlined into `train.py` as `LiveDashboardCallback` + `_EpochRow` (lines ~2990–3110 in train.py). Uses `rich.live.Live` for an in-place updating lab panel. Set `DISABLE_LIVE_DASHBOARD=1` to suppress.
+- `paper_diff.py` → inlined into `reporting.py` (compute_diff, print_diff_table, run_paper_diff). Re-exported via `inject_results.py` shim.
+- `test_runner.py` → inlined into `cloud_orchestration.py` (TestRunner, RuffReport, PytestReport, etc.). Was previously called `cloud_pipeline.py` before consolidation.
+- `validators/` directory → merged into `validation.py`
+- `pipeline_types/` directory → merged into `cloud_orchestration.py` (not into a `pipeline_types.py` file — no such file exists)
+- `tests/test_*.py` (20 files) → merged into `tests/test_all.py`
 - Deleted dead code: `run_experiments_v2.py`, `train_donut.py`, `results_browser.py`, `tui_console.py`, `quick_results_generator.py`
 
 ---
@@ -380,6 +383,14 @@ from constants import FIELDS, IMAGE_EXTS, MAX_LENGTH, BASE_MODEL, SEED, NEW_TOKE
 
 **HF Token:** Place your token in `hf_token.txt` (single line). Gitignored — never commit. Enables parallel accelerated downloads.
 
+**Dataset version pinning:** If a dataset repo updates and breaks the pipeline, pin to a known-good commit via env vars:
+```bash
+export HF_FUNSD_REVISION=<commit-sha>       # nielsr/funsd
+export HF_INVOICES_REVISION=<commit-sha>    # katanaml-org/invoices-donut-data-v1
+export HF_CORD_REVISION=<commit-sha>        # naver-clova-ix/cord-v2
+```
+Delete the dataset's `.done` marker file to force re-download with the new revision.
+
 ---
 
 ## 10. Development Workflows
@@ -420,6 +431,41 @@ python run_experiments.py --all --force      # force re-run
 ```bash
 python inject_results.py --all --paper paper/paper.tex --output paper/paper_filled.tex
 ```
+
+### Paper PDF Compilation
+
+`stage_paper()` in `run_all.py` automatically compiles both filled `.tex` files to PDF if a LaTeX compiler is found:
+- Tries `pdflatex` → `latexmk` → `xelatex` in order
+- Runs each compiler **twice** to resolve `\ref` / `\cite` cross-references
+- Outputs: `paper/paper_filled.pdf` and `paper/presentation_filled.pdf`
+- Falls back gracefully with an install hint if no compiler is present
+
+Install a compiler: `apt-get install texlive-latex-base texlive-fonts-recommended` (Linux)
+or download [MiKTeX](https://miktex.org/) (Windows/macOS).
+
+```python
+# Programmatic usage from Python:
+from reporting import compile_pdf
+pdf = compile_pdf("paper/paper_filled.tex")   # returns Path or None
+```
+
+### Console Lab (LiveDashboardCallback)
+
+When `rich` is installed, a persistent in-place table is rendered during training:
+
+```
+┌────────────────────────────────────────────────┐
+│  Exp 6 — Training [8/15]                       │
+├────┬──────────┬──────────┬────────────┬────────┤
+│ Ep │ Train ↓  │ Val ↓    │  Best F1 ↑ │  Δ F1  │
+├────┼──────────┼──────────┼────────────┼────────┤
+│  1 │   2.1234 │   1.8901 │     0.4120 │     —  │
+│  2 │   1.4210 │   1.2345 │     0.6310 │+0.2190 │
+│  8 │   0.3891 │   0.4102 │     0.8982 │+0.0120 │
+└────┴──────────┴──────────┴────────────┴────────┘
+```
+
+The table updates in-place after every epoch. Disable with `DISABLE_LIVE_DASHBOARD=1`.
 
 ### Alternative Standalone Workflow
 

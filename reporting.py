@@ -42,6 +42,7 @@ __all__ = [
     "EXP_NAMES", "build_var_map", "fill_paper",
     "print_table1_dataset_stats", "print_table2_experiments",
     "print_table3_perfield", "print_table4_leaderboard", "ResultsAggregator",
+    "compile_pdf",
     "main",
 ]
 
@@ -1988,6 +1989,94 @@ def _plot_convergence_main() -> None:
 # ---------------------------------------------------------------------------
 
 # (inject_results __all__ merged into module-level __all__ at top of file)
+
+
+# ── LaTeX PDF compilation ──────────────────────────────────────────────────
+
+def compile_pdf(tex_file: str | Path, work_dir: str | Path | None = None) -> Path | None:
+    """Compile a LaTeX .tex file to PDF using pdflatex / latexmk / xelatex.
+
+    Runs the compiler twice (pdflatex) to resolve cross-references.
+    Returns the Path to the generated .pdf on success, None if no compiler
+    is installed.  All compiler output is suppressed (nonstopmode).
+
+    Parameters
+    ----------
+    tex_file:
+        Path to the filled .tex file (e.g., ``paper/paper_filled.tex``).
+    work_dir:
+        Working directory for the compilation (defaults to directory of
+        ``tex_file``).  All auxiliary files (.aux, .log, .toc) are written
+        here.
+
+    Returns
+    -------
+    Path to the .pdf on success, None if compilation failed or no LaTeX
+    compiler is available.
+    """
+    tex_path = Path(tex_file).resolve()
+    if not tex_path.exists():
+        logging.getLogger(__name__).warning("[PDF] tex file not found: %s", tex_path)
+        return None
+
+    if work_dir is None:
+        work_dir = tex_path.parent
+    work_dir = Path(work_dir).resolve()
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    pdf_path = work_dir / tex_path.with_suffix(".pdf").name
+    log = logging.getLogger(__name__)
+
+    # compiler → build command (tex_file inserted at end)
+    compilers = [
+        ("pdflatex", [
+            "pdflatex",
+            "-interaction=nonstopmode",
+            f"-output-directory={work_dir}",
+            str(tex_path),
+        ]),
+        ("latexmk", [
+            "latexmk",
+            "-pdf",
+            "-interaction=nonstopmode",
+            f"-outdir={work_dir}",
+            str(tex_path),
+        ]),
+        ("xelatex", [
+            "xelatex",
+            "-interaction=nonstopmode",
+            f"-output-directory={work_dir}",
+            str(tex_path),
+        ]),
+    ]
+
+    for compiler_name, cmd in compilers:
+        try:
+            # Run twice so cross-references (\ref, \cite) resolve correctly.
+            for _ in range(2):
+                _subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    timeout=120,
+                    check=True,
+                    cwd=str(work_dir),
+                )
+            if pdf_path.exists():
+                log.info("[PDF] Compiled %s → %s (using %s)", tex_path.name, pdf_path, compiler_name)
+                return pdf_path
+        except FileNotFoundError:
+            continue  # compiler not installed — try next
+        except (_subprocess.CalledProcessError, _subprocess.TimeoutExpired) as exc:
+            log.warning("[PDF] %s failed for %s: %s", compiler_name, tex_path.name, exc)
+            # If the compiler exists but failed, don't try others (likely a .tex error)
+            return None
+
+    log.info(
+        "[PDF] No LaTeX compiler found (pdflatex / latexmk / xelatex). "
+        "Install texlive-latex-base or MiKTeX to auto-compile PDFs."
+    )
+    return None
+
 
 # Pre-compiled regex for \VAR{...} template placeholders — compiled once at
 # module load rather than on every fill() call.

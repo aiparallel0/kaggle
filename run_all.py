@@ -2062,6 +2062,21 @@ def stage_paper(args) -> StageResult:
             w = f"fill_paper failed for {paper_template}: {exc}"
             print(f"  WARNING: {w}")
             warnings.append(w)
+
+        # ── Compile paper → PDF ────────────────────────────────────────────
+        try:
+            paper_pdf = ir.compile_pdf(output_paper, work_dir=output_paper.parent)
+            if paper_pdf:
+                print(f"  PDF compiled   -> {paper_pdf}")
+            else:
+                print(
+                    "  INFO: No LaTeX compiler found — install texlive-latex-base "
+                    "or MiKTeX to auto-compile PDFs."
+                )
+        except Exception as exc:
+            w = f"PDF compilation failed: {exc}"
+            print(f"  WARNING: {w}")
+            warnings.append(w)
     else:
         w = f"paper template not found at {paper_template}; skipping paper_filled.tex generation."
         print(f"  WARNING: {w}")
@@ -2078,6 +2093,14 @@ def stage_paper(args) -> StageResult:
             w = f"fill_paper failed for {pres_template}: {exc}"
             print(f"  WARNING: {w}")
             warnings.append(w)
+
+        # ── Compile presentation → PDF ─────────────────────────────────────
+        try:
+            pres_pdf = ir.compile_pdf(pres_output, work_dir=pres_output.parent)
+            if pres_pdf:
+                print(f"  PDF compiled   -> {pres_pdf}")
+        except Exception as exc:
+            warnings.append(f"Presentation PDF compilation failed: {exc}")
     else:
         print(f"  INFO: {pres_template} not found; skipping presentation_filled.tex generation.")
 
