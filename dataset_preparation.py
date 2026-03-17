@@ -29,7 +29,26 @@ import json
 import os
 from pathlib import Path
 
-from PIL import Image
+try:
+    from PIL import Image
+
+    _PIL_AVAILABLE = True
+except ImportError:
+    from donut_evaluator import _load_image  # noqa: E402, I001
+
+    class _ImageShim:  # type: ignore[misc]
+        @staticmethod
+        def open(path):
+            class _Img:
+                def __init__(self, arr):
+                    self._arr = arr
+
+                def convert(self, mode):
+                    return self
+
+            return _Img(_load_image(path))
+
+    Image = _ImageShim()  # type: ignore[assignment]
 
 from constants import FIELDS, IMAGE_EXTS
 from dataset_loaders import SROIELoader, _load_key_file
