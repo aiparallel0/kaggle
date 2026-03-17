@@ -125,7 +125,35 @@ except ImportError:
 
 
 # Project imports (do not require torch/transformers)
+from dataset_normalizer import DatasetNormalizer, extract_address_from_seller, normalise_samples
+
 import memory_manager as mm
+from cloud_orchestration import (
+    AggregatedResults,
+    ArchitectureAudit,
+    BenchmarkNarrowness,
+    BugPattern,
+    BugReport,
+    CheckResult,
+    CheckStatus,
+    CritiqueFinding,
+    CritiqueReport,
+    DataSplitValidationReport,
+    EpochConfoundAudit,
+    ExperimentMetrics,
+    ExperimentResult,
+    FindingSeverity,
+    MultipleTestingAudit,
+    PipelineCritic,
+    PipelineResult,
+    PretrainingBiasAudit,
+    SeverityLevel,
+    StatisticalPowerAudit,
+    ValidationReport,
+    _family_wise_error_rate,
+    _norm_ppf,
+    _two_proportion_mdd,
+)
 from constants import BASE_MODEL, EMPTY_GT, FIELDS, IMAGE_EXTS, MAX_LENGTH, NEW_TOKENS, SEED
 from control_suite import (
     CONTROL_SUITE,
@@ -142,37 +170,8 @@ from dataset_loaders import (
     _validate_sample_schema,
     _validate_samples_nonempty,
 )
-from dataset_normalizer import DatasetNormalizer, extract_address_from_seller, normalise_samples
 from inject_results import EXP_NAMES, LEADERBOARD, PaperInjector, UnresolvedVarError, _safe
 from logging_utils import DeduplicatingHandler, suppress_noisy_loggers
-from pipeline_critic import (
-    ArchitectureAudit,
-    BenchmarkNarrowness,
-    EpochConfoundAudit,
-    MultipleTestingAudit,
-    PipelineCritic,
-    PretrainingBiasAudit,
-    StatisticalPowerAudit,
-    _family_wise_error_rate,
-    _norm_ppf,
-    _two_proportion_mdd,
-)
-from pipeline_types import (
-    AggregatedResults,
-    BugPattern,
-    BugReport,
-    CheckResult,
-    CheckStatus,
-    CritiqueFinding,
-    CritiqueReport,
-    DataSplitValidationReport,
-    ExperimentMetrics,
-    ExperimentResult,
-    FindingSeverity,
-    PipelineResult,
-    SeverityLevel,
-    ValidationReport,
-)
 from resource_optimizer import (
     ResourceOptimizedConfig,
     optimize_hyperparams,
@@ -2782,18 +2781,18 @@ class TestImportChain(unittest.TestCase):
 
     def test_pipeline_config_importable(self):
         # PipelineMode merged into cloud_pipeline.py
-        from cloud_pipeline import PipelineMode
+        from cloud_orchestration import PipelineMode
 
         assert PipelineMode.AUTO.value == "auto"
 
     def test_retro_ui_importable(self):
         # RetroUIFormatter moved to cloud_pipeline.py
-        from cloud_pipeline import RetroUIFormatter
+        from cloud_orchestration import RetroUIFormatter
 
         assert RetroUIFormatter.bold("x")
 
     def test_test_runner_importable(self):
-        from cloud_pipeline import TestRunner
+        from cloud_orchestration import TestRunner
 
         assert hasattr(TestRunner, "run_all_checks")
 
@@ -2806,14 +2805,14 @@ class TestImportChain(unittest.TestCase):
 
     def test_storage_manager_importable(self):
         # StorageManager merged into cloud_pipeline.py
-        from cloud_pipeline import StorageManager
+        from cloud_orchestration import StorageManager
 
         sm = StorageManager(results_dir=Path("/tmp"))
         assert sm is not None
 
     def test_git_controller_importable(self):
         # GitController merged into cloud_pipeline.py
-        from cloud_pipeline import GitController
+        from cloud_orchestration import GitController
 
         assert hasattr(GitController, "get_current_branch")
 
@@ -6334,8 +6333,9 @@ class TestBugPatternDetectorJsonConfusion(unittest.TestCase):
         assert "True" in bugs[0].fix_suggestion
 
     def test_severity_is_critical(self):
-        from pipeline_types import SeverityLevel
         from validators import BugPatternDetector
+
+        from cloud_orchestration import SeverityLevel
 
         bugs = BugPatternDetector.detect_python_json_confusion("x = false", Path("test.py"))
         assert bugs[0].severity == SeverityLevel.CRITICAL
@@ -6420,8 +6420,9 @@ class TestBugPatternDetectorTieWordEmbeddings(unittest.TestCase):
         assert bugs == []
 
     def test_severity_is_critical(self):
-        from pipeline_types import SeverityLevel
         from validators import BugPatternDetector
+
+        from cloud_orchestration import SeverityLevel
 
         code = "model.resize_token_embeddings(len(tokenizer))\npass"
         bugs = BugPatternDetector.detect_missing_tie_word_embeddings(code, Path("train.py"))
