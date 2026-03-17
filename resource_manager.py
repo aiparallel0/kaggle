@@ -75,6 +75,22 @@ def compute_pil_mb_per_sample(height: int, width: int) -> float:
     return (3 * height * width) / (1024 * 1024)
 
 
+def _get_available_ram_bytes_patchable() -> int:
+    """Return available RAM bytes, routing through memory_manager when loaded.
+
+    Using sys.modules indirection lets tests patch
+    ``memory_manager._get_available_ram_bytes`` and have the effect propagate
+    into calls made via resource_manager (e.g. ram_cache_is_safe, ram_headroom_mb).
+    This avoids a circular import while keeping the public API mockable.
+    """
+    import sys
+
+    _mm = sys.modules.get("memory_manager")
+    if _mm is not None:
+        return getattr(_mm, "_get_available_ram_bytes", _get_available_ram_bytes)()
+    return _get_available_ram_bytes()
+
+
 def ram_cache_is_safe(
     n_samples: int,
     height: int,
@@ -110,7 +126,7 @@ def ram_cache_is_safe(
     mb_per_sample = compute_pil_mb_per_sample(height, width)
     estimated_mb = n_samples * mb_per_sample
 
-    available_bytes = _get_available_ram_bytes()
+    available_bytes = _get_available_ram_bytes_patchable()
     if available_bytes <= 0:
         logger.warning("[memory_manager] available RAM unknown; disabling PIL image cache.")
         return False
@@ -146,7 +162,7 @@ def ram_headroom_mb() -> float:
     Returns a conservative 0.0 on any error so callers treat an unknown
     RAM state as "no headroom available".
     """
-    available_bytes = _get_available_ram_bytes()
+    available_bytes = _get_available_ram_bytes_patchable()
     return available_bytes / (1024 * 1024) if available_bytes > 0 else 0.0
 
 
@@ -302,6 +318,13 @@ __all__ = [
     # Absorbed from training_config.py
     "TrainingConfig",
     "PARAM_GRIDS_DEFAULT",
+    # Absorbed from memory_manager.py
+    "compute_pil_mb_per_sample",
+    "ram_cache_is_safe",
+    "ram_headroom_mb",
+    "release_hf_dataset",
+    "flush_hf_arrow_cache",
+    "shutdown_dataloader_workers",
 ]
 
 try:

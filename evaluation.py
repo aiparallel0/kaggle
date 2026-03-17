@@ -1344,6 +1344,15 @@ __all__ = [
     "print_metrics",
     "generate_comparison_report",
     "generate_json_summary",
+    # Also needed by donut_evaluator shim consumers
+    "DEVICE",
+    "run_inference",
+    "remap_cord_to_sroie",
+    "compute_metrics",
+    "DonutEvaluator",
+    "EvaluationResult",
+    "normalized_edit_distance",
+    "load_model_with_tied_weights",
 ]
 
 # ── Config ──────────────────────────────────────────────────────────────────
