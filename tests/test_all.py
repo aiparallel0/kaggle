@@ -2601,8 +2601,8 @@ class TestDonutEvaluatorModelPath(unittest.TestCase):
 
     def test_donut_evaluator_constructor_has_model_path_param(self):
         """DonutEvaluator.__init__ must accept model_path (not model_dir)."""
-        tree = _parse("donut_evaluator.py")
-        src = _source("donut_evaluator.py")
+        tree = _parse("evaluation.py")
+        src = _source("evaluation.py")
         for node in ast.walk(tree):
             if isinstance(node, ast.ClassDef) and node.name == "DonutEvaluator":
                 for item in ast.walk(node):
