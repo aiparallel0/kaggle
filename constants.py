@@ -352,5 +352,7 @@ def _progress(iterable, desc: str = "", total: int | None = None):
 
 PROJECT_NAME: str = "donut-kiedata"
 PROJECT_VERSION: str = "1.0.0"
-PROJECT_DESCRIPTION: str = "DONUT + TrOCR + YOLO multi-dataset KIE pipeline for receipt understanding"
+PROJECT_DESCRIPTION: str = (
+    "DONUT + TrOCR + YOLO multi-dataset KIE pipeline for receipt understanding"
+)
 PROJECT_ENTRY_POINT: str = "run_all:main"  # console_scripts entry point

@@ -5,8 +5,6 @@
 # Project: DONUT Receipt KIE — SROIE Fine-tuning & Benchmarking
 # Updated: 2026-03-17
 # =============================================================================
-from __future__ import annotations
-
 """
 run_experiments.py — Experiment orchestrator for 8 DONUT fine-tuning experiments.
 
@@ -43,6 +41,8 @@ DonutEvaluator (from donut_evaluator.py) handles model loading with weight re-ty
 and evaluation with self-test and parse-failure thresholds.
 """
 
+from __future__ import annotations
+
 import argparse
 import copy
 import dataclasses
@@ -54,22 +54,24 @@ import math
 import os
 import re
 import time
+import warnings
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, ClassVar, Sequence
+from typing import Any, ClassVar
 
 # Set before torch initializes to reduce GPU memory fragmentation.
 os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
 
-import torch
-from transformers import DonutProcessor, VisionEncoderDecoderModel
+import torch  # noqa: E402
+from transformers import DonutProcessor, VisionEncoderDecoderModel  # noqa: E402
 
-import data_pipeline as dataset_loaders
-import resource_manager as _mm
+import data_pipeline as dataset_loaders  # noqa: E402
+import resource_manager as _mm  # noqa: E402
 
 # FIX: Import shared constants from single source of truth (constants.py)
 # instead of duplicating FIELDS/IMAGE_EXTS/etc. independently in this file.
-from constants import (
+from constants import (  # noqa: E402
     BASE_MODEL,
     DEVICE,
     EMPTY_GT,
@@ -84,18 +86,18 @@ from constants import (
     _progress,
     set_seed,
 )
-from data_pipeline import load_sroie_test
-from resource_manager import TrainingAuditLogger
-from train import MultiDataset
+from data_pipeline import load_sroie_test  # noqa: E402
+from resource_manager import TrainingAuditLogger  # noqa: E402
+from train import MultiDataset  # noqa: E402
 
 try:
-    import yaml
+    import yaml  # noqa: E402
 except ImportError as e:
     raise ImportError("PyYAML is required: pip install pyyaml") from e
 
-import struct
-import sys
-import zlib
+import struct  # noqa: E402
+import sys  # noqa: E402
+import zlib  # noqa: E402
 
 try:
     import flash_attn  # noqa: F401
@@ -3003,7 +3005,6 @@ def evaluate_donut_on_test(
 ) -> dict:
     """Evaluate a DONUT model on the SROIE test set. Returns metrics dict."""
     from transformers import DonutProcessor
-
 
     processor = DonutProcessor.from_pretrained(model_path)
     model = load_model_with_tied_weights(model_path, device=DEVICE)

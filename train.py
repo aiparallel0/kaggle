@@ -3466,6 +3466,22 @@ class DonutTrainer:
         self.model.gradient_checkpointing_enable()
         logging.info("Gradient checkpointing enabled")
 
+        # Guard: transformers trainer._get_dataloader() does
+        #   isinstance(dataset, datasets.Dataset)
+        # With HuggingFace datasets 3.x lazy-loading, a prior
+        # `from datasets import load_dataset` only partially initialises the
+        # module, leaving datasets.Dataset inaccessible (AttributeError).
+        # Fully initialise it here so the isinstance check never crashes.
+        # Our MultiDataset is a torch.utils.data.Dataset, so isinstance returns
+        # False regardless — this guard only prevents the AttributeError.
+        try:
+            import datasets as _hf_ds
+
+            if not hasattr(_hf_ds, "Dataset"):
+                _hf_ds.Dataset = _hf_ds.arrow_dataset.Dataset
+        except Exception:
+            pass
+
         trainer = Seq2SeqTrainer(
             model=self.model,
             args=training_args,
