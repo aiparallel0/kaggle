@@ -1,18 +1,19 @@
 # =============================================================================
 # data_pipeline.py
-# Merged from: dataset_normalizer.py, dataset_loaders.py, preprocess_seller_split.py
+# Merged from: dataset_normalizer.py, dataset_loaders.py, preprocess_seller_split.py, dataset_preparation.py
 # Project: DONUT Receipt KIE — SROIE Fine-tuning & Benchmarking
 # =============================================================================
 """
 data_pipeline.py — Merged data pipeline module.
 
-Combines dataset_normalizer.py, dataset_loaders.py, and preprocess_seller_split.py
-into a single module for the DONUT Receipt KIE pipeline.
+Combines dataset_normalizer.py, dataset_loaders.py, preprocess_seller_split.py,
+and dataset_preparation.py into a single module for the DONUT Receipt KIE pipeline.
 
 Sections:
   1. DatasetNormalizer and field-value normalisation utilities (from dataset_normalizer.py)
   2. ABC-based dataset loaders for SROIE, WildReceipt, FUNSD, Invoices-DONUT (from dataset_loaders.py)
   3. Seller-string splitting with spaCy NER and heuristic fallback (from preprocess_seller_split.py)
+  4. YOLO + TrOCR data preparation utilities (from dataset_preparation.py)
 """
 
 from __future__ import annotations
