@@ -354,7 +354,7 @@ def _svg_compare_bar(labels: list, values: list, title: str, ylabel: str) -> str
 # ─────────────────────────────────────────────────────────────────────────────
 # Constants — imported from single source of truth (constants.py)
 # ─────────────────────────────────────────────────────────────────────────────
-from constants import BASE_MODEL, FIELDS, IMAGE_EXTS, MAX_LENGTH  # noqa: E402
+from constants import BASE_MODEL, IMAGE_EXTS, MAX_LENGTH  # noqa: E402
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -508,7 +508,7 @@ def load_label_txt(path: Path) -> dict[str, str]:
         except json.JSONDecodeError:
             pass
 
-    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
 
     # --- Format C: key: value ---
     kv = {}
@@ -1980,8 +1980,7 @@ def _plot_convergence_main() -> None:
     print("plot_convergence: convergence .tex files written to", args.results_dir)
 
 
-if __name__ == "__main__":
-    main()
+# (main() is defined later in this merged file — __main__ block moved to end)
 
 
 # ---------------------------------------------------------------------------
@@ -2154,9 +2153,9 @@ class PaperInjector:
             var_map[f"exp{eid}_rec"] = _safe(m, "global_recall")
             var_map[f"exp{eid}_f1"] = _safe(m, "global_f1")
             var_map[f"exp{eid}_em"] = _safe(m, "overall_exact_match")
-            for field in FIELDS:
-                var_map[f"exp{eid}_{field}_f1"] = _safe(m, f"{field}_f1")
-                var_map[f"exp{eid}_{field}_ned"] = _safe(m, f"{field}_ned")
+            for fname in FIELDS:
+                var_map[f"exp{eid}_{fname}_f1"] = _safe(m, f"{fname}_f1")
+                var_map[f"exp{eid}_{fname}_ned"] = _safe(m, f"{fname}_ned")
 
         # Best experiment
         best_f1 = 0.0
@@ -2360,13 +2359,13 @@ def legacy_output(results_path: str = str(WORKSPACE / "evaluation_results.json")
 
     print("% === PASTE INTO LATEX TABLE 2 (head-to-head) ===")
     print("% Field & Metric & Pretrained & Fine-tuned \\\\")
-    for field in FIELDS:
-        f1_p = pm[f"{field}_f1"]
-        f1_f = fm[f"{field}_f1"]
-        ned_p = pm[f"{field}_ned"]
-        ned_f = fm[f"{field}_ned"]
-        print(f"{field.capitalize()} & F1 & {f1_p:.4f} & {f1_f:.4f} \\\\")
-        print(f"{field.capitalize()} & NED & {ned_p:.4f} & {ned_f:.4f} \\\\")
+    for fname in FIELDS:
+        f1_p = pm[f"{fname}_f1"]
+        f1_f = fm[f"{fname}_f1"]
+        ned_p = pm[f"{fname}_ned"]
+        ned_f = fm[f"{fname}_ned"]
+        print(f"{fname.capitalize()} & F1 & {f1_p:.4f} & {f1_f:.4f} \\\\")
+        print(f"{fname.capitalize()} & NED & {ned_p:.4f} & {ned_f:.4f} \\\\")
 
     print("\\midrule")
     print(f"Global & F1 & {pm['global_f1']:.4f} & {fm['global_f1']:.4f} \\\\")
@@ -3268,3 +3267,7 @@ class ResultsAggregator:
             except Exception as e:
                 _logging.getLogger(__name__).warning(f"Could not load {exp_file}: {e}")
         return experiments
+
+
+if __name__ == "__main__":
+    main()

@@ -11,8 +11,10 @@
 # evaluate.py, inject_results.py, dataset_loaders.py).  Any change had to be
 # replicated manually, risking silent drift.  All files now import from here.
 
+import logging
 import multiprocessing
 import os
+import threading
 from pathlib import Path
 
 __all__ = [
@@ -212,9 +214,6 @@ def set_seed(seed: int = SEED) -> None:
 # ---------------------------------------------------------------------------
 # Logging utilities (from logging_utils.py)
 # ---------------------------------------------------------------------------
-import logging
-import threading
-
 _NOISY_THIRD_PARTY_LOGGERS = [
     "PIL",
     "PIL.PngImagePlugin",

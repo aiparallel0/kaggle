@@ -8,10 +8,16 @@ import logging
 import os
 import struct
 import sys
+import time
 import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+try:
+    from PIL import Image as _PILImage
+except ImportError:
+    _PILImage = None  # type: ignore[assignment]
 
 try:
     import numpy as np
@@ -1328,8 +1334,8 @@ if __name__ == "__main__":
 # ---------------------------------------------------------------------------
 # Unified model evaluation (from evaluate_models.py)
 # ---------------------------------------------------------------------------
-from constants import DEVICE, FIELDS, MAX_LENGTH, _get_sroie_dir, _gpu_cleanup  # noqa: E402, I001
-from dataset_loaders import load_sroie_test  # noqa: E402, I001
+from constants import DEVICE, MAX_LENGTH, _get_sroie_dir, _gpu_cleanup  # noqa: E402, I001
+from data_pipeline import load_sroie_test  # noqa: E402, I001
 
 __all__ = [
     "load_test_samples",
@@ -1377,7 +1383,7 @@ def evaluate_donut_on_test(
     """Evaluate a DONUT model on the SROIE test set. Returns metrics dict."""
     from transformers import DonutProcessor
 
-    from donut_evaluator import _parse_sroie_output, load_model_with_tied_weights
+    from evaluation import _parse_sroie_output, load_model_with_tied_weights  # noqa: E402
 
     processor = DonutProcessor.from_pretrained(model_path)
     model = load_model_with_tied_weights(model_path, device=DEVICE)
@@ -1389,7 +1395,7 @@ def evaluate_donut_on_test(
 
     with torch.no_grad():
         for img_path, _gt in _progress(test_samples, desc="DONUT eval"):
-            image = Image.open(img_path).convert("RGB")
+            image = _PILImage.open(img_path).convert("RGB")
             pixel_values = processor(image, return_tensors="pt").pixel_values.to(DEVICE)
             decoder_input_ids = processor.tokenizer(
                 "<s_sroie>", add_special_tokens=False, return_tensors="pt"

@@ -1688,8 +1688,8 @@ def stage_trocr_experiments(args) -> StageResult:
     warnings: list[str] = []
 
     try:
-        import evaluate_models as eval_mod
-        import train_trocr_yolo as trocr_yolo
+        import evaluate_models as eval_mod  # noqa: I001
+        import train_trocr_yolo as trocr_yolo  # noqa: I001
 
         workspace = Path(args.workspace)
 

@@ -807,7 +807,7 @@ class ImportChainChecker:
             (success: bool, error_message: str)
         """
         try:
-            from dataset_loaders import SROIELoader
+            from data_pipeline import SROIELoader
 
             _ = SROIELoader()  # Try instantiating to catch runtime issues
             return True, ""
@@ -1561,7 +1561,7 @@ def validate_pipeline() -> bool:
         print(f"  ✗ Failed to load constants: {e}")
 
     try:
-        from donut_evaluator import DonutEvaluator  # noqa: F401
+        from evaluation import DonutEvaluator  # noqa: F401
 
         print("  ✓ DonutEvaluator class available")
         checks["donut_evaluator"] = True
@@ -1577,7 +1577,7 @@ def validate_pipeline() -> bool:
         print(f"  ✗ Failed to load PyTorch: {e}")
 
     try:
-        from donut_evaluator import DEVICE  # noqa: F401
+        from evaluation import DEVICE  # noqa: F401
 
         print(f"  ✓ Detected device: {DEVICE}")
         checks["device_type"] = True

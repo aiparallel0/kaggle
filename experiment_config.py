@@ -279,7 +279,7 @@ class ExperimentConfig:
 
 
 def _parse_yaml(path: str | Path) -> dict[str, Any]:
-    with open(path, "r", encoding="utf-8") as fh:
+    with open(path, encoding="utf-8") as fh:
         raw = yaml.safe_load(fh)
     if not isinstance(raw, dict):
         raise ValueError(f"YAML file {path} must be a mapping at the top level.")
@@ -524,7 +524,7 @@ def load_experiment_selection(
         # Graceful fallback: load everything from the experiments directory
         return load_all_experiments(experiments_dir)
 
-    with open(selection_file, "r", encoding="utf-8") as fh:
+    with open(selection_file, encoding="utf-8") as fh:
         data = json.load(fh)
 
     if not isinstance(data, dict) or "experiments" not in data:
@@ -607,7 +607,7 @@ if __name__ == "__main__":
 # Ablation control suite (from control_suite.py)
 # ---------------------------------------------------------------------------
 from dataclasses import asdict, dataclass, field  # noqa: E402, I001
-from typing import Any, ClassVar  # noqa: E402, I001
+from typing import ClassVar  # noqa: E402, I001
 from constants import BASE_MODEL, MAX_LENGTH, SEED  # noqa: E402, I001
 
 __all__ = [

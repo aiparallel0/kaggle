@@ -1248,7 +1248,7 @@ class DAGScheduler:
 
         if check_vram:
             try:
-                from resource_optimizer import detect_system_resources
+                from resource_manager import detect_system_resources
 
                 res = detect_system_resources()
                 # Each DONUT experiment needs ~8 GB VRAM
@@ -1999,7 +1999,7 @@ class TestRunner:
                 exit_code=result.returncode,
             )
             if result.stdout:
-                report.issues = [l.strip() for l in result.stdout.split("\n") if l.strip()]
+                report.issues = [ln.strip() for ln in result.stdout.split("\n") if ln.strip()]
             if report.passed:
                 logger.info("✓ Ruff check passed")
             else:
@@ -2248,8 +2248,8 @@ class MLTrainingOrchestrator:
         self.config = config
         self.logger = logging.getLogger(__name__)
         self.storage_manager = StorageManager(config.results_dir)
-        # Lazy import to avoid circular dependency with inject_results
-        from inject_results import ResultsAggregator
+        # Lazy import to avoid circular dependency with reporting
+        from reporting import ResultsAggregator
 
         self.results_aggregator = ResultsAggregator(config.results_dir)
 

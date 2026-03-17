@@ -125,8 +125,6 @@ except ImportError:
 
 
 # Project imports (do not require torch/transformers)
-from data_pipeline import DatasetNormalizer, extract_address_from_seller, normalise_samples
-
 import resource_manager as mm
 from cloud_orchestration import (
     AggregatedResults,
@@ -154,8 +152,27 @@ from cloud_orchestration import (
     _norm_ppf,
     _two_proportion_mdd,
 )
-from constants import BASE_MODEL, EMPTY_GT, FIELDS, IMAGE_EXTS, MAX_LENGTH, NEW_TOKENS, SEED
-from control_suite import (
+from constants import (
+    BASE_MODEL,
+    EMPTY_GT,
+    FIELDS,
+    IMAGE_EXTS,
+    MAX_LENGTH,
+    NEW_TOKENS,
+    SEED,
+    DeduplicatingHandler,
+    suppress_noisy_loggers,
+)
+from data_pipeline import (
+    DatasetLoadError,
+    DatasetNormalizer,
+    _ensure_dir,
+    _validate_sample_schema,
+    _validate_samples_nonempty,
+    extract_address_from_seller,
+    normalise_samples,
+)
+from experiment_config import (
     CONTROL_SUITE,
     ControlSuite,
     DonutControlConfig,
@@ -164,14 +181,7 @@ from control_suite import (
     get_augmentation_transforms,
     validate_sroie_oversample,
 )
-from dataset_loaders import (
-    DatasetLoadError,
-    _ensure_dir,
-    _validate_sample_schema,
-    _validate_samples_nonempty,
-)
 from reporting import EXP_NAMES, LEADERBOARD, PaperInjector, UnresolvedVarError, _safe
-from constants import DeduplicatingHandler, suppress_noisy_loggers
 from resource_manager import (
     ResourceOptimizedConfig,
     optimize_hyperparams,
