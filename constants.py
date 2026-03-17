@@ -180,8 +180,8 @@ def _mask_empty_field_labels(labels, gt: dict, tokenizer) -> "torch.Tensor":  # 
     for f in FIELDS:
         if gt.get(f, "").strip():
             continue  # field has content — do not mask
-        open_id = tokenizer.convert_tokens_to_ids(f"<s_{f}>")
-        close_id = tokenizer.convert_tokens_to_ids(f"</s_{f}>")
+        open_id = tokenizer.convert_tokens_to_ids([f"<s_{f}>"])[0]
+        close_id = tokenizer.convert_tokens_to_ids([f"</s_{f}>"])[0]
         # Skip if the special tokens are not registered in the vocabulary.
         if unk_id is not None and (open_id == unk_id or close_id == unk_id):
             continue
