@@ -26,7 +26,8 @@ pyyaml>=6.0
 # tqdm          → replaced with inline _progress() logger (16 lines)
 # scipy         → replaced with inline _smooth() moving-average (15 lines)
 # psutil        → replaced with inline _get_total_ram_bytes() via /proc/meminfo (18 lines)
-# opencv-python → never imported anywhere; PIL handles all image I/O
+# opencv-python → soft dep for train_trocr_yolo.py image resizing (inline import at training time only)
+#                 Install with: pip install opencv-python-headless
 # pandas        → never imported; stdlib csv module used instead
 # scikit-learn  → never imported
 # seaborn       → never imported; matplotlib used directly
