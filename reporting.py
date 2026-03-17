@@ -23,7 +23,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from constants import FIELDS, WORKSPACE
+from constants import FIELDS, WORKSPACE, _edit_distance, _progress
 
 # ---------------------------------------------------------------------------
 # Optional heavy dependencies (torch, PIL, matplotlib, numpy)
@@ -104,30 +104,6 @@ try:
     _MATPLOTLIB_AVAILABLE = True
 except ImportError:
     pass
-
-
-def _edit_distance(s1: str, s2: str) -> int:
-    """Levenshtein distance — replaces the editdistance package."""
-    m, n = len(s1), len(s2)
-    dp = list(range(n + 1))
-    for i in range(1, m + 1):
-        prev, dp[0] = dp[0], i
-        for j in range(1, n + 1):
-            prev, dp[j] = dp[j], prev if s1[i - 1] == s2[j - 1] else 1 + min(prev, dp[j], dp[j - 1])
-    return dp[n]
-
-
-def _progress(iterable, desc: str = "", total: int | None = None):
-    """Logging-based progress — replaces tqdm. Emits at 0 %, 10 %, … 100 %."""
-    _log = logging.getLogger(__name__)
-    items = list(iterable) if not hasattr(iterable, "__len__") and total is None else iterable
-    n = total if total is not None else len(items)  # type: ignore[arg-type]
-    step = max(1, -(-n // 10))
-    for i, item in enumerate(items):
-        if i % step == 0:
-            _log.info("%s %d/%d (%d%%)", desc, i, n, 100 * i // n if n else 0)
-        yield item
-    _log.info("%s done (%d items)", desc, n)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1575,10 +1551,6 @@ def benchmark_compare_main() -> None:
 
     # ── Save plots ───────────────────────────────────────────────────────────
     plot_results(all_results, out_dir=args.output_dir / "figures")
-
-
-if __name__ == "__main__":
-    benchmark_compare_main()
 
 
 # ---------------------------------------------------------------------------
@@ -3242,10 +3214,6 @@ def run_paper_diff(
     date_str = datetime.now(timezone.utc).strftime("%Y%m%d")
     out_file = Path(results_dir) / f"paper_diff_{date_str}.txt"
     print_diff_table(changes, output_file=out_file)
-
-
-if __name__ == "__main__":
-    main()
 
 
 # ---------------------------------------------------------------------------

@@ -738,24 +738,8 @@ except ImportError:
                 shutil.copy(best_sd_path, best_pt_path)
 
 
-from constants import DEVICE, FIELDS, SEED, WORKSPACE, _gpu_cleanup, _optimal_num_workers
-from control_suite import CONTROL_SUITE, get_augmentation_transforms
-
-
-def _progress(iterable, desc: str = "", total: int | None = None):
-    """Logging-based progress — replaces tqdm. Emits at 0 %, 10 %, … 100 %."""
-    import logging as _logging
-
-    _log = _logging.getLogger(__name__)
-    items = list(iterable) if not hasattr(iterable, "__len__") and total is None else iterable
-    n = total if total is not None else len(items)  # type: ignore[arg-type]
-    step = max(1, -(-n // 10))
-    for i, item in enumerate(items):
-        if i % step == 0:
-            _log.info("%s %d/%d (%d%%)", desc, i, n, 100 * i // n if n else 0)
-        yield item
-    _log.info("%s done (%d items)", desc, n)
-
+from constants import DEVICE, FIELDS, SEED, WORKSPACE, _gpu_cleanup, _optimal_num_workers, _progress
+from experiment_config import CONTROL_SUITE, get_augmentation_transforms
 
 __all__ = [
     "TrOCRReceiptDataset",

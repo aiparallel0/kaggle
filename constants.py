@@ -301,3 +301,37 @@ def suppress_noisy_loggers(level: int = logging.WARNING) -> None:
     """
     for name in _NOISY_THIRD_PARTY_LOGGERS:
         logging.getLogger(name).setLevel(level)
+
+
+# ---------------------------------------------------------------------------
+# Shared utility functions (used by both evaluation.py and reporting.py)
+# ---------------------------------------------------------------------------
+
+
+def _edit_distance(s1: str, s2: str) -> int:
+    """Levenshtein distance — replaces the editdistance package."""
+    m, n = len(s1), len(s2)
+    dp = list(range(n + 1))
+    for i in range(1, m + 1):
+        prev, dp[0] = dp[0], i
+        for j in range(1, n + 1):
+            prev, dp[j] = dp[j], prev if s1[i - 1] == s2[j - 1] else 1 + min(prev, dp[j], dp[j - 1])
+    return dp[n]
+
+
+def _progress(iterable, desc: str = "", total: int | None = None):
+    """Logging-based progress — replaces tqdm. Emits at 0 %, 10 %, … 100 %."""
+    import logging as _logging
+
+    _log = _logging.getLogger(__name__)
+    items = list(iterable) if not hasattr(iterable, "__len__") and total is None else iterable
+    n = total if total is not None else len(items)  # type: ignore[arg-type]
+    step = max(1, -(-n // 10))  # ceiling division by 10
+    for idx, item in enumerate(items):
+        if idx % step == 0 or idx == n - 1:
+            pct = int(100 * idx / max(n - 1, 1))
+            if desc:
+                _log.info("%s %3d%%", desc, pct)
+            else:
+                _log.info("%3d%%", pct)
+        yield item

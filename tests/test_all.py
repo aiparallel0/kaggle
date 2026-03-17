@@ -26,7 +26,6 @@ Individual test files merged:
 # Standard library
 import ast
 import dataclasses
-import importlib
 import inspect
 import json
 import logging
@@ -208,8 +207,8 @@ _needs_torch = pytest.mark.skipif(not _TORCH_AVAILABLE, reason="torch and transf
 # Guarded project imports — only reachable when torch + transformers are present
 if _TORCH_AVAILABLE:
     from constants import _mask_empty_field_labels  # noqa: E402, I001
-    from dataset_loaders import _LOADERS  # noqa: E402, I001
-    from donut_evaluator import (  # noqa: E402, I001
+    from data_pipeline import _LOADERS  # noqa: E402, I001
+    from evaluation import (  # noqa: E402, I001
         _unwrap_prediction,
         compute_metrics,
         normalized_edit_distance,
@@ -327,7 +326,7 @@ class TestSROIEKeyFileParsing:
 
     def test_four_line_file(self, tmp_path):
         """Standard 4-line SROIE key file parses correctly."""
-        from dataset_loaders import _load_key_file  # testing internal behaviour — intentional
+        from data_pipeline import _load_key_file  # testing internal behaviour — intentional
 
         key_dir = tmp_path / "key"
         key_dir.mkdir()
@@ -342,7 +341,7 @@ class TestSROIEKeyFileParsing:
 
     def test_five_line_file_multi_line_address(self, tmp_path):
         """5-line key file: address spans lines 2 and 3, total is line 4."""
-        from dataset_loaders import _load_key_file  # testing internal behaviour — intentional
+        from data_pipeline import _load_key_file  # testing internal behaviour — intentional
 
         key_dir = tmp_path / "key"
         key_dir.mkdir()
@@ -358,7 +357,7 @@ class TestSROIEKeyFileParsing:
 
     def test_six_line_file_multi_line_address(self, tmp_path):
         """6-line key file: address spans lines 2-4, total is line 5."""
-        from dataset_loaders import _load_key_file  # testing internal behaviour — intentional
+        from data_pipeline import _load_key_file  # testing internal behaviour — intentional
 
         key_dir = tmp_path / "key"
         key_dir.mkdir()
@@ -372,7 +371,7 @@ class TestSROIEKeyFileParsing:
 
     def test_train_parse_txt_key_four_lines(self, tmp_path):
         """_load_key_file handles standard 4-line file."""
-        from dataset_loaders import _load_key_file  # noqa: E402, I001
+        from data_pipeline import _load_key_file  # noqa: E402, I001
 
         key_dir = tmp_path / "key"
         key_dir.mkdir()
@@ -385,7 +384,7 @@ class TestSROIEKeyFileParsing:
 
     def test_train_parse_txt_key_multiline_address(self, tmp_path):
         """_load_key_file handles 5-line file with multi-line address."""
-        from dataset_loaders import _load_key_file  # noqa: E402, I001
+        from data_pipeline import _load_key_file  # noqa: E402, I001
 
         key_dir = tmp_path / "key"
         key_dir.mkdir()
@@ -398,7 +397,7 @@ class TestSROIEKeyFileParsing:
 
     def test_train_parse_txt_key_too_few_lines(self, tmp_path):
         """_load_key_file returns empty dict for files with fewer than 4 lines."""
-        from dataset_loaders import _load_key_file  # noqa: E402, I001
+        from data_pipeline import _load_key_file  # noqa: E402, I001
 
         key_dir = tmp_path / "key"
         key_dir.mkdir()
@@ -1218,7 +1217,7 @@ def test_validate_sroie_oversample_error_message_is_informative():
 
 def test_validate_sroie_oversample_exported():
     """validate_sroie_oversample must be in control_suite.__all__."""
-    import control_suite
+    import experiment_config as control_suite
 
     assert "validate_sroie_oversample" in control_suite.__all__
 
@@ -1405,7 +1404,7 @@ def test_get_augmentation_transforms_invalid_raises():
 
 def test_get_augmentation_transforms_exported():
     """get_augmentation_transforms must be in control_suite.__all__."""
-    import control_suite
+    import experiment_config as control_suite
 
     assert "get_augmentation_transforms" in control_suite.__all__
 
@@ -1514,7 +1513,7 @@ class TestEnsureDir:
 
 class TestPathHelpers(unittest.TestCase):
     def test_get_datasets_dir_default(self):
-        from dataset_loaders import _get_datasets_dir
+        from data_pipeline import _get_datasets_dir
 
         old = os.environ.pop("DONUT_WORKSPACE", None)
         try:
@@ -1525,7 +1524,7 @@ class TestPathHelpers(unittest.TestCase):
                 os.environ["DONUT_WORKSPACE"] = old
 
     def test_get_datasets_dir_custom(self):
-        from dataset_loaders import _get_datasets_dir
+        from data_pipeline import _get_datasets_dir
 
         old = os.environ.get("DONUT_WORKSPACE")
         os.environ["DONUT_WORKSPACE"] = "/tmp/custom"
@@ -1539,7 +1538,7 @@ class TestPathHelpers(unittest.TestCase):
                 del os.environ["DONUT_WORKSPACE"]
 
     def test_get_sroie_dir_default(self):
-        from dataset_loaders import _get_sroie_dir
+        from data_pipeline import _get_sroie_dir
 
         old = os.environ.pop("SROIE_DATA_DIR", None)
         try:
@@ -1550,7 +1549,7 @@ class TestPathHelpers(unittest.TestCase):
                 os.environ["SROIE_DATA_DIR"] = old
 
     def test_get_sroie_dir_custom(self):
-        from dataset_loaders import _get_sroie_dir
+        from data_pipeline import _get_sroie_dir
 
         old = os.environ.get("SROIE_DATA_DIR")
         os.environ["SROIE_DATA_DIR"] = "/data/sroie"
@@ -1574,7 +1573,7 @@ class TestSROIESplitDirectories(unittest.TestCase):
 
     def test_val_and_test_use_different_dirs(self):
         """val_img/ != test_img/ — ensures early stopping does not use test data."""
-        from dataset_loaders import SROIELoader
+        from data_pipeline import SROIELoader
 
         loader = SROIELoader()
         val_dirs = loader._SPLIT_DIRS["val"]
@@ -1586,7 +1585,7 @@ class TestSROIESplitDirectories(unittest.TestCase):
 
     def test_train_val_test_all_different(self):
         """All three splits use different source directories."""
-        from dataset_loaders import SROIELoader
+        from data_pipeline import SROIELoader
 
         loader = SROIELoader()
         dirs = [loader._SPLIT_DIRS[s] for s in ("train", "val", "test")]
@@ -1595,7 +1594,7 @@ class TestSROIESplitDirectories(unittest.TestCase):
         )
 
     def test_val_uses_val_img(self):
-        from dataset_loaders import SROIELoader
+        from data_pipeline import SROIELoader
 
         loader = SROIELoader()
         img_subdir, key_subdir = loader._SPLIT_DIRS["val"]
@@ -1603,7 +1602,7 @@ class TestSROIESplitDirectories(unittest.TestCase):
         assert key_subdir == "val_key"
 
     def test_test_uses_test_img(self):
-        from dataset_loaders import SROIELoader
+        from data_pipeline import SROIELoader
 
         loader = SROIELoader()
         img_subdir, key_subdir = loader._SPLIT_DIRS["test"]
@@ -1611,7 +1610,7 @@ class TestSROIESplitDirectories(unittest.TestCase):
         assert key_subdir == "test_key"
 
     def test_train_uses_img(self):
-        from dataset_loaders import SROIELoader
+        from data_pipeline import SROIELoader
 
         loader = SROIELoader()
         img_subdir, key_subdir = loader._SPLIT_DIRS["train"]
@@ -1626,19 +1625,19 @@ class TestSROIESplitDirectories(unittest.TestCase):
 
 class TestSellerSplitCache(unittest.TestCase):
     def test_load_returns_dict(self):
-        from dataset_loaders import _load_seller_split_cache
+        from data_pipeline import _load_seller_split_cache
 
         cache = _load_seller_split_cache()
         assert isinstance(cache, dict)
 
     def test_no_metadata_key(self):
-        from dataset_loaders import _load_seller_split_cache
+        from data_pipeline import _load_seller_split_cache
 
         cache = _load_seller_split_cache()
         assert "_metadata" not in cache
 
     def test_entries_have_company_and_address(self):
-        from dataset_loaders import _load_seller_split_cache
+        from data_pipeline import _load_seller_split_cache
 
         cache = _load_seller_split_cache()
         for seller, split in cache.items():
@@ -1649,7 +1648,7 @@ class TestSellerSplitCache(unittest.TestCase):
         """When seller is in cache, _invoices_donut_remap uses cached values."""
         import json
 
-        from dataset_loaders import (
+        from data_pipeline import (
             InvoicesDonutLoader,
             _load_seller_split_cache,
         )
@@ -1690,7 +1689,7 @@ def test_val_test_no_overlap():
     performance, inflating reported F1 by ~5–8 pp.  stage_install() creates
     physically separate val_img/ and test_img/ directories to prevent this.
     """
-    from dataset_loaders import SROIELoader
+    from data_pipeline import SROIELoader
 
     loader = SROIELoader()
 
@@ -1989,16 +1988,16 @@ class TestGP2ValidateStepCount(unittest.TestCase):
         )
 
     def test_validate_training_config_exists_in_resource_optimizer(self):
-        """resource_optimizer.py must export validate_training_config."""
-        from resource_optimizer import validate_training_config
+        """resource_manager.py must export validate_training_config."""
+        from resource_manager import validate_training_config
 
         assert callable(validate_training_config), (
-            "validate_training_config must be a callable in resource_optimizer.py"
+            "validate_training_config must be a callable in resource_manager.py"
         )
 
     def test_validate_training_config_raises_on_too_few_steps(self):
         """Fewer than 200 optimizer steps must raise ValueError."""
-        from resource_optimizer import validate_training_config
+        from resource_manager import validate_training_config
 
         # 10 samples × 1 epoch / batch_size=8 / accum=1 = only 1 step — way too few
         with pytest.raises((ValueError, RuntimeError)):
@@ -2112,7 +2111,7 @@ class TestGP4DecoderStartTokenVerification(unittest.TestCase):
 
 class TestPattern3CompatShim(unittest.TestCase):
     """Pattern 3 (CLAUDE.md §5): The PreTrainedTokenizerBase compat shim must
-    be present in dataset_loaders.py.
+    be present in data_pipeline.py.
 
     In transformers ≥4.47, PreTrainedTokenizerBase moved from
     ``transformers.tokenization_utils_base`` to ``transformers`` directly.
@@ -2121,17 +2120,17 @@ class TestPattern3CompatShim(unittest.TestCase):
 
     def test_compat_shim_contains_pretrained_tokenizer_base(self):
         """dataset_loaders.py must reference PreTrainedTokenizerBase."""
-        source = _read("dataset_loaders.py")
+        source = _read("data_pipeline.py")
         assert "PreTrainedTokenizerBase" in source, (
-            "dataset_loaders.py is missing the PreTrainedTokenizerBase import. "
+            "data_pipeline.py is missing the PreTrainedTokenizerBase import. "
             "Pattern 3 requires the compat shim for transformers ≥4.47 compatibility."
         )
 
     def test_compat_shim_has_fallback_import_path(self):
         """The shim must include the fallback from tokenization_utils_base."""
-        source = _read("dataset_loaders.py")
+        source = _read("data_pipeline.py")
         assert "tokenization_utils_base" in source, (
-            "dataset_loaders.py missing fallback import from "
+            "data_pipeline.py missing fallback import from "
             "transformers.tokenization_utils_base — "
             "this will crash on transformers <4.47. "
             "Pattern 3 (CLAUDE.md §5): preserve the compat shim."
@@ -2139,7 +2138,7 @@ class TestPattern3CompatShim(unittest.TestCase):
 
     def test_compat_shim_uses_try_except(self):
         """The shim must be a try/except block, not a version comparison."""
-        source = _read("dataset_loaders.py")
+        source = _read("data_pipeline.py")
         tree = ast.parse(source)
 
         # The shim wraps the conditional import in a try/except:
@@ -2162,7 +2161,7 @@ class TestPattern3CompatShim(unittest.TestCase):
                     break
 
         assert found_shim, (
-            "dataset_loaders.py has no try/except block whose body imports "
+            "data_pipeline.py has no try/except block whose body imports "
             "PreTrainedTokenizerBase. Pattern 3 requires the try/except form (not a "
             "version check) so that the shim works across all "
             "Python/transformers version combinations."
@@ -2184,7 +2183,7 @@ class TestPattern7ImportorskipOrder(unittest.TestCase):
     """
 
     def test_test_metrics_importorskip_before_donut_evaluator(self):
-        """test_all.py must guard torch before importing donut_evaluator.
+        """test_all.py must guard torch before importing evaluation.
 
         In the merged file the guard is a try/except + _TORCH_AVAILABLE flag
         (instead of module-level pytest.importorskip) so that non-torch tests
@@ -2192,8 +2191,8 @@ class TestPattern7ImportorskipOrder(unittest.TestCase):
         protected import.
         """
         source = (Path(__file__).parent / "test_all.py").read_text()
-        donut_import_pos = source.find("from donut_evaluator import")
-        assert donut_import_pos != -1, "'from donut_evaluator import' not found in test_all.py"
+        donut_import_pos = source.find("from evaluation import")
+        assert donut_import_pos != -1, "'from evaluation import' not found in test_all.py"
 
         # Accept either importorskip (original Pattern 7) or _TORCH_AVAILABLE try/except guard
         guard_candidates = [
@@ -2206,7 +2205,7 @@ class TestPattern7ImportorskipOrder(unittest.TestCase):
             "Pattern 7 (CLAUDE.md §16)."
         )
         assert guard_pos < donut_import_pos, (
-            "Pattern 7 violation in test_all.py: 'from donut_evaluator import' appears "
+            "Pattern 7 violation in test_all.py: 'from evaluation import' appears "
             "before the torch guard. The guard must come first so that collection fails "
             "gracefully (skip) rather than crashing with ImportError."
         )
@@ -2541,7 +2540,7 @@ class TestInjectorRobustness(unittest.TestCase):
 
     def test_fill_paper_creates_missing_output_directory(self):
         """fill_paper() must create the parent directory of output_path if absent."""
-        from inject_results import fill_paper
+        from reporting import fill_paper
 
         with tempfile.TemporaryDirectory() as tmp:
             paper = Path(tmp) / "paper.tex"
@@ -2555,7 +2554,7 @@ class TestInjectorRobustness(unittest.TestCase):
 
     def test_fill_paper_creates_output_in_existing_directory(self):
         """fill_paper() must still work normally when output dir already exists."""
-        from inject_results import fill_paper
+        from reporting import fill_paper
 
         with tempfile.TemporaryDirectory() as tmp:
             paper = Path(tmp) / "paper.tex"
@@ -2625,7 +2624,7 @@ class TestDonutEvaluatorModelPath(unittest.TestCase):
                             "DonutEvaluator.__init__ must NOT use model_dir (use model_path)"
                         )
                         return
-        pytest.fail("DonutEvaluator.__init__ not found in donut_evaluator.py")
+        pytest.fail("DonutEvaluator.__init__ not found in evaluation.py")
 
 
 # ---------------------------------------------------------------------------
@@ -2734,8 +2733,9 @@ class TestTrocrCallsDataPrep(unittest.TestCase):
 
 class TestLoggingUtilsImportable(unittest.TestCase):
     def test_import(self):
-        """logging_utils must be importable without heavy dependencies."""
-        mod = importlib.import_module("logging_utils")
+        """Logging utilities must be importable from constants (merged from logging_utils)."""
+        import constants as mod
+
         assert hasattr(mod, "suppress_noisy_loggers")
         assert hasattr(mod, "DeduplicatingHandler")
         assert hasattr(mod, "_NOISY_THIRD_PARTY_LOGGERS")
@@ -2771,19 +2771,19 @@ class TestImportChain(unittest.TestCase):
         assert SEED == 42
 
     def test_address_extractor_importable(self):
-        # extract_address_from_seller moved to dataset_normalizer.py
-        from dataset_normalizer import extract_address_from_seller
+        # extract_address_from_seller moved to data_pipeline.py
+        from data_pipeline import extract_address_from_seller
 
         assert callable(extract_address_from_seller)
 
     def test_inject_results_importable(self):
-        from inject_results import LEADERBOARD
+        from reporting import LEADERBOARD
 
         assert len(LEADERBOARD) > 0
 
     def test_training_config_importable(self):
-        # TrainingConfig moved to resource_optimizer.py
-        from resource_optimizer import TrainingConfig
+        # TrainingConfig moved to resource_manager.py
+        from resource_manager import TrainingConfig
 
         cfg = TrainingConfig()
         cfg.validate()
@@ -2807,8 +2807,8 @@ class TestImportChain(unittest.TestCase):
         assert hasattr(TestRunner, "run_all_checks")
 
     def test_results_aggregator_importable(self):
-        # ResultsAggregator moved to inject_results.py
-        from inject_results import ResultsAggregator
+        # ResultsAggregator moved to reporting.py
+        from reporting import ResultsAggregator
 
         agg = ResultsAggregator(results_dir=Path("/tmp"))
         assert agg is not None
@@ -2827,7 +2827,7 @@ class TestImportChain(unittest.TestCase):
         assert hasattr(GitController, "get_current_branch")
 
     def test_validators_importable(self):
-        from validators import ImportChainChecker
+        from validation import ImportChainChecker
 
         success, errors = ImportChainChecker.check_all()
         # Import chain should pass (constants.py exists)
@@ -3001,10 +3001,10 @@ class TestComputePilMbPerSample(unittest.TestCase):
 
 
 def _patch_available_ram(available_bytes: int):
-    """Context manager: patch memory_manager._get_available_ram_bytes to return a fixed value."""
+    """Context manager: patch resource_manager._get_available_ram_bytes to return a fixed value."""
     import unittest.mock as mock
 
-    return mock.patch("memory_manager._get_available_ram_bytes", return_value=available_bytes)
+    return mock.patch("resource_manager._get_available_ram_bytes", return_value=available_bytes)
 
 
 class TestRamCacheIsSafe(unittest.TestCase):
@@ -3155,10 +3155,10 @@ class TestRamHeadroomMb(unittest.TestCase):
         assert result == 0.0, f"Expected 0.0 when RAM unknown, got {result}"
 
     def test_exported_in_all(self):
-        """ram_headroom_mb must be listed in memory_manager.__all__."""
+        """ram_headroom_mb must be listed in resource_manager.__all__."""
         assert "ram_headroom_mb" in mm.__all__, (
             "ram_headroom_mb must be exported in __all__ so callers can do "
-            "`from memory_manager import ram_headroom_mb`"
+            "`from resource_manager import ram_headroom_mb`"
         )
 
 
@@ -3249,7 +3249,7 @@ class TestParsePredictionListMerge(unittest.TestCase):
     def _make_evaluator_stub(self):
         """Return a minimal DonutEvaluator-like object with just _parse_prediction."""
         pytest.importorskip("torch")
-        from donut_evaluator import DonutEvaluator
+        from evaluation import DonutEvaluator
 
         # Build the smallest possible evaluator without hitting from_pretrained
         evaluator = object.__new__(DonutEvaluator)
@@ -3280,7 +3280,7 @@ class TestParsePredictionListMerge(unittest.TestCase):
     def test_first_occurrence_wins_on_duplicate_keys(self):
         """When multiple pages share a key, the first page's value wins."""
         pytest.importorskip("torch")
-        from donut_evaluator import DonutEvaluator
+        from evaluation import DonutEvaluator
 
         evaluator = object.__new__(DonutEvaluator)
         evaluator.parse_failure_count = 0
@@ -3307,7 +3307,7 @@ class TestParsePredictionListMerge(unittest.TestCase):
     def test_empty_list_counts_as_failure(self):
         """Fully empty list (no dict pages) is a parse failure."""
         pytest.importorskip("torch")
-        from donut_evaluator import DonutEvaluator
+        from evaluation import DonutEvaluator
 
         evaluator = object.__new__(DonutEvaluator)
         evaluator.parse_failure_count = 0
@@ -3499,13 +3499,13 @@ class TestLoadModelWithTiedWeights(unittest.TestCase):
 
     def test_raises_when_lm_head_missing_and_tie_false(self):
         """RuntimeError raised when lm_head.weight absent and tie_word_embeddings=False."""
-        from donut_evaluator import load_model_with_tied_weights
+        from evaluation import load_model_with_tied_weights
 
         mock_model = self._make_mock_model(tie_word_embeddings=False)
         loading_info = {"missing_keys": ["decoder.lm_head.weight"], "unexpected_keys": []}
 
         with mock.patch(
-            "donut_evaluator.VisionEncoderDecoderModel.from_pretrained",
+            "evaluation.VisionEncoderDecoderModel.from_pretrained",
             return_value=(mock_model, loading_info),
         ):
             with pytest.raises(RuntimeError, match="CRITICAL"):
@@ -3513,13 +3513,13 @@ class TestLoadModelWithTiedWeights(unittest.TestCase):
 
     def test_no_raise_when_lm_head_present(self):
         """No RuntimeError when lm_head.weight is present in the checkpoint."""
-        from donut_evaluator import load_model_with_tied_weights
+        from evaluation import load_model_with_tied_weights
 
         mock_model = self._make_mock_model(tie_word_embeddings=False)
         loading_info = {"missing_keys": [], "unexpected_keys": []}
 
         with mock.patch(
-            "donut_evaluator.VisionEncoderDecoderModel.from_pretrained",
+            "evaluation.VisionEncoderDecoderModel.from_pretrained",
             return_value=(mock_model, loading_info),
         ):
             # Should not raise — lm_head is present
@@ -3532,13 +3532,13 @@ class TestLoadModelWithTiedWeights(unittest.TestCase):
         Legacy checkpoints tie lm_head to embed_tokens, so lm_head.weight is
         legitimately absent from the shard — _retie_decoder_head re-ties it.
         """
-        from donut_evaluator import load_model_with_tied_weights
+        from evaluation import load_model_with_tied_weights
 
         mock_model = self._make_mock_model(tie_word_embeddings=True)
         loading_info = {"missing_keys": ["decoder.lm_head.weight"], "unexpected_keys": []}
 
         with mock.patch(
-            "donut_evaluator.VisionEncoderDecoderModel.from_pretrained",
+            "evaluation.VisionEncoderDecoderModel.from_pretrained",
             return_value=(mock_model, loading_info),
         ):
             # Should not raise — legacy tied checkpoint, _retie_decoder_head handles it
@@ -3572,7 +3572,7 @@ class TestAllowHighParseFailures(unittest.TestCase):
         """Return a DonutEvaluator stub that simulates 100% parse failures."""
         pytest.importorskip("torch")
         pytest.importorskip("transformers")
-        from donut_evaluator import DonutEvaluator, EvaluationResult
+        from evaluation import DonutEvaluator, EvaluationResult
 
         evaluator = object.__new__(DonutEvaluator)
         evaluator.parse_failure_count = 0
@@ -3651,7 +3651,7 @@ class TestAllowHighParseFailures(unittest.TestCase):
         """evaluate(allow_high_parse_failures=True) does not change low-failure behaviour."""
         pytest.importorskip("torch")
         pytest.importorskip("transformers")
-        from donut_evaluator import DonutEvaluator
+        from evaluation import DonutEvaluator
 
         evaluator = object.__new__(DonutEvaluator)
         evaluator.parse_failure_count = 0  # zero failures
@@ -3785,7 +3785,7 @@ def test_lm_head_not_missing_after_reload():
 
     import unittest.mock as _mock
 
-    from donut_evaluator import load_model_with_tied_weights  # noqa: E402
+    from evaluation import load_model_with_tied_weights  # noqa: E402
 
     decoder_config = _mock.MagicMock()
     decoder_config.tie_word_embeddings = False
@@ -3800,7 +3800,7 @@ def test_lm_head_not_missing_after_reload():
     loading_info = {"missing_keys": [], "unexpected_keys": []}
 
     with _mock.patch(
-        "donut_evaluator.VisionEncoderDecoderModel.from_pretrained",
+        "evaluation.VisionEncoderDecoderModel.from_pretrained",
         return_value=(mock_model, loading_info),
     ):
         result = load_model_with_tied_weights("/fake/checkpoint")
@@ -3820,7 +3820,7 @@ def test_token2json_list_output_merged():
     pytest.importorskip("torch")
     pytest.importorskip("transformers")
 
-    from donut_evaluator import DonutEvaluator  # noqa: E402
+    from evaluation import DonutEvaluator  # noqa: E402
 
     evaluator = object.__new__(DonutEvaluator)
     evaluator.parse_failure_count = 0
@@ -3886,7 +3886,7 @@ class TestBenchmarkCompareMetricUnification(unittest.TestCase):
             if k not in sys.modules:
                 saved[k] = v
         with mock.patch.dict(sys.modules, saved):
-            import benchmark_compare as bc  # noqa: I001
+            import reporting as bc  # noqa: I001
             import importlib
 
             importlib.reload(bc)
@@ -3895,7 +3895,7 @@ class TestBenchmarkCompareMetricUnification(unittest.TestCase):
     def test_token_f1_is_exact_match(self):
         """_token_f1 must return 1.0 only on exact match, 0.0 on partial match."""
         try:
-            import benchmark_compare as bc
+            import reporting as bc
         except ImportError:
             pytest.skip("benchmark_compare unavailable")
         # Exact match → 1.0
@@ -3906,7 +3906,7 @@ class TestBenchmarkCompareMetricUnification(unittest.TestCase):
     def test_token_f1_squad_is_partial_credit(self):
         """_token_f1_squad must give partial credit for overlapping tokens."""
         try:
-            import benchmark_compare as bc
+            import reporting as bc
         except ImportError:
             pytest.skip("benchmark_compare unavailable")
         # "WATSON SODA SNACKS" vs "watson soda" — 2 tokens in common
@@ -3917,7 +3917,7 @@ class TestBenchmarkCompareMetricUnification(unittest.TestCase):
         """Confirm the two functions produce different scores on a partial match
         so that the change from _token_f1_squad to _token_f1 actually matters."""
         try:
-            import benchmark_compare as bc
+            import reporting as bc
         except ImportError:
             pytest.skip("benchmark_compare unavailable")
         pred = "123 MAIN STREET SINGAPORE"
@@ -3934,7 +3934,7 @@ class TestBenchmarkCompareMetricUnification(unittest.TestCase):
     def test_both_empty_returns_one(self):
         """Both functions must return 1.0 when both pred and gold are empty."""
         try:
-            import benchmark_compare as bc
+            import reporting as bc
         except ImportError:
             pytest.skip("benchmark_compare unavailable")
         assert bc._token_f1("", "") == 1.0
@@ -5360,7 +5360,7 @@ class TestImageSizeAwareVRAM:
 
     def test_get_image_size_fallback_on_missing_file(self):
         """get_image_size_from_processor_config falls back to (1280, 960) when file absent."""
-        from resource_optimizer import get_image_size_from_processor_config
+        from resource_manager import get_image_size_from_processor_config
 
         result = get_image_size_from_processor_config("/nonexistent/path/processor_config.json")
         assert result == (1280, 960), f"Expected fallback (1280, 960), got {result}"
@@ -5369,7 +5369,7 @@ class TestImageSizeAwareVRAM:
         """get_image_size_from_processor_config correctly parses a valid config file."""
         import json
 
-        from resource_optimizer import get_image_size_from_processor_config
+        from resource_manager import get_image_size_from_processor_config
 
         cfg = {"image_processor": {"size": {"height": 2560, "width": 1920}}}
         config_file = tmp_path / "processor_config.json"
@@ -6296,7 +6296,7 @@ class TestBugPatternDetectorJsonConfusion(unittest.TestCase):
     """
 
     def test_detects_bare_true(self):
-        from validators import BugPatternDetector
+        from validation import BugPatternDetector
 
         bugs = BugPatternDetector.detect_python_json_confusion(
             'config = {"use_cache": true}', Path("test.py")
@@ -6305,7 +6305,7 @@ class TestBugPatternDetectorJsonConfusion(unittest.TestCase):
         assert "true" in bugs[0].description
 
     def test_detects_bare_false(self):
-        from validators import BugPatternDetector
+        from validation import BugPatternDetector
 
         bugs = BugPatternDetector.detect_python_json_confusion(
             "model.config.tie_word_embeddings = false", Path("test.py")
@@ -6314,21 +6314,21 @@ class TestBugPatternDetectorJsonConfusion(unittest.TestCase):
         assert "false" in bugs[0].description
 
     def test_detects_bare_null(self):
-        from validators import BugPatternDetector
+        from validation import BugPatternDetector
 
         bugs = BugPatternDetector.detect_python_json_confusion("x = null", Path("test.py"))
         assert len(bugs) == 1
         assert "null" in bugs[0].description
 
     def test_no_false_positive_for_python_booleans(self):
-        from validators import BugPatternDetector
+        from validation import BugPatternDetector
 
         code = 'use_cache = True\ntie = False\nx = None\nword = "truecolor"'
         bugs = BugPatternDetector.detect_python_json_confusion(code, Path("test.py"))
         assert bugs == [], f"Expected no bugs for valid Python booleans, got: {bugs}"
 
     def test_skips_comment_lines(self):
-        from validators import BugPatternDetector
+        from validation import BugPatternDetector
 
         bugs = BugPatternDetector.detect_python_json_confusion(
             "# tie_word_embeddings = false  (JSON literal example in comment)",
@@ -6337,14 +6337,14 @@ class TestBugPatternDetectorJsonConfusion(unittest.TestCase):
         assert bugs == [], "Comment lines must not trigger JSON literal detection"
 
     def test_fix_suggestion_contains_replacement(self):
-        from validators import BugPatternDetector
+        from validation import BugPatternDetector
 
         bugs = BugPatternDetector.detect_python_json_confusion("x = true", Path("test.py"))
         assert "True" in bugs[0].fix_suggestion
 
     def test_severity_is_critical(self):
         from cloud_orchestration import SeverityLevel
-        from validators import BugPatternDetector
+        from validation import BugPatternDetector
 
         bugs = BugPatternDetector.detect_python_json_confusion("x = false", Path("test.py"))
         assert bugs[0].severity == SeverityLevel.CRITICAL
@@ -6359,14 +6359,14 @@ class TestBugPatternDetectorSyntax(unittest.TestCase):
     """Syntax error detection via ast.parse."""
 
     def test_valid_python_no_bugs(self):
-        from validators import BugPatternDetector
+        from validation import BugPatternDetector
 
         code = 'x = [1, 2, 3]\ny = {"key": "value"}\nresult = x + [y["key"]]'
         bugs = BugPatternDetector.detect_syntax_errors(code, Path("test.py"))
         assert bugs == []
 
     def test_syntax_error_detected(self):
-        from validators import BugPatternDetector
+        from validation import BugPatternDetector
 
         code = "x = [1, 2, 3"  # Missing closing bracket
         bugs = BugPatternDetector.detect_syntax_errors(code, Path("test.py"))
@@ -6374,7 +6374,7 @@ class TestBugPatternDetectorSyntax(unittest.TestCase):
         assert any(b.category == "syntax" for b in bugs)
 
     def test_syntax_error_has_non_negative_line(self):
-        from validators import BugPatternDetector
+        from validation import BugPatternDetector
 
         code = "x = [1, 2, 3\ny = 'ok'"  # Missing bracket
         bugs = BugPatternDetector.detect_syntax_errors(code, Path("test.py"))
@@ -6382,7 +6382,7 @@ class TestBugPatternDetectorSyntax(unittest.TestCase):
         assert bugs[0].line >= 0
 
     def test_missing_comma_detected(self):
-        from validators import BugPatternDetector
+        from validation import BugPatternDetector
 
         # ExperimentConfig list with missing trailing comma (Pattern 1 from CLAUDE.md §5)
         code = "configs = [\n    ExperimentConfig(id=1)\n    ExperimentConfig(id=2)\n]"
@@ -6404,7 +6404,7 @@ class TestBugPatternDetectorTieWordEmbeddings(unittest.TestCase):
     """
 
     def test_resize_without_tie_word_embeddings_detected(self):
-        from validators import BugPatternDetector
+        from validation import BugPatternDetector
 
         code = "model.resize_token_embeddings(len(tokenizer))\ntrainer.train()"
         bugs = BugPatternDetector.detect_missing_tie_word_embeddings(code, Path("train.py"))
@@ -6412,7 +6412,7 @@ class TestBugPatternDetectorTieWordEmbeddings(unittest.TestCase):
         assert any("tie_word_embeddings" in b.fix_suggestion for b in bugs)
 
     def test_resize_with_tie_word_embeddings_no_bug(self):
-        from validators import BugPatternDetector
+        from validation import BugPatternDetector
 
         code = (
             "model.resize_token_embeddings(len(tokenizer))\n"
@@ -6422,7 +6422,7 @@ class TestBugPatternDetectorTieWordEmbeddings(unittest.TestCase):
         assert bugs == [], f"Expected no bugs when tie_word_embeddings is set: {bugs}"
 
     def test_no_resize_no_bug(self):
-        from validators import BugPatternDetector
+        from validation import BugPatternDetector
 
         code = "trainer.train()\nresult = trainer.evaluate()"
         bugs = BugPatternDetector.detect_missing_tie_word_embeddings(code, Path("train.py"))
@@ -6430,7 +6430,7 @@ class TestBugPatternDetectorTieWordEmbeddings(unittest.TestCase):
 
     def test_severity_is_critical(self):
         from cloud_orchestration import SeverityLevel
-        from validators import BugPatternDetector
+        from validation import BugPatternDetector
 
         code = "model.resize_token_embeddings(len(tokenizer))\npass"
         bugs = BugPatternDetector.detect_missing_tie_word_embeddings(code, Path("train.py"))
@@ -6448,7 +6448,7 @@ class TestImportChainChecker(unittest.TestCase):
 
     def test_check_constants_import_succeeds(self):
         """The real constants.py must import successfully."""
-        from validators import ImportChainChecker
+        from validation import ImportChainChecker
 
         success, error = ImportChainChecker.check_constants_import()
         assert success, f"constants.py import failed: {error}"
@@ -6456,27 +6456,27 @@ class TestImportChainChecker(unittest.TestCase):
 
     def test_check_all_succeeds(self):
         """Full import chain (constants + dataset_loaders) must pass."""
-        from validators import ImportChainChecker
+        from validation import ImportChainChecker
 
         success, errors = ImportChainChecker.check_all()
         assert success, f"Import chain check failed: {errors}"
         assert errors == []
 
     def test_diagnose_no_module_named(self):
-        from validators import ImportChainChecker
+        from validation import ImportChainChecker
 
         suggestion = ImportChainChecker.diagnose_import_error("No module named 'torch'")
         assert "pip install" in suggestion.lower() or "requirements" in suggestion.lower()
 
     def test_diagnose_syntax_error(self):
-        from validators import ImportChainChecker
+        from validation import ImportChainChecker
 
         # diagnose_import_error checks for "syntax error" (with space, lower-case)
         suggestion = ImportChainChecker.diagnose_import_error("syntax error at line 5")
         assert "syntax" in suggestion.lower()
 
     def test_diagnose_tie_word_embeddings(self):
-        from validators import ImportChainChecker
+        from validation import ImportChainChecker
 
         suggestion = ImportChainChecker.diagnose_import_error(
             "AttributeError: tie_word_embeddings not found"
@@ -6484,13 +6484,13 @@ class TestImportChainChecker(unittest.TestCase):
         assert "tie_word_embeddings" in suggestion.lower()
 
     def test_diagnose_unknown_error_returns_non_empty(self):
-        from validators import ImportChainChecker
+        from validation import ImportChainChecker
 
         suggestion = ImportChainChecker.diagnose_import_error("completely unknown error XYZ123")
         assert len(suggestion) > 0, "diagnose_import_error must return a non-empty suggestion"
 
     def test_diagnose_lm_head_error(self):
-        from validators import ImportChainChecker
+        from validation import ImportChainChecker
 
         suggestion = ImportChainChecker.diagnose_import_error(
             "RuntimeError: CRITICAL lm_head weight missing"
@@ -6512,7 +6512,7 @@ class TestModelWeightValidator(unittest.TestCase):
 
     def test_lm_head_present_passes(self):
         """No missing keys → validation passes."""
-        from validators import ModelWeightValidator
+        from validation import ModelWeightValidator
 
         valid, error = ModelWeightValidator.check_missing_keys_after_load(
             missing_keys=[],
@@ -6529,7 +6529,7 @@ class TestModelWeightValidator(unittest.TestCase):
         the checkpoint shard, lm_head gets randomly re-initialized on reload →
         F1~0.42 (garbled but syntactically valid predictions).
         """
-        from validators import ModelWeightValidator
+        from validation import ModelWeightValidator
 
         valid, error = ModelWeightValidator.check_missing_keys_after_load(
             missing_keys=["decoder.lm_head.weight"],
@@ -6542,7 +6542,7 @@ class TestModelWeightValidator(unittest.TestCase):
 
     def test_lm_head_missing_tie_true_passes(self):
         """lm_head.weight missing with tie_word_embeddings=True → OK (legacy tied checkpoint)."""
-        from validators import ModelWeightValidator
+        from validation import ModelWeightValidator
 
         valid, error = ModelWeightValidator.check_missing_keys_after_load(
             missing_keys=["decoder.lm_head.weight"],
@@ -6553,7 +6553,7 @@ class TestModelWeightValidator(unittest.TestCase):
 
     def test_other_missing_keys_no_lm_head_error(self):
         """Non-critical missing keys do not trigger the lm_head error."""
-        from validators import ModelWeightValidator
+        from validation import ModelWeightValidator
 
         valid, error = ModelWeightValidator.check_missing_keys_after_load(
             missing_keys=["some.other.weight"],
@@ -6563,7 +6563,7 @@ class TestModelWeightValidator(unittest.TestCase):
         assert valid is True
 
     def test_empty_unexpected_keys_passes(self):
-        from validators import ModelWeightValidator
+        from validation import ModelWeightValidator
 
         valid, error = ModelWeightValidator.check_missing_keys_after_load(
             missing_keys=[],
@@ -6587,7 +6587,7 @@ class TestDataSplitValidator:
 
     def test_different_empty_dirs_passes(self, tmp_path):
         """Physically distinct empty dirs → no leakage."""
-        from validators import DataSplitValidator
+        from validation import DataSplitValidator
 
         val_dir = tmp_path / "val_img"
         test_dir = tmp_path / "test_img"
@@ -6600,7 +6600,7 @@ class TestDataSplitValidator:
 
     def test_same_dir_fails(self, tmp_path):
         """Same path for val and test → leakage detected."""
-        from validators import DataSplitValidator
+        from validation import DataSplitValidator
 
         shared_dir = tmp_path / "shared_img"
         shared_dir.mkdir()
@@ -6611,7 +6611,7 @@ class TestDataSplitValidator:
 
     def test_overlapping_images_fails(self, tmp_path):
         """Same image stem in both dirs → leakage detected."""
-        from validators import DataSplitValidator
+        from validation import DataSplitValidator
 
         val_dir = tmp_path / "val_img"
         test_dir = tmp_path / "test_img"
@@ -6628,7 +6628,7 @@ class TestDataSplitValidator:
 
     def test_no_overlap_passes(self, tmp_path):
         """Different image stems in each dir → no leakage."""
-        from validators import DataSplitValidator
+        from validation import DataSplitValidator
 
         val_dir = tmp_path / "val_img"
         test_dir = tmp_path / "test_img"
@@ -6643,7 +6643,7 @@ class TestDataSplitValidator:
 
     def test_partial_overlap_detected(self, tmp_path):
         """Even a single shared file triggers the leakage warning."""
-        from validators import DataSplitValidator
+        from validation import DataSplitValidator
 
         val_dir = tmp_path / "val_img"
         test_dir = tmp_path / "test_img"

@@ -43,13 +43,6 @@ def _get_available_ram_bytes() -> int:
 
 
 # ---------------------------------------------------------------------------
-# Reference image dimensions — DONUT native pretrained resolution.
-# All arithmetic in this module is parameterised by actual H×W, but these
-# serve as the documented reference point.
-# ---------------------------------------------------------------------------
-_REF_H: int = 1280
-_REF_W: int = 960
-
 # Safety fraction of available RAM that the PIL image cache is allowed to use.
 # 0.06 = 6%: tighter than the previous 15% to account for sequential train→val
 # allocations within the same experiment. With 15%, a 4.6 GB train cache could
@@ -307,7 +300,7 @@ from dataclasses import dataclass  # noqa: E402, I001
 from datetime import datetime  # noqa: E402, I001
 from pathlib import Path  # noqa: E402, I001
 
-__all__ = [
+__all__ += [
     "ResourceOptimizedConfig",
     "SystemResources",
     "detect_system_resources",
@@ -351,8 +344,6 @@ def _get_total_ram_bytes() -> int:
         pass
     return 0  # caller falls back to 16 GB assumption
 
-
-logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Module-level constants

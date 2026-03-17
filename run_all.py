@@ -450,7 +450,7 @@ def _setup_logging(log_file: Path = Path("terminal.txt")) -> logging.Logger:
 
     # Suppress PIL chunk-level DEBUG flood and other noisy third-party loggers
     try:
-        from logging_utils import suppress_noisy_loggers
+        from constants import suppress_noisy_loggers
 
         suppress_noisy_loggers()
     except ImportError:
@@ -605,7 +605,7 @@ def _print_all_params() -> None:
         experiments = {}
 
     try:
-        import memory_manager as _mm_mod
+        import resource_manager as _mm_mod
 
         ram_fraction = _mm_mod._RAM_SAFETY_FRACTION
         pixel_cap = 4096  # _PIXEL_TENSOR_MAX_MB in train.py
@@ -660,7 +660,7 @@ def _print_all_params() -> None:
     except Exception:
         print("  GPU  : torch not available")
     try:
-        from memory_manager import _get_available_ram_bytes
+        from resource_manager import _get_available_ram_bytes
 
         _avail = _get_available_ram_bytes()
         print(f"  RAM  : {_avail / (1024**3):.1f} GB available")
@@ -940,7 +940,7 @@ def stage_download(args) -> StageResult:
     """Verify SROIE exists, fetch auxiliary datasets in parallel, then download model inline."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    import dataset_loaders  # local module
+    import data_pipeline as dataset_loaders  # local module
 
     _banner("STAGE 1 — Dataset verification & download")
     warnings: list[str] = []
@@ -1073,8 +1073,8 @@ def stage_pretrained_baseline(args) -> StageResult:
     import torch
     from transformers import DonutProcessor, VisionEncoderDecoderModel
 
-    import dataset_loaders
-    import donut_evaluator as eval_mod
+    import data_pipeline as dataset_loaders
+    import evaluation as eval_mod
 
     _banner("STAGE 1.5 — CORD-transfer baseline evaluation (cross-dataset CORD→SROIE)")
     warnings: list[str] = []
@@ -1358,7 +1358,7 @@ def stage_experiments(args) -> StageResult:
     # DAGScheduler degrades to serial execution automatically.
     if getattr(args, "parallel", False) and yaml_configs:
         try:
-            from dag_scheduler import DAGScheduler
+            from cloud_orchestration import DAGScheduler
 
             def _parallel_run_fn(cfg):
                 """Single-experiment runner for the DAG scheduler thread pool."""
@@ -1571,8 +1571,8 @@ def _run_zero_shot_experiment(args, cfg) -> dict:
     try:
         from transformers import DonutProcessor
 
-        import dataset_loaders
-        from donut_evaluator import DonutEvaluator
+        import data_pipeline as dataset_loaders
+        from evaluation import DonutEvaluator
 
         processor = DonutProcessor.from_pretrained(cfg.base_checkpoint)
         test_samples = dataset_loaders.load_sroie_test()
@@ -1895,7 +1895,7 @@ def stage_benchmark(args) -> StageResult:
 
     # --- Run benchmark_compare programmatically ---
     try:
-        import benchmark_compare as bench_mod
+        import reporting as bench_mod
 
         pairs = bench_mod.find_pairs(test_img_dir, test_key_dir)
         print(f"  Found {len(pairs)} test image+label pairs.")
@@ -1973,7 +1973,7 @@ def stage_comparison(args) -> StageResult:
     warnings: list[str] = []
 
     try:
-        import benchmark_compare as compare_mod
+        import reporting as compare_mod
 
         compare_mod.compare_all()
     except Exception as exc:
@@ -1999,8 +1999,8 @@ def stage_paper(args) -> StageResult:
     ``sys.exit()`` — returns a non-zero ``exit_status`` instead so the
     orchestrator can continue.
     """
-    import dataset_loaders
-    import inject_results as ir  # local module
+    import data_pipeline as dataset_loaders
+    import reporting as ir  # local module
 
     _banner("STAGE 7 — LaTeX paper generation")
     warnings: list[str] = []
@@ -2703,7 +2703,7 @@ def _generate_mini_paper(args, logger: logging.Logger) -> int:
     """
     import re as _re
 
-    import inject_results as ir
+    import reporting as ir
 
     _VAR_RE = _re.compile(r"\\VAR\{([^}]+)\}")
 
@@ -3072,7 +3072,7 @@ def main() -> None:
         elif _i > 0 and _argv[_i - 1] == "--startup-log":
             # This token was already consumed as the value for --startup-log; skip.
             continue
-    import startup_diagnostics  # noqa: E402, I001  (uses stdlib only — safe before heavy imports)
+    import validation as startup_diagnostics  # noqa: E402, I001
 
     startup_diagnostics.run(log_file=_startup_log_file, skip=_skip_startup)
 
@@ -3244,7 +3244,7 @@ def main() -> None:
     print(f"  SROIE dir    : {args.sroie_dir}")
     print(f"  CWD          : {Path.cwd()}")
     try:
-        from memory_manager import _get_available_ram_bytes
+        from resource_manager import _get_available_ram_bytes
 
         _avail = _get_available_ram_bytes()
         print(f"  RAM          : {_avail / (1024**3):.1f} GB available")

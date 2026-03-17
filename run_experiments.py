@@ -59,8 +59,8 @@ os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
 import torch
 from transformers import DonutProcessor, VisionEncoderDecoderModel
 
-import dataset_loaders
-import memory_manager as _mm
+import data_pipeline as dataset_loaders
+import resource_manager as _mm
 
 # FIX: Import shared constants from single source of truth (constants.py)
 # instead of duplicating FIELDS/IMAGE_EXTS/etc. independently in this file.
@@ -74,10 +74,10 @@ from constants import (
     _gpu_cleanup,
     set_seed,
 )
-from control_suite import validate_sroie_oversample
+from experiment_config import validate_sroie_oversample
 
 # Phase 3-5: Dynamic resource optimization and audit logging
-from resource_optimizer import (
+from resource_manager import (
     TrainingAuditLogger,
     detect_system_resources,
     optimize_hyperparams,
@@ -116,7 +116,7 @@ for pkg in ["httpx", "httpcore", "urllib3", "datasets", "transformers", "hugging
 
 # Suppress PIL chunk-level DEBUG flood and other noisy third-party loggers
 try:
-    from logging_utils import suppress_noisy_loggers
+    from constants import suppress_noisy_loggers
 
     suppress_noisy_loggers()
 except ImportError:

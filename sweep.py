@@ -145,7 +145,7 @@ def run_hparam_search(
     return study
 
 
-def main() -> None:
+def main_hparam_search() -> None:
     parser = argparse.ArgumentParser(description="Optuna hyperparameter sweep for DONUT SROIE")
     parser.add_argument(
         "--experiment",
@@ -192,10 +192,6 @@ def main() -> None:
         results_dir=args.results_dir,
         timeout_seconds=args.timeout,
     )
-
-
-if __name__ == "__main__":
-    main()
 
 
 # ---------------------------------------------------------------------------
@@ -360,7 +356,7 @@ def print_multi_seed_table(results_dir: str | Path = "results/multi_seed") -> No
     print("=" * len(header) + "\n")
 
 
-def main() -> None:
+def main_multi_seed() -> None:
     parser = argparse.ArgumentParser(
         description="Run DONUT experiment with multiple seeds to measure variance"
     )
@@ -405,6 +401,27 @@ def main() -> None:
         results_dir=args.results_dir,
         force=args.force,
     )
+
+
+def main() -> None:
+    """Unified entry point: dispatches to hparam search or multi-seed runner.
+
+    Usage:
+        python sweep.py hparam --experiment 2 --n-trials 20
+        python sweep.py multi-seed --experiment 1 --seeds 42,43,44
+    """
+    import sys as _sys
+
+    if len(_sys.argv) < 2 or _sys.argv[1] not in ("hparam", "multi-seed"):
+        print("Usage: python sweep.py <hparam|multi-seed> [args...]")
+        print("  hparam     — Optuna hyperparameter sweep")
+        print("  multi-seed — Multi-seed variance runner")
+        _sys.exit(1)
+    mode = _sys.argv.pop(1)
+    if mode == "hparam":
+        main_hparam_search()
+    else:
+        main_multi_seed()
 
 
 if __name__ == "__main__":

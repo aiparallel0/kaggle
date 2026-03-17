@@ -51,6 +51,32 @@ import resource_manager as _mm
 from constants import EMPTY_GT, FIELDS, SEED, _get_sroie_dir
 from constants import IMAGE_EXTS as _IMAGE_EXTS_SET
 
+__all__ = [
+    "Sample",
+    "DatasetLoadError",
+    "BaseDatasetLoader",
+    "SROIELoader",
+    "WildReceiptLoader",
+    "FUNSDLoader",
+    "InvoicesDonutLoader",
+    "load_sroie_train",
+    "load_sroie_test",
+    "load_sroie_val",
+    "load_wildreceipt",
+    "load_funsd",
+    "load_invoices_donut",
+    "get_combined_dataset",
+    "split_dataset",
+    # from preprocess_seller_split
+    "build_cache",
+    "main",
+    # from dataset_normalizer
+    "DatasetNormalizer",
+    "normalise_samples",
+    "extract_address_from_seller",
+    "FIELD_ALIASES",
+]
+
 # ── dataset_normalizer ───────────────────────────────────────────────────────
 
 logger = logging.getLogger(__name__)
@@ -268,35 +294,6 @@ def extract_address_from_seller(seller_str: str) -> tuple[str, str]:
 
 
 # ── dataset_loaders ──────────────────────────────────────────────────────
-
-# ── Type alias ────────────────────────────────────────────────────────
-Sample = tuple[Path, dict[str, str]]
-
-__all__ = [
-    "Sample",
-    "DatasetLoadError",
-    "BaseDatasetLoader",
-    "SROIELoader",
-    "WildReceiptLoader",
-    "FUNSDLoader",
-    "InvoicesDonutLoader",
-    "load_sroie_train",
-    "load_sroie_test",
-    "load_sroie_val",
-    "load_wildreceipt",
-    "load_funsd",
-    "load_invoices_donut",
-    "get_combined_dataset",
-    "split_dataset",
-    # from preprocess_seller_split
-    "build_cache",
-    "main",
-    # from dataset_normalizer
-    "DatasetNormalizer",
-    "normalise_samples",
-    "extract_address_from_seller",
-    "FIELD_ALIASES",
-]
 
 # ── Shared constants (derived from constants.py) ─────────────────────
 _SROIE_FIELDS = frozenset(EMPTY_GT.keys())

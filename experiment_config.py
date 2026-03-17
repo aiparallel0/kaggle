@@ -25,26 +25,23 @@ except ImportError as e:
 # ---------------------------------------------------------------------------
 
 __all__ = [
+    # YAML loader
     "DatasetEntry",
     "load_experiment",
     "load_all_experiments",
     "load_experiment_selection",
+    # ControlSuite
+    "DonutControlConfig",
+    "TrOCRControlConfig",
+    "YOLOControlConfig",
+    "ControlSuite",
+    "CONTROL_SUITE",
+    "validate_sroie_oversample",
+    "get_augmentation_transforms",
     # ExperimentConfig is intentionally NOT exported here.
     # Callers should use run_experiments.ExperimentConfig for hardcoded experiments.
     # experiment_config_loader.ExperimentConfig is for YAML-loaded experiments only.
 ]
-
-# ---------------------------------------------------------------------------
-# Module-level guard: verify canonical ExperimentConfig consistency
-# ---------------------------------------------------------------------------
-try:
-    from run_experiments import ExperimentConfig as _CanonicalConfig  # noqa: E402
-
-    if not hasattr(_CanonicalConfig, "experiment_id"):
-        raise RuntimeError("run_experiments.ExperimentConfig must have 'experiment_id' field")
-except ImportError:
-    pass  # run_experiments not available in torch-free test envs
-
 
 # ---------------------------------------------------------------------------
 # DatasetEntry — per-dataset config within an experiment
@@ -609,16 +606,6 @@ if __name__ == "__main__":
 from dataclasses import asdict, dataclass, field  # noqa: E402, I001
 from typing import ClassVar  # noqa: E402, I001
 from constants import BASE_MODEL, MAX_LENGTH, SEED  # noqa: E402, I001
-
-__all__ = [
-    "DonutControlConfig",
-    "TrOCRControlConfig",
-    "YOLOControlConfig",
-    "ControlSuite",
-    "CONTROL_SUITE",
-    "validate_sroie_oversample",
-    "get_augmentation_transforms",
-]
 
 # ---------------------------------------------------------------------------
 # Impact metadata — not enforced at runtime, used by print_summary()
