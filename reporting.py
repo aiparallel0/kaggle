@@ -42,6 +42,8 @@ __all__ = [
     "find_pairs",
     "compute_metrics",
     "plot_results",
+    "print_report",
+    "save_json",
     # From plot_convergence
     "generate_all",
     "generate_combined_paper",
@@ -49,6 +51,10 @@ __all__ = [
     "generate_grid_1_8",
     "generate_grid_9_18",
     "smooth_curve",
+    "generate_training_plots",
+    "generate_convergence_data",
+    "generate_convergence_tex",
+    "generate_f1_barchart_tex",
     # From inject_results
     "PaperInjector",
     "UnresolvedVarError",
@@ -62,6 +68,8 @@ __all__ = [
     "print_table3_perfield",
     "print_table4_leaderboard",
     "ResultsAggregator",
+    "print_table5_trocr_yolo",
+    "print_table6_cross_architecture",
     "compile_pdf",
     "main",
 ]

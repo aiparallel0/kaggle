@@ -316,7 +316,7 @@ class TestExtractAddressFromSeller(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 
-class TestSROIEKeyFileParsing(unittest.TestCase):
+class TestSROIEKeyFileParsing:
     """Tests for _load_key_file (dataset_loaders) and _parse_txt_key (train)."""
 
     def _write_key_file(self, tmp_path: Path, lines: list[str]) -> Path:
@@ -1493,7 +1493,7 @@ class TestValidateSamplesNonempty(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 
-class TestEnsureDir(unittest.TestCase):
+class TestEnsureDir:
     def test_creates_dir(self, tmp_path):
         new_dir = tmp_path / "a" / "b" / "c"
         result = _ensure_dir(new_dir)
@@ -4437,7 +4437,7 @@ class TestBenchmarkNarrowness(unittest.TestCase):
 # =============================================================================
 
 
-class TestPipelineCritic(unittest.TestCase):
+class TestPipelineCritic:
     def test_run_returns_critique_report(self):
         report = PipelineCritic().run()
         assert isinstance(report, CritiqueReport)
@@ -5350,7 +5350,7 @@ class TestOptimizeHyperparamsLowVRAM(unittest.TestCase):
         assert steps >= 200, f"Large dataset path still too few steps: {steps} with 5 epochs"
 
 
-class TestImageSizeAwareVRAM(unittest.TestCase):
+class TestImageSizeAwareVRAM:
     """Tests for the image-size-aware VRAM calibration (Task 2 OOM fix).
 
     Pins the fix for Experiment 8 OOM on the Vast.ai RTX 6000 Blackwell 96 GB:
@@ -6578,7 +6578,7 @@ class TestModelWeightValidator(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 
-class TestDataSplitValidator(unittest.TestCase):
+class TestDataSplitValidator:
     """Tests for DataSplitValidator.check_no_val_test_leakage.
 
     Guards BUG A (CLAUDE.md §16): val and test must be physically separate
