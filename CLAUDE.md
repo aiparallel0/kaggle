@@ -67,7 +67,7 @@ This is the most important mental model in the codebase. Every receipt image tra
 - **Accepted formats:** `.jpg`, `.jpeg`, `.png`, `.bmp`, `.tiff` (defined in `IMAGE_EXTS` in `constants.py`)
 - Images are loaded via Pillow, resized to **960 × 1280 px** (DONUT canonical input), and normalised with ImageNet mean/std
 - The dataset loader returns `List[Tuple[image_path, gt_dict]]` — image paths are resolved lazily inside `__getitem__` to keep RAM footprint low
-- All loaders extend the ABC base class in `dataset_loaders.py`
+- All loaders extend the ABC base class in `data_pipeline.py`
 
 ### Stage 2 — DONUT Swin Encoder
 
@@ -107,7 +107,7 @@ Full-parameter supervised Seq2Seq fine-tuning (not LoRA/adapters). The HuggingFa
 
 ### Stage 5 — Evaluation & Results
 
-The `DonutEvaluator` in `donut_evaluator.py` runs inference on the 63-sample SROIE test set, computes global F1 and NED per field, and writes `results/experiment_N.json`.
+The `DonutEvaluator` in `run_experiments.py` runs inference on the 63-sample SROIE test set, computes global F1 and NED per field, and writes `results/experiment_N.json`.
 
 ---
 
@@ -192,21 +192,21 @@ Both must exit with code `0`. If either fails, fix the core import chain **befor
 | `AttributeError` on `PreTrainedTokenizerBase` | `transformers ≥4.47` moved the class | Apply compat shim (see below) |
 | `F1 = 0.0000` after checkpoint reload | `lm_head` weight tying regression | Set `config.tie_word_embeddings = False` |
 | `protobuf` / `sentencepiece` crash at import | Missing or wrong-version package | `pip install 'protobuf>=3.20.0' sentencepiece` |
-| `JSONDecodeError` in `inject_results.py` | Trailing comma or missing field in results JSON | Validate JSON against results format spec below |
+| `JSONDecodeError` in `reporting.py` | Trailing comma or missing field in results JSON | Validate JSON against results format spec below |
 | `CUDA out of memory` | Batch size too large for VRAM | Halve `batch_size`; double `gradient_accumulation_steps` |
 | **`OutOfMemoryError` in `train_trocr()` after DONUT experiments** | Prior stages leaked GPU memory; no defensive cleanup at TrOCR/YOLO start | Add `_gpu_cleanup()` at start of `train_trocr()` and `train_yolo()`; add VRAM-aware batch auto-scaling |
-| `KeyError: 'sroie'` in evaluator | `{"sroie": {...}}` wrapper not unwrapped | Unwrap in `donut_evaluator.py`: `result = result.get("sroie", result)` |
+| `KeyError: 'sroie'` in evaluator | `{"sroie": {...}}` wrapper not unwrapped | Unwrap in `run_experiments.py`: `result = result.get("sroie", result)` |
 | **`F1 ≈ 0.008`** (not zero, not 0.42) | `token2json` returned list (CORD `<sep/>` drift) | `_parse_prediction()` merges page-list → dict (Pattern 5 below) |
 | **`F1 ≈ 0.42`** (not zero, plausible-looking) | `lm_head.weight` dropped by safetensors dedup | `LmHeadCloneCallback` + `RuntimeError` check on load (Pattern 6 below) |
 | **`RuntimeError: CRITICAL: decoder.lm_head.weight missing`** | `LmHeadCloneCallback` failed or was removed | Re-register callback in `DonutTrainer.train()`; do NOT remove the check |
 | **`Self-test FAILED: model produced empty dict`** | `token2json` returned list; self-test treated list as empty | `_self_test()` merges list before `_unwrap_prediction()` (Pattern 5 below) |
 | **Experiment results inconsistent across runs** | Mutable global `EXPERIMENTS` dict mutated by `run_experiment()` | Use `dataclasses.replace()` — never assign to `EXPERIMENTS[N].field` |
-| **`ruff check .` fails in CI** | pre-commit hook not installed; `lint.sh` not run before push | Run `.github/lint.sh` before every `git commit` (see § 10 Mandatory Lint) |
+| **`ruff check .` fails in CI** | pre-commit hook not installed; `lint.sh` not run before push | Run `lint.sh` before every `git commit` (see § 10 Mandatory Lint) |
 | **`FATAL: The following packages could not be installed: editdistance`** | `_CRITICAL_INSTALL_PACKAGES` still contains `editdistance` which was removed from `requirements.txt` (replaced with inline `_edit_distance()`) | Remove `editdistance` and `pandas` from both `_CRITICAL_INSTALL_PACKAGES` and `_CRITICAL_VERIFY_PACKAGES` in `run_all.py` |
 
 ### Pattern 1: Bracket & Comma Errors
 
-Most common location: `run_experiments.py` (the `ExperimentConfig` list) and `dataset_loaders.py` (ABC method signatures).
+Most common location: `run_experiments.py` (the `ExperimentConfig` list) and `data_pipeline.py` (ABC method signatures).
 
 ```python
 # ❌ BROKEN — missing trailing comma after first config
@@ -236,7 +236,7 @@ config = {"use_cache": True, "pad": None}
 
 ### Pattern 3: Import / Compatibility Shim
 
-The `transformers ≥4.47` relocation of `PreTrainedTokenizerBase` must be preserved on every merge into `dataset_loaders.py`:
+The `transformers ≥4.47` relocation of `PreTrainedTokenizerBase` must be preserved on every merge into `data_pipeline.py`:
 
 ```python
 # ✅ Compat shim — preserve this block, never delete it
@@ -251,7 +251,7 @@ except ImportError:
 After any `pip install --upgrade` or dependency version bump, check these 5 things:
 
 1. `protobuf` version ≥ 3.20.0 (breaks otherwise at import)
-2. `transformers` compat shim in `dataset_loaders.py` still present
+2. `transformers` compat shim in `data_pipeline.py` still present
 3. `model.config.tie_word_embeddings = False` still set in `train.py`
 4. `FIELDS` / `IMAGE_EXTS` imported from `constants.py` (not redeclared)
 5. `results/experiment_N.json` schema matches the evaluator's output keys
@@ -262,44 +262,29 @@ After any `pip install --upgrade` or dependency version bump, check these 5 thin
 
 ```
 kaggle/
-├── constants.py              # SINGLE SOURCE OF TRUTH for all shared constants + logging utils
-├── data_pipeline.py          # Merged: dataset_loaders + dataset_normalizer + preprocess_seller_split
-├── evaluation.py             # Merged: donut_evaluator + evaluate_models
+├── constants.py              # SINGLE SOURCE OF TRUTH for all shared constants + logging utils + project metadata
+├── data_pipeline.py          # Merged: dataset_loaders + dataset_normalizer + preprocess_seller_split + dataset_preparation
+├── run_experiments.py        # Merged: experiment_config + evaluation + 8-experiment DONUT orchestrator
 ├── reporting.py              # Merged: benchmark_compare + plot_convergence + inject_results
 ├── validation.py             # Merged: validators + preflight_checks + startup_diagnostics
 ├── cloud_orchestration.py    # Merged: pipeline_types + pipeline_critic + dag_scheduler + cloud_pipeline
 ├── sweep.py                  # Merged: hparam_search + multi_seed_runner
-├── experiment_config.py      # Merged: experiment_config_loader + control_suite
 ├── resource_manager.py       # Merged: memory_manager + resource_optimizer
 │
 ├── train.py                  # DonutTrainer OOP wrapper + LiveDashboardCallback (inlined)
-├── run_experiments.py        # 8-experiment DONUT orchestrator (ExperimentConfig)
-├── run_all.py                # MAIN ENTRY POINT: full dual-architecture pipeline (128 KB)
+├── run_all.py                # MAIN ENTRY POINT: full dual-architecture pipeline
 ├── train_trocr_yolo.py       # TrOCR+YOLO training (also called by run_all.py)
-├── dataset_preparation.py    # Alternative standalone: dataset prep
-│
-├── dataset_loaders.py        # Re-export shim → data_pipeline.py
-├── donut_evaluator.py        # Re-export shim → evaluation.py
-├── inject_results.py         # Re-export shim → reporting.py (run_all.py late-imports)
-├── benchmark_compare.py      # Re-export shim → reporting.py (run_all.py late-imports)
-├── dag_scheduler.py          # Re-export shim → cloud_orchestration.py (run_all.py late-imports)
-├── startup_diagnostics.py    # Re-export shim → validation.py (run_all.py late-imports)
-├── memory_manager.py         # Re-export shim → resource_manager.py
-├── resource_optimizer.py     # Re-export shim → resource_manager.py
-├── control_suite.py          # Re-export shim → experiment_config.py
 │
 ├── requirements.txt          # Python dependencies with version pins (2 required: torch, transformers)
-├── pyproject.toml            # Package metadata, entry points, ruff/pytest config
+├── ruff.toml                 # Linter/formatter config (moved from pyproject.toml)
+├── lint.sh                   # Run before every commit: ruff check --fix . && ruff format .
 │
 ├── paper/                    # LaTeX source files
 │   ├── paper.tex             # Main paper template with \VAR{} placeholders
 │   ├── references.bib        # BibTeX references
 │   └── presentation.tex      # Presentation slides template
 │
-├── tests/                    # Unit tests (pytest)
-│   ├── __init__.py
-│   ├── conftest.py           # pytest fixtures
-│   └── test_all.py           # All tests merged into single file
+├── experiments/              # YAML experiment definition files (exp_01_*.yaml … exp_17_*.yaml)
 │
 ├── results/                  # Runtime: per-experiment JSON (gitignored)
 ├── data/                     # Runtime: dataset cache (gitignored)
@@ -307,16 +292,17 @@ kaggle/
 └── paper/paper_filled.tex    # Runtime: generated paper output (gitignored)
 ```
 
-**Canonical entry point:** `run_all.py`. The standalone scripts are a simplified alternative workflow for standalone use only.
+**Canonical entry point:** `run_all.py`.
 
-**Consolidation notes:**
-- `live_dashboard.py` → inlined into `train.py` as `LiveDashboardCallback` + `_EpochRow` (lines ~2990–3110 in train.py). Uses `rich.live.Live` for an in-place updating lab panel. Set `DISABLE_LIVE_DASHBOARD=1` to suppress.
-- `paper_diff.py` → inlined into `reporting.py` (compute_diff, print_diff_table, run_paper_diff). Re-exported via `inject_results.py` shim.
-- `test_runner.py` → inlined into `cloud_orchestration.py` (TestRunner, RuffReport, PytestReport, etc.). Was previously called `cloud_pipeline.py` before consolidation.
-- `validators/` directory → merged into `validation.py`
-- `pipeline_types/` directory → merged into `cloud_orchestration.py` (not into a `pipeline_types.py` file — no such file exists)
-- `tests/test_*.py` (20 files) → merged into `tests/test_all.py`
-- Deleted dead code: `run_experiments_v2.py`, `train_donut.py`, `results_browser.py`, `tui_console.py`, `quick_results_generator.py`
+**Consolidation history (all shim files deleted):**
+- `dataset_loaders.py`, `dataset_normalizer.py`, `dataset_preparation.py` → merged into `data_pipeline.py`
+- `evaluation.py`, `experiment_config.py` → merged into `run_experiments.py`
+- `logging_utils.py` → merged into `constants.py`
+- `pyproject.toml` project metadata → merged into `constants.py` as `PROJECT_*` constants
+- `pipeline_critic.py`, `validators.py`, `control_suite.py`, `memory_manager.py`, `resource_optimizer.py` → all were re-export shims, deleted
+- `tests/` directory, `.github/` directory, `__main__.py` → deleted
+- `live_dashboard.py` → inlined into `train.py` as `LiveDashboardCallback`
+- `paper_diff.py` → inlined into `reporting.py`
 
 ---
 
@@ -399,11 +385,11 @@ Delete the dataset's `.done` marker file to force re-download with the new revis
 
 **requirements.txt is now minimal (2 packages: torch + transformers).**
 All other dependencies are inlined:
-- `datasets` → `_hf_download_dataset_inline()` in `dataset_loaders.py`
+- `datasets` → `_hf_download_dataset_inline()` in `data_pipeline.py`
 - `ultralytics` → `_YOLO_CLS` in `train_trocr_yolo.py`
 - `accelerate` → never used; `torch.cuda.amp.GradScaler` directly
-- `matplotlib` → `_svg_bar_chart/_svg_radar_chart/...` in `benchmark_compare.py`
-- `pytest` → `_Pytest` stub in `tests/test_all.py` (also runs under `python -m unittest discover`)
+- `matplotlib` → `_svg_bar_chart/_svg_radar_chart/...` in `reporting.py`
+- `pytest` → `_Pytest` stub in `run_all.py` (tests/ directory removed)
 - `Pillow` → `_load_png/_load_bmp/_load_jpeg_pure` in `train.py`
 
 ```bash
@@ -490,7 +476,7 @@ CI runs `ruff check .` + `ruff format --check .` — both fail on any unformatte
 **Always run before `git commit`:**
 
 ```bash
-.github/lint.sh          # auto-fixes + formats everything (preferred)
+lint.sh          # auto-fixes + formats everything (preferred)
 # or equivalently:
 ruff check --fix . && ruff format .
 ```
@@ -507,7 +493,7 @@ pip install pre-commit && pre-commit install
 |---|---|---|---|
 | Import not at top of file | E402 | Intentional late import | Add `# noqa: E402, I001` (see Pattern 7) |
 | Unused import | F401 | Removed dependency still imported | Delete the import line |
-| Import order wrong | I001 | Added import in wrong block | Run `.github/lint.sh` |
+| Import order wrong | I001 | Added import in wrong block | Run `lint.sh` |
 | f-string without placeholder | F541 | `f"plain string"` | Remove `f` prefix |
 | Comparison to None | E711 | `x == None` | Use `x is None` |
 | Old-style type hint | UP006/UP007 | `Optional[X]`, `List[X]` | Use `X \| None`, `list[X]` |
@@ -518,11 +504,11 @@ pip install pre-commit && pre-commit install
 
 | Class | File | Responsibility |
 |---|---|---|
-| `SROIELoader`, `WildReceiptLoader`, etc. | `dataset_loaders.py` | ABC hierarchy; all return `List[Tuple[image_path, gt_dict]]` |
+| `SROIELoader`, `WildReceiptLoader`, etc. | `data_pipeline.py` | ABC hierarchy; all return `List[Tuple[image_path, gt_dict]]` |
 | `DonutTrainer` | `train.py` | Wraps `Seq2SeqTrainer`; reads all hyperparams from `ExperimentConfig` |
-| `DonutEvaluator` | `donut_evaluator.py` | Computes global F1, NED; unwraps `{"sroie": {...}}` token2json output |
+| `DonutEvaluator` | `run_experiments.py` | Computes global F1, NED; unwraps `{"sroie": {...}}` token2json output |
 | `PipelineOrchestrator` | `run_all.py` | Sequential GPU stage runner; uses `StageResult` dataclass |
-| `PaperInjector` | `inject_results.py` | Resolves `\VAR{}` placeholders from JSON results |
+| `PaperInjector` | `reporting.py` | Resolves `\VAR{}` placeholders from JSON results |
 | `ExperimentConfig` | `run_experiments.py` | Dataclass; single source of truth for all hyperparameters |
 
 **Sequential execution:** All pipeline stages run sequentially to prevent GPU memory contention. GPU memory freed between stages: `torch.cuda.empty_cache()` + `gc.collect()`.
@@ -568,7 +554,7 @@ Each experiment saves `results/experiment_N.json`:
 }
 ```
 
-`inject_results.py` reads these files and resolves `\VAR{variable_name}` placeholders in `paper/paper.tex`. Never edit `paper/paper_filled.tex` directly — it is fully regenerated each run.
+`reporting.py` reads these files and resolves `\VAR{variable_name}` placeholders in `paper/paper.tex`. Never edit `paper/paper_filled.tex` directly — it is fully regenerated each run.
 
 ---
 
@@ -620,15 +606,15 @@ Two-stage pipeline in `train_trocr_yolo.py` (called by `run_all.py`):
 | `lm_head` weight tying → F1=0 on reload | `config.tie_word_embeddings=False` after `resize_token_embeddings()` | `train.py` |
 | Key file loading failure | Try `.txt` first, then `.json` (BUG A/E fix) | `train.py` |
 | Data leakage in eval | Separate `val_img/` and `test_img/` directories in `stage_install()` | `run_all.py` |
-| `{"sroie": {...}}` wrapper in token2json | Unwrapped in evaluator | `donut_evaluator.py` |
+| `{"sroie": {...}}` wrapper in token2json | Unwrapped in evaluator | `run_experiments.py` |
 | FIELDS/IMAGE_EXTS duplicated in 5+ files | Consolidated in `constants.py` | `constants.py` |
-| `transformers ≥4.47` `PreTrainedTokenizerBase` move | Compat shim added | `dataset_loaders.py` |
-| **safetensors deduplication drops `lm_head.weight` → F1~0.42** | `LmHeadCloneCallback` deep-clones weight before every save; sanity `RuntimeError` on load | `train.py`, `donut_evaluator.py` |
-| **`token2json` returns list (`<sep/>` tokens) → F1=0.0078** | `_parse_prediction()` and `_self_test()` merge page-list into flat dict | `donut_evaluator.py` |
+| `transformers ≥4.47` `PreTrainedTokenizerBase` move | Compat shim added | `data_pipeline.py` |
+| **safetensors deduplication drops `lm_head.weight` → F1~0.42** | `LmHeadCloneCallback` deep-clones weight before every save; sanity `RuntimeError` on load | `train.py`, `run_experiments.py` |
+| **`token2json` returns list (`<sep/>` tokens) → F1=0.0078** | `_parse_prediction()` and `_self_test()` merge page-list into flat dict | `run_experiments.py` |
 | **val split missing → no early stopping guard** | `stage_install()` creates `val_img/`+`val_key/` distinct from `test_img/`+`test_key/` | `run_all.py` |
 | **mutable global `EXPERIMENTS` dict corrupted by `run_experiment()`** | `dataclasses.replace()` creates isolated copy; `_config_to_dict()` records actual training params | `run_experiments.py` |
 | **TrOCR OOM after DONUT experiments** | Prior stages' GPU memory not freed before TrOCR model load | Added defensive `_gpu_cleanup()` at start of `train_trocr()` and `train_yolo()`; explicit cleanup between YOLO and TrOCR in `stage_trocr_experiments()`; VRAM-aware batch auto-scaling halves batch when free VRAM < needed | `train_trocr_yolo.py`, `run_all.py` |
-| **`flash-attn` build fails with nvcc segfault on torch≥2.9+cu126** | Pipeline already falls back to PyTorch SDPA — no action needed. If you want FA2: use prebuilt wheel from https://flashattn.dev/wheel-finder/ (Python 3.12 / CUDA 12.6). Fixed `run_experiments.py` to catch `RuntimeError` in addition to `ImportError`. | `run_experiments.py`, `startup_diagnostics.py` |
+| **`flash-attn` build fails with nvcc segfault on torch≥2.9+cu126** | Pipeline already falls back to PyTorch SDPA — no action needed. If you want FA2: use prebuilt wheel from https://flashattn.dev/wheel-finder/ (Python 3.12 / CUDA 12.6). Fixed `run_experiments.py` to catch `RuntimeError` in addition to `ImportError`. | `run_experiments.py`, `validation.py` |
 | **Terminal freeze after "Dependencies installed successfully" on GPU machine** | `_install_dependencies()` ran `subprocess.run(..., capture_output=True)` for flash-attn after the main install — CUDA kernel compilation takes 5–25 min, invisible; `Ctrl+C` didn't reach nvcc child. Post-install `_verify_critical_packages()` called `sys.exit(2)` because newly-installed packages aren't visible to the running process (`sys.modules` isolation). | Removed flash-attn auto-build entirely. Added `os.execv()` restart (with `_DONUT_RESTARTED=1` sentinel) after successful pip install. Added `_InstallWatchdog` thread for elapsed-time progress. Added `timeout=300` to main pip subprocess. | `run_all.py` |
 | **`FATAL: editdistance could not be installed` after dependency auto-install** | `editdistance` and `pandas` still in `_CRITICAL_INSTALL_PACKAGES`/`_CRITICAL_VERIFY_PACKAGES` after being removed from `requirements.txt` (both replaced with inline implementations) | Removed both from `_CRITICAL_INSTALL_PACKAGES` and `_CRITICAL_VERIFY_PACKAGES` in `run_all.py` | `run_all.py` |
 
@@ -958,14 +944,14 @@ The previous 15% was calibrated for a single allocation. Across sequential train
 - Exp 6 train PIL check: 4683 MB vs 6% × 37637 MB = **2258 MB threshold → SKIP** (belt+suspenders catch that blocks the drain before the val check runs)
 - 500-sample baseline: 1758 MB vs 6% × 65536 MB = 3932 MB → still ALLOW on 64 GB RAM
 
-**Never raise `_RAM_SAFETY_FRACTION` above 0.10.** The regression test in `tests/test_resource_manager.py` enforces this.
+**Never raise `_RAM_SAFETY_FRACTION` above 0.10.**
 
 ### Adding a New Dataset
 
 1. Drop images and annotations into `/workspace/datasets/<your_dataset>/`
 2. Normalize annotations to SROIE schema: `{"company": "", "date": "", "address": "", "total": ""}`
 3. Add entry to `datasets_registry.json` in repository root
-4. Add loader class to `dataset_loaders.py` following `BaseDatasetLoader` ABC
+4. Add loader class to `data_pipeline.py` following `BaseDatasetLoader` ABC
 5. If loader uses `load_from_disk()` or `load_dataset()`: call `resource_manager.release_hf_dataset(ds)` + `resource_manager.flush_hf_arrow_cache()` after sample extraction
 6. Add dataset name to relevant `ExperimentConfig.datasets` lists in `run_experiments.py`
 7. No changes to `resource_manager.py`, `train.py`, `constants.py`, or `resource_manager.py`
@@ -975,7 +961,7 @@ The previous 15% was calibrated for a single allocation. Across sequential train
 Every OOM PR from #80 to #109 fixed GPU VRAM symptoms. The actual 192 GB RAM explosion was:
 - A RAM problem (not GPU), caused by `processor_config.json` at 4× resolution (`2560×1920` instead of `1280×960`)
 - Compounded by a wrong `* 3 MB/sample` constant in `train.py` (should be `3 × H × W / 1_048_576`)
-- Compounded by HF Arrow cache never being released between experiments in `dataset_loaders.py`
+- Compounded by HF Arrow cache never being released between experiments in `data_pipeline.py`
 - Compounded by DataLoader worker processes staying alive across experiments (`persistent_workers=True` + `prefetch_factor=4`)
 
 The fix is in commit adding this section. Do not revert `processor_config.json` to `2560×1920`.

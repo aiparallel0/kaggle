@@ -671,7 +671,7 @@ def _print_all_params() -> None:
     print("\n  TrOCR + YOLO (CONTROL_SUITE)")
     print("  " + "-" * 50)
     try:
-        from control_suite import CONTROL_SUITE
+        from run_experiments import CONTROL_SUITE
 
         CONTROL_SUITE.print_summary()
     except Exception as exc:
@@ -1074,7 +1074,7 @@ def stage_pretrained_baseline(args) -> StageResult:
     from transformers import DonutProcessor, VisionEncoderDecoderModel
 
     import data_pipeline as dataset_loaders
-    import evaluation as eval_mod
+    import run_experiments as eval_mod
 
     _banner("STAGE 1.5 — CORD-transfer baseline evaluation (cross-dataset CORD→SROIE)")
     warnings: list[str] = []
@@ -1205,7 +1205,7 @@ def _load_experiment_configs_for_run(args) -> "list":
     appears when the flag is given.
     """
     try:
-        from experiment_config_loader import (
+        from run_experiments import (
             load_all_experiments,
             load_experiment_selection,
         )
@@ -1572,7 +1572,7 @@ def _run_zero_shot_experiment(args, cfg) -> dict:
         from transformers import DonutProcessor
 
         import data_pipeline as dataset_loaders
-        from evaluation import DonutEvaluator
+        from run_experiments import DonutEvaluator
 
         processor = DonutProcessor.from_pretrained(cfg.base_checkpoint)
         test_samples = dataset_loaders.load_sroie_test()
@@ -1662,7 +1662,7 @@ def stage_trocr_data_prep(args) -> StageResult:
         return StageResult(name="TrOCR Data Prep", duration=0.0, exit_status=0, warnings=warnings)
 
     try:
-        import dataset_preparation as ds_prep
+        import data_pipeline as ds_prep
 
         counts = ds_prep.prepare_all()
         for key, count in counts.items():
@@ -1695,7 +1695,7 @@ def stage_trocr_experiments(args) -> StageResult:
     warnings: list[str] = []
 
     try:
-        import evaluation as eval_mod  # noqa: I001
+        import run_experiments as eval_mod  # noqa: I001
         import train_trocr_yolo as trocr_yolo  # noqa: I001
 
         workspace = Path(args.workspace)

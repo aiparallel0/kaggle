@@ -2813,7 +2813,7 @@ class MultiDataset(Dataset):
             # be closed. memory_manager.ram_cache_is_safe() uses the real formula:
             #   3 × H × W / 1_048_576 MB per sample.
             try:
-                from resource_optimizer import get_image_size_from_processor_config
+                from resource_manager import get_image_size_from_processor_config
 
                 _img_h, _img_w = get_image_size_from_processor_config()
             except Exception:
@@ -3630,7 +3630,7 @@ def main():
     model.gradient_checkpointing_enable()
 
     # Load SROIE data using canonical loaders (single source of truth)
-    from dataset_loaders import load_sroie_train, load_sroie_val
+    from data_pipeline import load_sroie_train, load_sroie_val
 
     train_samples = load_sroie_train()
     val_samples = load_sroie_val()

@@ -1,6 +1,7 @@
 # =============================================================================
 # constants.py
-# Purpose: Shared project constants (BASE_MODEL, NEW_TOKENS, IMAGE_EXTS, MAX_LENGTH, SEED)
+# Purpose: Shared project constants + project metadata (merged from pyproject.toml)
+# Merged from: pyproject.toml
 # Project: DONUT Receipt KIE — SROIE Fine-tuning & Benchmarking
 # Updated: 2026-03-07
 # =============================================================================
@@ -27,6 +28,11 @@ __all__ = [
     "EMPTY_GT",
     "DEVICE",
     "WORKSPACE",
+    # Project metadata
+    "PROJECT_NAME",
+    "PROJECT_VERSION",
+    "PROJECT_DESCRIPTION",
+    "PROJECT_ENTRY_POINT",
 ]
 # _get_sroie_dir, _optimal_num_workers, _gpu_cleanup are intentionally
 # NOT in __all__ (underscore-prefixed internal helpers)
@@ -335,3 +341,16 @@ def _progress(iterable, desc: str = "", total: int | None = None):
             else:
                 _log.info("%3d%%", pct)
         yield item
+
+
+# ---------------------------------------------------------------------------
+# Project metadata (merged from pyproject.toml)
+# ---------------------------------------------------------------------------
+# Tool config (ruff): target-version=py310, line-length=100
+# ruff.lint: select E,W,F,I,UP,B,SIM; ignore E501,E741,B905,SIM108,SIM105,UP015
+# ruff.format: quote-style=double
+
+PROJECT_NAME: str = "donut-kiedata"
+PROJECT_VERSION: str = "1.0.0"
+PROJECT_DESCRIPTION: str = "DONUT + TrOCR + YOLO multi-dataset KIE pipeline for receipt understanding"
+PROJECT_ENTRY_POINT: str = "run_all:main"  # console_scripts entry point

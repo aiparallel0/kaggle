@@ -515,15 +515,8 @@ class CritiqueReport:
         }
 
     def print_loud(self, exit_on_fatal: bool = True) -> None:
-        """Print all findings to stdout; call sys.exit(1) on FATAL when exit_on_fatal=True.
-
-        Import ``pipeline_critic._print_report`` lazily to avoid a circular import
-        (pipeline_critic imports pipeline_types, not the other way around).
-        """
-        import importlib
-
-        mod = importlib.import_module("pipeline_critic")
-        mod._print_report(self, exit_on_fatal=exit_on_fatal)
+        """Print all findings to stdout; call sys.exit(1) on FATAL when exit_on_fatal=True."""
+        _print_report(self, exit_on_fatal=exit_on_fatal)
 
 
 # ── pipeline_critic ──────────────────────────────────────────────────────
@@ -1412,7 +1405,7 @@ def main_dag_scheduler() -> None:
     args = parser.parse_args()
 
     try:
-        from experiment_config_loader import load_all_experiments
+        from run_experiments import load_all_experiments
 
         configs = load_all_experiments(args.experiments_dir)
     except Exception as exc:
@@ -2138,7 +2131,7 @@ class CodeRepairOrchestrator:
         Returns:
             CodeRepairResult with status and details
         """
-        from validators import BugPatternDetector
+        from validation import BugPatternDetector
 
         self.logger.info("Code Repair Orchestrator starting...")
         result = CodeRepairResult(success=False)

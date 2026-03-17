@@ -278,9 +278,9 @@ except ImportError:
     def _autopad(k, p=None, d=1):
         """Pad to same shape output."""
         if d > 1:
-            k = d * (k - 1) + 1
+            k = d * (k - 1) + 1 if isinstance(k, int) else [d * (x - 1) + 1 for x in k]
         if p is None:
-            p = k // 2
+            p = k // 2 if isinstance(k, int) else [x // 2 for x in k]
         return p
 
     class _Conv(_nn.Module):
@@ -739,7 +739,7 @@ except ImportError:
 
 
 from constants import DEVICE, FIELDS, SEED, WORKSPACE, _gpu_cleanup, _optimal_num_workers, _progress
-from experiment_config import CONTROL_SUITE, get_augmentation_transforms
+from run_experiments import CONTROL_SUITE, get_augmentation_transforms
 
 __all__ = [
     "TrOCRReceiptDataset",
