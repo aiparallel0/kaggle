@@ -1562,7 +1562,7 @@ def validate_pipeline() -> bool:
         print(f"  ✗ Failed to load constants: {e}")
 
     try:
-        from evaluation import DonutEvaluator  # noqa: F401
+        from run_experiments import DonutEvaluator  # noqa: F401
 
         print("  ✓ DonutEvaluator class available")
         checks["donut_evaluator"] = True
@@ -1578,7 +1578,7 @@ def validate_pipeline() -> bool:
         print(f"  ✗ Failed to load PyTorch: {e}")
 
     try:
-        from evaluation import DEVICE  # noqa: F401
+        from run_experiments import DEVICE  # noqa: F401
 
         print(f"  ✓ Detected device: {DEVICE}")
         checks["device_type"] = True

@@ -1412,7 +1412,7 @@ def main_dag_scheduler() -> None:
     args = parser.parse_args()
 
     try:
-        from experiment_config_loader import load_all_experiments
+        from run_experiments import load_all_experiments
 
         configs = load_all_experiments(args.experiments_dir)
     except Exception as exc:
@@ -2138,7 +2138,7 @@ class CodeRepairOrchestrator:
         Returns:
             CodeRepairResult with status and details
         """
-        from validators import BugPatternDetector
+        from validation import BugPatternDetector
 
         self.logger.info("Code Repair Orchestrator starting...")
         result = CodeRepairResult(success=False)

@@ -1074,7 +1074,7 @@ def stage_pretrained_baseline(args) -> StageResult:
     from transformers import DonutProcessor, VisionEncoderDecoderModel
 
     import data_pipeline as dataset_loaders
-    import evaluation as eval_mod
+    import run_experiments as eval_mod
 
     _banner("STAGE 1.5 — CORD-transfer baseline evaluation (cross-dataset CORD→SROIE)")
     warnings: list[str] = []
@@ -1205,7 +1205,7 @@ def _load_experiment_configs_for_run(args) -> "list":
     appears when the flag is given.
     """
     try:
-        from experiment_config_loader import (
+        from run_experiments import (
             load_all_experiments,
             load_experiment_selection,
         )
@@ -1572,7 +1572,7 @@ def _run_zero_shot_experiment(args, cfg) -> dict:
         from transformers import DonutProcessor
 
         import data_pipeline as dataset_loaders
-        from evaluation import DonutEvaluator
+        from run_experiments import DonutEvaluator
 
         processor = DonutProcessor.from_pretrained(cfg.base_checkpoint)
         test_samples = dataset_loaders.load_sroie_test()
@@ -1695,7 +1695,7 @@ def stage_trocr_experiments(args) -> StageResult:
     warnings: list[str] = []
 
     try:
-        import evaluation as eval_mod  # noqa: I001
+        import run_experiments as eval_mod  # noqa: I001
         import train_trocr_yolo as trocr_yolo  # noqa: I001
 
         workspace = Path(args.workspace)

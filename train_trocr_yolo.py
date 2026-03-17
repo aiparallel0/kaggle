@@ -739,7 +739,7 @@ except ImportError:
 
 
 from constants import DEVICE, FIELDS, SEED, WORKSPACE, _gpu_cleanup, _optimal_num_workers, _progress
-from experiment_config import CONTROL_SUITE, get_augmentation_transforms
+from run_experiments import CONTROL_SUITE, get_augmentation_transforms
 
 __all__ = [
     "TrOCRReceiptDataset",
