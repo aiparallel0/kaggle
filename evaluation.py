@@ -1,7 +1,6 @@
 # =============================================================================
 # evaluation.py
 # Purpose: Merged evaluation module — DONUT evaluator + unified model evaluation
-# Merged from: donut_evaluator.py + evaluate_models.py
 # =============================================================================
 import json
 import logging
@@ -13,6 +12,32 @@ import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from constants import (
+    BASE_MODEL,
+    DEVICE,
+    EMPTY_GT,
+    FIELDS,
+    MAX_LENGTH,
+    _edit_distance,
+    _get_sroie_dir,
+    _gpu_cleanup,
+    _progress,
+)
+from data_pipeline import load_sroie_test
+
+__all__ = [
+    "DonutEvaluator",
+    "EvaluationResult",
+    "compute_metrics",
+    "normalized_edit_distance",
+    "load_test_samples",
+    "evaluate_donut_on_test",
+    "evaluate_trocr_yolo_on_test",
+    "print_metrics",
+    "generate_comparison_report",
+    "generate_json_summary",
+]
 
 try:
     from PIL import Image as _PILImage
@@ -193,37 +218,6 @@ except ImportError:
                 "are supported natively."
             )
         return np.ascontiguousarray(arr, dtype=np.uint8)
-
-
-# FIX: Import shared constants from single source of truth (constants.py)
-# instead of duplicating FIELDS/IMAGE_EXTS independently in this file.
-from constants import BASE_MODEL, DEVICE, EMPTY_GT, FIELDS, MAX_LENGTH
-
-__all__ = ["DonutEvaluator", "EvaluationResult", "compute_metrics", "normalized_edit_distance"]
-
-
-def _edit_distance(s1: str, s2: str) -> int:
-    """Levenshtein distance — replaces the editdistance package."""
-    m, n = len(s1), len(s2)
-    dp = list(range(n + 1))
-    for i in range(1, m + 1):
-        prev, dp[0] = dp[0], i
-        for j in range(1, n + 1):
-            prev, dp[j] = dp[j], prev if s1[i - 1] == s2[j - 1] else 1 + min(prev, dp[j], dp[j - 1])
-    return dp[n]
-
-
-def _progress(iterable, desc: str = "", total: int | None = None):
-    """Logging-based progress — replaces tqdm. Emits at 0 %, 10 %, … 100 %."""
-    _log = logging.getLogger(__name__)
-    items = list(iterable) if not hasattr(iterable, "__len__") and total is None else iterable
-    n = total if total is not None else len(items)  # type: ignore[arg-type]
-    step = max(1, -(-n // 10))  # ceiling division by 10
-    for i, item in enumerate(items):
-        if i % step == 0:
-            _log.info("%s %d/%d (%d%%)", desc, i, n, 100 * i // n if n else 0)
-        yield item
-    _log.info("%s done (%d items)", desc, n)
 
 
 # ---------------------------------------------------------------------------
@@ -1326,25 +1320,6 @@ def main():
         json.dump(output, f, indent=2, default=str)
     print(f"Saved -> {output_file}")
 
-
-if __name__ == "__main__":
-    main()
-
-
-# ---------------------------------------------------------------------------
-# Unified model evaluation (from evaluate_models.py)
-# ---------------------------------------------------------------------------
-from constants import DEVICE, MAX_LENGTH, _get_sroie_dir, _gpu_cleanup  # noqa: E402, I001
-from data_pipeline import load_sroie_test  # noqa: E402, I001
-
-__all__ = [
-    "load_test_samples",
-    "evaluate_donut_on_test",
-    "evaluate_trocr_yolo_on_test",
-    "print_metrics",
-    "generate_comparison_report",
-    "generate_json_summary",
-]
 
 # ── Config ──────────────────────────────────────────────────────────────────
 RESULTS_DIR = Path("results")

@@ -26,7 +26,6 @@ Individual test files merged:
 # Standard library
 import ast
 import dataclasses
-import importlib
 import inspect
 import json
 import logging
@@ -2736,6 +2735,7 @@ class TestLoggingUtilsImportable(unittest.TestCase):
     def test_import(self):
         """Logging utilities must be importable from constants (merged from logging_utils)."""
         import constants as mod
+
         assert hasattr(mod, "suppress_noisy_loggers")
         assert hasattr(mod, "DeduplicatingHandler")
         assert hasattr(mod, "_NOISY_THIRD_PARTY_LOGGERS")
@@ -6343,9 +6343,8 @@ class TestBugPatternDetectorJsonConfusion(unittest.TestCase):
         assert "True" in bugs[0].fix_suggestion
 
     def test_severity_is_critical(self):
-        from validation import BugPatternDetector
-
         from cloud_orchestration import SeverityLevel
+        from validation import BugPatternDetector
 
         bugs = BugPatternDetector.detect_python_json_confusion("x = false", Path("test.py"))
         assert bugs[0].severity == SeverityLevel.CRITICAL
@@ -6430,9 +6429,8 @@ class TestBugPatternDetectorTieWordEmbeddings(unittest.TestCase):
         assert bugs == []
 
     def test_severity_is_critical(self):
-        from validation import BugPatternDetector
-
         from cloud_orchestration import SeverityLevel
+        from validation import BugPatternDetector
 
         code = "model.resize_token_embeddings(len(tokenizer))\npass"
         bugs = BugPatternDetector.detect_missing_tie_word_embeddings(code, Path("train.py"))

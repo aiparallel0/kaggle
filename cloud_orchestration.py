@@ -51,6 +51,7 @@ class DatasetLoadError(Exception):
 
 
 __all__ = [
+    # pipeline_types
     "SeverityLevel",
     "CheckStatus",
     "RecoveryAction",
@@ -71,14 +72,38 @@ __all__ = [
     "GitCommitReport",
     "MLTrainingResult",
     "PipelineResult",
-    # Pipeline Critic
-    "FindingSeverity",
-    "CritiqueFinding",
-    "CritiqueReport",
     # Exceptions
     "CheckpointCorruptionError",
     "PipelineConfigError",
     "DatasetLoadError",
+    # pipeline_critic
+    "FindingSeverity",
+    "CritiqueFinding",
+    "CritiqueReport",
+    "PipelineCritic",
+    "StatisticalPowerAudit",
+    "MultipleTestingAudit",
+    "EpochConfoundAudit",
+    "PretrainingBiasAudit",
+    "ArchitectureAudit",
+    "BenchmarkNarrowness",
+    # dag_scheduler
+    "DAGScheduler",
+    "print_dag",
+    # cloud_pipeline
+    "CloudConfig",
+    "PipelineMode",
+    "LogLevel",
+    "GitController",
+    "StorageManager",
+    "CloudPipelineOrchestrator",
+    "CodeRepairOrchestrator",
+    "MLTrainingOrchestrator",
+    "RetroUIFormatter",
+    # stats helpers (used by tests)
+    "_norm_ppf",
+    "_two_proportion_mdd",
+    "_family_wise_error_rate",
 ]
 
 
@@ -502,16 +527,6 @@ class CritiqueReport:
 
 
 # ── pipeline_critic ──────────────────────────────────────────────────────
-
-__all__ = [
-    "PipelineCritic",
-    "StatisticalPowerAudit",
-    "MultipleTestingAudit",
-    "EpochConfoundAudit",
-    "PretrainingBiasAudit",
-    "ArchitectureAudit",
-    "BenchmarkNarrowness",
-]
 
 _ROOT = Path(__file__).resolve().parent
 
@@ -1179,15 +1194,6 @@ def _print_report(report: CritiqueReport, exit_on_fatal: bool = True) -> None:
         sys.exit(1)
 
 
-# =============================================================================
-# CLI entry point
-# =============================================================================
-
-if __name__ == "__main__":
-    report = PipelineCritic().run()
-    report.print_loud(exit_on_fatal=True)
-
-
 # ── dag_scheduler ────────────────────────────────────────────────────────
 
 logger = logging.getLogger(__name__)
@@ -1389,7 +1395,7 @@ def print_dag(configs: list) -> None:
     print("=" * 60 + "\n")
 
 
-def main() -> None:
+def main_dag_scheduler() -> None:
     import argparse
 
     parser = argparse.ArgumentParser(description="Show or test the experiment DAG")
@@ -1416,33 +1422,10 @@ def main() -> None:
     print_dag(configs)  # always show the graph
 
 
-if __name__ == "__main__":
-    main()
-
-
-# ── cloud_pipeline ───────────────────────────────────────────────────────
-
-__all__ = [
-    # Config (formerly pipeline_config.py)
-    "CloudConfig",
-    "PipelineMode",
-    "LogLevel",
-    # Utilities (formerly cloud_utils.py)
-    "GitController",
-    "StorageManager",
-    # Orchestration
-    "CloudPipelineOrchestrator",
-    "CodeRepairOrchestrator",
-    "MLTrainingOrchestrator",
-    "RetroUIFormatter",
-    # DAG scheduler (formerly dag_scheduler.py)
-    "DAGScheduler",
-    "print_dag",
-]
-
+# ── cloud_pipeline ─────────────────────────────────────────────────────────
 
 # =============================================================================
-# Pipeline Configuration  (formerly pipeline_config.py)
+# Pipeline Configuration
 # =============================================================================
 
 
@@ -1878,7 +1861,6 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
-logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------

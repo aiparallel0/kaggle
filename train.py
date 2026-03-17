@@ -2603,8 +2603,6 @@ class SROIEOnlyValCallback(TrainerCallback):
             model.eval()
             correct = 0
             total = 0
-            from constants import FIELDS
-
             with torch.no_grad():
                 for img_path, gt in self._samples:
                     try:
@@ -3078,9 +3076,7 @@ class LiveDashboardCallback:
             from rich.table import Table
             from rich.text import Text
 
-            epoch_str = (
-                f"[{len(self._rows)}/{self._total_epochs}]" if self._total_epochs else ""
-            )
+            epoch_str = f"[{len(self._rows)}/{self._total_epochs}]" if self._total_epochs else ""
             table = Table(
                 title=f"[bold cyan]Exp {self._experiment_id}[/] — Training {epoch_str}",
                 show_header=True,
