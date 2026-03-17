@@ -63,7 +63,6 @@ import torch
 from transformers import DonutProcessor, VisionEncoderDecoderModel
 
 import data_pipeline as dataset_loaders
-from data_pipeline import load_sroie_test
 import resource_manager as _mm
 
 # FIX: Import shared constants from single source of truth (constants.py)
@@ -83,6 +82,7 @@ from constants import (
     _progress,
     set_seed,
 )
+from data_pipeline import load_sroie_test
 
 try:
     import yaml
@@ -92,7 +92,6 @@ except ImportError as e:
 import struct
 import sys
 import zlib
-
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -411,7 +410,7 @@ def _require(d: dict[str, Any], key: str, path: str) -> Any:
 def load_experiment(
     experiment_id: int,
     experiments_dir: str | Path = "experiments",
-) -> "_YAMLExperimentConfig":
+) -> _YAMLExperimentConfig:
     """
     Load a single experiment by integer ID.
 
@@ -451,7 +450,7 @@ def load_experiment(
 def load_all_experiments(
     experiments_dir: str | Path = "experiments",
     experiment_ids: Sequence[int] | None = None,
-) -> "list[_YAMLExperimentConfig]":
+) -> list[_YAMLExperimentConfig]:
     """
     Load all experiment YAML files from experiments_dir, sorted by
     experiment_id.  Pass experiment_ids to load only specific IDs.
@@ -488,7 +487,7 @@ def load_all_experiments(
     return configs
 
 
-def _yaml_to_config(path: str | Path) -> "_YAMLExperimentConfig":
+def _yaml_to_config(path: str | Path) -> _YAMLExperimentConfig:
     """Parse one YAML file into a _YAMLExperimentConfig."""
     path = str(path)
     raw = _parse_yaml(path)
@@ -616,7 +615,7 @@ def _yaml_to_config(path: str | Path) -> "_YAMLExperimentConfig":
 def load_experiment_selection(
     selection_file: str | Path = "experiment_selection.json",
     experiments_dir: str | Path = "experiments",
-) -> "list[_YAMLExperimentConfig]":
+) -> list[_YAMLExperimentConfig]:
     """
     Load only the experiments listed as enabled=true in experiment_selection.json.
     Returns configs sorted by experiment_id ascending.
@@ -1717,7 +1716,7 @@ except ImportError:
 try:
     from PIL import Image as _PILImage
 
-    def _load_image(path: "str | Path") -> "_PILImage.Image":  # type: ignore[name-defined]
+    def _load_image(path: str | Path) -> _PILImage.Image:  # type: ignore[name-defined]
         return _PILImage.open(path).convert("RGB")
 
     _PIL_AVAILABLE = True
@@ -1753,7 +1752,7 @@ except ImportError:
             prev = bytes(row)
         return b"".join(out)
 
-    def _load_png(path: "str | Path") -> "np.ndarray | None":
+    def _load_png(path: str | Path) -> np.ndarray | None:
         """Minimal PNG decoder → RGB numpy array."""
         data = Path(path).read_bytes()
         if data[:8] != b"\x89PNG\r\n\x1a\n":
@@ -1789,7 +1788,7 @@ except ImportError:
             arr = arr[:, :, :3]
         return arr
 
-    def _load_bmp(path: "str | Path") -> "np.ndarray | None":
+    def _load_bmp(path: str | Path) -> np.ndarray | None:
         """Minimal BMP decoder for 24-bit uncompressed BMP → RGB numpy array."""
         data = Path(path).read_bytes()
         if data[:2] != b"BM":
@@ -1813,7 +1812,7 @@ except ImportError:
             arr[row] = pixels[:, ::-1]  # BGR → RGB
         return arr
 
-    def _load_jpeg_ctypes(path: "str | Path"):
+    def _load_jpeg_ctypes(path: str | Path):
         """Load JPEG via ImageMagick subprocess (system libjpeg fallback)."""
         import subprocess as _sp
 
@@ -1837,7 +1836,7 @@ except ImportError:
             pass
         return None
 
-    def _load_image(path: "str | Path"):  # type: ignore[misc]
+    def _load_image(path: str | Path):  # type: ignore[misc]
         """Load an image file as an RGB numpy array without PIL."""
         path = Path(path)
         suffix = path.suffix.lower()
@@ -2395,7 +2394,7 @@ class DonutEvaluator:
         self,
         image_path: Path,
         task_prompt: str,
-        preloaded_image: "Any | None" = None,
+        preloaded_image: Any | None = None,
     ) -> dict:
         """Run inference on a single image and return parsed dict.
 
@@ -3481,7 +3480,7 @@ TRAIN_CONFIG: dict[str, Any] = {
 }
 
 
-def _config_to_dict(config: "ExperimentConfig") -> dict:
+def _config_to_dict(config: ExperimentConfig) -> dict:
     """Serialize an ExperimentConfig to the TRAIN_CONFIG dict format.
 
     Used to record the *actual* training hyperparameters in the result JSON,
@@ -3864,7 +3863,7 @@ def train_experiment(
 
 
 def evaluate_experiment(
-    exp_id: int, model_dir: Path, config: "ExperimentConfig | None" = None
+    exp_id: int, model_dir: Path, config: ExperimentConfig | None = None
 ) -> dict:
     """Evaluate a fine-tuned model (at *model_dir*) on the SROIE test set.
 
@@ -3931,7 +3930,7 @@ def run_experiment(
     exp_id: int,
     base_processor=None,
     base_model=None,
-    overrides: "dict | None" = None,
+    overrides: dict | None = None,
 ) -> dict:
     """Run a single experiment: train, evaluate, save results.
 
@@ -4031,8 +4030,8 @@ def run_experiment(
 
     # Phase 5: Dynamic resource optimization (Phase 3-5)
     # Detect available hardware and optimize hyperparameters accordingly
-    resources = detect_system_resources()
-    optimized_config = optimize_hyperparams(
+    resources = _mm.detect_system_resources()
+    optimized_config = _mm.optimize_hyperparams(
         num_train_samples=len(train_samples),
         available_vram_gb=resources.vram_gb,
         available_ram_gb=resources.ram_gb,
@@ -4178,7 +4177,7 @@ def run_experiment(
     return result
 
 
-def run_custom_experiment(config: "ExperimentConfig", result_file: Path) -> dict:
+def run_custom_experiment(config: ExperimentConfig, result_file: Path) -> dict:
     """Run a single experiment with custom hyperparameters (for sweeps).
 
     Similar to run_experiment but:
@@ -4253,7 +4252,7 @@ def run_experiment_from_config(
     cfg,
     base_processor=None,
     base_model=None,
-    overrides: "dict | None" = None,
+    overrides: dict | None = None,
 ) -> dict:
     """Run a YAML-defined DONUT experiment (IDs 9+) via run_custom_experiment().
 
@@ -4394,7 +4393,7 @@ def save_summary() -> None:
 def main() -> None:
     # Phase 4-5: Initialize audit logger for persistent resource/config tracking
     audit_logger = TrainingAuditLogger(append_to_file="terminal.txt")
-    resources = detect_system_resources()
+    resources = _mm.detect_system_resources()
     audit_logger.log_resource_detection(resources)
     print(
         f"[Resources] GPU: {resources.device_name} ({resources.vram_gb:.1f}GB), "
