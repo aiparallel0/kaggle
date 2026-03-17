@@ -1662,7 +1662,7 @@ def stage_trocr_data_prep(args) -> StageResult:
         return StageResult(name="TrOCR Data Prep", duration=0.0, exit_status=0, warnings=warnings)
 
     try:
-        import dataset_preparation as ds_prep
+        import data_pipeline as ds_prep
 
         counts = ds_prep.prepare_all()
         for key, count in counts.items():
