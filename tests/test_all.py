@@ -170,7 +170,7 @@ from dataset_loaders import (
     _validate_sample_schema,
     _validate_samples_nonempty,
 )
-from inject_results import EXP_NAMES, LEADERBOARD, PaperInjector, UnresolvedVarError, _safe
+from reporting import EXP_NAMES, LEADERBOARD, PaperInjector, UnresolvedVarError, _safe
 from logging_utils import DeduplicatingHandler, suppress_noisy_loggers
 from resource_optimizer import (
     ResourceOptimizedConfig,
