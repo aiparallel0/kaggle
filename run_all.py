@@ -671,7 +671,7 @@ def _print_all_params() -> None:
     print("\n  TrOCR + YOLO (CONTROL_SUITE)")
     print("  " + "-" * 50)
     try:
-        from control_suite import CONTROL_SUITE
+        from run_experiments import CONTROL_SUITE
 
         CONTROL_SUITE.print_summary()
     except Exception as exc:

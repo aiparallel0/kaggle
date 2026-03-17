@@ -3630,7 +3630,7 @@ def main():
     model.gradient_checkpointing_enable()
 
     # Load SROIE data using canonical loaders (single source of truth)
-    from dataset_loaders import load_sroie_train, load_sroie_val
+    from data_pipeline import load_sroie_train, load_sroie_val
 
     train_samples = load_sroie_train()
     val_samples = load_sroie_val()

@@ -186,12 +186,14 @@ class DatasetEntry:
 
 
 # ---------------------------------------------------------------------------
-# ExperimentConfig — the authoritative config object consumed by training code
+# _YAMLExperimentConfig — config loaded from experiments/*.yaml files only
+# (private; the public ExperimentConfig for hardcoded experiments is defined
+#  further below at the "DONUT fine-tuning experiments" section)
 # ---------------------------------------------------------------------------
 
 
 @dataclasses.dataclass
-class ExperimentConfig:
+class _YAMLExperimentConfig:
     """
     Single source of truth for all hyperparameters of one DONUT experiment.
 
@@ -409,7 +411,7 @@ def _require(d: dict[str, Any], key: str, path: str) -> Any:
 def load_experiment(
     experiment_id: int,
     experiments_dir: str | Path = "experiments",
-) -> ExperimentConfig:
+) -> "_YAMLExperimentConfig":
     """
     Load a single experiment by integer ID.
 
@@ -449,7 +451,7 @@ def load_experiment(
 def load_all_experiments(
     experiments_dir: str | Path = "experiments",
     experiment_ids: Sequence[int] | None = None,
-) -> list[ExperimentConfig]:
+) -> "list[_YAMLExperimentConfig]":
     """
     Load all experiment YAML files from experiments_dir, sorted by
     experiment_id.  Pass experiment_ids to load only specific IDs.
@@ -466,7 +468,7 @@ def load_all_experiments(
             f"Expected files matching '{experiments_dir}/*.yaml'."
         )
 
-    configs: list[ExperimentConfig] = []
+    configs: list[_YAMLExperimentConfig] = []
     errors: list[str] = []
 
     for p in paths:
@@ -486,8 +488,8 @@ def load_all_experiments(
     return configs
 
 
-def _yaml_to_config(path: str | Path) -> ExperimentConfig:
-    """Parse one YAML file into an ExperimentConfig."""
+def _yaml_to_config(path: str | Path) -> "_YAMLExperimentConfig":
+    """Parse one YAML file into a _YAMLExperimentConfig."""
     path = str(path)
     raw = _parse_yaml(path)
 
@@ -574,7 +576,7 @@ def _yaml_to_config(path: str | Path) -> ExperimentConfig:
         int(d) for d in (_depends_raw or []) if str(d).strip().isdigit() or isinstance(d, int)
     ]
 
-    return ExperimentConfig(
+    return _YAMLExperimentConfig(
         id=exp_id,
         name=name,
         description=description,
@@ -614,7 +616,7 @@ def _yaml_to_config(path: str | Path) -> ExperimentConfig:
 def load_experiment_selection(
     selection_file: str | Path = "experiment_selection.json",
     experiments_dir: str | Path = "experiments",
-) -> list[ExperimentConfig]:
+) -> "list[_YAMLExperimentConfig]":
     """
     Load only the experiments listed as enabled=true in experiment_selection.json.
     Returns configs sorted by experiment_id ascending.
@@ -1434,7 +1436,7 @@ class ControlSuite:
 
     Usage
     -----
-        from control_suite import CONTROL_SUITE
+        from run_experiments import CONTROL_SUITE
 
         CONTROL_SUITE.print_summary()
         CONTROL_SUITE.critical_params()
