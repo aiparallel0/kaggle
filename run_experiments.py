@@ -47,14 +47,16 @@ import argparse
 import copy
 import dataclasses
 import gc
+import glob
 import json
 import logging
 import math
 import os
+import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar, Sequence
 
 # Set before torch initializes to reduce GPU memory fragmentation.
 os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
@@ -84,6 +86,7 @@ from constants import (
 )
 from data_pipeline import load_sroie_test
 from resource_manager import TrainingAuditLogger
+from train import MultiDataset
 
 try:
     import yaml
@@ -93,6 +96,13 @@ except ImportError as e:
 import struct
 import sys
 import zlib
+
+try:
+    import flash_attn  # noqa: F401
+
+    FLASH_ATTN_AVAILABLE = True
+except ImportError:
+    FLASH_ATTN_AVAILABLE = False
 
 # ---------------------------------------------------------------------------
 # Public API
