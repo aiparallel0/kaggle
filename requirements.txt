@@ -1,13 +1,13 @@
 torch>=2.0.0
 transformers>=4.37.0
 pyyaml>=6.0
+accelerate
 
 # --- Optional: uncomment if needed ---
 
 # torchvision>=0.15.0
 # Used ONLY for data augmentation presets DA1/DA2 in control_suite.get_augmentation_transforms().
 # The pipeline works without it — that function returns None gracefully when torchvision is absent.
-
 # flash-attn is OPTIONAL — the pipeline runs correctly without it (PyTorch 2.x
 # built-in SDPA is used as fallback).  Install separately after torch if desired:
 #   pip install flash-attn --no-build-isolation
@@ -39,8 +39,8 @@ pyyaml>=6.0
 # datasets      → 100% replaced with inline _hf_download_dataset_inline() in dataset_loaders.py
 #                 (urllib-only HTTP downloader + JSONL cache; no Arrow dependency)
 # ultralytics   → 100% replaced with inline _YOLO_CLS in train_trocr_yolo.py
-#                 (full YOLOv8x backbone + training loop + inference, pure PyTorch)
-# accelerate    → never imported anywhere; torch.cuda.amp.GradScaler used directly
+#                 (full YOLOv8x backbone + training loop + inference, pure PyTorch)→ never imported anywhere; torch.cuda.amp.GradScaler used directly
+    
 # matplotlib    → 100% replaced with inline SVG generators in benchmark_compare.py
 #                 (_svg_bar_chart, _svg_speed_chart, _svg_radar_chart, _svg_compare_bar)
 #                 Install matplotlib for PDF-quality rasterised output (optional)
