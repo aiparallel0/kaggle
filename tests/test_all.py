@@ -171,7 +171,7 @@ from dataset_loaders import (
     _validate_samples_nonempty,
 )
 from reporting import EXP_NAMES, LEADERBOARD, PaperInjector, UnresolvedVarError, _safe
-from logging_utils import DeduplicatingHandler, suppress_noisy_loggers
+from constants import DeduplicatingHandler, suppress_noisy_loggers
 from resource_optimizer import (
     ResourceOptimizedConfig,
     optimize_hyperparams,
@@ -2733,13 +2733,13 @@ class TestLoggingUtilsImportable(unittest.TestCase):
     def test_suppress_noisy_loggers_callable(self):
         import logging
 
-        from logging_utils import suppress_noisy_loggers
+        from constants import suppress_noisy_loggers
 
         # Should not raise
         suppress_noisy_loggers(logging.WARNING)
 
     def test_noisy_logger_list_contains_pil(self):
-        from logging_utils import _NOISY_THIRD_PARTY_LOGGERS
+        from constants import _NOISY_THIRD_PARTY_LOGGERS
 
         assert "PIL" in _NOISY_THIRD_PARTY_LOGGERS
         assert "PIL.PngImagePlugin" in _NOISY_THIRD_PARTY_LOGGERS
@@ -4647,8 +4647,8 @@ class TestExperimentConfigLoaderCompat(unittest.TestCase):
 
     def test_loader_experiment_id_property(self):
         """experiment_config_loader.ExperimentConfig.experiment_id must alias id."""
-        import experiment_config_loader as _ecl
-        from experiment_config_loader import DatasetEntry
+        import experiment_config as _ecl
+        from experiment_config import DatasetEntry
 
         c = _ecl.ExperimentConfig(
             id=5,
@@ -4660,8 +4660,8 @@ class TestExperimentConfigLoaderCompat(unittest.TestCase):
 
     def test_loader_base_model_property(self):
         """experiment_config_loader.ExperimentConfig.base_model must alias base_checkpoint."""
-        import experiment_config_loader as _ecl
-        from experiment_config_loader import DatasetEntry
+        import experiment_config as _ecl
+        from experiment_config import DatasetEntry
 
         c = _ecl.ExperimentConfig(
             id=5,
@@ -4674,8 +4674,8 @@ class TestExperimentConfigLoaderCompat(unittest.TestCase):
 
     def test_loader_dataset_names_property(self):
         """experiment_config_loader.ExperimentConfig.dataset_names returns list[str]."""
-        import experiment_config_loader as _ecl
-        from experiment_config_loader import DatasetEntry
+        import experiment_config as _ecl
+        from experiment_config import DatasetEntry
 
         c = _ecl.ExperimentConfig(
             id=2,
@@ -4686,8 +4686,8 @@ class TestExperimentConfigLoaderCompat(unittest.TestCase):
 
     def test_loader_warmup_steps_default(self):
         """experiment_config_loader.ExperimentConfig warmup_steps default must be 40."""
-        import experiment_config_loader as _ecl
-        from experiment_config_loader import DatasetEntry
+        import experiment_config as _ecl
+        from experiment_config import DatasetEntry
 
         c = _ecl.ExperimentConfig(
             id=1,
