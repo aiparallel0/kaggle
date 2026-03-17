@@ -42,6 +42,7 @@ __all__ = [
     "validate_checkpoint",
     "PreflightChecker",
     "validate_pipeline",
+    "run",
 ]
 
 # ---------------------------------------------------------------------------
