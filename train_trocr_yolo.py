@@ -695,9 +695,11 @@ except ImportError:
                     h, w = raw_arr.shape[:2]
                     scale = imgsz / max(h, w)
                     nh, nw = int(h * scale), int(w * scale)
-                    import cv2 as _cv2  # noqa: PLC0415 — soft dep for training only
+                    from PIL import Image as _PIL_Image  # noqa: PLC0415
 
-                    resized = _cv2.resize(raw_arr, (nw, nh), interpolation=_cv2.INTER_LINEAR)
+                    resized = _np.array(
+                        _PIL_Image.fromarray(raw_arr).resize((nw, nh), _PIL_Image.BILINEAR)
+                    )
                     padded = _np.zeros((imgsz, imgsz, 3), dtype=_np.uint8)
                     padded[:nh, :nw] = resized
                     t = (

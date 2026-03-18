@@ -4164,6 +4164,62 @@ def run_experiment(
         baseline_f1=None,  # Could set to pretrained F1 for comparison
     )
 
+    # Runtime diagnostic check — detect known F1 anomalies post-evaluation
+    try:
+        from diagnostics import RuntimeCheckpoint, ai_diagnose
+
+        _diag_cp = RuntimeCheckpoint(
+            timestamp=time.time(),
+            stage="post_evaluation",
+            experiment_id=exp_id,
+            eval_f1=global_f1,
+            metrics=metrics,
+        )
+        # Check for known F1 collapse patterns
+        _diag_issues = []
+        if 0.40 < global_f1 < 0.44:
+            _diag_issues.append(
+                {
+                    "pattern": "lm_head_dedup",
+                    "severity": "critical",
+                    "evidence": f"F1={global_f1:.4f} in safetensors danger zone (0.40-0.44)",
+                }
+            )
+        elif 0 < global_f1 < 0.02:
+            _diag_issues.append(
+                {
+                    "pattern": "token2json_list",
+                    "severity": "critical",
+                    "evidence": f"F1={global_f1:.4f} — likely token2json returning list",
+                }
+            )
+        elif global_f1 == 0.0 and not metrics.get("self_test_failed"):
+            _diag_issues.append(
+                {
+                    "pattern": "total_f1_collapse",
+                    "severity": "critical",
+                    "evidence": "F1=0.0000 — complete prediction failure",
+                }
+            )
+        if _diag_issues:
+            for _issue in _diag_issues:
+                print(
+                    f"\n{'!' * 72}\n"
+                    f"[Diagnostics] Exp {exp_id} | PATTERN: {_issue['pattern']} "
+                    f"({_issue['severity']})\n  {_issue['evidence']}\n"
+                    f"{'!' * 72}"
+                )
+            # AI diagnosis if enabled
+            if os.environ.get("AI_DIAGNOSE", "0") == "1":
+                _dx = ai_diagnose(
+                    {"experiment_id": exp_id, "metrics": metrics, "issues": _diag_issues},
+                    provider=os.environ.get("AI_DIAGNOSE_PROVIDER", "auto"),
+                )
+                if _dx:
+                    print(f"\n[AI Diagnosis] Exp {exp_id}:\n{_dx}")
+    except ImportError:
+        pass  # diagnostics.py not present
+
     # Save result — use the *original* (unoptimized) experiment config dict for cache
     # staleness comparison so future runs can correctly detect stale results.
     # The resource-optimized values (batch_size, encoder_lr, etc.) are hardware-dependent

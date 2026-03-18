@@ -24,6 +24,8 @@
 16. [Known Issues & Historical Fixes](#16-known-issues--historical-fixes)
 17. [Performance Tips](#17-performance-tips)
 18. [Pipeline Stage Summary](#18-pipeline-stage-summary)
+19. [Runtime Diagnostics — `diagnostics.py`](#19-runtime-diagnostics--diagnosticspy)
+20. [Guardrail Principles — What Must Never Be Done](#20-guardrail-principles--what-must-never-be-done)
 
 ---
 
@@ -798,7 +800,133 @@ Both must exit with code `0`. If either fails, fix the import chain before runni
 
 ---
 
-## 19. Guardrail Principles — What Must Never Be Done
+## 19. Runtime Diagnostics — `diagnostics.py`
+
+`diagnostics.py` is an always-on, self-contained diagnostic layer. It requires no API keys to run. AI-powered diagnosis is opt-in via environment variables.
+
+### Architecture
+
+| Component | Class / Function | When it runs |
+|---|---|---|
+| Per-epoch pattern detection | `DiagnosticCallback` (TrainerCallback) | After every `on_evaluate` during training |
+| Post-evaluation F1 check | inline in `run_experiment()` | After `evaluate_experiment()` returns |
+| Stage-level error capture | `PipelineDiagnostics` in `PipelineOrchestrator` | After every stage in `run_all.py` |
+| AI root-cause analysis | `ai_diagnose()` | On demand: triggered by critical pattern or stage failure when `AI_DIAGNOSE=1` |
+| Pre-run validation | `smoke_test()` / `run_preflight()` | Called from CLI: `python diagnostics.py --smoke-test` |
+
+### Known patterns detected automatically
+
+| Pattern name | F1 signature | Root cause | Fix pointer |
+|---|---|---|---|
+| `lm_head_dedup` | 0.40 < F1 < 0.44 | safetensors omits `lm_head.weight` | `LmHeadCloneCallback` + `tie_word_embeddings=False` (Pattern 6) |
+| `token2json_list` | F1 < 0.02 | `token2json` returned list (`<sep/>` tokens) | `_parse_prediction()` list merge (Pattern 5) |
+| `total_f1_collapse` | F1 = 0.000 | Wrong `decoder_start_token_id` or missing tokens | Use list form in `convert_tokens_to_ids` (GP-3) |
+| `loss_plateau` | train_loss > 2.0 at epoch > 3 | Fewer than 200 optimizer steps | `validate_training_config()` (GP-2) |
+| `loss_nan` | train_loss = NaN | fp16 overflow or bad LR | Switch to bf16; clip gradients |
+| `gpu_oom_warning` | allocated / reserved > 0.90 | Batch too large for VRAM | Halve batch_size, double grad_accum |
+| `eval_loss_diverging` | 3 consecutive eval loss increases | Overfitting | Increase `weight_decay`; rely on early stopping |
+
+### Running diagnostics
+
+```bash
+# Smoke test — validates import chain, model load, token roundtrip, forward pass (<30s)
+python diagnostics.py --smoke-test
+
+# Smoke test + AI diagnosis on failure
+AI_DIAGNOSE=1 python diagnostics.py --smoke-test --ai-diagnose --ai-provider auto
+
+# DiagnosticCallback fires automatically during training — no flag needed
+python run_experiments.py --experiment 6
+
+# Disable pattern detection entirely
+DISABLE_DIAGNOSTICS=1 python run_all.py
+```
+
+### Enabling AI-powered diagnosis
+
+```bash
+# Claude (fast, cheap — claude-haiku-4-5-20251001 default)
+export ANTHROPIC_API_KEY=sk-ant-...
+AI_DIAGNOSE=1 python run_all.py --experiment 3
+
+# Mistral (mistral-small-latest default; SDK or raw HTTP fallback)
+export MISTRAL_API_KEY=...
+AI_DIAGNOSE=1 AI_DIAGNOSE_PROVIDER=mistral python run_all.py
+
+# Auto: tries Claude → Mistral SDK → Mistral HTTP (no SDK required for HTTP fallback)
+AI_DIAGNOSE=1 AI_DIAGNOSE_PROVIDER=auto python run_all.py
+```
+
+Keys can also be stored in gitignored flat files:
+```
+anthropic_api_key.txt   # single line: sk-ant-...
+mistral_api_key.txt     # single line: ...
+```
+
+### Environment variables
+
+| Variable | Default | Effect |
+|---|---|---|
+| `AI_DIAGNOSE` | `0` | `1` enables AI API calls on critical failures |
+| `AI_DIAGNOSE_PROVIDER` | `auto` | `claude` / `mistral` / `auto` |
+| `ANTHROPIC_API_KEY` | — | Claude key (or `anthropic_api_key.txt`) |
+| `MISTRAL_API_KEY` | — | Mistral key (or `mistral_api_key.txt`) |
+| `DISABLE_DIAGNOSTICS` | `0` | `1` skips `DiagnosticCallback` entirely |
+
+### Output files
+
+| File | When created | Content |
+|---|---|---|
+| `results/diagnostics_expN.json` | After each training run | Per-epoch checkpoints, issues, AI diagnoses |
+| `results/pipeline_diagnostics.json` | After `run_all.py` completes | Per-stage status, GPU snapshots, AI diagnoses |
+
+### Claude Code autonomous validation hook
+
+`.claude/settings.json` registers a `PostToolUse` hook on `Edit|Write` that runs:
+
+```bash
+python -c "from constants import FIELDS, BASE_MODEL, SEED"
+```
+
+after every `.py` file edit in this session. If the import breaks, a warning is injected into the assistant context immediately — before any experiment runs. This satisfies the CLAUDE.md §5 rule automatically without requiring a manual check.
+
+To disable the hook for a session: `DISABLE_DIAGNOSTICS=1` (does not affect the hook — the hook is controlled via `.claude/settings.json`).
+
+### Programmatic API
+
+```python
+from diagnostics import (
+    DiagnosticCallback,   # TrainerCallback — add to HF Trainer callbacks list
+    PipelineDiagnostics,  # Stage wrapper — use in PipelineOrchestrator
+    ai_diagnose,          # Direct AI call: ai_diagnose(context, provider="auto")
+    RuntimeCheckpoint,    # Telemetry dataclass
+    smoke_test,           # Returns True/False; prints pass/fail per check
+    run_preflight,        # smoke_test() + optional AI diagnosis on failure
+)
+
+# Minimal usage in a custom training loop:
+from diagnostics import DiagnosticCallback
+cb = DiagnosticCallback(experiment_id=6, ai_diagnose=True)
+trainer = Seq2SeqTrainer(..., callbacks=[..., cb])
+
+# Direct AI call (no training needed):
+from diagnostics import ai_diagnose
+diagnosis = ai_diagnose(
+    {"eval_f1": 0.42, "epoch": 7, "stage": "training"},
+    provider="auto",
+)
+```
+
+### Integration points (for AI agents modifying this codebase)
+
+- **`train.py`:** `DiagnosticCallback` is registered in `DonutTrainer.train()` after `LiveDashboardCallback`. Do not remove it. It must come after `LmHeadCloneCallback`.
+- **`run_experiments.py`:** Post-evaluation block (after `evaluate_experiment()`) checks F1 against known-bad ranges. Adding new known-bad F1 ranges: add to the `if/elif/elif` chain, not to `_BUG_PATTERNS` (those are for training-time checks).
+- **`run_all.py`:** `PipelineOrchestrator.__init__()` creates `self._diag`. The `_run_stage()` method records each stage result. `run()` calls `self._diag.save_report()` at pipeline end.
+- **`diagnostics.py`:** `_BUG_PATTERNS` is a list of dicts with `name`, `description`, `detect` (lambda), `severity`, `fix`. Add new patterns here for training-time detection. The `detect` lambda receives a `RuntimeCheckpoint` and must not raise.
+
+---
+
+## 20. Guardrail Principles — What Must Never Be Done
 
 > These rules exist because each one corresponds to a real silent failure that was hard to diagnose. They are not style suggestions.
 

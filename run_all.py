@@ -2129,6 +2129,21 @@ class PipelineOrchestrator:
         self.args = args
         self.stages: list[StageResult] = []
 
+        # Pipeline-level diagnostics — captures per-stage telemetry and
+        # optionally calls Claude/Mistral API on failures.
+        self._diag = None
+        try:
+            from diagnostics import PipelineDiagnostics
+
+            _ai_diag = os.environ.get("AI_DIAGNOSE", "0") == "1"
+            _ai_prov = os.environ.get("AI_DIAGNOSE_PROVIDER", "auto")
+            self._diag = PipelineDiagnostics(
+                ai_diagnose=_ai_diag,
+                ai_provider=_ai_prov,
+            )
+        except ImportError:
+            pass  # diagnostics.py not present
+
     def _run_stage(self, name: str, func) -> StageResult:
         """Time a stage, catch exceptions, and record the StageResult."""
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -2140,10 +2155,33 @@ class PipelineOrchestrator:
         except SystemExit:
             raise
         except Exception as exc:
-            import traceback
+            import traceback as _tb
 
             elapsed = time.monotonic() - t0
-            traceback.print_exc()
+            _tb.print_exc()
+
+            # AI-powered diagnosis on stage failure
+            if self._diag is not None:
+                try:
+                    from diagnostics import ai_diagnose as _ai_dx
+
+                    _ai_enabled = os.environ.get("AI_DIAGNOSE", "0") == "1"
+                    if _ai_enabled:
+                        _ai_prov = os.environ.get("AI_DIAGNOSE_PROVIDER", "auto")
+                        _diagnosis = _ai_dx(
+                            {
+                                "stage": name,
+                                "error_type": type(exc).__name__,
+                                "error_message": str(exc),
+                                "traceback": _tb.format_exc()[-2000:],
+                            },
+                            provider=_ai_prov,
+                        )
+                        if _diagnosis:
+                            print(f"\n[AI Diagnosis] Stage {name!r}:\n{_diagnosis}")
+                except Exception:
+                    pass  # diagnosis itself failed — don't mask the real error
+
             result = StageResult(
                 name=name,
                 duration=elapsed,
@@ -2153,6 +2191,19 @@ class PipelineOrchestrator:
         ts_end = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         print(f"  ◀ {name} finished at {ts_end} ({result.duration:.1f}s)")
         self.stages.append(result)
+
+        # Record to pipeline diagnostics
+        if self._diag is not None:
+            self._diag.stage_reports.append(
+                {
+                    "stage": name,
+                    "status": "success" if result.exit_status == 0 else "failed",
+                    "duration_sec": result.duration,
+                    "exit_status": result.exit_status,
+                    "warnings": result.warnings,
+                }
+            )
+
         return result
 
     def run(self) -> int:
@@ -2209,6 +2260,13 @@ class PipelineOrchestrator:
 
         # Stage 7 — Paper generation
         self._run_stage("Paper Generation", stage_paper)
+
+        # Save pipeline diagnostics report
+        if self._diag is not None:
+            try:
+                self._diag.save_report()
+            except Exception as _diag_exc:
+                print(f"[Diagnostics] Failed to save pipeline report: {_diag_exc}")
 
         print(repr(self))
         return exit_code
