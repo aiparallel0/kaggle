@@ -345,6 +345,11 @@ except ImportError:
                 for step, batch in enumerate(train_loader):
                     self._call_callbacks("on_step_begin", control)
                     batch = {k: v.to(device) if hasattr(v, "to") else v for k, v in batch.items()}
+                    # Strip decoder_input_ids / decoder_inputs_embeds so that
+                    # VisionEncoderDecoderModel derives them from labels internally.
+                    # Passing both causes MBart to raise ValueError (see _DonutSeq2SeqTrainer).
+                    batch.pop("decoder_input_ids", None)
+                    batch.pop("decoder_inputs_embeds", None)
                     with torch.cuda.amp.autocast(enabled=use_amp, dtype=amp_dtype):
                         out = self.model(**batch)
                         loss = out.loss / args.gradient_accumulation_steps
@@ -3578,7 +3583,22 @@ class DonutTrainer:
                 "labels": torch.stack([f["labels"] for f in features]),
             }
 
-        trainer = Seq2SeqTrainer(
+        # Subclass that prevents decoder_input_ids/decoder_inputs_embeds conflict.
+        #
+        # HF Seq2SeqTrainer.compute_loss() (via prepare_decoder_input_ids_from_labels)
+        # can inject decoder_input_ids into the batch even after the data collator
+        # has omitted them.  VisionEncoderDecoderModel then also derives
+        # decoder_inputs_embeds from encoder hidden states, so MBart receives both
+        # simultaneously and raises ValueError.  Stripping both keys here ensures
+        # the model's forward() sees only pixel_values + labels and handles the
+        # shift-right step internally — which is the correct code path.
+        class _DonutSeq2SeqTrainer(Seq2SeqTrainer):
+            def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
+                inputs.pop("decoder_input_ids", None)
+                inputs.pop("decoder_inputs_embeds", None)
+                return super().compute_loss(model, inputs, return_outputs=return_outputs, **kwargs)
+
+        trainer = _DonutSeq2SeqTrainer(
             model=self.model,
             args=training_args,
             train_dataset=self.train_dataset,
