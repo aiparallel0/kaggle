@@ -429,6 +429,122 @@ Each experiment saves `results/experiment_N.json`:
 
 ---
 
+## 🩺 Runtime Diagnostics
+
+`diagnostics.py` provides an always-on, zero-config diagnostic layer that detects known failure patterns automatically during training and pipeline execution.
+
+### What it detects
+
+| Pattern | Symptom | Severity |
+|---|---|---|
+| `lm_head_dedup` | F1 ≈ 0.42 — safetensors dropped `lm_head.weight` | critical |
+| `token2json_list` | F1 ≈ 0.008 — `token2json` returned list instead of dict | critical |
+| `total_f1_collapse` | F1 = 0.000 — complete prediction failure | critical |
+| `loss_plateau` | Train loss > 2.0 after epoch 3 — underfitting | warning |
+| `loss_nan` | Train loss = NaN — fp16 overflow | critical |
+| `gpu_oom_warning` | GPU memory > 90% — OOM imminent | warning |
+| `eval_loss_diverging` | Eval loss rising 3+ consecutive epochs — overfitting | warning |
+
+### Basic usage (no API key needed)
+
+Pattern detection runs automatically during every training run — no configuration required:
+
+```bash
+python run_all.py --experiment 6    # DiagnosticCallback fires automatically
+```
+
+Issues are printed to the console and saved to `results/diagnostics_exp6.json`.
+
+Disable with:
+
+```bash
+DISABLE_DIAGNOSTICS=1 python run_all.py
+```
+
+### Preflight smoke test
+
+Validate the full import + model setup chain before starting a long training run:
+
+```bash
+python diagnostics.py --smoke-test
+```
+
+Checks: import chain, model load, token ID roundtrip (GP-3/GP-4), and a dummy forward pass. Exits 0 on success, 1 on failure. Runs in < 30 seconds.
+
+### AI-powered diagnosis (Claude or Mistral)
+
+When a critical pattern is detected, optionally call an AI API for root-cause analysis and a concrete fix:
+
+```bash
+# With Claude (claude-haiku-4-5-20251001 by default — fast + cheap)
+export ANTHROPIC_API_KEY=sk-ant-...
+AI_DIAGNOSE=1 python run_all.py --experiment 3
+
+# With Mistral (mistral-small-latest by default)
+export MISTRAL_API_KEY=...
+AI_DIAGNOSE=1 AI_DIAGNOSE_PROVIDER=mistral python run_all.py --experiment 3
+
+# Auto: tries Claude first, falls back to Mistral, then Mistral HTTP (no SDK)
+AI_DIAGNOSE=1 AI_DIAGNOSE_PROVIDER=auto python run_all.py
+```
+
+API keys can also be stored in key files (gitignored):
+
+```
+anthropic_api_key.txt   # one line: sk-ant-...
+mistral_api_key.txt     # one line: ...
+```
+
+### Environment variables
+
+| Variable | Default | Effect |
+|---|---|---|
+| `AI_DIAGNOSE` | `0` | Set `1` to enable AI API calls on critical failures |
+| `AI_DIAGNOSE_PROVIDER` | `auto` | `claude` / `mistral` / `auto` |
+| `ANTHROPIC_API_KEY` | — | Claude API key (or `anthropic_api_key.txt`) |
+| `MISTRAL_API_KEY` | — | Mistral API key (or `mistral_api_key.txt`) |
+| `DISABLE_DIAGNOSTICS` | `0` | Set `1` to skip `DiagnosticCallback` entirely |
+
+### Diagnostic output files
+
+| File | Content |
+|---|---|
+| `results/diagnostics_expN.json` | Per-epoch telemetry + issues for experiment N |
+| `results/pipeline_diagnostics.json` | Per-stage status + AI diagnoses (full pipeline runs) |
+
+### Programmatic use
+
+```python
+from diagnostics import DiagnosticCallback, PipelineDiagnostics, ai_diagnose, smoke_test
+
+# In your own training loop
+from diagnostics import DiagnosticCallback
+cb = DiagnosticCallback(experiment_id=6, ai_diagnose=True, ai_provider="auto")
+# Register with HuggingFace Trainer callbacks list
+
+# Direct AI diagnosis
+result = ai_diagnose(
+    {"stage": "training", "eval_f1": 0.42, "epoch": 5},
+    provider="auto",   # tries Claude then Mistral
+)
+print(result)
+
+# Preflight check
+ok = smoke_test()   # returns True/False
+```
+
+### Claude Code hook (autonomous validation)
+
+A `PostToolUse` hook in `.claude/settings.json` automatically runs:
+
+```bash
+python -c "from constants import FIELDS, BASE_MODEL, SEED"
+```
+
+after every `.py` file edit. If the import chain is broken, a warning is shown immediately — before any experiment is run.
+
+---
+
 ## 🛠️ Troubleshooting
 
 ### `FATAL: The following packages could not be installed: editdistance`
