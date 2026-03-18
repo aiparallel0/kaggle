@@ -2098,8 +2098,11 @@ def stage_benchmark(args) -> StageResult:
 
         # Run DONUT pipeline
         print("\n  Running DONUT inference ...")
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        gc.collect()
         donut_pipe = bench_mod.DonutPipeline(model_id_or_path=str(donut_model_dir))
-        donut_result = donut_pipe.run_benchmark(pairs, desc="DONUT benchmark")
+        donut_result = donut_pipe.run_benchmark(pairs, desc="DONUT benchmark", batch_size=1)
         donut_result = bench_mod.compute_metrics(donut_result)
         all_results.append(donut_result)
 

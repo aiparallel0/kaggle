@@ -658,7 +658,7 @@ class DonutPipeline:
         return self._parse_output(token_str), elapsed_ms
 
     def run_benchmark(
-        self, pairs: list[tuple[Path, dict]], desc: str = "DONUT", batch_size: int = 8
+        self, pairs: list[tuple[Path, dict]], desc: str = "DONUT", batch_size: int = 1
     ) -> BenchmarkResult:
         result = BenchmarkResult(method="DONUT")
         # Tokenize the task prompt once — it is constant across all batches.
@@ -1982,7 +1982,7 @@ def _plot_convergence_main() -> None:
         default="experiment_selection.json",
         help="Path to experiment_selection.json (default: experiment_selection.json)",
     )
-    args = parser.parse_args()
+    args, _ = parser.parse_known_args()
     generate_all(results_dir=args.results_dir, selection_file=args.selection)
     print("plot_convergence: convergence .tex files written to", args.results_dir)
 
@@ -3011,7 +3011,7 @@ def main() -> None:
         default="paper/presentation_filled.tex",
         help="Path to write filled presentation (default: paper/presentation_filled.tex)",
     )
-    args = parser.parse_args()
+    args, _ = parser.parse_known_args()
 
     if args.all:
         results_path = Path(args.results)

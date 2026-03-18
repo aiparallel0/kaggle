@@ -2,6 +2,7 @@ torch>=2.0.0
 transformers>=4.37.0
 pyyaml>=6.0
 accelerate
+ruff>=0.4.0
 
 # --- Optional: uncomment if needed ---
 
