@@ -3443,6 +3443,32 @@ class DonutTrainer:
                 _out_dir,
             )
 
+        # DiagnosticCallback — runtime bug-pattern detection + optional AI diagnosis.
+        # Enabled by default; set DISABLE_DIAGNOSTICS=1 to skip.
+        # AI diagnosis requires ANTHROPIC_API_KEY or MISTRAL_API_KEY env var.
+        if os.environ.get("DISABLE_DIAGNOSTICS", "0") != "1":
+            try:
+                from diagnostics import DiagnosticCallback as _DiagCB
+
+                _ai_diag = os.environ.get("AI_DIAGNOSE", "0") == "1"
+                _ai_prov = os.environ.get("AI_DIAGNOSE_PROVIDER", "auto")
+                _diag_cb = _DiagCB(
+                    experiment_id=getattr(self.config, "experiment_id", 0),
+                    output_dir=Path(str(getattr(self.config, "output_dir", "results"))),
+                    ai_diagnose=_ai_diag,
+                    ai_provider=_ai_prov,
+                )
+                callbacks.append(_diag_cb)
+                logger.debug(
+                    "[Diagnostics] Callback registered (ai_diagnose=%s, provider=%s)",
+                    _ai_diag,
+                    _ai_prov,
+                )
+            except ImportError:
+                pass  # diagnostics.py not present — skip
+            except Exception as _diag_exc:
+                logger.debug("[Diagnostics] Registration failed: %s", _diag_exc)
+
         # LiveDashboardCallback — auto-registered when rich is installed.
         # Writes per-epoch CSV and optionally redraws a rich table.
         # Disabled by setting env var DISABLE_LIVE_DASHBOARD=1.
