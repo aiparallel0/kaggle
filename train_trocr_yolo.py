@@ -1169,7 +1169,7 @@ def train_trocr(output_dir: Path | None = None) -> dict:
     if _trocr_enable_grad_ckpt:
         model.config.use_cache = False
         model.decoder.config.use_cache = False
-        model.gradient_checkpointing_enable()
+        model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
     else:
         model.config.use_cache = True
         model.decoder.config.use_cache = True
