@@ -41,6 +41,12 @@ AUTOFIX_WHITELIST = {
     "run_all.py",
     "diagnostics.py",
     "autonomous_ci.py",
+    "reporting.py",
+    "validation.py",
+    "cloud_orchestration.py",
+    "sweep.py",
+    "resource_manager.py",
+    "train_trocr_yolo.py",
 }
 
 # ============================================================================
@@ -308,7 +314,8 @@ def evaluate_test_results(
     )
 
     if not evaluation_text:
-        # No AI available — default to conservative verdict
+        # No AI available — use deterministic verdict based on test results.
+        # This is the MOST IMPORTANT path: if AI is down, tests are the truth.
         verdict = "BLOCK" if test_result.failed_tests > 0 else "MERGE"
         reasoning = (
             f"AI evaluation unavailable; tests show {test_result.summary}. Defaulting to {verdict}."
@@ -320,12 +327,25 @@ def evaluate_test_results(
             "all_passed": test_result.all_passed,
         }
 
-    # Parse AI response for verdict
-    verdict = "BLOCK"  # conservative default
-    if "MERGE" in evaluation_text.upper():
-        verdict = "MERGE"
-    elif "COMMENT" in evaluation_text.upper():
-        verdict = "COMMENT_ONLY"
+    # GUARDRAIL: Tests are the ground truth. AI can only DOWNGRADE a passing
+    # build to COMMENT_ONLY (never BLOCK), or UPGRADE a failing build to
+    # COMMENT_ONLY (never MERGE). This prevents an unreliable AI model from
+    # triggering the destructive auto-fix loop on healthy code.
+    ai_says_merge = "MERGE" in evaluation_text.upper()
+    ai_says_comment = "COMMENT" in evaluation_text.upper()
+
+    if test_result.all_passed:
+        # All tests pass → AI cannot block. AI can at most flag for review.
+        if ai_says_merge or (not ai_says_comment):
+            verdict = "MERGE"
+        else:
+            verdict = "COMMENT_ONLY"  # AI has concerns; flag but don't block
+    else:
+        # Tests failed → AI cannot approve. AI can at most soften to COMMENT_ONLY.
+        if ai_says_comment and not ai_says_merge:
+            verdict = "COMMENT_ONLY"
+        else:
+            verdict = "BLOCK"
 
     return {
         "verdict": verdict,
@@ -559,7 +579,10 @@ def autonomous_pipeline(
     if evaluation["verdict"] == "BLOCK" and not no_auto_fix:
         logger.warning("[CI] Tests failed. Starting auto-fix loop...")
         success, fix_attempts = auto_fix_and_retry(
-            test_result, max_attempts=max_fix_attempts, provider=ai_provider
+            test_result,
+            max_attempts=max_fix_attempts,
+            provider=ai_provider,
+            skip_smoke_test=skip_smoke_test,
         )
 
         if success:
@@ -663,6 +686,12 @@ def _identify_files_to_fix(test_result: TestSuiteResult) -> list[tuple[str, str]
                 "run_experiments": "run_experiments.py",
                 "run_all": "run_all.py",
                 "autonomous_ci": "autonomous_ci.py",
+                "reporting": "reporting.py",
+                "validation": "validation.py",
+                "cloud_orchestration": "cloud_orchestration.py",
+                "sweep": "sweep.py",
+                "resource_manager": "resource_manager.py",
+                "train_trocr_yolo": "train_trocr_yolo.py",
             }
             matched = False
             for module, fname in module_to_file.items():
@@ -715,6 +744,19 @@ def _generate_file_fix(
         logger.warning(f"[AutoFix] Cannot read {filename}: {exc}")
         return None
 
+    # SAFETY: Refuse to AI-rewrite files larger than 500 lines.
+    # Large files (run_experiments.py = 4500+ lines) CANNOT be faithfully
+    # reproduced by any AI model within a 4096-token response.  The AI will
+    # truncate, producing a mangled file that breaks the entire pipeline.
+    line_count = current_content.count("\n") + 1
+    if line_count > 500:
+        logger.warning(
+            f"[AutoFix] SKIPPING {filename} ({line_count} lines) — "
+            f"too large for full-file rewrite (max 500 lines). "
+            f"Only small files can be safely rewritten by AI."
+        )
+        return None
+
     prev_note = ""
     if previous_failures:
         prev_note = "\n\nPrevious fix attempts for this file failed:\n" + "\n".join(
@@ -745,6 +787,7 @@ def auto_fix_and_retry(
     test_result: TestSuiteResult,
     max_attempts: int = 10,
     provider: str = "auto",
+    skip_smoke_test: bool = False,
 ) -> tuple[bool, list[AutoFixAttempt]]:
     """Attempt to auto-fix test failures by having AI rewrite broken files.
 
@@ -799,17 +842,28 @@ def auto_fix_and_retry(
                 previous_failures.append(f"Attempt {attempt_num}: {fix_error}")
                 continue
 
-            # Write corrected content to disk
+            # Write corrected content to disk (with backup for rollback)
             full_path = _REPO_ROOT / filename
+            backup_path = full_path.with_suffix(".py.bak")
             try:
+                # Always back up the original before overwriting
+                original = full_path.read_text()
+                backup_path.write_text(original)
                 full_path.write_text(new_content)
-                logger.info(f"[AutoFix] Wrote fix to {filename}")
+                logger.info(f"[AutoFix] Wrote fix to {filename} (backup: {backup_path.name})")
                 fix_applied = True
                 patched_files.append(filename)
                 fix_description_parts.append(f"rewrote {filename}")
             except OSError as exc:
                 fix_error = f"Could not write {filename}: {exc}"
                 logger.error(f"[AutoFix] {fix_error}")
+                # Attempt to restore from backup
+                if backup_path.exists():
+                    try:
+                        full_path.write_text(backup_path.read_text())
+                        logger.info(f"[AutoFix] Restored {filename} from backup")
+                    except OSError:
+                        pass
                 continue
 
         # 3. Auto-format patched files with ruff (don't fail if ruff absent)
@@ -842,9 +896,9 @@ def auto_fix_and_retry(
             else:
                 logger.warning(f"[AutoFix] git commit failed: {combined_output[:300]}")
 
-        # 5. Re-run tests
+        # 5. Re-run tests (preserve skip_smoke_test from caller)
         logger.info("[AutoFix] Re-running tests...")
-        new_test_result = run_test_suite()
+        new_test_result = run_test_suite(skip_smoke_test=skip_smoke_test)
 
         attempt = AutoFixAttempt(
             attempt_num=attempt_num,
@@ -863,6 +917,11 @@ def auto_fix_and_retry(
 
         if new_test_result.all_passed:
             logger.info(f"[AutoFix] Tests PASSED on attempt {attempt_num}!")
+            # Clean up backup files on success
+            for fname in AUTOFIX_WHITELIST:
+                bak = _REPO_ROOT / f"{fname}.bak"
+                if bak.exists():
+                    bak.unlink(missing_ok=True)
             return True, attempts
 
         # 6. Prepare next iteration
@@ -871,7 +930,29 @@ def auto_fix_and_retry(
             f"Attempt {attempt_num}: {test_result.summary} — fixed: {'; '.join(fix_description_parts) or 'nothing'}"
         )
 
+    # All attempts exhausted — restore backups so the repo isn't left mangled
     logger.error(f"[AutoFix] Failed to fix after {max_attempts} attempts")
+    restored_files: list[str] = []
+    for fname in AUTOFIX_WHITELIST:
+        bak = _REPO_ROOT / f"{fname}.bak"
+        if bak.exists():
+            try:
+                (_REPO_ROOT / fname).write_text(bak.read_text())
+                bak.unlink()
+                restored_files.append(fname)
+            except OSError:
+                pass
+    if restored_files:
+        logger.info(
+            f"[AutoFix] Restored {len(restored_files)} file(s) from backup: "
+            + ", ".join(restored_files)
+        )
+        # Stage only the restored files (not `git checkout -- .` which is too broad)
+        subprocess.run(
+            ["git", "checkout", "--"] + restored_files,
+            capture_output=True,
+            cwd=_REPO_ROOT,
+        )
     return False, attempts
 
 

@@ -92,6 +92,7 @@ __all__ = [
     "stage_benchmark",
     "stage_comparison",
     "stage_paper",
+    "stage_push_results",
 ]
 
 
@@ -2118,6 +2119,78 @@ def stage_paper(args) -> StageResult:
 
 
 # ---------------------------------------------------------------------------
+# stage_push_results — auto-commit and push experiment results
+# ---------------------------------------------------------------------------
+
+
+def stage_push_results(args) -> StageResult:
+    """Auto-commit and push experiment results to the current branch."""
+    t0 = time.monotonic()
+    warnings: list[str] = []
+
+    if not getattr(args, "auto_push", False):
+        return StageResult(
+            "Results Push", time.monotonic() - t0, 0, ["--auto-push not set; skipped"]
+        )
+
+    results_dir = Path("results")
+    json_files = sorted(results_dir.glob("*.json")) if results_dir.is_dir() else []
+    if not json_files:
+        return StageResult("Results Push", time.monotonic() - t0, 0, ["No result files found"])
+
+    try:
+        # Get current branch
+        branch = subprocess.check_output(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+
+        # Stage result files
+        subprocess.run(
+            ["git", "add", *[str(f) for f in json_files]],
+            check=True,
+            capture_output=True,
+        )
+
+        # Check if there are staged changes
+        diff = subprocess.run(["git", "diff", "--cached", "--quiet"], capture_output=True)
+        if diff.returncode == 0:
+            return StageResult("Results Push", time.monotonic() - t0, 0, ["No new results to push"])
+
+        # Commit
+        subprocess.run(
+            ["git", "commit", "-m", "[auto] Add experiment results"],
+            check=True,
+            capture_output=True,
+        )
+
+        # Push with retry (up to 4 attempts with exponential backoff)
+        pushed = False
+        last_stderr = ""
+        for delay in [0, 2, 4, 8]:
+            if delay:
+                time.sleep(delay)
+            push = subprocess.run(
+                ["git", "push", "-u", "origin", branch],
+                capture_output=True,
+                text=True,
+            )
+            if push.returncode == 0:
+                pushed = True
+                break
+            last_stderr = push.stderr
+        if not pushed:
+            warnings.append(f"Push failed after 4 retries: {last_stderr}")
+
+    except Exception as exc:
+        warnings.append(f"Results push error: {exc}")
+        return StageResult("Results Push", time.monotonic() - t0, 1, warnings)
+
+    return StageResult("Results Push", time.monotonic() - t0, 0, warnings)
+
+
+# ---------------------------------------------------------------------------
 # PipelineOrchestrator — sequential execution with structured results
 # ---------------------------------------------------------------------------
 
@@ -2261,6 +2334,9 @@ class PipelineOrchestrator:
         # Stage 7 — Paper generation
         self._run_stage("Paper Generation", stage_paper)
 
+        # Stage 8 — Auto-push results (only if --auto-push or AUTOPUSH_RESULTS=1)
+        self._run_stage("Results Push", stage_push_results)
+
         # Save pipeline diagnostics report
         if self._diag is not None:
             try:
@@ -2297,6 +2373,7 @@ class PipelineOrchestrator:
             "Benchmark": "5. Benchmark H2H",
             "Comparison": "6. Comparison",
             "Paper Generation": "7. Paper Generation",
+            "Results Push": "8. Results Push",
         }
 
         for sr in self.stages:
@@ -3083,6 +3160,15 @@ def build_parser() -> argparse.ArgumentParser:
             "Enable DAG-based parallel experiment scheduling on multi-GPU setups. "
             "Experiments with no unmet depends_on run concurrently. "
             "Auto-serialised on single-GPU / CPU-only machines."
+        ),
+    )
+    p.add_argument(
+        "--auto-push",
+        action="store_true",
+        default=bool(os.environ.get("AUTOPUSH_RESULTS")),
+        help=(
+            "Auto-commit and push experiment results after pipeline completion. "
+            "Also enabled by AUTOPUSH_RESULTS=1 env var."
         ),
     )
     return p
