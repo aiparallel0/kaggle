@@ -7,8 +7,9 @@
 #   4. Post a summary comment on the PR.
 #   5. Auto-merge if all checks pass (squash, requires branch protection allowing it).
 #
-# Required GitHub secrets:
-#   MISTRAL_API_KEY  — Mistral API key for AI-powered auto-fix.
+# Required GitHub secrets (at least one):
+#   ANTHROPIC_API_KEY — Claude API key (preferred; more reliable verdicts).
+#   MISTRAL_API_KEY   — Mistral API key (fallback when Claude key absent).
 #
 # Optional:
 #   Auto-merge requires the "Allow auto-merge" setting to be enabled in
@@ -59,10 +60,14 @@ jobs:
           git config user.email "self-healing-ci[bot]@users.noreply.github.com"
           git config user.name "Self-Healing CI"
 
-      - name: Write Mistral API key to file (used by diagnostics.py)
+      - name: Write API keys to files (used by diagnostics.py)
         env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
         run: |
+          if [ -n "$ANTHROPIC_API_KEY" ]; then
+            echo "$ANTHROPIC_API_KEY" > anthropic_api_key.txt
+          fi
           if [ -n "$MISTRAL_API_KEY" ]; then
             echo "$MISTRAL_API_KEY" > mistral_api_key.txt
           fi
@@ -70,7 +75,8 @@ jobs:
       - name: Run autonomous CI with auto-fix
         id: ci
         env:
-          # Let autonomous_ci.py / diagnostics.py discover the key via env var too.
+          # Prefer Claude for reliable verdicts; fall back to Mistral if absent.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
           # Tell GitHub integrations which repo we're in.
           GITHUB_REPO: ${{ github.repository }}
@@ -79,7 +85,7 @@ jobs:
           python autonomous_ci.py \
             --skip-smoke-test \
             --no-merge \
-            --ai-provider mistral \
+            --ai-provider auto \
             --max-fix-attempts 5 \
             --branch "${{ github.head_ref }}" \
             --pr "${{ github.event.pull_request.number }}" \
@@ -91,6 +97,6 @@ jobs:
         run: |
           git push origin HEAD:"${{ github.head_ref }}" || true
 
-      - name: Clean up API key file
+      - name: Clean up API key files
         if: always()
-        run: rm -f mistral_api_key.txt
+        run: rm -f mistral_api_key.txt anthropic_api_key.txt

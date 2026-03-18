@@ -565,7 +565,10 @@ def autonomous_pipeline(
     if evaluation["verdict"] == "BLOCK" and not no_auto_fix:
         logger.warning("[CI] Tests failed. Starting auto-fix loop...")
         success, fix_attempts = auto_fix_and_retry(
-            test_result, max_attempts=max_fix_attempts, provider=ai_provider
+            test_result,
+            max_attempts=max_fix_attempts,
+            provider=ai_provider,
+            skip_smoke_test=skip_smoke_test,
         )
 
         if success:
@@ -751,6 +754,7 @@ def auto_fix_and_retry(
     test_result: TestSuiteResult,
     max_attempts: int = 10,
     provider: str = "auto",
+    skip_smoke_test: bool = False,
 ) -> tuple[bool, list[AutoFixAttempt]]:
     """Attempt to auto-fix test failures by having AI rewrite broken files.
 
@@ -848,9 +852,9 @@ def auto_fix_and_retry(
             else:
                 logger.warning(f"[AutoFix] git commit failed: {combined_output[:300]}")
 
-        # 5. Re-run tests
+        # 5. Re-run tests (preserve skip_smoke_test from caller)
         logger.info("[AutoFix] Re-running tests...")
-        new_test_result = run_test_suite()
+        new_test_result = run_test_suite(skip_smoke_test=skip_smoke_test)
 
         attempt = AutoFixAttempt(
             attempt_num=attempt_num,
