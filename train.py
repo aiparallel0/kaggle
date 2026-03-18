@@ -3335,6 +3335,23 @@ class DonutTrainer:
                 self.config.max_epochs,
             )
 
+        # Guard DataLoader kwargs that were renamed/removed in transformers 5.x.
+        # When num_workers=8, passing dataloader_prefetch_factor=2 to
+        # Seq2SeqTrainingArguments raises TypeError in transformers >= 5.0 if the
+        # parameter no longer exists (root cause: Exp 2-8 crash in <7s while Exp 1
+        # with num_workers=0 trains normally). Use inspect to probe the signature.
+        import inspect as _inspect
+
+        _ta_params = set(_inspect.signature(Seq2SeqTrainingArguments.__init__).parameters)
+        _dl_extra: dict = {}
+        if optimal_workers > 0:
+            if "dataloader_prefetch_factor" in _ta_params:
+                _dl_extra["dataloader_prefetch_factor"] = 2
+            if "dataloader_persistent_workers" in _ta_params:
+                _dl_extra["dataloader_persistent_workers"] = True
+        elif "dataloader_prefetch_factor" in _ta_params:
+            _dl_extra["dataloader_prefetch_factor"] = None
+
         training_args = Seq2SeqTrainingArguments(
             output_dir=str(self._output_dir),
             num_train_epochs=self.config.max_epochs,
@@ -3364,10 +3381,9 @@ class DonutTrainer:
             # PERFORMANCE: Optimized DataLoader settings
             dataloader_num_workers=optimal_workers,
             dataloader_pin_memory=optimal_workers > 0,
-            dataloader_prefetch_factor=2 if optimal_workers > 0 else None,
-            dataloader_persistent_workers=optimal_workers > 0,
             remove_unused_columns=False,
             seed=getattr(self.config, "seed", SEED),
+            **_dl_extra,
         )
 
         # Build layerwise AdamW optimizer: encoder at encoder_lr, decoder at decoder_lr.

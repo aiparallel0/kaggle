@@ -3654,9 +3654,19 @@ def train_experiment(
         # FIX: max_length must live on generation_config, NOT model.config.
         # Newer transformers (>=4.37) raises ValueError at save_pretrained if
         # generation parameters are found on model.config.
+        # FIX: Do NOT set both max_new_tokens and max_length — transformers 5.x
+        # raises ValueError("Both 'max_new_tokens' and 'max_length' have been set").
+        # max_new_tokens alone is sufficient and preferred.
         if hasattr(_mdl, "generation_config"):
             _mdl.generation_config.max_new_tokens = MAX_LENGTH
-            _mdl.generation_config.max_length = MAX_LENGTH
+            # Explicitly unset max_length to avoid the transformers 5.x conflict.
+            # GenerationConfig stores max_length=20 by default; clear it.
+            if hasattr(_mdl.generation_config, "max_length"):
+                _mdl.generation_config.max_length = None
+            # Set decoder_start_token_id on generation_config (not just model.config)
+            # so generate() uses the correct start token without needing a prompt.
+            _sroie_start_id = _proc.tokenizer.convert_tokens_to_ids(["<s_sroie>"])[0]
+            _mdl.generation_config.decoder_start_token_id = _sroie_start_id
 
         # Only enable gradient checkpointing when VRAM is constrained (< 24 GB).
         # 24 GB covers RTX 3090/4090 (24 GB) and below, where activation memory

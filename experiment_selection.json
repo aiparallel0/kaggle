@@ -1,0 +1,12 @@
+{
+  "experiments": [
+    {"id": 1, "enabled": true, "note": "SROIE only (baseline)"},
+    {"id": 2, "enabled": true, "note": "SROIE + WildReceipt"},
+    {"id": 3, "enabled": true, "note": "SROIE + Invoices-DONUT"},
+    {"id": 4, "enabled": true, "note": "SROIE + WR + Invoices"},
+    {"id": 5, "enabled": true, "note": "SROIE + WR (2x SROIE oversample)"},
+    {"id": 6, "enabled": true, "note": "SROIE + Invoices (2x SROIE oversample) -- BEST"},
+    {"id": 7, "enabled": true, "note": "SROIE + All (2x SROIE oversample)"},
+    {"id": 8, "enabled": true, "note": "SROIE + WR + Invoices (3x SROIE oversample)"}
+  ]
+}
