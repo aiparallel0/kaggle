@@ -11,6 +11,17 @@
             "statusMessage": "Validating constants import chain..."
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.command // empty' | grep -q 'git.*commit' && (cd /home/user/kaggle && python autonomous_ci.py --pr-only >/tmp/autonomous_ci.log 2>&1 &) || true",
+            "async": true,
+            "statusMessage": "Autonomous CI/CD: evaluating commit..."
+          }
+        ]
       }
     ]
   }
