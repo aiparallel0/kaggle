@@ -1402,9 +1402,7 @@ def _autonomous_feedback_loop(
             max_fix_attempts=3,
             skip_smoke_test=False,
         )
-        print(
-            f"  [AutoRetry] CI auto-fix returned: {'PASS' if ci_fixed else 'FAIL'}"
-        )
+        print(f"  [AutoRetry] CI auto-fix returned: {'PASS' if ci_fixed else 'FAIL'}")
     except Exception as _ci_exc:
         print(f"  [AutoRetry] CI auto-fix error: {_ci_exc}")
         return failed_ids
@@ -1453,7 +1451,9 @@ def _autonomous_feedback_loop(
             still_failed.append(exp_id)
 
     if still_failed:
-        print(f"  [AutoRetry] {len(still_failed)} experiment(s) could not be recovered: {still_failed}")
+        print(
+            f"  [AutoRetry] {len(still_failed)} experiment(s) could not be recovered: {still_failed}"
+        )
     else:
         print("  [AutoRetry] All failed experiments recovered successfully!")
 
