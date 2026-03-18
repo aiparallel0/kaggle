@@ -3714,7 +3714,9 @@ def train_experiment(
         # present, causing GPU Load 0% and ~20× slower training.
         _mdl = _mdl.to(DEVICE)
         _actual_device = next(_mdl.parameters()).device.type
-        if _actual_device != DEVICE:
+        # Compare type-only strings (e.g. "cuda" == "cuda" when DEVICE="cuda",
+        # even if the physical device is "cuda:0").
+        if _actual_device != str(DEVICE).split(":")[0]:
             raise RuntimeError(
                 f"Model.to({DEVICE!r}) failed — parameters still on {_actual_device!r}. "
                 f"Check CUDA installation and torch device availability."

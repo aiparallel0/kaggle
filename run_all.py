@@ -1295,12 +1295,181 @@ def _load_experiment_configs_for_run(args) -> "list":
         return []
 
 
+# ---------------------------------------------------------------------------
+# Environment helpers — run once at pipeline start
+# ---------------------------------------------------------------------------
+
+
+def _ensure_processor_config(path: str = "processor_config.json") -> None:
+    """Write processor_config.json at *path* if it doesn't already exist.
+
+    resource_manager.get_image_size_from_processor_config() reads this file to
+    compute VRAM budgets.  When it's absent it falls back to the reference
+    resolution and logs a WARNING on every experiment.  Writing the file once
+    eliminates the recurring warning and ensures the correct 1280×960
+    resolution is always used.
+    """
+    p = Path(path)
+    if p.exists():
+        return
+    cfg = {"image_processor": {"size": {"height": 1280, "width": 960}}}
+    try:
+        p.write_text(json.dumps(cfg, indent=2) + "\n")
+        print(f"  [env] Generated {p} (height=1280, width=960)")
+    except OSError as exc:
+        print(f"  [env] Could not write {p}: {exc} — continuing without it")
+
+
+def _incremental_push_result(exp_id: int) -> None:
+    """Commit and push a single experiment result JSON to the current branch.
+
+    Called after each successful experiment when --auto-push is active.
+    This ensures partial results are visible in the PR even if the pipeline
+    crashes or is interrupted before the final stage_push_results() runs.
+    Failures are silently swallowed — a failed push is never fatal.
+    """
+    result_file = Path("results") / f"experiment_{exp_id}.json"
+    if not result_file.exists():
+        return
+    try:
+        branch = subprocess.check_output(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+        subprocess.run(["git", "add", str(result_file)], check=True, capture_output=True)
+        diff = subprocess.run(["git", "diff", "--cached", "--quiet"], capture_output=True)
+        if diff.returncode == 0:
+            return  # nothing new to push
+        subprocess.run(
+            ["git", "commit", "-m", f"[auto] Exp {exp_id} result"],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "push", "-u", "origin", branch],
+            capture_output=True,
+        )
+    except Exception as _push_exc:
+        print(f"  [sync] Incremental push for exp {exp_id} failed (non-fatal): {_push_exc}")
+
+
+# ---------------------------------------------------------------------------
+# Autonomous feedback loop — retry failed experiments after CI auto-fix
+# ---------------------------------------------------------------------------
+
+
+def _autonomous_feedback_loop(
+    failed_ids: list,
+    *,
+    args,
+    yaml_cfg_map: dict,
+    use_yaml_dispatch: bool,
+) -> list:
+    """Run CI auto-fix and retry any experiments that failed with code errors.
+
+    This is the "stop being the glue" feedback loop:
+      1. When experiments crash with non-OOM errors (e.g., ValueError from a
+         transformers API change), call autonomous_ci.autonomous_pipeline()
+         which uses AI to detect and rewrite the broken file.
+      2. If CI fixes pass, reload the affected modules via importlib.reload()
+         so the new code is live in the current process.
+      3. Retry only the failed experiments — successful ones are not repeated.
+
+    Returns the list of experiment IDs that are *still* failed after the loop
+    (empty list on full recovery).
+    """
+    if not failed_ids:
+        return []
+
+    if os.environ.get("DISABLE_DIAGNOSTICS", "0") == "1":
+        print("  [AutoRetry] DISABLE_DIAGNOSTICS=1 — skipping feedback loop")
+        return failed_ids
+
+    print(
+        f"\n  [AutoRetry] {len(failed_ids)} experiment(s) failed "
+        f"({failed_ids}) — running autonomous CI auto-fix..."
+    )
+
+    # Run CI auto-fix (no git merge, no PR post — fixes code in-place).
+    ci_fixed = False
+    try:
+        from autonomous_ci import autonomous_pipeline as _ci_pipeline
+
+        ci_fixed = _ci_pipeline(
+            no_merge=True,
+            pr_only=False,
+            max_fix_attempts=3,
+            skip_smoke_test=False,
+        )
+        print(
+            f"  [AutoRetry] CI auto-fix returned: {'PASS' if ci_fixed else 'FAIL'}"
+        )
+    except Exception as _ci_exc:
+        print(f"  [AutoRetry] CI auto-fix error: {_ci_exc}")
+        return failed_ids
+
+    if not ci_fixed:
+        print("  [AutoRetry] CI could not fix issues — experiments remain failed")
+        return failed_ids
+
+    # Reload run_experiments so patched code is live without restarting the process.
+    print("  [AutoRetry] Reloading run_experiments module to pick up fixes...")
+    try:
+        import run_experiments as _re_retry
+
+        importlib.reload(_re_retry)
+    except Exception as _reload_exc:
+        print(f"  [AutoRetry] Module reload failed: {_reload_exc} — skipping retry")
+        return failed_ids
+
+    # Retry failed experiments with the patched code.
+    still_failed: list = []
+    for exp_id in failed_ids:
+        print(f"  [AutoRetry] Retrying experiment {exp_id}...")
+        try:
+            yaml_cfg = yaml_cfg_map.get(exp_id)
+            arch = getattr(yaml_cfg, "arch_type", "donut") if yaml_cfg else "donut"
+            is_zs = getattr(yaml_cfg, "is_zero_shot", False) if yaml_cfg else False
+
+            if arch == "trocr_yolo" and use_yaml_dispatch and yaml_cfg:
+                result = _run_trocr_yolo_experiment(args, yaml_cfg)
+            elif is_zs and use_yaml_dispatch and yaml_cfg:
+                result = _run_zero_shot_experiment(args, yaml_cfg)
+            elif use_yaml_dispatch and yaml_cfg and exp_id not in _re_retry.EXPERIMENTS:
+                result = _run_yaml_donut_experiment(args, yaml_cfg)
+            else:
+                result = _re_retry.run_experiment(
+                    exp_id,
+                    overrides=getattr(args, "param_overrides", None) or None,
+                )
+
+            print(
+                f"  [AutoRetry] Experiment {exp_id} succeeded on retry "
+                f"(F1={result.get('metrics', {}).get('global_f1', 'N/A')})"
+            )
+        except Exception as _retry_exc:
+            print(f"  [AutoRetry] Experiment {exp_id} still failed: {_retry_exc}")
+            still_failed.append(exp_id)
+
+    if still_failed:
+        print(f"  [AutoRetry] {len(still_failed)} experiment(s) could not be recovered: {still_failed}")
+    else:
+        print("  [AutoRetry] All failed experiments recovered successfully!")
+
+    return still_failed
+
+
 def stage_experiments(args) -> StageResult:
     """Run all (or a single) experiment(s) SEQUENTIALLY. Returns StageResult."""
     import run_experiments as re_mod  # local module
 
     _banner("STAGE 2 — Experiments (train + evaluate)")
     warnings: list[str] = []
+
+    # Auto-generate processor_config.json once so resource_manager stops warning
+    # about a missing file on every experiment.
+    _ensure_processor_config()
 
     results_dir = Path("results")
     results_dir.mkdir(exist_ok=True)
@@ -1505,6 +1674,13 @@ def stage_experiments(args) -> StageResult:
         else:
             succeeded += 1
 
+        # ── Incremental result sync ──────────────────────────────────────────
+        # Push partial results to GitHub after every successful experiment so
+        # that results are visible in the PR even if later experiments crash.
+        # Only fires when --auto-push is active (same guard as stage_push_results).
+        if getattr(args, "auto_push", False):
+            _incremental_push_result(exp_id)
+
         # ── Inter-experiment GPU cleanup ──────────────────────────────────
         # Flush any GPU memory left by this experiment before the next one
         # starts instantiating Seq2SeqTrainingArguments (which calls
@@ -1530,6 +1706,21 @@ def stage_experiments(args) -> StageResult:
             _gpu_cleanup()
         except Exception:
             pass
+
+    # ── Autonomous feedback loop ────────────────────────────────────────────
+    # If any experiments crashed with non-OOM code errors, run the CI auto-fix
+    # loop (autonomous_ci.autonomous_pipeline) which uses AI to rewrite broken
+    # files, then reload the fixed modules and retry only the failed experiments.
+    # This eliminates the "copy logs to agent → agent fixes → re-run" cycle.
+    if failed_experiments:
+        failed_experiments = _autonomous_feedback_loop(
+            failed_experiments,
+            args=args,
+            yaml_cfg_map=_yaml_cfg_map,
+            use_yaml_dispatch=use_yaml_dispatch,
+        )
+        # Update had_empty based on final failure state
+        had_empty = bool(failed_experiments)
 
     exit_status = 1 if had_empty else 0
     return StageResult(

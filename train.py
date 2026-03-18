@@ -1614,10 +1614,14 @@ except ImportError:
                         "pad_token_id is not set on model.config. "
                         "Assign tokenizer.pad_token_id to model.config.pad_token_id."
                     )
-                bos = labels.new_full((labels.shape[0], 1), start_id)
-                _labels_clean = labels.clone()
-                _labels_clean[_labels_clean == -100] = pad_id
-                decoder_input_ids = torch.cat([bos, _labels_clean[:, :-1]], dim=1)
+            # Standard teacher-forcing shift-right: prepend decoder_start_token_id,
+            # drop the last label token.  -100 is the HuggingFace ignore index
+            # (used to mask padding positions in the cross-entropy loss) and must
+            # be replaced with a real token ID before embedding lookup.
+            bos = labels.new_full((labels.shape[0], 1), start_id)
+            _labels_clean = labels.clone()
+            _labels_clean[_labels_clean == -100] = pad_id  # replace ignore-index with pad
+            decoder_input_ids = torch.cat([bos, _labels_clean[:, :-1]], dim=1)  # shift right
 
             # Encode image
             encoder_out = self.encoder(pixel_values)  # (B, src_len, 1024)
