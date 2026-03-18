@@ -2046,6 +2046,22 @@ def load_model_with_tied_weights(model_path: str, device: str = DEVICE, processo
             model.config.decoder_start_token_id = _sroie_id
             model.decoder.config.decoder_start_token_id = _sroie_id
 
+        # ── Guard: verify tokenizer vocab size matches model embedding size ──
+        # A mismatch (e.g. processor saved with fewer tokens than the model
+        # was trained with) causes embedding lookup errors or silent wrong IDs.
+        _tok_vocab_size = len(processor.tokenizer)
+        _model_vocab_size = None
+        if hasattr(model.decoder, "lm_head") and hasattr(model.decoder.lm_head, "weight"):
+            _model_vocab_size = model.decoder.lm_head.weight.shape[0]
+        if _model_vocab_size is not None and _tok_vocab_size != _model_vocab_size:
+            logger.warning(
+                "Vocab size MISMATCH: tokenizer has %d tokens but model lm_head "
+                "has %d output dimensions. This can cause wrong token predictions. "
+                "Ensure processor and model are saved from the same training run.",
+                _tok_vocab_size,
+                _model_vocab_size,
+            )
+
     return model
 
 
@@ -2474,7 +2490,17 @@ class DonutEvaluator:
         emit <sep/> because the base checkpoint (donut-base-finetuned-cord-v2)
         knows the token.  Merge pages into one dict (first occurrence of each
         key wins) so callers always receive a flat dict.
+
+        Handles all edge cases defensively:
+          - None or empty tokens → returns EMPTY_GT copy
+          - token2json returning None → returns EMPTY_GT copy
+          - token2json returning list → merges pages (Pattern 5)
+          - Exception in parser → logs and returns EMPTY_GT copy
         """
+        # Guard: None or empty token string → return empty template
+        if tokens is None or (isinstance(tokens, str) and not tokens.strip()):
+            return EMPTY_GT.copy()
+
         # For SROIE output, use the custom parser that understands SROIE tags
         if getattr(self, "task_prompt", "").startswith("<s_sroie"):
             try:
@@ -2484,26 +2510,31 @@ class DonutEvaluator:
                 # No fields extracted — log and increment failure
                 logger.warning("SROIE parser returned empty result from tokens: %.100s", tokens)
                 self.parse_failure_count += 1
-                return {}
+                return EMPTY_GT.copy()
             except Exception as exc:
                 logger.warning("SROIE parser failed: %s — tokens: %.100s", exc, tokens)
                 self.parse_failure_count += 1
-                return {}
+                return EMPTY_GT.copy()
 
         # For CORD/other formats, use token2json
         try:
             result = self.processor.token2json(tokens)
+            # Handle None return from token2json
+            if result is None:
+                logger.warning("token2json returned None — tokens: %.100s", tokens)
+                self.parse_failure_count += 1
+                return EMPTY_GT.copy()
             result = _merge_token2json_pages(result)  # Phase 0b: consolidate list merging
             if result:
                 return result
             # Empty result from token2json (either [] list or {} dict)
             logger.warning("token2json returned empty result: %s", type(result))
             self.parse_failure_count += 1
-            return {}
+            return EMPTY_GT.copy()
         except Exception as exc:
             logger.warning("token2json failed: %s — tokens: %.100s", exc, tokens)
             self.parse_failure_count += 1
-            return {}
+            return EMPTY_GT.copy()
 
     # ------------------------------------------------------------------
     # Metrics

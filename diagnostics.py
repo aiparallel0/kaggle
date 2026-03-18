@@ -701,11 +701,52 @@ def _github_request(
         return None
 
 
+def github_search_open_issues(title_prefix: str, repo: str | None = None) -> list[dict]:
+    """Search for open GitHub issues whose title contains ``title_prefix``.
+
+    Used by :func:`github_create_issue` to avoid creating duplicate issues
+    (e.g. repeated ``SmokeTestFailure`` entries for the same root cause).
+    Results are post-filtered to only return issues whose title starts with
+    ``title_prefix`` (GitHub search matches anywhere in the title).
+
+    Parameters
+    ----------
+    title_prefix : str
+        Prefix to search for in issue titles (e.g. ``"[DONUT Pipeline] SmokeTestFailure"``).
+        Only issues whose ``title`` starts with this prefix are returned.
+    repo : str or None
+        ``owner/repo`` slug.  Falls back to ``GITHUB_REPO`` env var.
+
+    Returns
+    -------
+    list[dict]
+        List of matching open issue objects (may be empty).
+    """
+    import urllib.parse
+
+    token = _get_github_token()
+    if not token:
+        return []
+    repo = repo or _get_github_repo()
+    if not repo:
+        return []
+
+    query = urllib.parse.quote(f'repo:{repo} is:issue is:open in:title "{title_prefix}"')
+    result = _github_request("GET", f"/search/issues?q={query}&per_page=10", token)
+    if result and isinstance(result.get("items"), list):
+        # Post-filter: GitHub `in:title` matches anywhere; enforce true prefix match.
+        return [
+            issue for issue in result["items"] if issue.get("title", "").startswith(title_prefix)
+        ]
+    return []
+
+
 def github_create_issue(
     title: str,
     body: str,
     labels: list[str] | None = None,
     repo: str | None = None,
+    deduplicate: bool = True,
 ) -> dict | None:
     """Create a GitHub issue and return the response dict (includes ``html_url``).
 
@@ -719,6 +760,11 @@ def github_create_issue(
         Optional label names to attach (must already exist in the repo).
     repo : str or None
         ``owner/repo`` slug.  Falls back to ``GITHUB_REPO`` env var.
+    deduplicate : bool
+        When True (default), search for an existing open issue with the same
+        title before creating a new one.  If a duplicate is found, post a
+        comment on the existing issue instead of opening a new one.  This
+        prevents the flood of identical ``SmokeTestFailure`` issues (#150-#154).
 
     Returns
     -------
@@ -734,7 +780,32 @@ def github_create_issue(
         logger.debug("No GITHUB_REPO set — skipping issue creation")
         return None
 
-    payload: dict = {"title": f"[DONUT Pipeline] {title}", "body": body}
+    full_title = f"[DONUT Pipeline] {title}"
+
+    # Deduplication: if an open issue with the same title already exists,
+    # post a comment instead of creating a new issue.
+    if deduplicate:
+        existing = github_search_open_issues(full_title, repo=repo)
+        if existing:
+            existing_issue = existing[0]
+            issue_number = existing_issue.get("number")
+            issue_url = existing_issue.get("html_url", "")
+            n_dupes = len(existing)
+            logger.info(
+                "Duplicate suppressed: %d open issue(s) already exist for %r — "
+                "posting comment on #%s instead of creating new issue.",
+                n_dupes,
+                full_title,
+                issue_number,
+            )
+            print(
+                f"  [GitHub] Duplicate suppressed ({n_dupes} open) — "
+                f"commenting on existing issue #{issue_number}: {issue_url}"
+            )
+            comment_body = f"**Recurrence detected** — same failure observed again.\n\n{body}"
+            return github_post_comment(issue_number, comment_body, repo=repo)
+
+    payload: dict = {"title": full_title, "body": body}
     if labels:
         payload["labels"] = labels
 
