@@ -165,15 +165,23 @@ class DiagnosticCallback:
         output_dir: Path | str | None = None,
         ai_diagnose: bool = False,
         ai_provider: str = "auto",
+        github_notify: bool = False,
+        github_repo: str | None = None,
+        github_issue_number: int | None = None,
     ):
         self.experiment_id = experiment_id
         self.output_dir = Path(output_dir or "results")
         self.ai_diagnose = ai_diagnose
         self.ai_provider = ai_provider
+        # GitHub notification: auto-enable when token + repo are present
+        self.github_notify = github_notify or bool(_get_github_token() and _get_github_repo())
+        self.github_repo = github_repo or _get_github_repo() or None
+        self.github_issue_number = github_issue_number
         self.checkpoints: list[RuntimeCheckpoint] = []
         self._eval_loss_history: list[float] = []
         self._train_loss_history: list[float] = []
         self._issues_raised: set[str] = set()
+        self._github_notified: set[str] = set()  # avoid duplicate issues per pattern
 
         # Dynamically inherit from TrainerCallback at instantiation
         # (avoids import-time dependency on transformers)
@@ -235,8 +243,31 @@ class DiagnosticCallback:
 
             # AI diagnosis for critical issues
             critical = [i for i in issues if i.get("severity") == "critical"]
+            diagnosis: str | None = None
             if critical and self.ai_diagnose:
                 self._run_ai_diagnosis(cp, critical)
+                diagnosis = cp.metrics.get("ai_diagnosis")
+
+            # GitHub notification — one issue per unique pattern per experiment
+            if critical and self.github_notify:
+                for issue in critical:
+                    pattern_name = issue.get("pattern", "unknown")
+                    notify_key = f"{self.experiment_id}:{pattern_name}"
+                    if notify_key not in self._github_notified:
+                        self._github_notified.add(notify_key)
+                        github_report_failure(
+                            stage=f"Experiment {self.experiment_id} training (epoch {cp.epoch:.0f})",
+                            error_type=pattern_name,
+                            error_message=issue.get("description", ""),
+                            context={
+                                "evidence": issue.get("evidence"),
+                                "fix": issue.get("fix"),
+                                "checkpoint": cp.to_dict(),
+                            },
+                            ai_diagnosis=diagnosis,
+                            repo=self.github_repo,
+                            issue_number=self.github_issue_number,
+                        )
 
         return control
 
@@ -570,6 +601,235 @@ def _call_mistral_httpx(context: dict, model: str = "mistral-small-latest") -> s
         return None
 
 
+# ---------------------------------------------------------------------------
+# GitHub API integration — create issues / post comments on failures
+# ---------------------------------------------------------------------------
+
+
+def _get_github_token() -> str:
+    """Read GitHub token from env var or file. Returns empty string if absent."""
+    token = os.environ.get("GITHUB_TOKEN", "")
+    if not token:
+        for path in ["github_token.txt", ".github_token"]:
+            try:
+                token = Path(path).read_text().strip()
+                if token:
+                    break
+            except OSError:
+                continue
+    return token
+
+
+def _get_github_repo() -> str:
+    """Read target repo (owner/repo) from GITHUB_REPO env var."""
+    return os.environ.get("GITHUB_REPO", "")
+
+
+def _github_request(
+    method: str, endpoint: str, token: str, payload: dict | None = None
+) -> dict | None:
+    """Execute a GitHub REST API call. Returns parsed JSON or None on failure.
+
+    Parameters
+    ----------
+    method : str
+        HTTP method — "GET", "POST", "PATCH".
+    endpoint : str
+        Path after ``https://api.github.com``, e.g. ``/repos/owner/repo/issues``.
+    token : str
+        GitHub personal-access token (``repo`` scope) or fine-grained token
+        with Issues write permission.
+    payload : dict or None
+        Request body; serialised to JSON when given.
+    """
+    import urllib.request
+
+    url = f"https://api.github.com{endpoint}"
+    data = json.dumps(payload).encode() if payload is not None else None
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {token}",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "Content-Type": "application/json",
+            "User-Agent": "donut-sroie-diagnostics/1.0",
+        },
+        method=method,
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            return json.loads(resp.read().decode())
+    except Exception as exc:
+        logger.warning("GitHub API call %s %s failed: %s", method, endpoint, exc)
+        return None
+
+
+def github_create_issue(
+    title: str,
+    body: str,
+    labels: list[str] | None = None,
+    repo: str | None = None,
+) -> dict | None:
+    """Create a GitHub issue and return the response dict (includes ``html_url``).
+
+    Parameters
+    ----------
+    title : str
+        Issue title (will be prefixed with ``[DONUT Pipeline]``).
+    body : str
+        Issue body in Markdown.
+    labels : list[str] or None
+        Optional label names to attach (must already exist in the repo).
+    repo : str or None
+        ``owner/repo`` slug.  Falls back to ``GITHUB_REPO`` env var.
+
+    Returns
+    -------
+    dict or None
+        GitHub issue object on success, or None if token / repo absent.
+    """
+    token = _get_github_token()
+    if not token:
+        logger.debug("No GitHub token — skipping issue creation")
+        return None
+    repo = repo or _get_github_repo()
+    if not repo:
+        logger.debug("No GITHUB_REPO set — skipping issue creation")
+        return None
+
+    payload: dict = {"title": f"[DONUT Pipeline] {title}", "body": body}
+    if labels:
+        payload["labels"] = labels
+
+    result = _github_request("POST", f"/repos/{repo}/issues", token, payload)
+    if result and "html_url" in result:
+        logger.info("GitHub issue created: %s", result["html_url"])
+        print(f"  [GitHub] Issue created: {result['html_url']}")
+    return result
+
+
+def github_post_comment(
+    issue_number: int,
+    body: str,
+    repo: str | None = None,
+) -> dict | None:
+    """Post a comment on an existing GitHub issue or pull request.
+
+    Parameters
+    ----------
+    issue_number : int
+        Issue or PR number to comment on.
+    body : str
+        Comment body in Markdown.
+    repo : str or None
+        ``owner/repo`` slug.  Falls back to ``GITHUB_REPO`` env var.
+
+    Returns
+    -------
+    dict or None
+        GitHub comment object on success, or None on failure.
+    """
+    token = _get_github_token()
+    if not token:
+        logger.debug("No GitHub token — skipping comment post")
+        return None
+    repo = repo or _get_github_repo()
+    if not repo:
+        logger.debug("No GITHUB_REPO set — skipping comment post")
+        return None
+
+    result = _github_request(
+        "POST",
+        f"/repos/{repo}/issues/{issue_number}/comments",
+        token,
+        {"body": body},
+    )
+    if result and "html_url" in result:
+        logger.info("GitHub comment posted: %s", result["html_url"])
+        print(f"  [GitHub] Comment posted: {result['html_url']}")
+    return result
+
+
+def github_report_failure(
+    stage: str,
+    error_type: str,
+    error_message: str,
+    context: dict | None = None,
+    ai_diagnosis: str | None = None,
+    repo: str | None = None,
+    issue_number: int | None = None,
+) -> dict | None:
+    """Create a GitHub issue (or comment on an existing one) for a pipeline failure.
+
+    Composes a structured Markdown body from the failure context, any AI
+    diagnosis text, and a reproduction hint.
+
+    Parameters
+    ----------
+    stage : str
+        Pipeline stage name (e.g. ``"Experiment 6"``).
+    error_type : str
+        Exception class name.
+    error_message : str
+        Short exception message (first 500 chars used).
+    context : dict or None
+        Extra telemetry (gpu, epoch, F1, etc.) to include as a code block.
+    ai_diagnosis : str or None
+        AI-generated diagnosis text to include in the issue body.
+    repo : str or None
+        ``owner/repo`` slug; defaults to ``GITHUB_REPO`` env var.
+    issue_number : int or None
+        If set, post as a comment on this issue instead of creating a new one.
+
+    Returns
+    -------
+    dict or None
+        GitHub API response dict on success, or None on failure.
+    """
+    # Build Markdown body
+    lines: list[str] = [
+        f"## Pipeline Failure: {stage}",
+        "",
+        f"**Error:** `{error_type}: {error_message[:500]}`",
+        "",
+    ]
+
+    if context:
+        lines += [
+            "### Runtime Context",
+            "```json",
+            json.dumps(context, indent=2, default=str)[:2000],
+            "```",
+            "",
+        ]
+
+    if ai_diagnosis:
+        lines += [
+            "### AI Diagnosis",
+            ai_diagnosis,
+            "",
+        ]
+
+    lines += [
+        "### Reproduction",
+        "```bash",
+        "python run_all.py --experiment 1  # minimal repro",
+        "python diagnostics.py --smoke-test",
+        "```",
+        "",
+        "*Auto-generated by `diagnostics.py` — DONUT SROIE pipeline*",
+    ]
+
+    body = "\n".join(lines)
+    title = f"{stage}: {error_type}"
+
+    if issue_number is not None:
+        return github_post_comment(issue_number, body, repo=repo)
+    return github_create_issue(title, body, labels=["bug", "pipeline-failure"], repo=repo)
+
+
 def ai_diagnose(
     context: dict,
     provider: str = "auto",
@@ -636,11 +896,18 @@ class PipelineDiagnostics:
         ai_diagnose: bool = False,
         ai_provider: str = "auto",
         output_dir: Path | str | None = None,
+        github_notify: bool = False,
+        github_repo: str | None = None,
+        github_issue_number: int | None = None,
     ):
         self.ai_diagnose = ai_diagnose
         self.ai_provider = ai_provider
         self.output_dir = Path(output_dir or "results")
         self.stage_reports: list[dict] = []
+        # GitHub notification: create issue or comment on failure
+        self.github_notify = github_notify or bool(_get_github_token() and _get_github_repo())
+        self.github_repo = github_repo or _get_github_repo() or None
+        self.github_issue_number = github_issue_number
 
     def wrap_stage(self, stage_name: str, func, args) -> object:
         """Execute a stage function with diagnostic wrapping.
@@ -692,6 +959,7 @@ class PipelineDiagnostics:
             )
 
             # AI diagnosis on failure
+            diagnosis: str | None = None
             if self.ai_diagnose:
                 diagnosis = ai_diagnose(
                     {
@@ -711,6 +979,24 @@ class PipelineDiagnostics:
                         diagnosis,
                     )
                     print(f"\n[AI Diagnosis] Stage {stage_name!r}:\n{diagnosis}")
+
+            # GitHub notification on failure
+            if self.github_notify:
+                gh_result = github_report_failure(
+                    stage=stage_name,
+                    error_type=type(exc).__name__,
+                    error_message=str(exc),
+                    context={
+                        "traceback": tb[-1500:],
+                        "duration_sec": round(elapsed, 1),
+                        "gpu_state": gpu_after,
+                    },
+                    ai_diagnosis=diagnosis,
+                    repo=self.github_repo,
+                    issue_number=self.github_issue_number,
+                )
+                if gh_result:
+                    report["github_url"] = gh_result.get("html_url")
 
             raise
 
@@ -938,13 +1224,78 @@ if __name__ == "__main__":
         default="auto",
         help="AI provider for diagnosis (default: auto)",
     )
+    parser.add_argument(
+        "--github-notify",
+        action="store_true",
+        help="Post smoke-test failures as GitHub issues (requires GITHUB_TOKEN + GITHUB_REPO)",
+    )
+    parser.add_argument(
+        "--github-repo",
+        default=None,
+        metavar="OWNER/REPO",
+        help="GitHub repo slug, e.g. aiparallel0/kaggle (overrides GITHUB_REPO env var)",
+    )
+    parser.add_argument(
+        "--github-issue",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Post as a comment on issue/PR N instead of creating a new issue",
+    )
+    parser.add_argument(
+        "--github-test",
+        action="store_true",
+        help="Test GitHub API connectivity: create a test issue and immediately close it",
+    )
     args = parser.parse_args()
+
+    # Override env var when --github-repo is supplied
+    if args.github_repo:
+        os.environ["GITHUB_REPO"] = args.github_repo
+
+    # GitHub connectivity test
+    if args.github_test:
+        print("[GitHub Test] Creating test issue...")
+        result = github_create_issue(
+            title="API connectivity test",
+            body=(
+                "This issue was created by `python diagnostics.py --github-test` "
+                "to verify GitHub API connectivity.\n\n"
+                "It can be closed immediately."
+            ),
+            labels=[],
+        )
+        if result:
+            print(f"[GitHub Test] PASS — issue created: {result.get('html_url')}")
+            # Immediately close it
+            token = _get_github_token()
+            repo = _get_github_repo()
+            if token and repo:
+                issue_num = result.get("number")
+                _github_request(
+                    "PATCH",
+                    f"/repos/{repo}/issues/{issue_num}",
+                    token,
+                    {"state": "closed"},
+                )
+                print(f"[GitHub Test] Issue #{issue_num} closed.")
+        else:
+            print("[GitHub Test] FAIL — check GITHUB_TOKEN and GITHUB_REPO")
+        raise SystemExit(0 if result else 1)
 
     if args.smoke_test:
         ok = run_preflight(
             ai_diagnose_on_failure=args.ai_diagnose,
             ai_provider=args.ai_provider,
         )
+        if not ok and (args.github_notify or _get_github_token()):
+            github_report_failure(
+                stage="smoke_test",
+                error_type="SmokeTestFailure",
+                error_message="One or more preflight checks failed — see console output.",
+                repo=args.github_repo,
+                issue_number=args.github_issue,
+            )
         raise SystemExit(0 if ok else 1)
 
     # Default: just run smoke test

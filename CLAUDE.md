@@ -597,6 +597,7 @@ Two-stage pipeline in `train_trocr_yolo.py` (called by `run_all.py`):
 - `models/` — checkpoints (`*.pt`, `*.pth`, `*.pkl`, `*.h5`)
 - `paper/paper_filled.tex` — generated LaTeX paper
 - `hf_token.txt` — HuggingFace authentication token
+- `github_token.txt` — GitHub personal access token (for diagnostics issue creation)
 
 ---
 
@@ -871,6 +872,8 @@ mistral_api_key.txt     # single line: ...
 | `AI_DIAGNOSE_PROVIDER` | `auto` | `claude` / `mistral` / `auto` |
 | `ANTHROPIC_API_KEY` | — | Claude key (or `anthropic_api_key.txt`) |
 | `MISTRAL_API_KEY` | — | Mistral key (or `mistral_api_key.txt`) |
+| `GITHUB_TOKEN` | — | GitHub PAT with `repo` scope (or `github_token.txt`); enables auto-notify |
+| `GITHUB_REPO` | — | Target repo slug, e.g. `aiparallel0/kaggle`; required for GitHub notify |
 | `DISABLE_DIAGNOSTICS` | `0` | `1` skips `DiagnosticCallback` entirely |
 
 ### Output files
