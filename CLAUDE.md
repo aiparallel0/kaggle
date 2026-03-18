@@ -597,6 +597,7 @@ Two-stage pipeline in `train_trocr_yolo.py` (called by `run_all.py`):
 - `models/` — checkpoints (`*.pt`, `*.pth`, `*.pkl`, `*.h5`)
 - `paper/paper_filled.tex` — generated LaTeX paper
 - `hf_token.txt` — HuggingFace authentication token
+- `github_token.txt` — GitHub personal access token (for diagnostics issue creation)
 
 ---
 
@@ -871,6 +872,8 @@ mistral_api_key.txt     # single line: ...
 | `AI_DIAGNOSE_PROVIDER` | `auto` | `claude` / `mistral` / `auto` |
 | `ANTHROPIC_API_KEY` | — | Claude key (or `anthropic_api_key.txt`) |
 | `MISTRAL_API_KEY` | — | Mistral key (or `mistral_api_key.txt`) |
+| `GITHUB_TOKEN` | — | GitHub PAT with `repo` scope (or `github_token.txt`); enables auto-notify |
+| `GITHUB_REPO` | — | Target repo slug, e.g. `aiparallel0/kaggle`; required for GitHub notify |
 | `DISABLE_DIAGNOSTICS` | `0` | `1` skips `DiagnosticCallback` entirely |
 
 ### Output files
@@ -926,7 +929,447 @@ diagnosis = ai_diagnose(
 
 ---
 
-## 20. Guardrail Principles — What Must Never Be Done
+## Autonomous CI/CD Pipeline
+
+> **For developers:** This pipeline runs fully automatically after each commit. Tests run, AI evaluates results, PR is updated with findings, and on success the PR auto-merges. Setup requires two external API tokens — see "Token Setup" below.
+
+### How It Works
+
+1. **Commit detection** — After a successful `git commit`, a hook in `.claude/settings.json` fires automatically
+2. **Test execution** — `autonomous_ci.py` runs:
+   - Import chain validation
+   - Linting check (`ruff check`)
+   - Smoke test (`diagnostics.py --smoke-test`)
+3. **AI evaluation** — Test results sent to Claude or Mistral API for verdict: `MERGE` / `BLOCK` / `COMMENT_ONLY`
+4. **GitHub posting** — Results posted as a comment on the PR
+5. **Auto-merge** — If all tests pass and AI verdict is `MERGE`, PR auto-merges with squash strategy
+
+**Time from commit to merge:** ~15–30 seconds (tests) + API call latency (2–5s) = ~20–35s total.
+
+### Token Setup
+
+Two tokens required for full functionality (both optional; pipeline degrades gracefully without them):
+
+#### 1. GitHub Token (for PR auto-merge)
+
+**Scope required:** `repo` (full repository access)
+
+**Setup:**
+```bash
+# Option A: Save token to gitignored file
+echo "ghp_xxxxx..." > github_token.txt   # replace with your token
+# Never commit github_token.txt
+
+# Option B: Set environment variable
+export GITHUB_TOKEN="ghp_xxxxx..."
+
+# Set target repo (required)
+export GITHUB_REPO="aiparallel0/kaggle"
+```
+
+**Test connectivity:**
+```bash
+python diagnostics.py --github-test
+# Output: [GitHub Test] PASS — issue created: https://github.com/...
+```
+
+**Create a GitHub token:**
+1. Go to https://github.com/settings/tokens
+2. Click "Generate new token (classic)" or "Generate new token (fine-grained)"
+3. Select scope: `repo` (full control of private repositories)
+4. Click "Generate token"
+5. Copy token immediately (GitHub won't show it again)
+
+#### 2. AI API Key (for test evaluation)
+
+**Option A: Claude (recommended)**
+
+```bash
+echo "sk-ant-xxxxx..." > anthropic_api_key.txt
+export ANTHROPIC_API_KEY="sk-ant-xxxxx..."
+```
+
+[Get Claude API key](https://console.anthropic.com/account/keys)
+
+**Option B: Mistral**
+
+```bash
+echo "xxxxx..." > mistral_api_key.txt
+export MISTRAL_API_KEY="xxxxx..."
+```
+
+[Get Mistral API key](https://console.mistral.ai/api-keys/)
+
+**Option C: Auto** (tries Claude, falls back to Mistral HTTP, then silent mode)
+
+If either API key is present, it will be used. Both can coexist; auto-select tries Claude first.
+
+### Usage
+
+#### After a commit (automatic)
+
+```bash
+git commit -m "Add my feature"
+# → Hook fires automatically
+# → Tests run in background
+# → Results posted to PR
+# → PR auto-merges if tests pass
+```
+
+Monitor progress:
+```bash
+# View latest evaluation
+tail -f /tmp/autonomous_ci.log
+
+# Check PR comment
+gh pr view <pr-number>
+```
+
+#### Manual trigger (testing)
+
+```bash
+# Test on current branch
+python autonomous_ci.py
+
+# Test specific PR
+python autonomous_ci.py --pr 42
+
+# Test without merging
+python autonomous_ci.py --no-merge
+
+# Test and post comment, but don't merge
+python autonomous_ci.py --pr-only
+
+# Specify GitHub repo
+python autonomous_ci.py --repo myorg/myrepo
+
+# Use specific AI provider
+python autonomous_ci.py --ai-provider claude
+
+# [NEW] Auto-fix with custom attempt limit
+python autonomous_ci.py --max-fix-attempts 5     # max 5 auto-fix retries
+python autonomous_ci.py --max-fix-attempts 20    # max 20 attempts
+python autonomous_ci.py --no-auto-fix            # disable auto-fix entirely
+```
+
+### Auto-Fix Loop (NEW — Autonomous Code Repair)
+
+When tests fail, the pipeline **automatically generates and applies code fixes** without waiting for human intervention. This is the key innovation that makes the pipeline fully autonomous.
+
+#### How Auto-Fix Works
+
+```
+Test fails
+    ↓
+AI analyzes failure (import error, syntax error, etc.)
+    ↓
+AI generates Python code that fixes the issue
+    ↓
+Code is validated (syntax check + type validation)
+    ↓
+Fix is applied to whitelisted files
+    ↓
+git commit -m "[auto-fix 1/N] Apply generated fix"
+    ↓
+Tests re-run automatically
+    ↓
+IF pass → auto-merge to main ✅
+IF fail AND attempt < max → loop back to "AI analyzes failure"
+IF fail AND attempt == max → stop and report (N attempts exhausted)
+```
+
+#### Configuration
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `--max-fix-attempts` | `10` | Maximum number of auto-fix retry loops |
+| `--no-auto-fix` | `false` | Disable auto-fix (test-only mode) |
+
+**N is configurable:**
+```bash
+# Conservative: only 3 attempts
+python autonomous_ci.py --max-fix-attempts 3
+
+# Aggressive: 20 attempts
+python autonomous_ci.py --max-fix-attempts 20
+
+# Classic mode: no auto-fix (manual review only)
+python autonomous_ci.py --no-auto-fix
+```
+
+#### Whitelist of Modifiable Files
+
+For safety, auto-fix can only modify these files:
+```
+✅ constants.py
+✅ train.py
+✅ data_pipeline.py
+✅ run_experiments.py
+✅ run_all.py
+✅ diagnostics.py
+✅ autonomous_ci.py
+```
+
+Any fix affecting files outside this list will be **rejected before applying**.
+
+#### Example: Auto-Fix in Action
+
+```
+$ git commit -m "Add new feature"
+
+[hook fires automatically]
+
+$ python autonomous_ci.py
+
+[CI] Test suite: 2/3 FAIL
+[CI] AI verdict: BLOCK
+[CI] Tests failed. Starting auto-fix loop...
+
+[AutoFix] Attempt 1/10
+[AutoFix] Generating fix code from AI...
+[AutoFix] ✓ Generated fix for constants.py
+[AutoFix] Committed fix attempt 1
+[AutoFix] Re-running tests...
+[CI] Test suite: 3/3 PASS ✅
+
+[AutoFix] ✅ Tests PASSED on attempt 1!
+[CI] ✅ Auto-fix succeeded! Re-evaluating...
+[CI] AI verdict: MERGE
+[CI] Auto-merging PR #42...
+✅ PR #42 merged to main (squash)
+```
+
+#### Multi-Attempt Example (Harder Fix)
+
+```
+[AutoFix] Attempt 1/10: Fix import error
+[AutoFix] Re-running tests...
+[CI] Test suite: 2/3 FAIL (different error now)
+
+[AutoFix] Attempt 2/10: Fix syntax error (from previous fix)
+[AutoFix] Re-running tests...
+[CI] Test suite: 2/3 FAIL (different error)
+
+[AutoFix] Attempt 3/10: Fix missing dependency
+[AutoFix] Re-running tests...
+[CI] Test suite: 3/3 PASS ✅
+
+[AutoFix] ✅ Tests PASSED on attempt 3!
+```
+
+#### GitHub PR Comments (With Fix Attempts)
+
+When auto-fix runs, the PR comment includes a summary of all attempts:
+
+```markdown
+## Autonomous CI/CD Report
+**Status:** ✅ PASS
+**Duration:** 45.3s
+
+### Auto-Fix Attempts
+**Attempt 1/10:** ❌
+- Fix: Applied import fix
+- Error: Import still missing after fix
+
+**Attempt 2/10:** ❌
+- Fix: Applied syntax correction
+- Error: Different error appeared
+
+**Attempt 3/10:** ✅
+- Fix: Fixed missing constant definition
+
+### Test Results
+| Test | Status | Duration |
+|---|---|---|
+| import_check | ✅ | 2.1s |
+| ruff_lint | ✅ | 1.3s |
+| smoke_test | ✅ | 12.5s |
+
+### AI Evaluation
+**Verdict:** `MERGE`
+**Reasoning:** All tests pass after 3 auto-fix attempts. Code is ready.
+```
+
+#### Safety Guarantees
+
+1. **Syntax validation:** Generated code is validated before committing
+2. **Whitelist enforcement:** Only specific files can be modified
+3. **Max attempts limit:** Prevents infinite loops (default N=10)
+4. **Rollback on catastrophe:** If N attempts fail, the system stops and reports
+5. **Git trail:** Each fix is a separate commit: `[auto-fix 1/10]`, `[auto-fix 2/10]`, etc.
+6. **AI transparency:** Full fix attempt history posted to GitHub PR
+
+#### When Auto-Fix Stops
+
+Auto-fix will **stop and report failure** if:
+- All N attempts exhausted and tests still failing
+- AI can't generate valid Python code
+- Fix would require modifying non-whitelisted files
+- Git commit fails (filesystem issue)
+
+In all cases: **PR comment is posted with full diagnostic info**, allowing human review.
+
+#### Disable for a session
+
+```bash
+# Don't run CI hooks for this session
+DISABLE_DIAGNOSTICS=1 bash
+
+# Or set in .claude/settings.local.json (gitignored):
+# { "disableAllHooks": true }
+```
+
+### Test Suite Details
+
+| Test | What it checks | Fails if |
+|---|---|---|
+| `import_check` | Can import `constants`, `data_pipeline`, `diagnostics` | Any import error |
+| `ruff_lint` | Code style and type hints | `ruff check .` returns non-zero |
+| `smoke_test` | Model loads, tokenizer configs, forward pass | <30s test fails |
+
+**All three must pass for `MERGE` verdict.** If any fail, verdict is `BLOCK` and PR is not merged.
+
+### AI Evaluation Prompts
+
+The AI evaluator receives:
+```json
+{
+  "test_results": {
+    "total_tests": 3,
+    "passed_tests": 3,
+    "failed_tests": 0,
+    "all_passed": true,
+    "summary": "3/3 tests passed",
+    "tests": [...]
+  },
+  "evaluation_task": "Determine if build is safe to merge"
+}
+```
+
+**Prompt sent to Claude/Mistral:**
+
+> You are a CI/CD evaluation agent... Analyze the test results below and provide: 1) Pass/Fail verdict: Is the build safe to merge? 2) Root cause (if failed) 3) Recommended action: MERGE / BLOCK / COMMENT_ONLY
+
+The AI looks for:
+- All tests passing → verdict `MERGE`
+- Any test failing → verdict `BLOCK`
+- Warnings/issues → verdict `COMMENT_ONLY` (posts to PR, doesn't block)
+
+### Automation Rules
+
+**Auto-merge triggers:**
+- All tests: ✅ PASS
+- AI verdict: `MERGE`
+- Flag `--no-merge` not set
+- Flag `--pr-only` not set
+- GitHub token + repo available
+
+**Auto-merge strategy:** Squash (combines all feature branch commits into one)
+
+**PR comment always posted if:**
+- GITHUB_TOKEN + GITHUB_REPO env vars set
+- PR number detected from branch
+
+### Examples
+
+#### Example 1: Successful commit → auto-merge
+
+```bash
+# Make a feature commit on branch `claude/my-feature`
+git commit -m "Add feature X"
+
+# → Hook fires
+# → Tests: 3/3 pass ✅
+# → AI: "All tests pass; code looks good"
+# → Verdict: MERGE
+# → PR auto-merged to main
+# → Console log: ✅ PR #42 merged to main
+```
+
+#### Example 2: Failed test → blocked, PR comment posted
+
+```bash
+git commit -m "Add feature Y"
+
+# → Tests: 2/3 pass (smoke_test fails)
+# → AI: "smoke_test failure indicates model loading issue"
+# → Verdict: BLOCK
+# → PR NOT merged
+# → GitHub PR #43 gets comment:
+#   ```
+#   ## Autonomous CI/CD Report
+#   **Status:** ❌ FAIL
+#   | Test | Status |
+#   | import_check | ✅ |
+#   | ruff_lint | ✅ |
+#   | smoke_test | ❌ |
+#   **Verdict:** `BLOCK`
+#   **Reasoning:** smoke_test failure indicates...
+#   ```
+```
+
+#### Example 3: Manual test without merge
+
+```bash
+python autonomous_ci.py --no-merge --branch feature/my-work
+
+# → Tests run
+# → Results logged to console
+# → PR NOT merged (--no-merge flag)
+# → Useful for: testing CI logic before enabling auto-merge
+```
+
+### Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Hook doesn't fire after commit | `disableAllHooks: true` in settings.json | Remove or set to `false` |
+| `ImportError: no module named anthropic` | Claude SDK not installed | Not critical; falls back to no AI evaluation |
+| `GitHub API call failed: 401` | Bad/expired GitHub token | `python diagnostics.py --github-test` to verify |
+| `No GitHub credentials; skipping PR lookup` | GITHUB_TOKEN or GITHUB_REPO not set | Export both env vars; see "Token Setup" above |
+| Tests pass but verdict is `BLOCK` | AI evaluation failed or unavailable | Check API keys; run with `--ai-provider auto` |
+| PR doesn't auto-merge even on MERGE verdict | `--no-merge` or `--pr-only` flag set | Use `python autonomous_ci.py` without flags |
+
+### Architecture Files
+
+| File | Purpose |
+|---|---|
+| `autonomous_ci.py` | Test runner, AI evaluator, GitHub poster, auto-merger |
+| `.claude/settings.json` | Hook config: detects `git commit`, runs `autonomous_ci.py --pr-only` async |
+| `diagnostics.py` | Exports `ai_diagnose()`, GitHub API wrappers for autonomous_ci to use |
+
+### Workflow Integration (For Developers)
+
+No special steps needed. The pipeline is transparent:
+
+1. **Make changes** → `git add`, `git commit`
+2. **Hook fires automatically** — you don't have to do anything
+3. **Watch console** (optional) → `tail -f /tmp/autonomous_ci.log`
+4. **PR updates automatically** → results posted as comment
+5. **Merge happens automatically** → if tests pass
+
+If a test fails:
+- **Read the PR comment** → AI explains the failure
+- **Fix the issue** → make a new commit
+- **Hook fires again** → tests re-run automatically
+- **Repeat until merge** → once all pass, PR auto-merges
+
+### Performance
+
+**Typical pipeline time:**
+| Stage | Time |
+|---|---|
+| Test suite | ~10–15s (all 3 tests) |
+| AI evaluation | ~2–5s (Claude/Mistral API call) |
+| GitHub posting | ~1–2s (API call) |
+| Auto-merge | ~1–2s (API call) |
+| **Total** | **~15–25s** |
+
+**Parallel execution:** Hook runs `async: true` — doesn't block your terminal. You can continue working while tests run in background.
+
+---
+
+
 
 > These rules exist because each one corresponds to a real silent failure that was hard to diagnose. They are not style suggestions.
 
