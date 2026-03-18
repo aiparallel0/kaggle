@@ -223,16 +223,24 @@ def run_import_check() -> TestResult:
         )
 
 
-def run_test_suite() -> TestSuiteResult:
-    """Execute all tests and return aggregate result."""
+def run_test_suite(skip_smoke_test: bool = False) -> TestSuiteResult:
+    """Execute all tests and return aggregate result.
+
+    Parameters
+    ----------
+    skip_smoke_test : bool
+        Skip the smoke test (requires torch/transformers).
+        Use this in CI environments where those packages are not installed.
+    """
     t0 = time.time()
     logger.info("[CI] Starting test suite...")
 
     tests = [
         run_import_check(),
         run_ruff_lint(),
-        run_smoke_test(),
     ]
+    if not skip_smoke_test:
+        tests.append(run_smoke_test())
 
     passed = sum(1 for t in tests if t.passed)
     total = len(tests)
@@ -484,6 +492,7 @@ def autonomous_pipeline(
     repo: str | None = None,
     max_fix_attempts: int = 10,
     no_auto_fix: bool = False,
+    skip_smoke_test: bool = False,
 ) -> bool:
     """Run the full autonomous CI/CD pipeline with auto-fix loop.
 
@@ -505,6 +514,8 @@ def autonomous_pipeline(
         Maximum number of auto-fix attempts (default 10).
     no_auto_fix : bool
         If True, disable auto-fix; only run tests.
+    skip_smoke_test : bool
+        Skip the smoke test (requires torch/transformers). Use in lightweight CI.
 
     Returns
     -------
@@ -531,7 +542,7 @@ def autonomous_pipeline(
     logger.info(f"[CI] PR: #{pr_number}" if pr_number else "[CI] Not a PR branch")
 
     # 2. Run tests
-    test_result = run_test_suite()
+    test_result = run_test_suite(skip_smoke_test=skip_smoke_test)
 
     # 3. AI evaluation
     evaluation = evaluate_test_results(test_result, provider=ai_provider)
@@ -547,7 +558,7 @@ def autonomous_pipeline(
 
         if success:
             logger.info("[CI] ✅ Auto-fix succeeded! Re-evaluating...")
-            test_result = run_test_suite()
+            test_result = run_test_suite(skip_smoke_test=skip_smoke_test)
             evaluation = evaluate_test_results(test_result, provider=ai_provider)
         else:
             logger.error(f"[CI] ❌ Auto-fix failed after {max_fix_attempts} attempts")
@@ -915,6 +926,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Disable auto-fix; only run tests and evaluate",
     )
+    parser.add_argument(
+        "--skip-smoke-test",
+        action="store_true",
+        help="Skip smoke test (requires torch); use in lightweight CI environments",
+    )
 
     args = parser.parse_args()
 
@@ -927,6 +943,7 @@ if __name__ == "__main__":
         repo=args.repo,
         max_fix_attempts=args.max_fix_attempts,
         no_auto_fix=args.no_auto_fix,
+        skip_smoke_test=args.skip_smoke_test,
     )
 
     sys.exit(0 if success else 1)

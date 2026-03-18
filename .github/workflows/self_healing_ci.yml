@@ -1,0 +1,96 @@
+# self_healing_ci.yml — Autonomous self-healing CI on every PR.
+#
+# What this does:
+#   1. Run ruff lint + core import checks (no torch required, fast).
+#   2. If anything fails, call the Mistral API to generate a fix.
+#   3. Apply the fix, re-run tests, commit & push back to the PR branch.
+#   4. Post a summary comment on the PR.
+#   5. Auto-merge if all checks pass (squash, requires branch protection allowing it).
+#
+# Required GitHub secrets:
+#   MISTRAL_API_KEY  — Mistral API key for AI-powered auto-fix.
+#
+# Optional:
+#   Auto-merge requires the "Allow auto-merge" setting to be enabled in
+#   repo Settings → General → Pull Requests.
+
+name: Self-Healing CI
+
+on:
+  pull_request:
+    branches: ["main", "master"]
+    paths:
+      - "**.py"
+      - "requirements.txt"
+      - "ruff.toml"
+      - "experiments/**"
+
+jobs:
+  self-heal:
+    name: Lint + Import check + AI auto-fix
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write        # push auto-fix commits back to the PR branch
+      pull-requests: write   # post PR comments
+
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          # Check out the actual PR head so we can push fixes back to it.
+          ref: ${{ github.head_ref }}
+          # Use a PAT or the default GITHUB_TOKEN. GITHUB_TOKEN is enough for
+          # pushes within the same repo when "Allow GitHub Actions to create
+          # and approve pull requests" is enabled in repo settings.
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install lightweight deps (ruff + pyyaml only, no torch)
+        run: pip install ruff "pyyaml>=6.0"
+
+      - name: Configure git identity for auto-fix commits
+        run: |
+          git config user.email "self-healing-ci[bot]@users.noreply.github.com"
+          git config user.name "Self-Healing CI"
+
+      - name: Write Mistral API key to file (used by diagnostics.py)
+        env:
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+        run: |
+          if [ -n "$MISTRAL_API_KEY" ]; then
+            echo "$MISTRAL_API_KEY" > mistral_api_key.txt
+          fi
+
+      - name: Run autonomous CI with auto-fix
+        id: ci
+        env:
+          # Let autonomous_ci.py / diagnostics.py discover the key via env var too.
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+          # Tell GitHub integrations which repo we're in.
+          GITHUB_REPO: ${{ github.repository }}
+          # GITHUB_TOKEN is already set by Actions; diagnostics.py reads it.
+        run: |
+          python autonomous_ci.py \
+            --skip-smoke-test \
+            --no-merge \
+            --ai-provider mistral \
+            --max-fix-attempts 5 \
+            --branch "${{ github.head_ref }}" \
+            --pr "${{ github.event.pull_request.number }}" \
+            --repo "${{ github.repository }}"
+
+      - name: Push auto-fix commits (if any were made)
+        # Always run so fixes land even if the CI step itself exited non-zero.
+        if: always()
+        run: |
+          git push origin HEAD:"${{ github.head_ref }}" || true
+
+      - name: Clean up API key file
+        if: always()
+        run: rm -f mistral_api_key.txt
