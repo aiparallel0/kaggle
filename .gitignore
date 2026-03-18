@@ -78,6 +78,8 @@ results/evaluation_results.json
 
 # Stray experiment_*.json files at repo root (should live in results/)
 experiment_*.json
+# But track the selection file — it controls which experiments run
+!experiment_selection.json
 
 # Stray result JSON duplicates at repo root
 all_experiments*.json

@@ -13,6 +13,16 @@ cd "$SCRIPT_DIR"
 
 echo "[bootstrap] Setting up DONUT SROIE pipeline..."
 
+# 0. Activate virtual environment if present (Vast.ai instances use /venv/main)
+for _venv_path in /venv/main /opt/conda /usr/local; do
+    if [ -f "$_venv_path/bin/activate" ]; then
+        # shellcheck disable=SC1091
+        source "$_venv_path/bin/activate"
+        echo "[bootstrap] Activated venv: $_venv_path"
+        break
+    fi
+done
+
 # 1. Auto-detect GITHUB_REPO from git remote (if not already set)
 if [ -z "${GITHUB_REPO:-}" ]; then
     REMOTE_URL=$(git remote get-url origin 2>/dev/null || true)
@@ -36,11 +46,11 @@ done
 
 # 4. Read tokens from files into env vars if not already set
 if [ -z "${GITHUB_TOKEN:-}" ] && [ -f "$SCRIPT_DIR/github_token.txt" ]; then
-    export GITHUB_TOKEN="$(cat "$SCRIPT_DIR/github_token.txt")"
+    export GITHUB_TOKEN="$(tr -d '\r\n' < "$SCRIPT_DIR/github_token.txt")"
     echo "[bootstrap] Loaded GITHUB_TOKEN from github_token.txt"
 fi
 if [ -z "${HF_TOKEN:-}" ] && [ -f "$SCRIPT_DIR/hf_token.txt" ]; then
-    export HF_TOKEN="$(cat "$SCRIPT_DIR/hf_token.txt")"
+    export HF_TOKEN="$(tr -d '\r\n' < "$SCRIPT_DIR/hf_token.txt")"
     echo "[bootstrap] Loaded HF_TOKEN from hf_token.txt"
 fi
 

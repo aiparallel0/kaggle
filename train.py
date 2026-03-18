@@ -3304,18 +3304,14 @@ class DonutTrainer:
         use_fp16 = torch.cuda.is_available() and not use_bf16
         logging.info("precision: %s", "bf16" if use_bf16 else ("fp16" if use_fp16 else "fp32"))
 
-        # torch.compile: Ampere+ (sm≥80) GPUs including RTX 4090 / A100 / Blackwell.
-        # First batch is slow (kernel compilation); subsequent batches get ~15-30% speedup.
-        _compile_supported = (
-            hasattr(torch, "compile")
-            and torch.cuda.is_available()
-            and torch.cuda.get_device_capability()[0] >= 8  # Ampere+, includes 4090
-        )
-        if _compile_supported:
-            self.model = torch.compile(self.model, mode="reduce-overhead")
-            logging.info("torch.compile applied (mode=reduce-overhead)")
-        else:
-            logging.info("torch.compile skipped (not supported on this device)")
+        # torch.compile DISABLED for DONUT: mode="reduce-overhead" uses CUDA
+        # graphs which assume fixed tensor shapes, but autoregressive generate()
+        # (used during evaluation via predict_with_generate=True) changes shape
+        # at every decoding step.  This causes silent failures or ValueError
+        # during evaluation, producing F1=0.  The ~15-30% training speedup is
+        # negated by the ~1.5-2 min kernel compilation overhead per experiment
+        # and the broken evaluation.
+        logging.info("torch.compile skipped (incompatible with autoregressive generate)")
 
         # Cap warmup_steps to ≤10% of total optimizer steps.
         # warmup=500 is correct for large datasets (Exp 8, ~3940 samples, ~1250 opt steps),
@@ -3334,6 +3330,23 @@ class DonutTrainer:
                 _total_opt_steps,
                 self.config.max_epochs,
             )
+
+        # Guard DataLoader kwargs that were renamed/removed in transformers 5.x.
+        # When num_workers=8, passing dataloader_prefetch_factor=2 to
+        # Seq2SeqTrainingArguments raises TypeError in transformers >= 5.0 if the
+        # parameter no longer exists (root cause: Exp 2-8 crash in <7s while Exp 1
+        # with num_workers=0 trains normally). Use inspect to probe the signature.
+        import inspect as _inspect
+
+        _ta_params = set(_inspect.signature(Seq2SeqTrainingArguments.__init__).parameters)
+        _dl_extra: dict = {}
+        if optimal_workers > 0:
+            if "dataloader_prefetch_factor" in _ta_params:
+                _dl_extra["dataloader_prefetch_factor"] = 2
+            if "dataloader_persistent_workers" in _ta_params:
+                _dl_extra["dataloader_persistent_workers"] = True
+        elif "dataloader_prefetch_factor" in _ta_params:
+            _dl_extra["dataloader_prefetch_factor"] = None
 
         training_args = Seq2SeqTrainingArguments(
             output_dir=str(self._output_dir),
@@ -3364,10 +3377,9 @@ class DonutTrainer:
             # PERFORMANCE: Optimized DataLoader settings
             dataloader_num_workers=optimal_workers,
             dataloader_pin_memory=optimal_workers > 0,
-            dataloader_prefetch_factor=2 if optimal_workers > 0 else None,
-            dataloader_persistent_workers=optimal_workers > 0,
             remove_unused_columns=False,
             seed=getattr(self.config, "seed", SEED),
+            **_dl_extra,
         )
 
         # Build layerwise AdamW optimizer: encoder at encoder_lr, decoder at decoder_lr.
