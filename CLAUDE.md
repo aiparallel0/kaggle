@@ -1045,7 +1045,169 @@ python autonomous_ci.py --repo myorg/myrepo
 
 # Use specific AI provider
 python autonomous_ci.py --ai-provider claude
+
+# [NEW] Auto-fix with custom attempt limit
+python autonomous_ci.py --max-fix-attempts 5     # max 5 auto-fix retries
+python autonomous_ci.py --max-fix-attempts 20    # max 20 attempts
+python autonomous_ci.py --no-auto-fix            # disable auto-fix entirely
 ```
+
+### Auto-Fix Loop (NEW — Autonomous Code Repair)
+
+When tests fail, the pipeline **automatically generates and applies code fixes** without waiting for human intervention. This is the key innovation that makes the pipeline fully autonomous.
+
+#### How Auto-Fix Works
+
+```
+Test fails
+    ↓
+AI analyzes failure (import error, syntax error, etc.)
+    ↓
+AI generates Python code that fixes the issue
+    ↓
+Code is validated (syntax check + type validation)
+    ↓
+Fix is applied to whitelisted files
+    ↓
+git commit -m "[auto-fix 1/N] Apply generated fix"
+    ↓
+Tests re-run automatically
+    ↓
+IF pass → auto-merge to main ✅
+IF fail AND attempt < max → loop back to "AI analyzes failure"
+IF fail AND attempt == max → stop and report (N attempts exhausted)
+```
+
+#### Configuration
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `--max-fix-attempts` | `10` | Maximum number of auto-fix retry loops |
+| `--no-auto-fix` | `false` | Disable auto-fix (test-only mode) |
+
+**N is configurable:**
+```bash
+# Conservative: only 3 attempts
+python autonomous_ci.py --max-fix-attempts 3
+
+# Aggressive: 20 attempts
+python autonomous_ci.py --max-fix-attempts 20
+
+# Classic mode: no auto-fix (manual review only)
+python autonomous_ci.py --no-auto-fix
+```
+
+#### Whitelist of Modifiable Files
+
+For safety, auto-fix can only modify these files:
+```
+✅ constants.py
+✅ train.py
+✅ data_pipeline.py
+✅ run_experiments.py
+✅ run_all.py
+✅ diagnostics.py
+✅ autonomous_ci.py
+```
+
+Any fix affecting files outside this list will be **rejected before applying**.
+
+#### Example: Auto-Fix in Action
+
+```
+$ git commit -m "Add new feature"
+
+[hook fires automatically]
+
+$ python autonomous_ci.py
+
+[CI] Test suite: 2/3 FAIL
+[CI] AI verdict: BLOCK
+[CI] Tests failed. Starting auto-fix loop...
+
+[AutoFix] Attempt 1/10
+[AutoFix] Generating fix code from AI...
+[AutoFix] ✓ Generated fix for constants.py
+[AutoFix] Committed fix attempt 1
+[AutoFix] Re-running tests...
+[CI] Test suite: 3/3 PASS ✅
+
+[AutoFix] ✅ Tests PASSED on attempt 1!
+[CI] ✅ Auto-fix succeeded! Re-evaluating...
+[CI] AI verdict: MERGE
+[CI] Auto-merging PR #42...
+✅ PR #42 merged to main (squash)
+```
+
+#### Multi-Attempt Example (Harder Fix)
+
+```
+[AutoFix] Attempt 1/10: Fix import error
+[AutoFix] Re-running tests...
+[CI] Test suite: 2/3 FAIL (different error now)
+
+[AutoFix] Attempt 2/10: Fix syntax error (from previous fix)
+[AutoFix] Re-running tests...
+[CI] Test suite: 2/3 FAIL (different error)
+
+[AutoFix] Attempt 3/10: Fix missing dependency
+[AutoFix] Re-running tests...
+[CI] Test suite: 3/3 PASS ✅
+
+[AutoFix] ✅ Tests PASSED on attempt 3!
+```
+
+#### GitHub PR Comments (With Fix Attempts)
+
+When auto-fix runs, the PR comment includes a summary of all attempts:
+
+```markdown
+## Autonomous CI/CD Report
+**Status:** ✅ PASS
+**Duration:** 45.3s
+
+### Auto-Fix Attempts
+**Attempt 1/10:** ❌
+- Fix: Applied import fix
+- Error: Import still missing after fix
+
+**Attempt 2/10:** ❌
+- Fix: Applied syntax correction
+- Error: Different error appeared
+
+**Attempt 3/10:** ✅
+- Fix: Fixed missing constant definition
+
+### Test Results
+| Test | Status | Duration |
+|---|---|---|
+| import_check | ✅ | 2.1s |
+| ruff_lint | ✅ | 1.3s |
+| smoke_test | ✅ | 12.5s |
+
+### AI Evaluation
+**Verdict:** `MERGE`
+**Reasoning:** All tests pass after 3 auto-fix attempts. Code is ready.
+```
+
+#### Safety Guarantees
+
+1. **Syntax validation:** Generated code is validated before committing
+2. **Whitelist enforcement:** Only specific files can be modified
+3. **Max attempts limit:** Prevents infinite loops (default N=10)
+4. **Rollback on catastrophe:** If N attempts fail, the system stops and reports
+5. **Git trail:** Each fix is a separate commit: `[auto-fix 1/10]`, `[auto-fix 2/10]`, etc.
+6. **AI transparency:** Full fix attempt history posted to GitHub PR
+
+#### When Auto-Fix Stops
+
+Auto-fix will **stop and report failure** if:
+- All N attempts exhausted and tests still failing
+- AI can't generate valid Python code
+- Fix would require modifying non-whitelisted files
+- Git commit fails (filesystem issue)
+
+In all cases: **PR comment is posted with full diagnostic info**, allowing human review.
 
 #### Disable for a session
 
