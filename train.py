@@ -3588,6 +3588,73 @@ class DonutTrainer:
             optimizers=(optimizer, custom_scheduler),
         )
 
+        # ── Pre-training guardrails ────────────────────────────────────────────
+        # These checks catch the known silent-failure modes documented in CLAUDE.md
+        # §16 BEFORE training begins, so no compute is wasted on a broken setup.
+        _decoder_config = getattr(self.model, "decoder", self.model).config
+
+        # Guardrail 1: tie_word_embeddings MUST be False after resize_token_embeddings().
+        # If True, tie_weights() on checkpoint reload overwrites the learned lm_head
+        # with embed_tokens weights → F1 = 0.0 on every prediction (Bug B / lm_head_dedup).
+        _tie = getattr(_decoder_config, "tie_word_embeddings", True)
+        if _tie:
+            raise ValueError(
+                "CRITICAL: model.decoder.config.tie_word_embeddings is True. "
+                "This will cause lm_head.weight to be overwritten on checkpoint reload, "
+                "producing F1=0. Call model.decoder.config.tie_word_embeddings=False "
+                "immediately after resize_token_embeddings(). See CLAUDE.md §2."
+            )
+
+        # Guardrail 2: decoder_start_token_id must be set (not None).
+        # None → decoder starts from a random token → garbled output → F1=0 (GP-3/GP-4).
+        _dst_id = getattr(self.model.config, "decoder_start_token_id", None)
+        if _dst_id is None:
+            raise ValueError(
+                "CRITICAL: model.config.decoder_start_token_id is None. "
+                "Set it to processor.tokenizer.convert_tokens_to_ids(['<s_sroie>'])[0] "
+                "before training. See CLAUDE.md §16 GP-3."
+            )
+
+        # Guardrail 3: decoder_start_token_id must not map to unk_token_id.
+        # If it does, the <s_sroie> token was not registered before convert_tokens_to_ids.
+        _unk_id = getattr(self.processor.tokenizer, "unk_token_id", None)
+        if _unk_id is not None and _dst_id == _unk_id:
+            raise ValueError(
+                f"CRITICAL: decoder_start_token_id={_dst_id} equals unk_token_id={_unk_id}. "
+                "The <s_sroie> token was not added to the tokenizer before "
+                "convert_tokens_to_ids was called. "
+                "Call add_special_tokens({'additional_special_tokens': NEW_TOKENS}) "
+                "and resize_token_embeddings() before setting decoder_start_token_id. "
+                "See CLAUDE.md §16 GP-3."
+            )
+
+        # Guardrail 4: all NEW_TOKENS must be registered in the tokenizer vocab.
+        # Missing tokens map to unk_token_id → model learns to generate unk → F1=0.
+        if _unk_id is not None:
+            _missing_toks = [
+                tok
+                for tok in NEW_TOKENS
+                if self.processor.tokenizer.convert_tokens_to_ids([tok])[0] == _unk_id
+            ]
+            if _missing_toks:
+                raise ValueError(
+                    f"CRITICAL: {len(_missing_toks)} SROIE special token(s) are missing from "
+                    f"the tokenizer vocabulary (all map to unk_token_id={_unk_id}): "
+                    f"{_missing_toks}. "
+                    "Call processor.tokenizer.add_special_tokens("
+                    "{'additional_special_tokens': NEW_TOKENS}) "
+                    "and model.decoder.resize_token_embeddings(len(processor.tokenizer)) "
+                    "before training. See CLAUDE.md §7."
+                )
+
+        logger.info(
+            "Pre-training guardrails PASSED: tie_word_embeddings=False, "
+            "decoder_start_token_id=%d (%d NEW_TOKENS registered).",
+            _dst_id,
+            len(NEW_TOKENS),
+        )
+        # ── End pre-training guardrails ───────────────────────────────────────
+
         trainer.train()
 
         # Close the live dashboard (stops rich.live.Live so terminal is clean).
@@ -3660,6 +3727,46 @@ class DonutTrainer:
             len(NEW_TOKENS),
             save_dir,
         )
+
+        # ── Post-save lm_head.weight verification ────────────────────────────
+        # Verify that lm_head.weight was not deduped out of the safetensors shard.
+        # If safetensors sees embed_tokens.weight and lm_head.weight sharing the
+        # same data pointer, it silently omits lm_head from the shard — producing
+        # F1~0.42 on reload (Bug B / lm_head_dedup, CLAUDE.md §16).
+        # The clone() above should prevent this; this check confirms it.
+        _shard_file = save_dir / "model.safetensors"
+        if not _shard_file.exists():
+            # Multi-shard save: find the index
+            _shard_file = save_dir / "pytorch_model.bin"
+        if _shard_file.exists() and _shard_file.suffix == ".safetensors":
+            try:
+                from safetensors import safe_open
+
+                with safe_open(str(_shard_file), framework="pt", device="cpu") as _sf:
+                    _sf_keys = set(_sf.keys())
+                _lm_head_keys = {k for k in _sf_keys if "lm_head" in k}
+                if not _lm_head_keys:
+                    raise RuntimeError(
+                        f"CRITICAL: lm_head.weight is MISSING from {_shard_file}. "
+                        "safetensors deduplicated it against embed_tokens.weight. "
+                        "The LmHeadCloneCallback.on_save() clone did not fire in time. "
+                        "Manually call: "
+                        "model.decoder.lm_head.weight = "
+                        "torch.nn.Parameter(model.decoder.lm_head.weight.data.clone()) "
+                        "before save_pretrained(). See CLAUDE.md §16 Pattern 6."
+                    )
+                logger.info(
+                    "Post-save lm_head check PASSED: %s present in %s",
+                    _lm_head_keys,
+                    _shard_file.name,
+                )
+            except ImportError:
+                # safetensors not installed — skip the detailed check
+                logger.debug("safetensors not importable — skipping lm_head shard check")
+            except RuntimeError:
+                raise  # re-raise our own CRITICAL errors
+            except Exception as _sf_exc:
+                logger.warning("lm_head shard check failed (non-critical): %s", _sf_exc)
 
     # ------------------------------------------------------------------
     # Internals

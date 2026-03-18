@@ -1674,6 +1674,33 @@ def stage_experiments(args) -> StageResult:
         else:
             succeeded += 1
 
+        # ── --verify: post-experiment F1 > 0 check ──────────────────────────
+        # Catches silent failures (lm_head_dedup, token2json_list, wrong
+        # decoder_start_token_id) that train successfully but produce F1=0.
+        if getattr(args, "verify", False):
+            _f1_val = result.get("metrics", {}).get("global_f1", None)
+            if _f1_val is not None and not is_zero_shot:
+                try:
+                    _f1_float = float(_f1_val)
+                except (TypeError, ValueError):
+                    _f1_float = None
+                if _f1_float is not None and _f1_float == 0.0:
+                    _vw = (
+                        f"--verify FAILED for Experiment {exp_id} ({exp_name}): "
+                        f"F1=0.0 after training. This indicates a silent failure. "
+                        f"Known causes (CLAUDE.md §16): "
+                        f"lm_head_dedup (check LmHeadCloneCallback), "
+                        f"token2json_list (<sep/> tokens — check _parse_prediction), "
+                        f"wrong decoder_start_token_id (use list-form convert_tokens_to_ids). "
+                        f"Run: python diagnostics.py --smoke-test"
+                    )
+                    logging.warning(_vw)
+                    print(f"\n  ⚠  {_vw}\n")
+                    warnings.append(_vw)
+                    had_empty = True
+                    if exp_id not in failed_experiments:
+                        failed_experiments.append(exp_id)
+
         # ── Incremental result sync ──────────────────────────────────────────
         # Push partial results to GitHub after every successful experiment so
         # that results are visible in the PR even if later experiments crash.
@@ -3363,6 +3390,16 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Auto-commit and push experiment results after pipeline completion. "
             "Also enabled by AUTOPUSH_RESULTS=1 env var."
+        ),
+    )
+    p.add_argument(
+        "--verify",
+        action="store_true",
+        help=(
+            "After each experiment completes, verify that F1 > 0. "
+            "Logs a WARNING if F1 == 0.0 (silent failure indicator). "
+            "Use with --experiment N for targeted validation. "
+            "Exits with code 1 if any experiment produces F1=0 after training."
         ),
     )
     return p
