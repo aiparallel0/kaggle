@@ -53,12 +53,20 @@ import logging
 import math
 import os
 import re
+import struct
+import sys
 import time
 import warnings
+import zlib
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar
+
+# Ensure sibling modules are importable regardless of CWD.
+_SCRIPT_DIR = str(Path(__file__).resolve().parent)
+if _SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPT_DIR)
 
 # Set before torch initializes to reduce GPU memory fragmentation.
 os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
@@ -94,10 +102,6 @@ try:
     import yaml  # noqa: E402
 except ImportError as e:
     raise ImportError("PyYAML is required: pip install pyyaml") from e
-
-import struct  # noqa: E402
-import sys  # noqa: E402
-import zlib  # noqa: E402
 
 try:
     import flash_attn  # noqa: F401
@@ -3220,13 +3224,8 @@ def generate_json_summary(results: dict) -> None:
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
-RESULTS_DIR = Path("results")
-
-# ---------------------------------------------------------------------------
 # v2 resolution-sync constants and helper
+# (RESULTS_DIR already defined at line ~2979 — do not redefine here)
 # ---------------------------------------------------------------------------
 
 # Canonical fine-tuning resolution for DONUT on SROIE.
@@ -3523,7 +3522,7 @@ def train_experiment(
     exp_id: int,
     samples: list[tuple[Path, dict]],
     output_dir: Path,
-    val_samples: list[tuple[Path, dict]] = None,
+    val_samples: list[tuple[Path, dict]] | None = None,
     base_processor=None,
     base_model=None,
     config=None,
@@ -4088,16 +4087,14 @@ def run_experiment(
         )
     )
 
-    # ── Guardrail: verify global EXPERIMENTS dict was NOT mutated ──────────
-    if (
-        config.batch_size != EXPERIMENTS[exp_id].batch_size
-        or config.gradient_accumulation_steps != EXPERIMENTS[exp_id].gradient_accumulation_steps
-    ):
-        assert config is not EXPERIMENTS[exp_id], (
-            "INVARIANT VIOLATION: config is the same object as EXPERIMENTS[exp_id] "
-            "after the dataclasses.replace() call. This indicates a logic error in the "
-            "override block — the replace() result was not assigned back to config."
-        )
+    # ── Guardrail: verify global EXPERIMENTS dict was NOT mutated (GP-1) ──
+    # The assert must be unconditional — the old version only checked when
+    # values differed, but same-object implies same-values, making it inert.
+    assert config is not EXPERIMENTS[exp_id], (
+        "INVARIANT VIOLATION: config is the same object as EXPERIMENTS[exp_id]. "
+        "dataclasses.replace() was not applied — mutations would corrupt the "
+        "global singleton. Ensure replace() result is assigned back to config."
+    )
 
     # ── Guardrail: validate optimizer step count ───────────────────────────
     # skip_step_validation=True is set only by micro/mini modes where a small
