@@ -1,0 +1,1538 @@
+2026-03-18 19:04:54 | root | INFO     | ========================================================================
+2026-03-18 19:04:54 | root | INFO     | Pipeline started at 2026-03-18 19:04:54
+2026-03-18 19:04:54 | root | INFO     | ========================================================================
+2026-03-18 19:05:17 | data_pipeline | INFO     |   SROIE field coverage: company = 500/500 (100.0%)
+2026-03-18 19:05:17 | data_pipeline | INFO     |   SROIE field coverage: date = 500/500 (100.0%)
+2026-03-18 19:05:17 | data_pipeline | INFO     |   SROIE field coverage: address = 500/500 (100.0%)
+2026-03-18 19:05:17 | data_pipeline | INFO     |   SROIE field coverage: total = 499/500 (99.8%)
+2026-03-18 19:05:17 | data_pipeline | INFO     |   SROIE field coverage: company = 63/63 (100.0%)
+2026-03-18 19:05:17 | data_pipeline | INFO     |   SROIE field coverage: date = 63/63 (100.0%)
+2026-03-18 19:05:17 | data_pipeline | INFO     |   SROIE field coverage: address = 62/63 (98.4%)
+2026-03-18 19:05:17 | data_pipeline | INFO     |   SROIE field coverage: total = 63/63 (100.0%)
+2026-03-18 19:05:17 | data_pipeline | INFO     |   SROIE field coverage: company = 63/63 (100.0%)
+2026-03-18 19:05:17 | data_pipeline | INFO     |   SROIE field coverage: date = 63/63 (100.0%)
+2026-03-18 19:05:17 | data_pipeline | INFO     |   SROIE field coverage: address = 63/63 (100.0%)
+2026-03-18 19:05:17 | data_pipeline | INFO     |   SROIE field coverage: total = 63/63 (100.0%)
+2026-03-18 19:05:17 | data_pipeline | INFO     | [WildReceipt] Downloading from https://download.openmmlab.com/mmocr/data/wildreceipt.tar ...
+2026-03-18 19:05:17 | data_pipeline | INFO     | [FUNSD] datasets package absent — using inline HF downloader for FUNSD ...
+2026-03-18 19:05:17 | data_pipeline | INFO     | [Invoices-DONUT] datasets package absent — using inline HF downloader for Invoices-DONUT ...
+2026-03-18 19:05:17 | data_pipeline | INFO     | [inline-hf] Downloading nielsr/funsd/train from HuggingFace datasets-server …
+2026-03-18 19:05:17 | data_pipeline | INFO     | [inline-hf] Downloading katanaml-org/invoices-donut-data-v1/train from HuggingFace datasets-server …
+2026-03-18 19:05:19 | data_pipeline | INFO     | [inline-hf] 100/149 rows fetched …
+2026-03-18 19:05:20 | data_pipeline | INFO     | [inline-hf] 149/149 rows fetched …
+2026-03-18 19:05:22 | data_pipeline | INFO     | [inline-hf] 100/425 rows fetched …
+2026-03-18 19:05:23 | data_pipeline | INFO     | [WildReceipt] Extracting tar ...
+2026-03-18 19:05:24 | data_pipeline | INFO     | [WildReceipt] Download and extraction complete.
+2026-03-18 19:05:24 | data_pipeline | INFO     |   WildReceipt field coverage: company = 836/1267 (66.0%)
+2026-03-18 19:05:24 | data_pipeline | INFO     |   WildReceipt field coverage: date = 1072/1267 (84.6%)
+2026-03-18 19:05:24 | data_pipeline | INFO     |   WildReceipt field coverage: address = 827/1267 (65.3%)
+2026-03-18 19:05:24 | data_pipeline | INFO     |   WildReceipt field coverage: total = 1118/1267 (88.2%)
+2026-03-18 19:05:26 | data_pipeline | INFO     | [inline-hf] 200/425 rows fetched …
+2026-03-18 19:05:29 | data_pipeline | INFO     | [inline-hf] 300/425 rows fetched …
+2026-03-18 19:05:32 | data_pipeline | INFO     | [inline-hf] 400/425 rows fetched …
+2026-03-18 19:05:35 | data_pipeline | INFO     | [inline-hf] 425/425 rows fetched …
+2026-03-18 19:05:52 | data_pipeline | INFO     | [inline-hf] Download complete: 149 rows saved to /workspace/datasets/funsd/hf_cache_inline
+2026-03-18 19:05:52 | data_pipeline | INFO     |   FUNSD field coverage: company = 149/149 (100.0%)
+2026-03-18 19:05:52 | data_pipeline | INFO     |   FUNSD field coverage: date = 63/149 (42.3%)
+2026-03-18 19:05:52 | data_pipeline | INFO     |   FUNSD field coverage: address = 147/149 (98.7%)
+2026-03-18 19:05:52 | data_pipeline | INFO     |   FUNSD field coverage: total = 20/149 (13.4%)
+2026-03-18 19:07:47 | data_pipeline | INFO     | [inline-hf] Download complete: 425 rows saved to /workspace/datasets/invoices_donut/hf_cache_inline
+2026-03-18 19:07:47 | data_pipeline | INFO     |   Invoices-DONUT field coverage: company = 415/425 (97.6%)
+2026-03-18 19:07:47 | data_pipeline | INFO     |   Invoices-DONUT field coverage: date = 417/425 (98.1%)
+2026-03-18 19:07:47 | data_pipeline | INFO     |   Invoices-DONUT field coverage: address = 414/425 (97.4%)
+2026-03-18 19:07:47 | data_pipeline | INFO     |   Invoices-DONUT field coverage: total = 414/425 (97.4%)
+2026-03-18 19:07:47 | __main__ | INFO     | Pre-downloading base model (blocking) ...
+2026-03-18 19:08:17 | __main__ | INFO     | Base model cached
+2026-03-18 19:08:17 | data_pipeline | INFO     |   SROIE field coverage: company = 63/63 (100.0%)
+2026-03-18 19:08:17 | data_pipeline | INFO     |   SROIE field coverage: date = 63/63 (100.0%)
+2026-03-18 19:08:17 | data_pipeline | INFO     |   SROIE field coverage: address = 62/63 (98.4%)
+2026-03-18 19:08:17 | data_pipeline | INFO     |   SROIE field coverage: total = 63/63 (100.0%)
+2026-03-18 19:09:18 | run_experiments | DEBUG    | run_inference #1 [<s_cord-v2>] raw tokens: <s_cord-v2><s_menu><s_nm> SOON HUAT MACHINERY ENTERPRISE</s_nm><s_unitprice> JALAN PUTRA (JM0352019-K)</s_nm><s_unitprice> SOON TAMAN SRI PUTRA.</s_unitprice><s_cnt> 1.</s_cnt><s_price> PUTRA</s_price...
+2026-03-18 19:09:19 | run_experiments | DEBUG    | run_inference #2 [<s_cord-v2>] raw tokens: <s_cord-v2><s_menu><s_nm> TED HENG STRTONERY & BOOKS</s_nm><s_num> 60146.540</s_num><s_price> BEDUDAY NO. SELAURN SEAK SEROUS DAKL BEHSONTANZA</s_nm><s_num> TO.: SPICKE STAL NRK 9941</s_num><sep/><s_n...
+2026-03-18 19:09:20 | run_experiments | DEBUG    | run_inference #3 [<s_cord-v2>] raw tokens: <s_cord-v2><s_menu><s_nm> MAR</s_nm><s_unitprice> 2018</s_unitprice><s_cnt> 1</s_cnt><s_price> 2018</s_price><sep/><s_nm> (CO)</s_nm><s_unitprice> : BOOSUND BHO</s_nm><s_unitprice> :806加拿大陸地貌 서LARMORE...
+2026-03-18 19:09:20 | run_experiments | DEBUG    | token2json returned list for /workspace/ICDAR-2019-SROIE/data/test_img/027.jpg (3 pages) — passing to caller
+2026-03-18 19:09:42 | run_experiments | DEBUG    | token2json returned list for /workspace/ICDAR-2019-SROIE/data/test_img/270.jpg (8 pages) — passing to caller
+2026-03-18 19:09:58 | run_experiments | DEBUG    | token2json returned list for /workspace/ICDAR-2019-SROIE/data/test_img/459.jpg (3 pages) — passing to caller
+2026-03-18 19:09:59 | run_experiments | DEBUG    | token2json returned list for /workspace/ICDAR-2019-SROIE/data/test_img/464.jpg (2 pages) — passing to caller
+2026-03-18 19:10:15 | data_pipeline | INFO     |   SROIE field coverage: company = 500/500 (100.0%)
+2026-03-18 19:10:15 | data_pipeline | INFO     |   SROIE field coverage: date = 500/500 (100.0%)
+2026-03-18 19:10:15 | data_pipeline | INFO     |   SROIE field coverage: address = 500/500 (100.0%)
+2026-03-18 19:10:15 | data_pipeline | INFO     |   SROIE field coverage: total = 499/500 (99.8%)
+2026-03-18 19:10:15 | data_pipeline | INFO     |   SROIE field coverage: company = 63/63 (100.0%)
+2026-03-18 19:10:15 | data_pipeline | INFO     |   SROIE field coverage: date = 63/63 (100.0%)
+2026-03-18 19:10:15 | data_pipeline | INFO     |   SROIE field coverage: address = 63/63 (100.0%)
+2026-03-18 19:10:15 | data_pipeline | INFO     |   SROIE field coverage: total = 63/63 (100.0%)
+[2026-03-18 19:10:15] CONFIG_OPTIMIZATION (Exp 1)
+- batch_size: 2 (effective=8)
+- accumulation_steps: 4
+- encoder_lr: 5.00e-05
+- decoder_lr: 1.00e-04
+- epochs: 10
+- warmup_steps: 40
+- early_stopping_patience: 5
+- reason: batch_size=2: VRAM 23.5GB (≤24 GB); DONUT at 960×1280 requires ~22.78 GB at batch=8 — using batch=2 with accumulation_steps=8 (effective batch=16) to avoid OOM; accumulation_steps=4: physical batch=2, small dataset (500 samples) on ≤24 GB card — effective batch=8 ensures ≥200 optimizer steps even at 5 epochs; encoder_lr=5e-5, decoder_lr=1e-4 (fixed per CLAUDE.md); epochs=10 (fixed per CLAUDE.md § 3 convergence analysis); warmup_steps=40 (fixed: 500 overflowed total steps on small datasets); early_stopping_patience=5 (small dataset <1000 samples; patience=3 fires too early when val loss plateaus and then resumes improving)
+2026-03-18 19:10:15 | resource_manager | INFO     | [validate_training_config] OK: 630 optimizer steps (batch=2, accum=4, samples=500, epochs=10)
+2026-03-18 19:10:15 | run_experiments | INFO     | [ResolutionSync] processor.image_processor.size = {height: 1280, width: 960}  |  model.config.encoder.image_size = [1280, 960]  ✓
+2026-03-18 19:10:15 | run_experiments | DEBUG    | [Pre-resize] Tokenizer vocab size: 57525
+2026-03-18 19:10:15 | run_experiments | DEBUG    | [Pre-resize] Decoder embed_tokens shape: torch.Size([57525, 1024])
+2026-03-18 19:10:16 | run_experiments | DEBUG    | [Post-resize] Tokenizer vocab size: 57535
+2026-03-18 19:10:16 | run_experiments | DEBUG    | [Post-resize] Decoder embed_tokens shape: torch.Size([57535, 1024])
+2026-03-18 19:10:16 | run_experiments | DEBUG    | [Post-resize] Decoder lm_head shape: torch.Size([57535, 1024])
+2026-03-18 19:10:16 | run_experiments | DEBUG    | [Token-verify] All 10 SROIE tokens successfully added to vocab
+2026-03-18 19:10:16 | run_experiments | INFO     | [GradCkpt] Enabled — VRAM=23.5 GB <= 24 GB threshold
+2026-03-18 19:10:16 | run_experiments | INFO     | [FreezeEncoder] Frozen Swin stage-0 only (37 parameters)
+2026-03-18 19:10:16 | run_experiments | INFO     | [Device] Model moved to cuda
+2026-03-18 19:10:16 | resource_manager | INFO     | [memory_manager] PIL cache check: 500 samples x 3.52 MB = 1758 MB estimated; 55099 MB available x 6% safety = 3306 MB threshold -> ALLOW
+2026-03-18 19:10:19 | train | INFO     | [RAM Cache] 500/500 images cached
+2026-03-18 19:10:19 | train | INFO     | [Tensor Cache] Skipped (estimated 7100 MB exceeds hard cap 4096 MB)
+2026-03-18 19:10:20 | train | INFO     | [Label Cache] Precomputed 500 label tensors
+2026-03-18 19:10:20 | train | INFO     | Field masking: 1/500 samples will have <total> masked (0.2%)
+2026-03-18 19:10:20 | resource_manager | INFO     | [memory_manager] PIL cache check: 63 samples x 3.52 MB = 221 MB estimated; 42282 MB available x 6% safety = 2537 MB threshold -> ALLOW
+2026-03-18 19:10:20 | train | INFO     | [RAM Cache] 63/63 images cached
+2026-03-18 19:10:20 | train | INFO     | [Tensor Cache] Skipped (precompute_tensors=False — val/eval dataset)
+2026-03-18 19:10:20 | train | INFO     | DataLoader: num_workers=0 (batch_size=2 ≤ 2 + RAM cache active — eliminates fork+IPC overhead that caused 88s/step GPU starvation)
+2026-03-18 19:10:20 | root | INFO     | precision: bf16
+2026-03-18 19:10:21 | root | INFO     | torch.compile applied (mode=reduce-overhead)
+2026-03-18 19:10:21 | train | WARNING  | warmup_steps capped 500 → 63 (dataset has only 630 opt steps over 10 epochs)
+2026-03-18 19:10:21 | train | DEBUG    | [Diagnostics] Callback registered (ai_diagnose=True, provider=auto)
+2026-03-18 19:10:21 | train | DEBUG    | [LiveDashboard] Callback registered for experiment 1
+2026-03-18 19:10:21 | root | INFO     | Gradient checkpointing enabled (use_reentrant=False)
+2026-03-18 19:11:12 | data_pipeline | INFO     |   SROIE field coverage: company = 500/500 (100.0%)
+2026-03-18 19:11:12 | data_pipeline | INFO     |   SROIE field coverage: date = 500/500 (100.0%)
+2026-03-18 19:11:12 | data_pipeline | INFO     |   SROIE field coverage: address = 500/500 (100.0%)
+2026-03-18 19:11:12 | data_pipeline | INFO     |   SROIE field coverage: total = 499/500 (99.8%)
+2026-03-18 19:11:12 | data_pipeline | INFO     |   SROIE field coverage: company = 63/63 (100.0%)
+2026-03-18 19:11:12 | data_pipeline | INFO     |   SROIE field coverage: date = 63/63 (100.0%)
+2026-03-18 19:11:12 | data_pipeline | INFO     |   SROIE field coverage: address = 63/63 (100.0%)
+2026-03-18 19:11:12 | data_pipeline | INFO     |   SROIE field coverage: total = 63/63 (100.0%)
+2026-03-18 19:11:12 | data_pipeline | INFO     |   WildReceipt field coverage: company = 836/1267 (66.0%)
+2026-03-18 19:11:12 | data_pipeline | INFO     |   WildReceipt field coverage: date = 1072/1267 (84.6%)
+2026-03-18 19:11:12 | data_pipeline | INFO     |   WildReceipt field coverage: address = 827/1267 (65.3%)
+2026-03-18 19:11:12 | data_pipeline | INFO     |   WildReceipt field coverage: total = 1118/1267 (88.2%)
+[2026-03-18 19:11:12] CONFIG_OPTIMIZATION (Exp 2)
+- batch_size: 2 (effective=8)
+- accumulation_steps: 4
+- encoder_lr: 5.00e-05
+- decoder_lr: 1.00e-04
+- epochs: 10
+- warmup_steps: 40
+- early_stopping_patience: 3
+- reason: batch_size=2: VRAM 23.5GB (≤24 GB); DONUT at 960×1280 requires ~22.78 GB at batch=8 — using batch=2 with accumulation_steps=8 (effective batch=16) to avoid OOM; accumulation_steps=4: physical batch=2, small dataset (1386 samples) on ≤24 GB card — effective batch=8 ensures ≥200 optimizer steps even at 5 epochs; encoder_lr=5e-5, decoder_lr=1e-4 (fixed per CLAUDE.md); epochs=10 (fixed per CLAUDE.md § 3 convergence analysis); warmup_steps=40 (fixed: 500 overflowed total steps on small datasets); early_stopping_patience=3 (fixed to prevent overfitting on small val set)
+2026-03-18 19:11:12 | resource_manager | INFO     | [validate_training_config] OK: 1740 optimizer steps (batch=2, accum=4, samples=1386, epochs=10)
+2026-03-18 19:11:12 | run_experiments | INFO     | [ResolutionSync] processor.image_processor.size = {height: 1280, width: 960}  |  model.config.encoder.image_size = [1280, 960]  ✓
+2026-03-18 19:11:12 | run_experiments | DEBUG    | [Pre-resize] Tokenizer vocab size: 57525
+2026-03-18 19:11:12 | run_experiments | DEBUG    | [Pre-resize] Decoder embed_tokens shape: torch.Size([57525, 1024])
+2026-03-18 19:11:13 | run_experiments | DEBUG    | [Post-resize] Tokenizer vocab size: 57535
+2026-03-18 19:11:13 | run_experiments | DEBUG    | [Post-resize] Decoder embed_tokens shape: torch.Size([57535, 1024])
+2026-03-18 19:11:13 | run_experiments | DEBUG    | [Post-resize] Decoder lm_head shape: torch.Size([57535, 1024])
+2026-03-18 19:11:13 | run_experiments | DEBUG    | [Token-verify] All 10 SROIE tokens successfully added to vocab
+2026-03-18 19:11:13 | run_experiments | INFO     | [GradCkpt] Enabled — VRAM=23.5 GB <= 24 GB threshold
+2026-03-18 19:11:13 | run_experiments | INFO     | [FreezeEncoder] Frozen Swin stage-0 only (37 parameters)
+2026-03-18 19:11:13 | run_experiments | INFO     | [Device] Model moved to cuda
+2026-03-18 19:11:13 | resource_manager | INFO     | [memory_manager] PIL cache check: 1386 samples x 3.52 MB = 4873 MB estimated; 47683 MB available x 6% safety = 2861 MB threshold -> SKIP
+2026-03-18 19:11:13 | train | INFO     | [RAM Cache] Skipped (ram_cache_is_safe returned False for 1386 samples at 1280x960)
+2026-03-18 19:11:13 | train | INFO     | Field masking: 303/1386 samples will have <company> masked (21.9%)
+2026-03-18 19:11:13 | train | INFO     | Field masking: 132/1386 samples will have <date> masked (9.5%)
+2026-03-18 19:11:13 | train | INFO     | Field masking: 313/1386 samples will have <address> masked (22.6%)
+2026-03-18 19:11:13 | train | INFO     | Field masking: 101/1386 samples will have <total> masked (7.3%)
+2026-03-18 19:11:13 | resource_manager | INFO     | [memory_manager] PIL cache check: 253 samples x 3.52 MB = 889 MB estimated; 47683 MB available x 6% safety = 2861 MB threshold -> ALLOW
+2026-03-18 19:11:14 | train | INFO     | [RAM Cache] 253/253 images cached
+2026-03-18 19:11:14 | train | INFO     | [Tensor Cache] Skipped (precompute_tensors=False — val/eval dataset)
+2026-03-18 19:11:14 | train | INFO     | Field masking: 60/253 samples will have <company> masked (23.7%)
+2026-03-18 19:11:14 | train | INFO     | Field masking: 28/253 samples will have <date> masked (11.1%)
+2026-03-18 19:11:14 | train | INFO     | Field masking: 58/253 samples will have <address> masked (22.9%)
+2026-03-18 19:11:14 | train | INFO     | Field masking: 19/253 samples will have <total> masked (7.5%)
+2026-03-18 19:11:14 | run_experiments | WARNING  | [VRAM] External process(es) occupying ~1.3 GB of GPU memory (20.7 GB free of 23.5 GB total). Risk of OOM during training. Run `nvidia-smi` and kill any unnecessary GPU processes.
+2026-03-18 19:11:14 | root | INFO     | precision: bf16
+2026-03-18 19:11:14 | root | INFO     | torch.compile applied (mode=reduce-overhead)
+2026-03-18 19:11:14 | train | WARNING  | warmup_steps capped 500 → 174 (dataset has only 1740 opt steps over 10 epochs)
+2026-03-18 19:11:14 | train | DEBUG    | [Diagnostics] Callback registered (ai_diagnose=True, provider=auto)
+2026-03-18 19:11:14 | train | DEBUG    | [LiveDashboard] Callback registered for experiment 2
+2026-03-18 19:11:14 | root | INFO     | Gradient checkpointing enabled (use_reentrant=False)
+2026-03-18 19:11:17 | data_pipeline | INFO     |   SROIE field coverage: company = 500/500 (100.0%)
+2026-03-18 19:11:17 | data_pipeline | INFO     |   SROIE field coverage: date = 500/500 (100.0%)
+2026-03-18 19:11:17 | data_pipeline | INFO     |   SROIE field coverage: address = 500/500 (100.0%)
+2026-03-18 19:11:17 | data_pipeline | INFO     |   SROIE field coverage: total = 499/500 (99.8%)
+2026-03-18 19:11:17 | data_pipeline | INFO     |   SROIE field coverage: company = 63/63 (100.0%)
+2026-03-18 19:11:17 | data_pipeline | INFO     |   SROIE field coverage: date = 63/63 (100.0%)
+2026-03-18 19:11:17 | data_pipeline | INFO     |   SROIE field coverage: address = 63/63 (100.0%)
+2026-03-18 19:11:17 | data_pipeline | INFO     |   SROIE field coverage: total = 63/63 (100.0%)
+2026-03-18 19:11:17 | data_pipeline | INFO     |   Invoices-DONUT field coverage: company = 415/425 (97.6%)
+2026-03-18 19:11:17 | data_pipeline | INFO     |   Invoices-DONUT field coverage: date = 417/425 (98.1%)
+2026-03-18 19:11:17 | data_pipeline | INFO     |   Invoices-DONUT field coverage: address = 414/425 (97.4%)
+2026-03-18 19:11:17 | data_pipeline | INFO     |   Invoices-DONUT field coverage: total = 414/425 (97.4%)
+[2026-03-18 19:11:17] CONFIG_OPTIMIZATION (Exp 3)
+- batch_size: 2 (effective=8)
+- accumulation_steps: 4
+- encoder_lr: 5.00e-05
+- decoder_lr: 1.00e-04
+- epochs: 10
+- warmup_steps: 40
+- early_stopping_patience: 5
+- reason: batch_size=2: VRAM 23.5GB (≤24 GB); DONUT at 960×1280 requires ~22.78 GB at batch=8 — using batch=2 with accumulation_steps=8 (effective batch=16) to avoid OOM; accumulation_steps=4: physical batch=2, small dataset (797 samples) on ≤24 GB card — effective batch=8 ensures ≥200 optimizer steps even at 5 epochs; encoder_lr=5e-5, decoder_lr=1e-4 (fixed per CLAUDE.md); epochs=10 (fixed per CLAUDE.md § 3 convergence analysis); warmup_steps=40 (fixed: 500 overflowed total steps on small datasets); early_stopping_patience=5 (small dataset <1000 samples; patience=3 fires too early when val loss plateaus and then resumes improving)
+2026-03-18 19:11:17 | resource_manager | INFO     | [validate_training_config] OK: 1000 optimizer steps (batch=2, accum=4, samples=797, epochs=10)
+2026-03-18 19:11:18 | run_experiments | INFO     | [ResolutionSync] processor.image_processor.size = {height: 1280, width: 960}  |  model.config.encoder.image_size = [1280, 960]  ✓
+2026-03-18 19:11:18 | run_experiments | DEBUG    | [Pre-resize] Tokenizer vocab size: 57525
+2026-03-18 19:11:18 | run_experiments | DEBUG    | [Pre-resize] Decoder embed_tokens shape: torch.Size([57525, 1024])
+2026-03-18 19:11:19 | run_experiments | DEBUG    | [Post-resize] Tokenizer vocab size: 57535
+2026-03-18 19:11:19 | run_experiments | DEBUG    | [Post-resize] Decoder embed_tokens shape: torch.Size([57535, 1024])
+2026-03-18 19:11:19 | run_experiments | DEBUG    | [Post-resize] Decoder lm_head shape: torch.Size([57535, 1024])
+2026-03-18 19:11:19 | run_experiments | DEBUG    | [Token-verify] All 10 SROIE tokens successfully added to vocab
+2026-03-18 19:11:19 | run_experiments | INFO     | [GradCkpt] Enabled — VRAM=23.5 GB <= 24 GB threshold
+2026-03-18 19:11:19 | run_experiments | INFO     | [FreezeEncoder] Frozen Swin stage-0 only (37 parameters)
+2026-03-18 19:11:19 | run_experiments | INFO     | [Device] Model moved to cuda
+2026-03-18 19:11:19 | resource_manager | INFO     | [memory_manager] PIL cache check: 797 samples x 3.52 MB = 2802 MB estimated; 46349 MB available x 6% safety = 2781 MB threshold -> SKIP
+2026-03-18 19:11:19 | train | INFO     | [RAM Cache] Skipped (ram_cache_is_safe returned False for 797 samples at 1280x960)
+2026-03-18 19:11:19 | train | INFO     | Field masking: 8/797 samples will have <company> masked (1.0%)
+2026-03-18 19:11:19 | train | INFO     | Field masking: 8/797 samples will have <date> masked (1.0%)
+2026-03-18 19:11:19 | train | INFO     | Field masking: 9/797 samples will have <address> masked (1.1%)
+2026-03-18 19:11:19 | train | INFO     | Field masking: 11/797 samples will have <total> masked (1.4%)
+2026-03-18 19:11:19 | resource_manager | INFO     | [memory_manager] PIL cache check: 126 samples x 3.52 MB = 443 MB estimated; 46345 MB available x 6% safety = 2781 MB threshold -> ALLOW
+2026-03-18 19:11:20 | train | INFO     | [RAM Cache] 126/126 images cached
+2026-03-18 19:11:20 | train | INFO     | [Tensor Cache] Skipped (precompute_tensors=False — val/eval dataset)
+2026-03-18 19:11:20 | train | INFO     | Field masking: 2/126 samples will have <company> masked (1.6%)
+2026-03-18 19:11:20 | train | INFO     | Field masking: 2/126 samples will have <address> masked (1.6%)
+2026-03-18 19:11:20 | train | INFO     | Field masking: 1/126 samples will have <total> masked (0.8%)
+2026-03-18 19:11:20 | run_experiments | WARNING  | [VRAM] External process(es) occupying ~1.3 GB of GPU memory (20.7 GB free of 23.5 GB total). Risk of OOM during training. Run `nvidia-smi` and kill any unnecessary GPU processes.
+2026-03-18 19:11:20 | root | INFO     | precision: bf16
+2026-03-18 19:11:20 | root | INFO     | torch.compile applied (mode=reduce-overhead)
+2026-03-18 19:11:20 | train | WARNING  | warmup_steps capped 500 → 100 (dataset has only 1000 opt steps over 10 epochs)
+2026-03-18 19:11:20 | train | DEBUG    | [Diagnostics] Callback registered (ai_diagnose=True, provider=auto)
+2026-03-18 19:11:20 | train | DEBUG    | [LiveDashboard] Callback registered for experiment 3
+2026-03-18 19:11:20 | root | INFO     | Gradient checkpointing enabled (use_reentrant=False)
+2026-03-18 19:11:24 | data_pipeline | INFO     |   SROIE field coverage: company = 500/500 (100.0%)
+2026-03-18 19:11:24 | data_pipeline | INFO     |   SROIE field coverage: date = 500/500 (100.0%)
+2026-03-18 19:11:24 | data_pipeline | INFO     |   SROIE field coverage: address = 500/500 (100.0%)
+2026-03-18 19:11:24 | data_pipeline | INFO     |   SROIE field coverage: total = 499/500 (99.8%)
+2026-03-18 19:11:24 | data_pipeline | INFO     |   SROIE field coverage: company = 63/63 (100.0%)
+2026-03-18 19:11:24 | data_pipeline | INFO     |   SROIE field coverage: date = 63/63 (100.0%)
+2026-03-18 19:11:24 | data_pipeline | INFO     |   SROIE field coverage: address = 63/63 (100.0%)
+2026-03-18 19:11:24 | data_pipeline | INFO     |   SROIE field coverage: total = 63/63 (100.0%)
+2026-03-18 19:11:24 | data_pipeline | INFO     |   WildReceipt field coverage: company = 836/1267 (66.0%)
+2026-03-18 19:11:24 | data_pipeline | INFO     |   WildReceipt field coverage: date = 1072/1267 (84.6%)
+2026-03-18 19:11:24 | data_pipeline | INFO     |   WildReceipt field coverage: address = 827/1267 (65.3%)
+2026-03-18 19:11:24 | data_pipeline | INFO     |   WildReceipt field coverage: total = 1118/1267 (88.2%)
+2026-03-18 19:11:24 | data_pipeline | INFO     |   Invoices-DONUT field coverage: company = 415/425 (97.6%)
+2026-03-18 19:11:24 | data_pipeline | INFO     |   Invoices-DONUT field coverage: date = 417/425 (98.1%)
+2026-03-18 19:11:24 | data_pipeline | INFO     |   Invoices-DONUT field coverage: address = 414/425 (97.4%)
+2026-03-18 19:11:24 | data_pipeline | INFO     |   Invoices-DONUT field coverage: total = 414/425 (97.4%)
+[2026-03-18 19:11:24] CONFIG_OPTIMIZATION (Exp 4)
+- batch_size: 2 (effective=8)
+- accumulation_steps: 4
+- encoder_lr: 5.00e-05
+- decoder_lr: 1.00e-04
+- epochs: 10
+- warmup_steps: 40
+- early_stopping_patience: 3
+- reason: batch_size=2: VRAM 23.5GB (≤24 GB); DONUT at 960×1280 requires ~22.78 GB at batch=8 — using batch=2 with accumulation_steps=8 (effective batch=16) to avoid OOM; accumulation_steps=4: physical batch=2, small dataset (1683 samples) on ≤24 GB card — effective batch=8 ensures ≥200 optimizer steps even at 5 epochs; encoder_lr=5e-5, decoder_lr=1e-4 (fixed per CLAUDE.md); epochs=10 (fixed per CLAUDE.md § 3 convergence analysis); warmup_steps=40 (fixed: 500 overflowed total steps on small datasets); early_stopping_patience=3 (fixed to prevent overfitting on small val set)
+2026-03-18 19:11:24 | resource_manager | INFO     | [validate_training_config] OK: 2110 optimizer steps (batch=2, accum=4, samples=1683, epochs=10)
+2026-03-18 19:11:24 | run_experiments | INFO     | [ResolutionSync] processor.image_processor.size = {height: 1280, width: 960}  |  model.config.encoder.image_size = [1280, 960]  ✓
+2026-03-18 19:11:24 | run_experiments | DEBUG    | [Pre-resize] Tokenizer vocab size: 57525
+2026-03-18 19:11:24 | run_experiments | DEBUG    | [Pre-resize] Decoder embed_tokens shape: torch.Size([57525, 1024])
+2026-03-18 19:11:25 | run_experiments | DEBUG    | [Post-resize] Tokenizer vocab size: 57535
+2026-03-18 19:11:25 | run_experiments | DEBUG    | [Post-resize] Decoder embed_tokens shape: torch.Size([57535, 1024])
+2026-03-18 19:11:25 | run_experiments | DEBUG    | [Post-resize] Decoder lm_head shape: torch.Size([57535, 1024])
+2026-03-18 19:11:25 | run_experiments | DEBUG    | [Token-verify] All 10 SROIE tokens successfully added to vocab
+2026-03-18 19:11:25 | run_experiments | INFO     | [GradCkpt] Enabled — VRAM=23.5 GB <= 24 GB threshold
+2026-03-18 19:11:25 | run_experiments | INFO     | [FreezeEncoder] Frozen Swin stage-0 only (37 parameters)
+2026-03-18 19:11:25 | run_experiments | INFO     | [Device] Model moved to cuda
+2026-03-18 19:11:25 | resource_manager | INFO     | [memory_manager] PIL cache check: 1683 samples x 3.52 MB = 5917 MB estimated; 45964 MB available x 6% safety = 2758 MB threshold -> SKIP
+2026-03-18 19:11:25 | train | INFO     | [RAM Cache] Skipped (ram_cache_is_safe returned False for 1683 samples at 1280x960)
+2026-03-18 19:11:25 | train | INFO     | Field masking: 311/1683 samples will have <company> masked (18.5%)
+2026-03-18 19:11:25 | train | INFO     | Field masking: 140/1683 samples will have <date> masked (8.3%)
+2026-03-18 19:11:25 | train | INFO     | Field masking: 322/1683 samples will have <address> masked (19.1%)
+2026-03-18 19:11:25 | train | INFO     | Field masking: 111/1683 samples will have <total> masked (6.6%)
+2026-03-18 19:11:25 | resource_manager | INFO     | [memory_manager] PIL cache check: 316 samples x 3.52 MB = 1111 MB estimated; 45964 MB available x 6% safety = 2758 MB threshold -> ALLOW
+2026-03-18 19:11:26 | train | INFO     | [RAM Cache] 316/316 images cached
+2026-03-18 19:11:26 | train | INFO     | [Tensor Cache] Skipped (precompute_tensors=False — val/eval dataset)
+2026-03-18 19:11:26 | train | INFO     | Field masking: 62/316 samples will have <company> masked (19.6%)
+2026-03-18 19:11:26 | train | INFO     | Field masking: 28/316 samples will have <date> masked (8.9%)
+2026-03-18 19:11:26 | train | INFO     | Field masking: 60/316 samples will have <address> masked (19.0%)
+2026-03-18 19:11:27 | train | INFO     | Field masking: 20/316 samples will have <total> masked (6.3%)
+2026-03-18 19:11:27 | run_experiments | WARNING  | [VRAM] External process(es) occupying ~1.3 GB of GPU memory (20.4 GB free of 23.5 GB total). Risk of OOM during training. Run `nvidia-smi` and kill any unnecessary GPU processes.
+2026-03-18 19:11:27 | root | INFO     | precision: bf16
+2026-03-18 19:11:27 | root | INFO     | torch.compile applied (mode=reduce-overhead)
+2026-03-18 19:11:27 | train | WARNING  | warmup_steps capped 500 → 211 (dataset has only 2110 opt steps over 10 epochs)
+2026-03-18 19:11:27 | train | DEBUG    | [Diagnostics] Callback registered (ai_diagnose=True, provider=auto)
+2026-03-18 19:11:27 | train | DEBUG    | [LiveDashboard] Callback registered for experiment 4
+2026-03-18 19:11:27 | root | INFO     | Gradient checkpointing enabled (use_reentrant=False)
+2026-03-18 19:11:30 | data_pipeline | INFO     |   SROIE field coverage: company = 500/500 (100.0%)
+2026-03-18 19:11:30 | data_pipeline | INFO     |   SROIE field coverage: date = 500/500 (100.0%)
+2026-03-18 19:11:30 | data_pipeline | INFO     |   SROIE field coverage: address = 500/500 (100.0%)
+2026-03-18 19:11:30 | data_pipeline | INFO     |   SROIE field coverage: total = 499/500 (99.8%)
+2026-03-18 19:11:30 | data_pipeline | INFO     |   SROIE field coverage: company = 63/63 (100.0%)
+2026-03-18 19:11:30 | data_pipeline | INFO     |   SROIE field coverage: date = 63/63 (100.0%)
+2026-03-18 19:11:30 | data_pipeline | INFO     |   SROIE field coverage: address = 63/63 (100.0%)
+2026-03-18 19:11:30 | data_pipeline | INFO     |   SROIE field coverage: total = 63/63 (100.0%)
+2026-03-18 19:11:30 | data_pipeline | INFO     |   WildReceipt field coverage: company = 836/1267 (66.0%)
+2026-03-18 19:11:30 | data_pipeline | INFO     |   WildReceipt field coverage: date = 1072/1267 (84.6%)
+2026-03-18 19:11:30 | data_pipeline | INFO     |   WildReceipt field coverage: address = 827/1267 (65.3%)
+2026-03-18 19:11:30 | data_pipeline | INFO     |   WildReceipt field coverage: total = 1118/1267 (88.2%)
+[2026-03-18 19:11:30] CONFIG_OPTIMIZATION (Exp 5)
+- batch_size: 2 (effective=8)
+- accumulation_steps: 4
+- encoder_lr: 5.00e-05
+- decoder_lr: 1.00e-04
+- epochs: 10
+- warmup_steps: 40
+- early_stopping_patience: 3
+- reason: batch_size=2: VRAM 23.5GB (≤24 GB); DONUT at 960×1280 requires ~22.78 GB at batch=8 — using batch=2 with accumulation_steps=8 (effective batch=16) to avoid OOM; accumulation_steps=4: physical batch=2, small dataset (1886 samples) on ≤24 GB card — effective batch=8 ensures ≥200 optimizer steps even at 5 epochs; encoder_lr=5e-5, decoder_lr=1e-4 (fixed per CLAUDE.md); epochs=10 (fixed per CLAUDE.md § 3 convergence analysis); warmup_steps=40 (fixed: 500 overflowed total steps on small datasets); early_stopping_patience=3 (fixed to prevent overfitting on small val set)
+2026-03-18 19:11:30 | resource_manager | INFO     | [validate_training_config] OK: 3540 optimizer steps (batch=2, accum=4, samples=1886, epochs=15)
+2026-03-18 19:11:30 | run_experiments | INFO     | [ResolutionSync] processor.image_processor.size = {height: 1280, width: 960}  |  model.config.encoder.image_size = [1280, 960]  ✓
+2026-03-18 19:11:30 | run_experiments | DEBUG    | [Pre-resize] Tokenizer vocab size: 57525
+2026-03-18 19:11:30 | run_experiments | DEBUG    | [Pre-resize] Decoder embed_tokens shape: torch.Size([57525, 1024])
+2026-03-18 19:11:31 | run_experiments | DEBUG    | [Post-resize] Tokenizer vocab size: 57535
+2026-03-18 19:11:31 | run_experiments | DEBUG    | [Post-resize] Decoder embed_tokens shape: torch.Size([57535, 1024])
+2026-03-18 19:11:31 | run_experiments | DEBUG    | [Post-resize] Decoder lm_head shape: torch.Size([57535, 1024])
+2026-03-18 19:11:31 | run_experiments | DEBUG    | [Token-verify] All 10 SROIE tokens successfully added to vocab
+2026-03-18 19:11:31 | run_experiments | INFO     | [GradCkpt] Enabled — VRAM=23.5 GB <= 24 GB threshold
+2026-03-18 19:11:31 | run_experiments | INFO     | [FreezeEncoder] Frozen Swin stage-0 only (37 parameters)
+2026-03-18 19:11:31 | run_experiments | INFO     | [Device] Model moved to cuda
+2026-03-18 19:11:31 | resource_manager | INFO     | [memory_manager] PIL cache check: 1886 samples x 3.52 MB = 6630 MB estimated; 45557 MB available x 6% safety = 2733 MB threshold -> SKIP
+2026-03-18 19:11:31 | train | INFO     | [RAM Cache] Skipped (ram_cache_is_safe returned False for 1886 samples at 1280x960)
+2026-03-18 19:11:31 | train | INFO     | Field masking: 303/1886 samples will have <company> masked (16.1%)
+2026-03-18 19:11:31 | train | INFO     | Field masking: 132/1886 samples will have <date> masked (7.0%)
+2026-03-18 19:11:31 | train | INFO     | Field masking: 313/1886 samples will have <address> masked (16.6%)
+2026-03-18 19:11:31 | train | INFO     | Field masking: 102/1886 samples will have <total> masked (5.4%)
+2026-03-18 19:11:31 | resource_manager | INFO     | [memory_manager] PIL cache check: 253 samples x 3.52 MB = 889 MB estimated; 45557 MB available x 6% safety = 2733 MB threshold -> ALLOW
+2026-03-18 19:11:32 | train | INFO     | [RAM Cache] 253/253 images cached
+2026-03-18 19:11:32 | train | INFO     | [Tensor Cache] Skipped (precompute_tensors=False — val/eval dataset)
+2026-03-18 19:11:32 | train | INFO     | Field masking: 60/253 samples will have <company> masked (23.7%)
+2026-03-18 19:11:32 | train | INFO     | Field masking: 28/253 samples will have <date> masked (11.1%)
+2026-03-18 19:11:32 | train | INFO     | Field masking: 58/253 samples will have <address> masked (22.9%)
+2026-03-18 19:11:32 | train | INFO     | Field masking: 19/253 samples will have <total> masked (7.5%)
+2026-03-18 19:11:32 | run_experiments | WARNING  | [VRAM] External process(es) occupying ~1.3 GB of GPU memory (20.1 GB free of 23.5 GB total). Risk of OOM during training. Run `nvidia-smi` and kill any unnecessary GPU processes.
+2026-03-18 19:11:32 | root | INFO     | precision: bf16
+2026-03-18 19:11:32 | root | INFO     | torch.compile applied (mode=reduce-overhead)
+2026-03-18 19:11:32 | train | WARNING  | warmup_steps capped 500 → 354 (dataset has only 3540 opt steps over 15 epochs)
+2026-03-18 19:11:32 | train | DEBUG    | [Diagnostics] Callback registered (ai_diagnose=True, provider=auto)
+2026-03-18 19:11:32 | train | DEBUG    | [LiveDashboard] Callback registered for experiment 5
+2026-03-18 19:11:32 | root | INFO     | Gradient checkpointing enabled (use_reentrant=False)
+2026-03-18 19:11:35 | data_pipeline | INFO     |   SROIE field coverage: company = 500/500 (100.0%)
+2026-03-18 19:11:35 | data_pipeline | INFO     |   SROIE field coverage: date = 500/500 (100.0%)
+2026-03-18 19:11:35 | data_pipeline | INFO     |   SROIE field coverage: address = 500/500 (100.0%)
+2026-03-18 19:11:35 | data_pipeline | INFO     |   SROIE field coverage: total = 499/500 (99.8%)
+2026-03-18 19:11:35 | data_pipeline | INFO     |   SROIE field coverage: company = 63/63 (100.0%)
+2026-03-18 19:11:35 | data_pipeline | INFO     |   SROIE field coverage: date = 63/63 (100.0%)
+2026-03-18 19:11:35 | data_pipeline | INFO     |   SROIE field coverage: address = 63/63 (100.0%)
+2026-03-18 19:11:35 | data_pipeline | INFO     |   SROIE field coverage: total = 63/63 (100.0%)
+2026-03-18 19:11:35 | data_pipeline | INFO     |   Invoices-DONUT field coverage: company = 415/425 (97.6%)
+2026-03-18 19:11:35 | data_pipeline | INFO     |   Invoices-DONUT field coverage: date = 417/425 (98.1%)
+2026-03-18 19:11:35 | data_pipeline | INFO     |   Invoices-DONUT field coverage: address = 414/425 (97.4%)
+2026-03-18 19:11:35 | data_pipeline | INFO     |   Invoices-DONUT field coverage: total = 414/425 (97.4%)
+[2026-03-18 19:11:35] CONFIG_OPTIMIZATION (Exp 6)
+- batch_size: 2 (effective=8)
+- accumulation_steps: 4
+- encoder_lr: 5.00e-05
+- decoder_lr: 1.00e-04
+- epochs: 10
+- warmup_steps: 40
+- early_stopping_patience: 3
+- reason: batch_size=2: VRAM 23.5GB (≤24 GB); DONUT at 960×1280 requires ~22.78 GB at batch=8 — using batch=2 with accumulation_steps=8 (effective batch=16) to avoid OOM; accumulation_steps=4: physical batch=2, small dataset (1297 samples) on ≤24 GB card — effective batch=8 ensures ≥200 optimizer steps even at 5 epochs; encoder_lr=5e-5, decoder_lr=1e-4 (fixed per CLAUDE.md); epochs=10 (fixed per CLAUDE.md § 3 convergence analysis); warmup_steps=40 (fixed: 500 overflowed total steps on small datasets); early_stopping_patience=3 (fixed to prevent overfitting on small val set)
+2026-03-18 19:11:35 | resource_manager | INFO     | [validate_training_config] OK: 2445 optimizer steps (batch=2, accum=4, samples=1297, epochs=15)
+2026-03-18 19:11:36 | run_experiments | INFO     | [ResolutionSync] processor.image_processor.size = {height: 1280, width: 960}  |  model.config.encoder.image_size = [1280, 960]  ✓
+2026-03-18 19:11:36 | run_experiments | DEBUG    | [Pre-resize] Tokenizer vocab size: 57525
+2026-03-18 19:11:36 | run_experiments | DEBUG    | [Pre-resize] Decoder embed_tokens shape: torch.Size([57525, 1024])
+2026-03-18 19:11:36 | run_experiments | DEBUG    | [Post-resize] Tokenizer vocab size: 57535
+2026-03-18 19:11:36 | run_experiments | DEBUG    | [Post-resize] Decoder embed_tokens shape: torch.Size([57535, 1024])
+2026-03-18 19:11:36 | run_experiments | DEBUG    | [Post-resize] Decoder lm_head shape: torch.Size([57535, 1024])
+2026-03-18 19:11:36 | run_experiments | DEBUG    | [Token-verify] All 10 SROIE tokens successfully added to vocab
+2026-03-18 19:11:36 | run_experiments | INFO     | [GradCkpt] Enabled — VRAM=23.5 GB <= 24 GB threshold
+2026-03-18 19:11:36 | run_experiments | INFO     | [FreezeEncoder] Frozen Swin stage-0 only (37 parameters)
+2026-03-18 19:11:37 | run_experiments | INFO     | [Device] Model moved to cuda
+2026-03-18 19:11:37 | resource_manager | INFO     | [memory_manager] PIL cache check: 1297 samples x 3.52 MB = 4560 MB estimated; 45876 MB available x 6% safety = 2753 MB threshold -> SKIP
+2026-03-18 19:11:37 | train | INFO     | [RAM Cache] Skipped (ram_cache_is_safe returned False for 1297 samples at 1280x960)
+2026-03-18 19:11:37 | train | INFO     | Field masking: 8/1297 samples will have <company> masked (0.6%)
+2026-03-18 19:11:37 | train | INFO     | Field masking: 8/1297 samples will have <date> masked (0.6%)
+2026-03-18 19:11:37 | train | INFO     | Field masking: 9/1297 samples will have <address> masked (0.7%)
+2026-03-18 19:11:37 | train | INFO     | Field masking: 12/1297 samples will have <total> masked (0.9%)
+2026-03-18 19:11:37 | resource_manager | INFO     | [memory_manager] PIL cache check: 126 samples x 3.52 MB = 443 MB estimated; 45876 MB available x 6% safety = 2753 MB threshold -> ALLOW
+2026-03-18 19:11:38 | train | INFO     | [RAM Cache] 126/126 images cached
+2026-03-18 19:11:38 | train | INFO     | [Tensor Cache] Skipped (precompute_tensors=False — val/eval dataset)
+2026-03-18 19:11:38 | train | INFO     | Field masking: 2/126 samples will have <company> masked (1.6%)
+2026-03-18 19:11:38 | train | INFO     | Field masking: 2/126 samples will have <address> masked (1.6%)
+2026-03-18 19:11:38 | train | INFO     | Field masking: 1/126 samples will have <total> masked (0.8%)
+2026-03-18 19:11:38 | run_experiments | WARNING  | [VRAM] External process(es) occupying ~1.3 GB of GPU memory (19.8 GB free of 23.5 GB total). Risk of OOM during training. Run `nvidia-smi` and kill any unnecessary GPU processes.
+2026-03-18 19:11:38 | root | INFO     | precision: bf16
+2026-03-18 19:11:38 | root | INFO     | torch.compile applied (mode=reduce-overhead)
+2026-03-18 19:11:38 | train | WARNING  | warmup_steps capped 500 → 244 (dataset has only 2445 opt steps over 15 epochs)
+2026-03-18 19:11:38 | train | DEBUG    | [Diagnostics] Callback registered (ai_diagnose=True, provider=auto)
+2026-03-18 19:11:38 | train | DEBUG    | [LiveDashboard] Callback registered for experiment 6
+2026-03-18 19:11:38 | root | INFO     | Gradient checkpointing enabled (use_reentrant=False)
+2026-03-18 19:11:42 | data_pipeline | INFO     |   SROIE field coverage: company = 500/500 (100.0%)
+2026-03-18 19:11:42 | data_pipeline | INFO     |   SROIE field coverage: date = 500/500 (100.0%)
+2026-03-18 19:11:42 | data_pipeline | INFO     |   SROIE field coverage: address = 500/500 (100.0%)
+2026-03-18 19:11:42 | data_pipeline | INFO     |   SROIE field coverage: total = 499/500 (99.8%)
+2026-03-18 19:11:42 | data_pipeline | INFO     |   SROIE field coverage: company = 63/63 (100.0%)
+2026-03-18 19:11:42 | data_pipeline | INFO     |   SROIE field coverage: date = 63/63 (100.0%)
+2026-03-18 19:11:42 | data_pipeline | INFO     |   SROIE field coverage: address = 63/63 (100.0%)
+2026-03-18 19:11:42 | data_pipeline | INFO     |   SROIE field coverage: total = 63/63 (100.0%)
+2026-03-18 19:11:42 | data_pipeline | INFO     |   WildReceipt field coverage: company = 836/1267 (66.0%)
+2026-03-18 19:11:42 | data_pipeline | INFO     |   WildReceipt field coverage: date = 1072/1267 (84.6%)
+2026-03-18 19:11:42 | data_pipeline | INFO     |   WildReceipt field coverage: address = 827/1267 (65.3%)
+2026-03-18 19:11:42 | data_pipeline | INFO     |   WildReceipt field coverage: total = 1118/1267 (88.2%)
+2026-03-18 19:11:42 | data_pipeline | INFO     |   Invoices-DONUT field coverage: company = 415/425 (97.6%)
+2026-03-18 19:11:42 | data_pipeline | INFO     |   Invoices-DONUT field coverage: date = 417/425 (98.1%)
+2026-03-18 19:11:42 | data_pipeline | INFO     |   Invoices-DONUT field coverage: address = 414/425 (97.4%)
+2026-03-18 19:11:42 | data_pipeline | INFO     |   Invoices-DONUT field coverage: total = 414/425 (97.4%)
+[2026-03-18 19:11:42] CONFIG_OPTIMIZATION (Exp 7)
+- batch_size: 2 (effective=16)
+- accumulation_steps: 8
+- encoder_lr: 5.00e-05
+- decoder_lr: 1.00e-04
+- epochs: 10
+- warmup_steps: 40
+- early_stopping_patience: 3
+- reason: batch_size=2: VRAM 23.5GB (≤24 GB); DONUT at 960×1280 requires ~22.78 GB at batch=8 — using batch=2 with accumulation_steps=8 (effective batch=16) to avoid OOM; accumulation_steps=8: physical batch=2, reaching effective batch=16; encoder_lr=5e-5, decoder_lr=1e-4 (fixed per CLAUDE.md); epochs=10 (fixed per CLAUDE.md § 3 convergence analysis); warmup_steps=40 (fixed: 500 overflowed total steps on small datasets); early_stopping_patience=3 (fixed to prevent overfitting on small val set)
+2026-03-18 19:11:42 | resource_manager | INFO     | [validate_training_config] OK: 2055 optimizer steps (batch=2, accum=8, samples=2183, epochs=15)
+2026-03-18 19:11:42 | run_experiments | INFO     | [ResolutionSync] processor.image_processor.size = {height: 1280, width: 960}  |  model.config.encoder.image_size = [1280, 960]  ✓
+2026-03-18 19:11:42 | run_experiments | DEBUG    | [Pre-resize] Tokenizer vocab size: 57525
+2026-03-18 19:11:42 | run_experiments | DEBUG    | [Pre-resize] Decoder embed_tokens shape: torch.Size([57525, 1024])
+2026-03-18 19:11:43 | run_experiments | DEBUG    | [Post-resize] Tokenizer vocab size: 57535
+2026-03-18 19:11:43 | run_experiments | DEBUG    | [Post-resize] Decoder embed_tokens shape: torch.Size([57535, 1024])
+2026-03-18 19:11:43 | run_experiments | DEBUG    | [Post-resize] Decoder lm_head shape: torch.Size([57535, 1024])
+2026-03-18 19:11:43 | run_experiments | DEBUG    | [Token-verify] All 10 SROIE tokens successfully added to vocab
+2026-03-18 19:11:43 | run_experiments | INFO     | [GradCkpt] Enabled — VRAM=23.5 GB <= 24 GB threshold
+2026-03-18 19:11:43 | run_experiments | INFO     | [FreezeEncoder] Frozen Swin stage-0 only (37 parameters)
+2026-03-18 19:11:43 | run_experiments | INFO     | [Device] Model moved to cuda
+2026-03-18 19:11:43 | resource_manager | INFO     | [memory_manager] PIL cache check: 2183 samples x 3.52 MB = 7675 MB estimated; 45482 MB available x 6% safety = 2729 MB threshold -> SKIP
+2026-03-18 19:11:43 | train | INFO     | [RAM Cache] Skipped (ram_cache_is_safe returned False for 2183 samples at 1280x960)
+2026-03-18 19:11:43 | train | INFO     | Field masking: 311/2183 samples will have <company> masked (14.2%)
+2026-03-18 19:11:43 | train | INFO     | Field masking: 140/2183 samples will have <date> masked (6.4%)
+2026-03-18 19:11:43 | train | INFO     | Field masking: 322/2183 samples will have <address> masked (14.8%)
+2026-03-18 19:11:43 | train | INFO     | Field masking: 112/2183 samples will have <total> masked (5.1%)
+2026-03-18 19:11:43 | resource_manager | INFO     | [memory_manager] PIL cache check: 316 samples x 3.52 MB = 1111 MB estimated; 45482 MB available x 6% safety = 2729 MB threshold -> ALLOW
+2026-03-18 19:11:44 | train | INFO     | [RAM Cache] 316/316 images cached
+2026-03-18 19:11:44 | train | INFO     | [Tensor Cache] Skipped (precompute_tensors=False — val/eval dataset)
+2026-03-18 19:11:44 | train | INFO     | Field masking: 62/316 samples will have <company> masked (19.6%)
+2026-03-18 19:11:44 | train | INFO     | Field masking: 28/316 samples will have <date> masked (8.9%)
+2026-03-18 19:11:44 | train | INFO     | Field masking: 60/316 samples will have <address> masked (19.0%)
+2026-03-18 19:11:44 | train | INFO     | Field masking: 20/316 samples will have <total> masked (6.3%)
+2026-03-18 19:11:44 | run_experiments | WARNING  | [VRAM] External process(es) occupying ~1.3 GB of GPU memory (19.6 GB free of 23.5 GB total). Risk of OOM during training. Run `nvidia-smi` and kill any unnecessary GPU processes.
+2026-03-18 19:11:44 | root | INFO     | precision: bf16
+2026-03-18 19:11:44 | root | INFO     | torch.compile applied (mode=reduce-overhead)
+2026-03-18 19:11:44 | train | WARNING  | warmup_steps capped 500 → 205 (dataset has only 2055 opt steps over 15 epochs)
+2026-03-18 19:11:44 | train | DEBUG    | [Diagnostics] Callback registered (ai_diagnose=True, provider=auto)
+2026-03-18 19:11:44 | train | DEBUG    | [LiveDashboard] Callback registered for experiment 7
+2026-03-18 19:11:44 | root | INFO     | Gradient checkpointing enabled (use_reentrant=False)
+2026-03-18 19:11:49 | data_pipeline | INFO     |   SROIE field coverage: company = 500/500 (100.0%)
+2026-03-18 19:11:49 | data_pipeline | INFO     |   SROIE field coverage: date = 500/500 (100.0%)
+2026-03-18 19:11:49 | data_pipeline | INFO     |   SROIE field coverage: address = 500/500 (100.0%)
+2026-03-18 19:11:49 | data_pipeline | INFO     |   SROIE field coverage: total = 499/500 (99.8%)
+2026-03-18 19:11:49 | data_pipeline | INFO     |   SROIE field coverage: company = 63/63 (100.0%)
+2026-03-18 19:11:49 | data_pipeline | INFO     |   SROIE field coverage: date = 63/63 (100.0%)
+2026-03-18 19:11:49 | data_pipeline | INFO     |   SROIE field coverage: address = 63/63 (100.0%)
+2026-03-18 19:11:49 | data_pipeline | INFO     |   SROIE field coverage: total = 63/63 (100.0%)
+2026-03-18 19:11:49 | data_pipeline | INFO     |   WildReceipt field coverage: company = 836/1267 (66.0%)
+2026-03-18 19:11:49 | data_pipeline | INFO     |   WildReceipt field coverage: date = 1072/1267 (84.6%)
+2026-03-18 19:11:49 | data_pipeline | INFO     |   WildReceipt field coverage: address = 827/1267 (65.3%)
+2026-03-18 19:11:49 | data_pipeline | INFO     |   WildReceipt field coverage: total = 1118/1267 (88.2%)
+2026-03-18 19:11:49 | data_pipeline | INFO     |   Invoices-DONUT field coverage: company = 415/425 (97.6%)
+2026-03-18 19:11:49 | data_pipeline | INFO     |   Invoices-DONUT field coverage: date = 417/425 (98.1%)
+2026-03-18 19:11:49 | data_pipeline | INFO     |   Invoices-DONUT field coverage: address = 414/425 (97.4%)
+2026-03-18 19:11:49 | data_pipeline | INFO     |   Invoices-DONUT field coverage: total = 414/425 (97.4%)
+[2026-03-18 19:11:49] CONFIG_OPTIMIZATION (Exp 8)
+- batch_size: 2 (effective=16)
+- accumulation_steps: 8
+- encoder_lr: 5.00e-05
+- decoder_lr: 1.00e-04
+- epochs: 10
+- warmup_steps: 40
+- early_stopping_patience: 3
+- reason: batch_size=2: VRAM 23.5GB (≤24 GB); DONUT at 960×1280 requires ~22.78 GB at batch=8 — using batch=2 with accumulation_steps=8 (effective batch=16) to avoid OOM; accumulation_steps=8: physical batch=2, reaching effective batch=16; encoder_lr=5e-5, decoder_lr=1e-4 (fixed per CLAUDE.md); epochs=10 (fixed per CLAUDE.md § 3 convergence analysis); warmup_steps=40 (fixed: 500 overflowed total steps on small datasets); early_stopping_patience=3 (fixed to prevent overfitting on small val set)
+2026-03-18 19:11:49 | resource_manager | INFO     | [validate_training_config] OK: 2520 optimizer steps (batch=2, accum=8, samples=2683, epochs=15)
+2026-03-18 19:11:49 | run_experiments | INFO     | [ResolutionSync] processor.image_processor.size = {height: 1280, width: 960}  |  model.config.encoder.image_size = [1280, 960]  ✓
+2026-03-18 19:11:49 | run_experiments | DEBUG    | [Pre-resize] Tokenizer vocab size: 57525
+2026-03-18 19:11:49 | run_experiments | DEBUG    | [Pre-resize] Decoder embed_tokens shape: torch.Size([57525, 1024])
+2026-03-18 19:11:50 | run_experiments | DEBUG    | [Post-resize] Tokenizer vocab size: 57535
+2026-03-18 19:11:50 | run_experiments | DEBUG    | [Post-resize] Decoder embed_tokens shape: torch.Size([57535, 1024])
+2026-03-18 19:11:50 | run_experiments | DEBUG    | [Post-resize] Decoder lm_head shape: torch.Size([57535, 1024])
+2026-03-18 19:11:50 | run_experiments | DEBUG    | [Token-verify] All 10 SROIE tokens successfully added to vocab
+2026-03-18 19:11:50 | run_experiments | INFO     | [GradCkpt] Enabled — VRAM=23.5 GB <= 24 GB threshold
+2026-03-18 19:11:50 | run_experiments | INFO     | [FreezeEncoder] Frozen Swin stage-0 only (37 parameters)
+2026-03-18 19:11:50 | run_experiments | INFO     | [Device] Model moved to cuda
+2026-03-18 19:11:50 | resource_manager | INFO     | [memory_manager] PIL cache check: 2683 samples x 3.52 MB = 9432 MB estimated; 44718 MB available x 6% safety = 2683 MB threshold -> SKIP
+2026-03-18 19:11:50 | train | INFO     | [RAM Cache] Skipped (ram_cache_is_safe returned False for 2683 samples at 1280x960)
+2026-03-18 19:11:50 | train | INFO     | Field masking: 311/2683 samples will have <company> masked (11.6%)
+2026-03-18 19:11:50 | train | INFO     | Field masking: 140/2683 samples will have <date> masked (5.2%)
+2026-03-18 19:11:50 | train | INFO     | Field masking: 322/2683 samples will have <address> masked (12.0%)
+2026-03-18 19:11:50 | train | INFO     | Field masking: 113/2683 samples will have <total> masked (4.2%)
+2026-03-18 19:11:50 | resource_manager | INFO     | [memory_manager] PIL cache check: 316 samples x 3.52 MB = 1111 MB estimated; 44718 MB available x 6% safety = 2683 MB threshold -> ALLOW
+2026-03-18 19:11:51 | train | INFO     | [RAM Cache] 316/316 images cached
+2026-03-18 19:11:51 | train | INFO     | [Tensor Cache] Skipped (precompute_tensors=False — val/eval dataset)
+2026-03-18 19:11:51 | train | INFO     | Field masking: 62/316 samples will have <company> masked (19.6%)
+2026-03-18 19:11:51 | train | INFO     | Field masking: 28/316 samples will have <date> masked (8.9%)
+2026-03-18 19:11:51 | train | INFO     | Field masking: 60/316 samples will have <address> masked (19.0%)
+2026-03-18 19:11:51 | train | INFO     | Field masking: 20/316 samples will have <total> masked (6.3%)
+2026-03-18 19:11:51 | run_experiments | WARNING  | [VRAM] External process(es) occupying ~1.4 GB of GPU memory (19.3 GB free of 23.5 GB total). Risk of OOM during training. Run `nvidia-smi` and kill any unnecessary GPU processes.
+2026-03-18 19:11:51 | root | INFO     | precision: bf16
+2026-03-18 19:11:51 | root | INFO     | torch.compile applied (mode=reduce-overhead)
+2026-03-18 19:11:51 | train | WARNING  | warmup_steps capped 500 → 252 (dataset has only 2520 opt steps over 15 epochs)
+2026-03-18 19:11:51 | train | DEBUG    | [Diagnostics] Callback registered (ai_diagnose=True, provider=auto)
+2026-03-18 19:11:51 | train | DEBUG    | [LiveDashboard] Callback registered for experiment 8
+2026-03-18 19:11:51 | root | INFO     | Gradient checkpointing enabled (use_reentrant=False)
+2026-03-18 19:11:58 | data_pipeline | INFO     |   SROIE field coverage: company = 63/63 (100.0%)
+2026-03-18 19:11:58 | data_pipeline | INFO     |   SROIE field coverage: date = 63/63 (100.0%)
+2026-03-18 19:11:58 | data_pipeline | INFO     |   SROIE field coverage: address = 62/63 (98.4%)
+2026-03-18 19:11:58 | data_pipeline | INFO     |   SROIE field coverage: total = 63/63 (100.0%)
+2026-03-18 19:11:58 | run_experiments | INFO     | Loading model from naver-clova-ix/donut-base
+2026-03-18 19:11:58 | run_experiments | WARNING  | [DonutEvaluator] Checkpoint validation warning: Checkpoint directory not found: naver-clova-ix/donut-base
+2026-03-18 19:12:00 | run_experiments | INFO     | Re-tied decoder.lm_head.weight → embed_tokens.weight (shape torch.Size([57525, 1024]))
+2026-03-18 19:12:00 | data_pipeline | INFO     |   SROIE field coverage: company = 500/500 (100.0%)
+2026-03-18 19:12:00 | data_pipeline | INFO     |   SROIE field coverage: date = 500/500 (100.0%)
+2026-03-18 19:12:00 | data_pipeline | INFO     |   SROIE field coverage: address = 500/500 (100.0%)
+2026-03-18 19:12:00 | data_pipeline | INFO     |   SROIE field coverage: total = 499/500 (99.8%)
+2026-03-18 19:12:00 | data_pipeline | INFO     |   SROIE field coverage: company = 63/63 (100.0%)
+2026-03-18 19:12:00 | data_pipeline | INFO     |   SROIE field coverage: date = 63/63 (100.0%)
+2026-03-18 19:12:00 | data_pipeline | INFO     |   SROIE field coverage: address = 63/63 (100.0%)
+2026-03-18 19:12:00 | data_pipeline | INFO     |   SROIE field coverage: total = 63/63 (100.0%)
+2026-03-18 19:12:00 | data_pipeline | INFO     |   Invoices-DONUT field coverage: company = 415/425 (97.6%)
+2026-03-18 19:12:00 | data_pipeline | INFO     |   Invoices-DONUT field coverage: date = 417/425 (98.1%)
+2026-03-18 19:12:00 | data_pipeline | INFO     |   Invoices-DONUT field coverage: address = 414/425 (97.4%)
+2026-03-18 19:12:00 | data_pipeline | INFO     |   Invoices-DONUT field coverage: total = 414/425 (97.4%)
+2026-03-18 19:12:03 | run_experiments | INFO     | [Model] flash-attn not installed — using default attention (run fine)
+2026-03-18 19:12:04 | run_experiments | INFO     | [ResolutionSync] processor.image_processor.size = {height: 1280, width: 960}  |  model.config.encoder.image_size = [1280, 960]  ✓
+2026-03-18 19:12:04 | run_experiments | DEBUG    | [Pre-resize] Tokenizer vocab size: 57525
+2026-03-18 19:12:04 | run_experiments | DEBUG    | [Pre-resize] Decoder embed_tokens shape: torch.Size([57525, 1024])
+2026-03-18 19:12:05 | run_experiments | DEBUG    | [Post-resize] Tokenizer vocab size: 57535
+2026-03-18 19:12:05 | run_experiments | DEBUG    | [Post-resize] Decoder embed_tokens shape: torch.Size([57535, 1024])
+2026-03-18 19:12:05 | run_experiments | DEBUG    | [Post-resize] Decoder lm_head shape: torch.Size([57535, 1024])
+2026-03-18 19:12:05 | run_experiments | DEBUG    | [Token-verify] All 10 SROIE tokens successfully added to vocab
+2026-03-18 19:12:05 | run_experiments | INFO     | [GradCkpt] Enabled — VRAM=23.5 GB <= 24 GB threshold
+2026-03-18 19:12:05 | run_experiments | INFO     | [FreezeEncoder] Frozen Swin stage-0 only (37 parameters)
+2026-03-18 19:12:06 | run_experiments | INFO     | [Device] Model moved to cuda
+2026-03-18 19:12:06 | resource_manager | INFO     | [memory_manager] PIL cache check: 1297 samples x 3.52 MB = 4560 MB estimated; 44883 MB available x 6% safety = 2693 MB threshold -> SKIP
+2026-03-18 19:12:06 | train | INFO     | [RAM Cache] Skipped (ram_cache_is_safe returned False for 1297 samples at 1280x960)
+2026-03-18 19:12:06 | train | INFO     | Field masking: 8/1297 samples will have <company> masked (0.6%)
+2026-03-18 19:12:06 | train | INFO     | Field masking: 8/1297 samples will have <date> masked (0.6%)
+2026-03-18 19:12:06 | train | INFO     | Field masking: 9/1297 samples will have <address> masked (0.7%)
+2026-03-18 19:12:06 | train | INFO     | Field masking: 12/1297 samples will have <total> masked (0.9%)
+2026-03-18 19:12:06 | resource_manager | INFO     | [memory_manager] PIL cache check: 126 samples x 3.52 MB = 443 MB estimated; 44883 MB available x 6% safety = 2693 MB threshold -> ALLOW
+2026-03-18 19:12:06 | train | INFO     | [RAM Cache] 126/126 images cached
+2026-03-18 19:12:06 | train | INFO     | [Tensor Cache] Skipped (precompute_tensors=False — val/eval dataset)
+2026-03-18 19:12:06 | train | INFO     | Field masking: 2/126 samples will have <company> masked (1.6%)
+2026-03-18 19:12:06 | train | INFO     | Field masking: 2/126 samples will have <address> masked (1.6%)
+2026-03-18 19:12:06 | train | INFO     | Field masking: 1/126 samples will have <total> masked (0.8%)
+2026-03-18 19:12:06 | run_experiments | WARNING  | [VRAM] External process(es) occupying ~1.3 GB of GPU memory (19.5 GB free of 23.5 GB total). Risk of OOM during training. Run `nvidia-smi` and kill any unnecessary GPU processes.
+2026-03-18 19:12:06 | root | INFO     | precision: bf16
+2026-03-18 19:12:06 | root | INFO     | torch.compile applied (mode=reduce-overhead)
+2026-03-18 19:12:06 | train | WARNING  | warmup_steps capped 500 → 82 (dataset has only 820 opt steps over 10 epochs)
+2026-03-18 19:12:07 | train | DEBUG    | [Diagnostics] Callback registered (ai_diagnose=True, provider=auto)
+2026-03-18 19:12:07 | train | DEBUG    | [LiveDashboard] Callback registered for experiment 10
+2026-03-18 19:12:07 | root | INFO     | Gradient checkpointing enabled (use_reentrant=False)
+2026-03-18 19:14:18 | data_pipeline | INFO     |   SROIE field coverage: company = 500/500 (100.0%)
+2026-03-18 19:14:18 | data_pipeline | INFO     |   SROIE field coverage: date = 500/500 (100.0%)
+2026-03-18 19:14:18 | data_pipeline | INFO     |   SROIE field coverage: address = 500/500 (100.0%)
+2026-03-18 19:14:18 | data_pipeline | INFO     |   SROIE field coverage: total = 499/500 (99.8%)
+2026-03-18 19:14:18 | data_pipeline | INFO     |   SROIE field coverage: company = 63/63 (100.0%)
+2026-03-18 19:14:18 | data_pipeline | INFO     |   SROIE field coverage: date = 63/63 (100.0%)
+2026-03-18 19:14:18 | data_pipeline | INFO     |   SROIE field coverage: address = 63/63 (100.0%)
+2026-03-18 19:14:18 | data_pipeline | INFO     |   SROIE field coverage: total = 63/63 (100.0%)
+2026-03-18 19:14:18 | data_pipeline | INFO     |   Invoices-DONUT field coverage: company = 415/425 (97.6%)
+2026-03-18 19:14:18 | data_pipeline | INFO     |   Invoices-DONUT field coverage: date = 417/425 (98.1%)
+2026-03-18 19:14:18 | data_pipeline | INFO     |   Invoices-DONUT field coverage: address = 414/425 (97.4%)
+2026-03-18 19:14:18 | data_pipeline | INFO     |   Invoices-DONUT field coverage: total = 414/425 (97.4%)
+2026-03-18 19:14:21 | run_experiments | INFO     | [Model] flash-attn not installed — using default attention (run fine)
+2026-03-18 19:14:22 | run_experiments | INFO     | [ResolutionSync] processor.image_processor.size = {height: 1280, width: 960}  |  model.config.encoder.image_size = [1280, 960]  ✓
+2026-03-18 19:14:22 | run_experiments | DEBUG    | [Pre-resize] Tokenizer vocab size: 57525
+2026-03-18 19:14:22 | run_experiments | DEBUG    | [Pre-resize] Decoder embed_tokens shape: torch.Size([57525, 1024])
+2026-03-18 19:14:23 | run_experiments | DEBUG    | [Post-resize] Tokenizer vocab size: 57535
+2026-03-18 19:14:23 | run_experiments | DEBUG    | [Post-resize] Decoder embed_tokens shape: torch.Size([57535, 1024])
+2026-03-18 19:14:23 | run_experiments | DEBUG    | [Post-resize] Decoder lm_head shape: torch.Size([57535, 1024])
+2026-03-18 19:14:23 | run_experiments | DEBUG    | [Token-verify] All 10 SROIE tokens successfully added to vocab
+2026-03-18 19:14:23 | run_experiments | INFO     | [GradCkpt] Enabled — VRAM=23.5 GB <= 24 GB threshold
+2026-03-18 19:14:23 | run_experiments | INFO     | [FreezeEncoder] Frozen Swin stage-0 only (37 parameters)
+2026-03-18 19:14:24 | run_experiments | INFO     | [Device] Model moved to cuda
+2026-03-18 19:14:24 | resource_manager | INFO     | [memory_manager] PIL cache check: 1297 samples x 3.52 MB = 4560 MB estimated; 41922 MB available x 6% safety = 2515 MB threshold -> SKIP
+2026-03-18 19:14:24 | train | INFO     | [RAM Cache] Skipped (ram_cache_is_safe returned False for 1297 samples at 1280x960)
+2026-03-18 19:14:24 | train | INFO     | Field masking: 8/1297 samples will have <company> masked (0.6%)
+2026-03-18 19:14:24 | train | INFO     | Field masking: 8/1297 samples will have <date> masked (0.6%)
+2026-03-18 19:14:24 | train | INFO     | Field masking: 9/1297 samples will have <address> masked (0.7%)
+2026-03-18 19:14:24 | train | INFO     | Field masking: 12/1297 samples will have <total> masked (0.9%)
+2026-03-18 19:14:24 | resource_manager | INFO     | [memory_manager] PIL cache check: 126 samples x 3.52 MB = 443 MB estimated; 41922 MB available x 6% safety = 2515 MB threshold -> ALLOW
+2026-03-18 19:14:24 | train | INFO     | [RAM Cache] 126/126 images cached
+2026-03-18 19:14:24 | train | INFO     | [Tensor Cache] Skipped (precompute_tensors=False — val/eval dataset)
+2026-03-18 19:14:24 | train | INFO     | Field masking: 2/126 samples will have <company> masked (1.6%)
+2026-03-18 19:14:24 | train | INFO     | Field masking: 2/126 samples will have <address> masked (1.6%)
+2026-03-18 19:14:24 | train | INFO     | Field masking: 1/126 samples will have <total> masked (0.8%)
+2026-03-18 19:14:24 | run_experiments | WARNING  | [VRAM] External process(es) occupying ~3.2 GB of GPU memory (16.8 GB free of 23.5 GB total). Risk of OOM during training. Run `nvidia-smi` and kill any unnecessary GPU processes.
+2026-03-18 19:14:24 | root | INFO     | precision: bf16
+2026-03-18 19:14:25 | root | INFO     | torch.compile applied (mode=reduce-overhead)
+2026-03-18 19:14:25 | train | WARNING  | warmup_steps capped 500 → 82 (dataset has only 820 opt steps over 10 epochs)
+2026-03-18 19:14:25 | train | DEBUG    | [Diagnostics] Callback registered (ai_diagnose=True, provider=auto)
+2026-03-18 19:14:25 | train | DEBUG    | [LiveDashboard] Callback registered for experiment 11
+2026-03-18 19:14:25 | root | INFO     | Gradient checkpointing enabled (use_reentrant=False)
+2026-03-18 19:16:03 | data_pipeline | INFO     |   SROIE field coverage: company = 500/500 (100.0%)
+2026-03-18 19:16:03 | data_pipeline | INFO     |   SROIE field coverage: date = 500/500 (100.0%)
+2026-03-18 19:16:03 | data_pipeline | INFO     |   SROIE field coverage: address = 500/500 (100.0%)
+2026-03-18 19:16:03 | data_pipeline | INFO     |   SROIE field coverage: total = 499/500 (99.8%)
+2026-03-18 19:16:03 | data_pipeline | INFO     |   SROIE field coverage: company = 63/63 (100.0%)
+2026-03-18 19:16:03 | data_pipeline | INFO     |   SROIE field coverage: date = 63/63 (100.0%)
+2026-03-18 19:16:03 | data_pipeline | INFO     |   SROIE field coverage: address = 63/63 (100.0%)
+2026-03-18 19:16:03 | data_pipeline | INFO     |   SROIE field coverage: total = 63/63 (100.0%)
+2026-03-18 19:16:03 | data_pipeline | INFO     |   Invoices-DONUT field coverage: company = 415/425 (97.6%)
+2026-03-18 19:16:03 | data_pipeline | INFO     |   Invoices-DONUT field coverage: date = 417/425 (98.1%)
+2026-03-18 19:16:03 | data_pipeline | INFO     |   Invoices-DONUT field coverage: address = 414/425 (97.4%)
+2026-03-18 19:16:03 | data_pipeline | INFO     |   Invoices-DONUT field coverage: total = 414/425 (97.4%)
+2026-03-18 19:16:06 | run_experiments | INFO     | [Model] flash-attn not installed — using default attention (run fine)
+2026-03-18 19:16:08 | run_experiments | INFO     | [ResolutionSync] processor.image_processor.size = {height: 1280, width: 960}  |  model.config.encoder.image_size = [1280, 960]  ✓
+2026-03-18 19:16:08 | run_experiments | DEBUG    | [Pre-resize] Tokenizer vocab size: 57525
+2026-03-18 19:16:08 | run_experiments | DEBUG    | [Pre-resize] Decoder embed_tokens shape: torch.Size([57525, 1024])
+2026-03-18 19:16:09 | run_experiments | DEBUG    | [Post-resize] Tokenizer vocab size: 57535
+2026-03-18 19:16:09 | run_experiments | DEBUG    | [Post-resize] Decoder embed_tokens shape: torch.Size([57535, 1024])
+2026-03-18 19:16:09 | run_experiments | DEBUG    | [Post-resize] Decoder lm_head shape: torch.Size([57535, 1024])
+2026-03-18 19:16:09 | run_experiments | DEBUG    | [Token-verify] All 10 SROIE tokens successfully added to vocab
+2026-03-18 19:16:09 | run_experiments | INFO     | [GradCkpt] Enabled — VRAM=23.5 GB <= 24 GB threshold
+2026-03-18 19:16:09 | run_experiments | INFO     | [FreezeEncoder] Frozen Swin stage-0 only (37 parameters)
+2026-03-18 19:16:09 | run_experiments | INFO     | [Device] Model moved to cuda
+2026-03-18 19:16:09 | resource_manager | INFO     | [memory_manager] PIL cache check: 1297 samples x 3.52 MB = 4560 MB estimated; 43510 MB available x 6% safety = 2611 MB threshold -> SKIP
+2026-03-18 19:16:09 | train | INFO     | [RAM Cache] Skipped (ram_cache_is_safe returned False for 1297 samples at 1280x960)
+2026-03-18 19:16:09 | train | INFO     | Field masking: 8/1297 samples will have <company> masked (0.6%)
+2026-03-18 19:16:09 | train | INFO     | Field masking: 8/1297 samples will have <date> masked (0.6%)
+2026-03-18 19:16:09 | train | INFO     | Field masking: 9/1297 samples will have <address> masked (0.7%)
+2026-03-18 19:16:09 | train | INFO     | Field masking: 12/1297 samples will have <total> masked (0.9%)
+2026-03-18 19:16:09 | resource_manager | INFO     | [memory_manager] PIL cache check: 126 samples x 3.52 MB = 443 MB estimated; 43510 MB available x 6% safety = 2611 MB threshold -> ALLOW
+2026-03-18 19:16:10 | train | INFO     | [RAM Cache] 126/126 images cached
+2026-03-18 19:16:10 | train | INFO     | [Tensor Cache] Skipped (precompute_tensors=False — val/eval dataset)
+2026-03-18 19:16:10 | train | INFO     | Field masking: 2/126 samples will have <company> masked (1.6%)
+2026-03-18 19:16:10 | train | INFO     | Field masking: 2/126 samples will have <address> masked (1.6%)
+2026-03-18 19:16:10 | train | INFO     | Field masking: 1/126 samples will have <total> masked (0.8%)
+2026-03-18 19:16:10 | run_experiments | WARNING  | [VRAM] External process(es) occupying ~3.3 GB of GPU memory (17.2 GB free of 23.5 GB total). Risk of OOM during training. Run `nvidia-smi` and kill any unnecessary GPU processes.
+2026-03-18 19:16:10 | root | INFO     | precision: bf16
+2026-03-18 19:16:10 | root | INFO     | torch.compile applied (mode=reduce-overhead)
+2026-03-18 19:16:10 | train | WARNING  | warmup_steps capped 500 → 82 (dataset has only 820 opt steps over 10 epochs)
+2026-03-18 19:16:10 | train | DEBUG    | [Diagnostics] Callback registered (ai_diagnose=True, provider=auto)
+2026-03-18 19:16:10 | train | DEBUG    | [LiveDashboard] Callback registered for experiment 13
+2026-03-18 19:16:10 | root | INFO     | Gradient checkpointing enabled (use_reentrant=False)
+2026-03-18 19:17:42 | data_pipeline | INFO     |   SROIE field coverage: company = 500/500 (100.0%)
+2026-03-18 19:17:42 | data_pipeline | INFO     |   SROIE field coverage: date = 500/500 (100.0%)
+2026-03-18 19:17:42 | data_pipeline | INFO     |   SROIE field coverage: address = 500/500 (100.0%)
+2026-03-18 19:17:42 | data_pipeline | INFO     |   SROIE field coverage: total = 499/500 (99.8%)
+2026-03-18 19:17:42 | data_pipeline | INFO     |   SROIE field coverage: company = 63/63 (100.0%)
+2026-03-18 19:17:42 | data_pipeline | INFO     |   SROIE field coverage: date = 63/63 (100.0%)
+2026-03-18 19:17:42 | data_pipeline | INFO     |   SROIE field coverage: address = 63/63 (100.0%)
+2026-03-18 19:17:42 | data_pipeline | INFO     |   SROIE field coverage: total = 63/63 (100.0%)
+2026-03-18 19:17:42 | data_pipeline | INFO     |   Invoices-DONUT field coverage: company = 415/425 (97.6%)
+2026-03-18 19:17:42 | data_pipeline | INFO     |   Invoices-DONUT field coverage: date = 417/425 (98.1%)
+2026-03-18 19:17:42 | data_pipeline | INFO     |   Invoices-DONUT field coverage: address = 414/425 (97.4%)
+2026-03-18 19:17:42 | data_pipeline | INFO     |   Invoices-DONUT field coverage: total = 414/425 (97.4%)
+2026-03-18 19:17:45 | run_experiments | INFO     | [Model] flash-attn not installed — using default attention (run fine)
+2026-03-18 19:17:46 | run_experiments | INFO     | [ResolutionSync] processor.image_processor.size = {height: 1280, width: 960}  |  model.config.encoder.image_size = [1280, 960]  ✓
+2026-03-18 19:17:46 | run_experiments | DEBUG    | [Pre-resize] Tokenizer vocab size: 57525
+2026-03-18 19:17:46 | run_experiments | DEBUG    | [Pre-resize] Decoder embed_tokens shape: torch.Size([57525, 1024])
+2026-03-18 19:17:47 | run_experiments | DEBUG    | [Post-resize] Tokenizer vocab size: 57535
+2026-03-18 19:17:47 | run_experiments | DEBUG    | [Post-resize] Decoder embed_tokens shape: torch.Size([57535, 1024])
+2026-03-18 19:17:47 | run_experiments | DEBUG    | [Post-resize] Decoder lm_head shape: torch.Size([57535, 1024])
+2026-03-18 19:17:47 | run_experiments | DEBUG    | [Token-verify] All 10 SROIE tokens successfully added to vocab
+2026-03-18 19:17:47 | run_experiments | INFO     | [GradCkpt] Enabled — VRAM=23.5 GB <= 24 GB threshold
+2026-03-18 19:17:47 | run_experiments | INFO     | [FreezeEncoder] Frozen Swin stage-0 only (37 parameters)
+2026-03-18 19:17:47 | run_experiments | INFO     | [Device] Model moved to cuda
+2026-03-18 19:17:47 | resource_manager | INFO     | [memory_manager] PIL cache check: 1297 samples x 3.52 MB = 4560 MB estimated; 40698 MB available x 6% safety = 2442 MB threshold -> SKIP
+2026-03-18 19:17:47 | train | INFO     | [RAM Cache] Skipped (ram_cache_is_safe returned False for 1297 samples at 1280x960)
+2026-03-18 19:17:47 | train | INFO     | Field masking: 8/1297 samples will have <company> masked (0.6%)
+2026-03-18 19:17:47 | train | INFO     | Field masking: 8/1297 samples will have <date> masked (0.6%)
+2026-03-18 19:17:47 | train | INFO     | Field masking: 9/1297 samples will have <address> masked (0.7%)
+2026-03-18 19:17:47 | train | INFO     | Field masking: 12/1297 samples will have <total> masked (0.9%)
+2026-03-18 19:17:47 | resource_manager | INFO     | [memory_manager] PIL cache check: 126 samples x 3.52 MB = 443 MB estimated; 40693 MB available x 6% safety = 2442 MB threshold -> ALLOW
+2026-03-18 19:17:48 | train | INFO     | [RAM Cache] 126/126 images cached
+2026-03-18 19:17:48 | train | INFO     | [Tensor Cache] Skipped (precompute_tensors=False — val/eval dataset)
+2026-03-18 19:17:48 | train | INFO     | Field masking: 2/126 samples will have <company> masked (1.6%)
+2026-03-18 19:17:48 | train | INFO     | Field masking: 2/126 samples will have <address> masked (1.6%)
+2026-03-18 19:17:48 | train | INFO     | Field masking: 1/126 samples will have <total> masked (0.8%)
+2026-03-18 19:17:48 | run_experiments | WARNING  | [VRAM] External process(es) occupying ~3.3 GB of GPU memory (16.4 GB free of 23.5 GB total). Risk of OOM during training. Run `nvidia-smi` and kill any unnecessary GPU processes.
+2026-03-18 19:17:48 | root | INFO     | precision: bf16
+2026-03-18 19:17:48 | root | INFO     | torch.compile applied (mode=reduce-overhead)
+2026-03-18 19:17:48 | train | WARNING  | warmup_steps capped 500 → 82 (dataset has only 820 opt steps over 10 epochs)
+2026-03-18 19:17:48 | train | DEBUG    | [Diagnostics] Callback registered (ai_diagnose=True, provider=auto)
+2026-03-18 19:17:48 | train | DEBUG    | [LiveDashboard] Callback registered for experiment 14
+2026-03-18 19:17:48 | root | INFO     | Gradient checkpointing enabled (use_reentrant=False)
+2026-03-18 19:19:34 | data_pipeline | INFO     |   SROIE field coverage: company = 500/500 (100.0%)
+2026-03-18 19:19:34 | data_pipeline | INFO     |   SROIE field coverage: date = 500/500 (100.0%)
+2026-03-18 19:19:34 | data_pipeline | INFO     |   SROIE field coverage: address = 500/500 (100.0%)
+2026-03-18 19:19:34 | data_pipeline | INFO     |   SROIE field coverage: total = 499/500 (99.8%)
+2026-03-18 19:19:34 | data_pipeline | INFO     |   SROIE field coverage: company = 63/63 (100.0%)
+2026-03-18 19:19:34 | data_pipeline | INFO     |   SROIE field coverage: date = 63/63 (100.0%)
+2026-03-18 19:19:34 | data_pipeline | INFO     |   SROIE field coverage: address = 63/63 (100.0%)
+2026-03-18 19:19:34 | data_pipeline | INFO     |   SROIE field coverage: total = 63/63 (100.0%)
+2026-03-18 19:19:34 | data_pipeline | INFO     |   Invoices-DONUT field coverage: company = 415/425 (97.6%)
+2026-03-18 19:19:34 | data_pipeline | INFO     |   Invoices-DONUT field coverage: date = 417/425 (98.1%)
+2026-03-18 19:19:34 | data_pipeline | INFO     |   Invoices-DONUT field coverage: address = 414/425 (97.4%)
+2026-03-18 19:19:34 | data_pipeline | INFO     |   Invoices-DONUT field coverage: total = 414/425 (97.4%)
+2026-03-18 19:19:37 | run_experiments | INFO     | [Model] flash-attn not installed — using default attention (run fine)
+2026-03-18 19:19:38 | run_experiments | INFO     | [ResolutionSync] processor.image_processor.size = {height: 1280, width: 960}  |  model.config.encoder.image_size = [1280, 960]  ✓
+2026-03-18 19:19:38 | run_experiments | DEBUG    | [Pre-resize] Tokenizer vocab size: 57525
+2026-03-18 19:19:38 | run_experiments | DEBUG    | [Pre-resize] Decoder embed_tokens shape: torch.Size([57525, 1024])
+2026-03-18 19:19:39 | run_experiments | DEBUG    | [Post-resize] Tokenizer vocab size: 57535
+2026-03-18 19:19:39 | run_experiments | DEBUG    | [Post-resize] Decoder embed_tokens shape: torch.Size([57535, 1024])
+2026-03-18 19:19:39 | run_experiments | DEBUG    | [Post-resize] Decoder lm_head shape: torch.Size([57535, 1024])
+2026-03-18 19:19:39 | run_experiments | DEBUG    | [Token-verify] All 10 SROIE tokens successfully added to vocab
+2026-03-18 19:19:39 | run_experiments | INFO     | [GradCkpt] Enabled — VRAM=23.5 GB <= 24 GB threshold
+2026-03-18 19:19:39 | run_experiments | INFO     | [FreezeEncoder] Frozen Swin stage-0 only (37 parameters)
+2026-03-18 19:19:40 | run_experiments | INFO     | [Device] Model moved to cuda
+2026-03-18 19:19:40 | resource_manager | INFO     | [memory_manager] PIL cache check: 1297 samples x 3.52 MB = 4560 MB estimated; 41594 MB available x 6% safety = 2496 MB threshold -> SKIP
+2026-03-18 19:19:40 | train | INFO     | [RAM Cache] Skipped (ram_cache_is_safe returned False for 1297 samples at 1280x960)
+2026-03-18 19:19:40 | train | INFO     | Field masking: 8/1297 samples will have <company> masked (0.6%)
+2026-03-18 19:19:40 | train | INFO     | Field masking: 8/1297 samples will have <date> masked (0.6%)
+2026-03-18 19:19:40 | train | INFO     | Field masking: 9/1297 samples will have <address> masked (0.7%)
+2026-03-18 19:19:40 | train | INFO     | Field masking: 12/1297 samples will have <total> masked (0.9%)
+2026-03-18 19:19:40 | resource_manager | INFO     | [memory_manager] PIL cache check: 126 samples x 3.52 MB = 443 MB estimated; 41594 MB available x 6% safety = 2496 MB threshold -> ALLOW
+2026-03-18 19:19:40 | train | INFO     | [RAM Cache] 126/126 images cached
+2026-03-18 19:19:40 | train | INFO     | [Tensor Cache] Skipped (precompute_tensors=False — val/eval dataset)
+2026-03-18 19:19:40 | train | INFO     | Field masking: 2/126 samples will have <company> masked (1.6%)
+2026-03-18 19:19:40 | train | INFO     | Field masking: 2/126 samples will have <address> masked (1.6%)
+2026-03-18 19:19:40 | train | INFO     | Field masking: 1/126 samples will have <total> masked (0.8%)
+2026-03-18 19:19:40 | run_experiments | WARNING  | [VRAM] External process(es) occupying ~3.4 GB of GPU memory (16.9 GB free of 23.5 GB total). Risk of OOM during training. Run `nvidia-smi` and kill any unnecessary GPU processes.
+2026-03-18 19:19:40 | root | INFO     | precision: bf16
+2026-03-18 19:19:40 | root | INFO     | torch.compile applied (mode=reduce-overhead)
+2026-03-18 19:19:40 | train | WARNING  | warmup_steps capped 500 → 82 (dataset has only 820 opt steps over 10 epochs)
+2026-03-18 19:19:41 | train | DEBUG    | [Diagnostics] Callback registered (ai_diagnose=True, provider=auto)
+2026-03-18 19:19:41 | train | DEBUG    | [LiveDashboard] Callback registered for experiment 16
+2026-03-18 19:19:41 | root | INFO     | Gradient checkpointing enabled (use_reentrant=False)
+2026-03-18 19:19:46 | data_pipeline | INFO     |   SROIE field coverage: company = 500/500 (100.0%)
+2026-03-18 19:19:46 | data_pipeline | INFO     |   SROIE field coverage: date = 500/500 (100.0%)
+2026-03-18 19:19:46 | data_pipeline | INFO     |   SROIE field coverage: address = 500/500 (100.0%)
+2026-03-18 19:19:46 | data_pipeline | INFO     |   SROIE field coverage: total = 499/500 (99.8%)
+2026-03-18 19:19:46 | data_pipeline | INFO     |   SROIE field coverage: company = 63/63 (100.0%)
+2026-03-18 19:19:46 | data_pipeline | INFO     |   SROIE field coverage: date = 63/63 (100.0%)
+2026-03-18 19:19:46 | data_pipeline | INFO     |   SROIE field coverage: address = 63/63 (100.0%)
+2026-03-18 19:19:46 | data_pipeline | INFO     |   SROIE field coverage: total = 63/63 (100.0%)
+2026-03-18 19:19:46 | data_pipeline | INFO     |   Invoices-DONUT field coverage: company = 415/425 (97.6%)
+2026-03-18 19:19:46 | data_pipeline | INFO     |   Invoices-DONUT field coverage: date = 417/425 (98.1%)
+2026-03-18 19:19:46 | data_pipeline | INFO     |   Invoices-DONUT field coverage: address = 414/425 (97.4%)
+2026-03-18 19:19:46 | data_pipeline | INFO     |   Invoices-DONUT field coverage: total = 414/425 (97.4%)
+2026-03-18 19:19:49 | run_experiments | INFO     | [Model] flash-attn not installed — using default attention (run fine)
+2026-03-18 19:19:51 | run_experiments | INFO     | [ResolutionSync] processor.image_processor.size = {height: 1280, width: 960}  |  model.config.encoder.image_size = [1280, 960]  ✓
+2026-03-18 19:19:51 | run_experiments | DEBUG    | [Pre-resize] Tokenizer vocab size: 57525
+2026-03-18 19:19:51 | run_experiments | DEBUG    | [Pre-resize] Decoder embed_tokens shape: torch.Size([57525, 1024])
+2026-03-18 19:19:52 | run_experiments | DEBUG    | [Post-resize] Tokenizer vocab size: 57535
+2026-03-18 19:19:52 | run_experiments | DEBUG    | [Post-resize] Decoder embed_tokens shape: torch.Size([57535, 1024])
+2026-03-18 19:19:52 | run_experiments | DEBUG    | [Post-resize] Decoder lm_head shape: torch.Size([57535, 1024])
+2026-03-18 19:19:52 | run_experiments | DEBUG    | [Token-verify] All 10 SROIE tokens successfully added to vocab
+2026-03-18 19:19:52 | run_experiments | INFO     | [GradCkpt] Enabled — VRAM=23.5 GB <= 24 GB threshold
+2026-03-18 19:19:52 | run_experiments | INFO     | [FreezeEncoder] Frozen Swin stage-0 only (37 parameters)
+2026-03-18 19:19:52 | run_experiments | INFO     | [Device] Model moved to cuda
+2026-03-18 19:19:52 | resource_manager | INFO     | [memory_manager] PIL cache check: 1297 samples x 3.52 MB = 4560 MB estimated; 41781 MB available x 6% safety = 2507 MB threshold -> SKIP
+2026-03-18 19:19:52 | train | INFO     | [RAM Cache] Skipped (ram_cache_is_safe returned False for 1297 samples at 1280x960)
+2026-03-18 19:19:52 | train | INFO     | Field masking: 8/1297 samples will have <company> masked (0.6%)
+2026-03-18 19:19:52 | train | INFO     | Field masking: 8/1297 samples will have <date> masked (0.6%)
+2026-03-18 19:19:52 | train | INFO     | Field masking: 9/1297 samples will have <address> masked (0.7%)
+2026-03-18 19:19:52 | train | INFO     | Field masking: 12/1297 samples will have <total> masked (0.9%)
+2026-03-18 19:19:52 | resource_manager | INFO     | [memory_manager] PIL cache check: 126 samples x 3.52 MB = 443 MB estimated; 41781 MB available x 6% safety = 2507 MB threshold -> ALLOW
+2026-03-18 19:19:53 | train | INFO     | [RAM Cache] 126/126 images cached
+2026-03-18 19:19:53 | train | INFO     | [Tensor Cache] Skipped (precompute_tensors=False — val/eval dataset)
+2026-03-18 19:19:53 | train | INFO     | Field masking: 2/126 samples will have <company> masked (1.6%)
+2026-03-18 19:19:53 | train | INFO     | Field masking: 2/126 samples will have <address> masked (1.6%)
+2026-03-18 19:19:53 | train | INFO     | Field masking: 1/126 samples will have <total> masked (0.8%)
+2026-03-18 19:19:53 | run_experiments | WARNING  | [VRAM] External process(es) occupying ~3.4 GB of GPU memory (16.2 GB free of 23.5 GB total). Risk of OOM during training. Run `nvidia-smi` and kill any unnecessary GPU processes.
+2026-03-18 19:19:53 | root | INFO     | precision: bf16
+2026-03-18 19:19:53 | root | INFO     | torch.compile applied (mode=reduce-overhead)
+2026-03-18 19:19:53 | train | WARNING  | warmup_steps capped 500 → 82 (dataset has only 820 opt steps over 10 epochs)
+2026-03-18 19:19:53 | train | DEBUG    | [Diagnostics] Callback registered (ai_diagnose=True, provider=auto)
+2026-03-18 19:19:53 | train | DEBUG    | [LiveDashboard] Callback registered for experiment 17
+2026-03-18 19:19:53 | root | INFO     | Gradient checkpointing enabled (use_reentrant=False)
+2026-03-18 19:20:55 | data_pipeline | INFO     |   SROIE field coverage: company = 63/63 (100.0%)
+2026-03-18 19:20:55 | data_pipeline | INFO     |   SROIE field coverage: date = 63/63 (100.0%)
+2026-03-18 19:20:55 | data_pipeline | INFO     |   SROIE field coverage: address = 62/63 (98.4%)
+2026-03-18 19:20:55 | data_pipeline | INFO     |   SROIE field coverage: total = 63/63 (100.0%)
+2026-03-18 19:20:55 | run_experiments | INFO     | Loading model from naver-clova-ix/donut-base
+2026-03-18 19:20:55 | run_experiments | WARNING  | [DonutEvaluator] Checkpoint validation warning: Checkpoint directory not found: naver-clova-ix/donut-base
+2026-03-18 19:20:57 | run_experiments | INFO     | Re-tied decoder.lm_head.weight → embed_tokens.weight (shape torch.Size([57525, 1024]))
+2026-03-18 19:20:58 | data_pipeline | INFO     |   SROIE field coverage: company = 500/500 (100.0%)
+2026-03-18 19:20:58 | data_pipeline | INFO     |   SROIE field coverage: date = 500/500 (100.0%)
+2026-03-18 19:20:58 | data_pipeline | INFO     |   SROIE field coverage: address = 500/500 (100.0%)
+2026-03-18 19:20:58 | data_pipeline | INFO     |   SROIE field coverage: total = 499/500 (99.8%)
+2026-03-18 19:20:58 | data_pipeline | INFO     |   SROIE field coverage: company = 63/63 (100.0%)
+2026-03-18 19:20:58 | data_pipeline | INFO     |   SROIE field coverage: date = 63/63 (100.0%)
+2026-03-18 19:20:58 | data_pipeline | INFO     |   SROIE field coverage: address = 63/63 (100.0%)
+2026-03-18 19:20:58 | data_pipeline | INFO     |   SROIE field coverage: total = 63/63 (100.0%)
+2026-03-18 19:20:59 | data_pipeline | INFO     |   WildReceipt field coverage: company = 836/1267 (66.0%)
+2026-03-18 19:20:59 | data_pipeline | INFO     |   WildReceipt field coverage: date = 1072/1267 (84.6%)
+2026-03-18 19:20:59 | data_pipeline | INFO     |   WildReceipt field coverage: address = 827/1267 (65.3%)
+2026-03-18 19:20:59 | data_pipeline | INFO     |   WildReceipt field coverage: total = 1118/1267 (88.2%)
+2026-03-18 19:21:01 | run_experiments | INFO     | [Model] flash-attn not installed — using default attention (run fine)
+2026-03-18 19:21:03 | run_experiments | INFO     | [ResolutionSync] processor.image_processor.size = {height: 1280, width: 960}  |  model.config.encoder.image_size = [1280, 960]  ✓
+2026-03-18 19:21:03 | run_experiments | DEBUG    | [Pre-resize] Tokenizer vocab size: 57525
+2026-03-18 19:21:03 | run_experiments | DEBUG    | [Pre-resize] Decoder embed_tokens shape: torch.Size([57525, 1024])
+2026-03-18 19:21:04 | run_experiments | DEBUG    | [Post-resize] Tokenizer vocab size: 57535
+2026-03-18 19:21:04 | run_experiments | DEBUG    | [Post-resize] Decoder embed_tokens shape: torch.Size([57535, 1024])
+2026-03-18 19:21:04 | run_experiments | DEBUG    | [Post-resize] Decoder lm_head shape: torch.Size([57535, 1024])
+2026-03-18 19:21:04 | run_experiments | DEBUG    | [Token-verify] All 10 SROIE tokens successfully added to vocab
+2026-03-18 19:21:04 | run_experiments | INFO     | [GradCkpt] Enabled — VRAM=23.5 GB <= 24 GB threshold
+2026-03-18 19:21:04 | run_experiments | INFO     | [FreezeEncoder] Frozen Swin stage-0 only (37 parameters)
+2026-03-18 19:21:04 | run_experiments | INFO     | [Device] Model moved to cuda
+2026-03-18 19:21:04 | resource_manager | INFO     | [memory_manager] PIL cache check: 1886 samples x 3.52 MB = 6630 MB estimated; 40095 MB available x 6% safety = 2406 MB threshold -> SKIP
+2026-03-18 19:21:04 | train | INFO     | [RAM Cache] Skipped (ram_cache_is_safe returned False for 1886 samples at 1280x960)
+2026-03-18 19:21:04 | train | INFO     | Field masking: 303/1886 samples will have <company> masked (16.1%)
+2026-03-18 19:21:04 | train | INFO     | Field masking: 132/1886 samples will have <date> masked (7.0%)
+2026-03-18 19:21:04 | train | INFO     | Field masking: 313/1886 samples will have <address> masked (16.6%)
+2026-03-18 19:21:04 | train | INFO     | Field masking: 102/1886 samples will have <total> masked (5.4%)
+2026-03-18 19:21:04 | resource_manager | INFO     | [memory_manager] PIL cache check: 253 samples x 3.52 MB = 889 MB estimated; 40096 MB available x 6% safety = 2406 MB threshold -> ALLOW
+2026-03-18 19:21:04 | train | INFO     | [RAM Cache] 253/253 images cached
+2026-03-18 19:21:04 | train | INFO     | [Tensor Cache] Skipped (precompute_tensors=False — val/eval dataset)
+2026-03-18 19:21:04 | train | INFO     | Field masking: 60/253 samples will have <company> masked (23.7%)
+2026-03-18 19:21:04 | train | INFO     | Field masking: 28/253 samples will have <date> masked (11.1%)
+2026-03-18 19:21:04 | train | INFO     | Field masking: 58/253 samples will have <address> masked (22.9%)
+2026-03-18 19:21:04 | train | INFO     | Field masking: 19/253 samples will have <total> masked (7.5%)
+2026-03-18 19:21:04 | run_experiments | WARNING  | [VRAM] External process(es) occupying ~3.4 GB of GPU memory (16.6 GB free of 23.5 GB total). Risk of OOM during training. Run `nvidia-smi` and kill any unnecessary GPU processes.
+2026-03-18 19:21:04 | root | INFO     | precision: bf16
+2026-03-18 19:21:04 | root | INFO     | torch.compile applied (mode=reduce-overhead)
+2026-03-18 19:21:04 | train | DEBUG    | [Diagnostics] Callback registered (ai_diagnose=True, provider=auto)
+2026-03-18 19:21:04 | train | DEBUG    | [LiveDashboard] Callback registered for experiment 100
+2026-03-18 19:21:04 | root | INFO     | Gradient checkpointing enabled (use_reentrant=False)
+2026-03-18 19:21:12 | autonomous_ci | INFO     | [CI] Auto-fix: True (max 3 attempts)
+2026-03-18 19:21:12 | autonomous_ci | INFO     | [CI] Branch: main
+2026-03-18 19:21:12 | autonomous_ci | DEBUG    | Branch 'main' is not a feature branch; skipping PR lookup
+2026-03-18 19:21:12 | autonomous_ci | INFO     | [CI] Not a PR branch
+2026-03-18 19:21:13 | autonomous_ci | INFO     | [CI] Starting test suite...
+2026-03-18 19:21:45 | autonomous_ci | INFO     | [CI] Test suite completed: 3/3 tests passed
+2026-03-18 19:21:45 | autonomous_ci | INFO     |     ✓ PASS — import_check (2.0s)
+2026-03-18 19:21:45 | autonomous_ci | INFO     |     ✓ PASS — ruff_lint (0.1s)
+2026-03-18 19:21:45 | autonomous_ci | INFO     |     ✓ PASS — smoke_test (30.2s)
+2026-03-18 19:21:45 | diagnostics | DEBUG    | anthropic package not installed — pip install anthropic
+2026-03-18 19:21:45 | diagnostics | DEBUG    | mistralai package not installed — pip install mistralai
+2026-03-18 19:21:47 | autonomous_ci | INFO     | [CI] AI verdict: MERGE
+2026-03-18 19:21:47 | data_pipeline | INFO     |   SROIE field coverage: company = 500/500 (100.0%)
+2026-03-18 19:21:47 | data_pipeline | INFO     |   SROIE field coverage: date = 500/500 (100.0%)
+2026-03-18 19:21:47 | data_pipeline | INFO     |   SROIE field coverage: address = 500/500 (100.0%)
+2026-03-18 19:21:47 | data_pipeline | INFO     |   SROIE field coverage: total = 499/500 (99.8%)
+2026-03-18 19:21:47 | data_pipeline | INFO     |   SROIE field coverage: company = 63/63 (100.0%)
+2026-03-18 19:21:47 | data_pipeline | INFO     |   SROIE field coverage: date = 63/63 (100.0%)
+2026-03-18 19:21:47 | data_pipeline | INFO     |   SROIE field coverage: address = 63/63 (100.0%)
+2026-03-18 19:21:47 | data_pipeline | INFO     |   SROIE field coverage: total = 63/63 (100.0%)
+[2026-03-18 19:21:47] CONFIG_OPTIMIZATION (Exp 1)
+- batch_size: 2 (effective=8)
+- accumulation_steps: 4
+- encoder_lr: 5.00e-05
+- decoder_lr: 1.00e-04
+- epochs: 10
+- warmup_steps: 40
+- early_stopping_patience: 5
+- reason: batch_size=2: VRAM 23.5GB (≤24 GB); DONUT at 960×1280 requires ~22.78 GB at batch=8 — using batch=2 with accumulation_steps=8 (effective batch=16) to avoid OOM; accumulation_steps=4: physical batch=2, small dataset (500 samples) on ≤24 GB card — effective batch=8 ensures ≥200 optimizer steps even at 5 epochs; encoder_lr=5e-5, decoder_lr=1e-4 (fixed per CLAUDE.md); epochs=10 (fixed per CLAUDE.md § 3 convergence analysis); warmup_steps=40 (fixed: 500 overflowed total steps on small datasets); early_stopping_patience=5 (small dataset <1000 samples; patience=3 fires too early when val loss plateaus and then resumes improving)
+2026-03-18 19:21:47 | resource_manager | INFO     | [validate_training_config] OK: 630 optimizer steps (batch=2, accum=4, samples=500, epochs=10)
+2026-03-18 19:21:50 | run_experiments | INFO     | [Model] flash-attn not installed — using default attention (run fine)
+2026-03-18 19:21:51 | run_experiments | INFO     | [ResolutionSync] processor.image_processor.size = {height: 1280, width: 960}  |  model.config.encoder.image_size = [1280, 960]  ✓
+2026-03-18 19:21:51 | run_experiments | DEBUG    | [Pre-resize] Tokenizer vocab size: 57525
+2026-03-18 19:21:51 | run_experiments | DEBUG    | [Pre-resize] Decoder embed_tokens shape: torch.Size([57525, 1024])
+2026-03-18 19:21:52 | run_experiments | DEBUG    | [Post-resize] Tokenizer vocab size: 57535
+2026-03-18 19:21:52 | run_experiments | DEBUG    | [Post-resize] Decoder embed_tokens shape: torch.Size([57535, 1024])
+2026-03-18 19:21:52 | run_experiments | DEBUG    | [Post-resize] Decoder lm_head shape: torch.Size([57535, 1024])
+2026-03-18 19:21:52 | run_experiments | DEBUG    | [Token-verify] All 10 SROIE tokens successfully added to vocab
+2026-03-18 19:21:52 | run_experiments | INFO     | [GradCkpt] Enabled — VRAM=23.5 GB <= 24 GB threshold
+2026-03-18 19:21:52 | run_experiments | INFO     | [FreezeEncoder] Frozen Swin stage-0 only (37 parameters)
+2026-03-18 19:21:53 | run_experiments | INFO     | [Device] Model moved to cuda
+2026-03-18 19:21:53 | resource_manager | INFO     | [memory_manager] PIL cache check: 500 samples x 3.52 MB = 1758 MB estimated; 40506 MB available x 6% safety = 2430 MB threshold -> ALLOW
+2026-03-18 19:21:56 | train | INFO     | [RAM Cache] 500/500 images cached
+2026-03-18 19:21:56 | train | INFO     | [Tensor Cache] Skipped (estimated 7100 MB exceeds hard cap 4096 MB)
+2026-03-18 19:21:57 | train | INFO     | [Label Cache] Precomputed 500 label tensors
+2026-03-18 19:21:57 | train | INFO     | Field masking: 1/500 samples will have <total> masked (0.2%)
+2026-03-18 19:21:57 | resource_manager | INFO     | [memory_manager] PIL cache check: 63 samples x 3.52 MB = 221 MB estimated; 28743 MB available x 6% safety = 1725 MB threshold -> ALLOW
+2026-03-18 19:21:57 | train | INFO     | [RAM Cache] 63/63 images cached
+2026-03-18 19:21:57 | train | INFO     | [Tensor Cache] Skipped (precompute_tensors=False — val/eval dataset)
+2026-03-18 19:21:57 | run_experiments | WARNING  | [VRAM] External process(es) occupying ~3.4 GB of GPU memory (16.3 GB free of 23.5 GB total). Risk of OOM during training. Run `nvidia-smi` and kill any unnecessary GPU processes.
+2026-03-18 19:21:57 | train | INFO     | DataLoader: num_workers=0 (batch_size=2 ≤ 2 + RAM cache active — eliminates fork+IPC overhead that caused 88s/step GPU starvation)
+2026-03-18 19:21:57 | root | INFO     | precision: bf16
+2026-03-18 19:21:57 | root | INFO     | torch.compile applied (mode=reduce-overhead)
+2026-03-18 19:21:57 | train | WARNING  | warmup_steps capped 500 → 63 (dataset has only 630 opt steps over 10 epochs)
+2026-03-18 19:21:57 | train | DEBUG    | [Diagnostics] Callback registered (ai_diagnose=True, provider=auto)
+2026-03-18 19:21:57 | train | DEBUG    | [LiveDashboard] Callback registered for experiment 1
+2026-03-18 19:21:57 | root | INFO     | Gradient checkpointing enabled (use_reentrant=False)
+2026-03-18 19:22:05 | data_pipeline | INFO     |   SROIE field coverage: company = 500/500 (100.0%)
+2026-03-18 19:22:05 | data_pipeline | INFO     |   SROIE field coverage: date = 500/500 (100.0%)
+2026-03-18 19:22:05 | data_pipeline | INFO     |   SROIE field coverage: address = 500/500 (100.0%)
+2026-03-18 19:22:05 | data_pipeline | INFO     |   SROIE field coverage: total = 499/500 (99.8%)
+2026-03-18 19:22:05 | data_pipeline | INFO     |   SROIE field coverage: company = 63/63 (100.0%)
+2026-03-18 19:22:05 | data_pipeline | INFO     |   SROIE field coverage: date = 63/63 (100.0%)
+2026-03-18 19:22:05 | data_pipeline | INFO     |   SROIE field coverage: address = 63/63 (100.0%)
+2026-03-18 19:22:05 | data_pipeline | INFO     |   SROIE field coverage: total = 63/63 (100.0%)
+2026-03-18 19:22:05 | data_pipeline | INFO     |   WildReceipt field coverage: company = 836/1267 (66.0%)
+2026-03-18 19:22:05 | data_pipeline | INFO     |   WildReceipt field coverage: date = 1072/1267 (84.6%)
+2026-03-18 19:22:05 | data_pipeline | INFO     |   WildReceipt field coverage: address = 827/1267 (65.3%)
+2026-03-18 19:22:05 | data_pipeline | INFO     |   WildReceipt field coverage: total = 1118/1267 (88.2%)
+[2026-03-18 19:22:05] CONFIG_OPTIMIZATION (Exp 2)
+- batch_size: 2 (effective=8)
+- accumulation_steps: 4
+- encoder_lr: 5.00e-05
+- decoder_lr: 1.00e-04
+- epochs: 10
+- warmup_steps: 40
+- early_stopping_patience: 3
+- reason: batch_size=2: VRAM 23.5GB (≤24 GB); DONUT at 960×1280 requires ~22.78 GB at batch=8 — using batch=2 with accumulation_steps=8 (effective batch=16) to avoid OOM; accumulation_steps=4: physical batch=2, small dataset (1386 samples) on ≤24 GB card — effective batch=8 ensures ≥200 optimizer steps even at 5 epochs; encoder_lr=5e-5, decoder_lr=1e-4 (fixed per CLAUDE.md); epochs=10 (fixed per CLAUDE.md § 3 convergence analysis); warmup_steps=40 (fixed: 500 overflowed total steps on small datasets); early_stopping_patience=3 (fixed to prevent overfitting on small val set)
+2026-03-18 19:22:05 | resource_manager | INFO     | [validate_training_config] OK: 1740 optimizer steps (batch=2, accum=4, samples=1386, epochs=10)
+2026-03-18 19:22:08 | run_experiments | INFO     | [Model] flash-attn not installed — using default attention (run fine)
+2026-03-18 19:22:09 | run_experiments | INFO     | [ResolutionSync] processor.image_processor.size = {height: 1280, width: 960}  |  model.config.encoder.image_size = [1280, 960]  ✓
+2026-03-18 19:22:09 | run_experiments | DEBUG    | [Pre-resize] Tokenizer vocab size: 57525
+2026-03-18 19:22:09 | run_experiments | DEBUG    | [Pre-resize] Decoder embed_tokens shape: torch.Size([57525, 1024])
+2026-03-18 19:22:10 | run_experiments | DEBUG    | [Post-resize] Tokenizer vocab size: 57535
+2026-03-18 19:22:10 | run_experiments | DEBUG    | [Post-resize] Decoder embed_tokens shape: torch.Size([57535, 1024])
+2026-03-18 19:22:10 | run_experiments | DEBUG    | [Post-resize] Decoder lm_head shape: torch.Size([57535, 1024])
+2026-03-18 19:22:10 | run_experiments | DEBUG    | [Token-verify] All 10 SROIE tokens successfully added to vocab
+2026-03-18 19:22:10 | run_experiments | INFO     | [GradCkpt] Enabled — VRAM=23.5 GB <= 24 GB threshold
+2026-03-18 19:22:10 | run_experiments | INFO     | [FreezeEncoder] Frozen Swin stage-0 only (37 parameters)
+2026-03-18 19:22:10 | run_experiments | INFO     | [Device] Model moved to cuda
+2026-03-18 19:22:10 | resource_manager | INFO     | [memory_manager] PIL cache check: 1386 samples x 3.52 MB = 4873 MB estimated; 41715 MB available x 6% safety = 2503 MB threshold -> SKIP
+2026-03-18 19:22:10 | train | INFO     | [RAM Cache] Skipped (ram_cache_is_safe returned False for 1386 samples at 1280x960)
+2026-03-18 19:22:10 | train | INFO     | Field masking: 303/1386 samples will have <company> masked (21.9%)
+2026-03-18 19:22:10 | train | INFO     | Field masking: 132/1386 samples will have <date> masked (9.5%)
+2026-03-18 19:22:10 | train | INFO     | Field masking: 313/1386 samples will have <address> masked (22.6%)
+2026-03-18 19:22:10 | train | INFO     | Field masking: 101/1386 samples will have <total> masked (7.3%)
+2026-03-18 19:22:10 | resource_manager | INFO     | [memory_manager] PIL cache check: 253 samples x 3.52 MB = 889 MB estimated; 41715 MB available x 6% safety = 2503 MB threshold -> ALLOW
+2026-03-18 19:22:11 | train | INFO     | [RAM Cache] 253/253 images cached
+2026-03-18 19:22:11 | train | INFO     | [Tensor Cache] Skipped (precompute_tensors=False — val/eval dataset)
+2026-03-18 19:22:11 | train | INFO     | Field masking: 60/253 samples will have <company> masked (23.7%)
+2026-03-18 19:22:11 | train | INFO     | Field masking: 28/253 samples will have <date> masked (11.1%)
+2026-03-18 19:22:11 | train | INFO     | Field masking: 58/253 samples will have <address> masked (22.9%)
+2026-03-18 19:22:11 | train | INFO     | Field masking: 19/253 samples will have <total> masked (7.5%)
+2026-03-18 19:22:11 | run_experiments | WARNING  | [VRAM] External process(es) occupying ~3.4 GB of GPU memory (15.6 GB free of 23.5 GB total). Risk of OOM during training. Run `nvidia-smi` and kill any unnecessary GPU processes.
+2026-03-18 19:22:11 | root | INFO     | precision: bf16
+2026-03-18 19:22:11 | root | INFO     | torch.compile applied (mode=reduce-overhead)
+2026-03-18 19:22:11 | train | WARNING  | warmup_steps capped 500 → 174 (dataset has only 1740 opt steps over 10 epochs)
+2026-03-18 19:22:11 | train | DEBUG    | [Diagnostics] Callback registered (ai_diagnose=True, provider=auto)
+2026-03-18 19:22:11 | train | DEBUG    | [LiveDashboard] Callback registered for experiment 2
+2026-03-18 19:22:11 | root | INFO     | Gradient checkpointing enabled (use_reentrant=False)
+2026-03-18 19:22:14 | data_pipeline | INFO     |   SROIE field coverage: company = 500/500 (100.0%)
+2026-03-18 19:22:14 | data_pipeline | INFO     |   SROIE field coverage: date = 500/500 (100.0%)
+2026-03-18 19:22:14 | data_pipeline | INFO     |   SROIE field coverage: address = 500/500 (100.0%)
+2026-03-18 19:22:14 | data_pipeline | INFO     |   SROIE field coverage: total = 499/500 (99.8%)
+2026-03-18 19:22:14 | data_pipeline | INFO     |   SROIE field coverage: company = 63/63 (100.0%)
+2026-03-18 19:22:14 | data_pipeline | INFO     |   SROIE field coverage: date = 63/63 (100.0%)
+2026-03-18 19:22:14 | data_pipeline | INFO     |   SROIE field coverage: address = 63/63 (100.0%)
+2026-03-18 19:22:14 | data_pipeline | INFO     |   SROIE field coverage: total = 63/63 (100.0%)
+2026-03-18 19:22:14 | data_pipeline | INFO     |   Invoices-DONUT field coverage: company = 415/425 (97.6%)
+2026-03-18 19:22:14 | data_pipeline | INFO     |   Invoices-DONUT field coverage: date = 417/425 (98.1%)
+2026-03-18 19:22:14 | data_pipeline | INFO     |   Invoices-DONUT field coverage: address = 414/425 (97.4%)
+2026-03-18 19:22:14 | data_pipeline | INFO     |   Invoices-DONUT field coverage: total = 414/425 (97.4%)
+[2026-03-18 19:22:14] CONFIG_OPTIMIZATION (Exp 3)
+- batch_size: 2 (effective=8)
+- accumulation_steps: 4
+- encoder_lr: 5.00e-05
+- decoder_lr: 1.00e-04
+- epochs: 10
+- warmup_steps: 40
+- early_stopping_patience: 5
+- reason: batch_size=2: VRAM 23.5GB (≤24 GB); DONUT at 960×1280 requires ~22.78 GB at batch=8 — using batch=2 with accumulation_steps=8 (effective batch=16) to avoid OOM; accumulation_steps=4: physical batch=2, small dataset (797 samples) on ≤24 GB card — effective batch=8 ensures ≥200 optimizer steps even at 5 epochs; encoder_lr=5e-5, decoder_lr=1e-4 (fixed per CLAUDE.md); epochs=10 (fixed per CLAUDE.md § 3 convergence analysis); warmup_steps=40 (fixed: 500 overflowed total steps on small datasets); early_stopping_patience=5 (small dataset <1000 samples; patience=3 fires too early when val loss plateaus and then resumes improving)
+2026-03-18 19:22:14 | resource_manager | INFO     | [validate_training_config] OK: 1000 optimizer steps (batch=2, accum=4, samples=797, epochs=10)
+2026-03-18 19:22:17 | run_experiments | INFO     | [Model] flash-attn not installed — using default attention (run fine)
+2026-03-18 19:22:19 | run_experiments | INFO     | [ResolutionSync] processor.image_processor.size = {height: 1280, width: 960}  |  model.config.encoder.image_size = [1280, 960]  ✓
+2026-03-18 19:22:19 | run_experiments | DEBUG    | [Pre-resize] Tokenizer vocab size: 57525
+2026-03-18 19:22:19 | run_experiments | DEBUG    | [Pre-resize] Decoder embed_tokens shape: torch.Size([57525, 1024])
+2026-03-18 19:22:20 | run_experiments | DEBUG    | [Post-resize] Tokenizer vocab size: 57535
+2026-03-18 19:22:20 | run_experiments | DEBUG    | [Post-resize] Decoder embed_tokens shape: torch.Size([57535, 1024])
+2026-03-18 19:22:20 | run_experiments | DEBUG    | [Post-resize] Decoder lm_head shape: torch.Size([57535, 1024])
+2026-03-18 19:22:20 | run_experiments | DEBUG    | [Token-verify] All 10 SROIE tokens successfully added to vocab
+2026-03-18 19:22:20 | run_experiments | INFO     | [GradCkpt] Enabled — VRAM=23.5 GB <= 24 GB threshold
+2026-03-18 19:22:20 | run_experiments | INFO     | [FreezeEncoder] Frozen Swin stage-0 only (37 parameters)
+2026-03-18 19:22:20 | run_experiments | INFO     | [Device] Model moved to cuda
+2026-03-18 19:22:20 | resource_manager | INFO     | [memory_manager] PIL cache check: 797 samples x 3.52 MB = 2802 MB estimated; 41672 MB available x 6% safety = 2500 MB threshold -> SKIP
+2026-03-18 19:22:20 | train | INFO     | [RAM Cache] Skipped (ram_cache_is_safe returned False for 797 samples at 1280x960)
+2026-03-18 19:22:20 | train | INFO     | Field masking: 8/797 samples will have <company> masked (1.0%)
+2026-03-18 19:22:20 | train | INFO     | Field masking: 8/797 samples will have <date> masked (1.0%)
+2026-03-18 19:22:20 | train | INFO     | Field masking: 9/797 samples will have <address> masked (1.1%)
+2026-03-18 19:22:20 | train | INFO     | Field masking: 11/797 samples will have <total> masked (1.4%)
+2026-03-18 19:22:20 | resource_manager | INFO     | [memory_manager] PIL cache check: 126 samples x 3.52 MB = 443 MB estimated; 41672 MB available x 6% safety = 2500 MB threshold -> ALLOW
+2026-03-18 19:22:21 | train | INFO     | [RAM Cache] 126/126 images cached
+2026-03-18 19:22:21 | train | INFO     | [Tensor Cache] Skipped (precompute_tensors=False — val/eval dataset)
+2026-03-18 19:22:21 | train | INFO     | Field masking: 2/126 samples will have <company> masked (1.6%)
+2026-03-18 19:22:21 | train | INFO     | Field masking: 2/126 samples will have <address> masked (1.6%)
+2026-03-18 19:22:21 | train | INFO     | Field masking: 1/126 samples will have <total> masked (0.8%)
+2026-03-18 19:22:21 | run_experiments | WARNING  | [VRAM] External process(es) occupying ~3.4 GB of GPU memory (15.3 GB free of 23.5 GB total). Risk of OOM during training. Run `nvidia-smi` and kill any unnecessary GPU processes.
+2026-03-18 19:22:21 | root | INFO     | precision: bf16
+2026-03-18 19:22:21 | root | INFO     | torch.compile applied (mode=reduce-overhead)
+2026-03-18 19:22:21 | train | WARNING  | warmup_steps capped 500 → 100 (dataset has only 1000 opt steps over 10 epochs)
+2026-03-18 19:22:21 | train | DEBUG    | [Diagnostics] Callback registered (ai_diagnose=True, provider=auto)
+2026-03-18 19:22:21 | train | DEBUG    | [LiveDashboard] Callback registered for experiment 3
+2026-03-18 19:22:21 | root | INFO     | Gradient checkpointing enabled (use_reentrant=False)
+2026-03-18 19:22:25 | data_pipeline | INFO     |   SROIE field coverage: company = 500/500 (100.0%)
+2026-03-18 19:22:25 | data_pipeline | INFO     |   SROIE field coverage: date = 500/500 (100.0%)
+2026-03-18 19:22:25 | data_pipeline | INFO     |   SROIE field coverage: address = 500/500 (100.0%)
+2026-03-18 19:22:25 | data_pipeline | INFO     |   SROIE field coverage: total = 499/500 (99.8%)
+2026-03-18 19:22:25 | data_pipeline | INFO     |   SROIE field coverage: company = 63/63 (100.0%)
+2026-03-18 19:22:25 | data_pipeline | INFO     |   SROIE field coverage: date = 63/63 (100.0%)
+2026-03-18 19:22:25 | data_pipeline | INFO     |   SROIE field coverage: address = 63/63 (100.0%)
+2026-03-18 19:22:25 | data_pipeline | INFO     |   SROIE field coverage: total = 63/63 (100.0%)
+2026-03-18 19:22:25 | data_pipeline | INFO     |   WildReceipt field coverage: company = 836/1267 (66.0%)
+2026-03-18 19:22:25 | data_pipeline | INFO     |   WildReceipt field coverage: date = 1072/1267 (84.6%)
+2026-03-18 19:22:25 | data_pipeline | INFO     |   WildReceipt field coverage: address = 827/1267 (65.3%)
+2026-03-18 19:22:25 | data_pipeline | INFO     |   WildReceipt field coverage: total = 1118/1267 (88.2%)
+2026-03-18 19:22:25 | data_pipeline | INFO     |   Invoices-DONUT field coverage: company = 415/425 (97.6%)
+2026-03-18 19:22:25 | data_pipeline | INFO     |   Invoices-DONUT field coverage: date = 417/425 (98.1%)
+2026-03-18 19:22:25 | data_pipeline | INFO     |   Invoices-DONUT field coverage: address = 414/425 (97.4%)
+2026-03-18 19:22:25 | data_pipeline | INFO     |   Invoices-DONUT field coverage: total = 414/425 (97.4%)
+[2026-03-18 19:22:25] CONFIG_OPTIMIZATION (Exp 4)
+- batch_size: 2 (effective=8)
+- accumulation_steps: 4
+- encoder_lr: 5.00e-05
+- decoder_lr: 1.00e-04
+- epochs: 10
+- warmup_steps: 40
+- early_stopping_patience: 3
+- reason: batch_size=2: VRAM 23.5GB (≤24 GB); DONUT at 960×1280 requires ~22.78 GB at batch=8 — using batch=2 with accumulation_steps=8 (effective batch=16) to avoid OOM; accumulation_steps=4: physical batch=2, small dataset (1683 samples) on ≤24 GB card — effective batch=8 ensures ≥200 optimizer steps even at 5 epochs; encoder_lr=5e-5, decoder_lr=1e-4 (fixed per CLAUDE.md); epochs=10 (fixed per CLAUDE.md § 3 convergence analysis); warmup_steps=40 (fixed: 500 overflowed total steps on small datasets); early_stopping_patience=3 (fixed to prevent overfitting on small val set)
+2026-03-18 19:22:25 | resource_manager | INFO     | [validate_training_config] OK: 2110 optimizer steps (batch=2, accum=4, samples=1683, epochs=10)
+2026-03-18 19:22:28 | run_experiments | INFO     | [Model] flash-attn not installed — using default attention (run fine)
+2026-03-18 19:22:30 | run_experiments | INFO     | [ResolutionSync] processor.image_processor.size = {height: 1280, width: 960}  |  model.config.encoder.image_size = [1280, 960]  ✓
+2026-03-18 19:22:30 | run_experiments | DEBUG    | [Pre-resize] Tokenizer vocab size: 57525
+2026-03-18 19:22:30 | run_experiments | DEBUG    | [Pre-resize] Decoder embed_tokens shape: torch.Size([57525, 1024])
+2026-03-18 19:22:31 | run_experiments | DEBUG    | [Post-resize] Tokenizer vocab size: 57535
+2026-03-18 19:22:31 | run_experiments | DEBUG    | [Post-resize] Decoder embed_tokens shape: torch.Size([57535, 1024])
+2026-03-18 19:22:31 | run_experiments | DEBUG    | [Post-resize] Decoder lm_head shape: torch.Size([57535, 1024])
+2026-03-18 19:22:31 | run_experiments | DEBUG    | [Token-verify] All 10 SROIE tokens successfully added to vocab
+2026-03-18 19:22:31 | run_experiments | INFO     | [GradCkpt] Enabled — VRAM=23.5 GB <= 24 GB threshold
+2026-03-18 19:22:31 | run_experiments | INFO     | [FreezeEncoder] Frozen Swin stage-0 only (37 parameters)
+2026-03-18 19:22:31 | run_experiments | INFO     | [Device] Model moved to cuda
+2026-03-18 19:22:31 | resource_manager | INFO     | [memory_manager] PIL cache check: 1683 samples x 3.52 MB = 5917 MB estimated; 41720 MB available x 6% safety = 2503 MB threshold -> SKIP
+2026-03-18 19:22:31 | train | INFO     | [RAM Cache] Skipped (ram_cache_is_safe returned False for 1683 samples at 1280x960)
+2026-03-18 19:22:31 | train | INFO     | Field masking: 311/1683 samples will have <company> masked (18.5%)
+2026-03-18 19:22:31 | train | INFO     | Field masking: 140/1683 samples will have <date> masked (8.3%)
+2026-03-18 19:22:31 | train | INFO     | Field masking: 322/1683 samples will have <address> masked (19.1%)
+2026-03-18 19:22:31 | train | INFO     | Field masking: 111/1683 samples will have <total> masked (6.6%)
+2026-03-18 19:22:31 | resource_manager | INFO     | [memory_manager] PIL cache check: 316 samples x 3.52 MB = 1111 MB estimated; 41719 MB available x 6% safety = 2503 MB threshold -> ALLOW
+2026-03-18 19:22:32 | train | INFO     | [RAM Cache] 316/316 images cached
+2026-03-18 19:22:32 | train | INFO     | [Tensor Cache] Skipped (precompute_tensors=False — val/eval dataset)
+2026-03-18 19:22:32 | train | INFO     | Field masking: 62/316 samples will have <company> masked (19.6%)
+2026-03-18 19:22:32 | train | INFO     | Field masking: 28/316 samples will have <date> masked (8.9%)
+2026-03-18 19:22:32 | train | INFO     | Field masking: 60/316 samples will have <address> masked (19.0%)
+2026-03-18 19:22:32 | train | INFO     | Field masking: 20/316 samples will have <total> masked (6.3%)
+2026-03-18 19:22:32 | run_experiments | WARNING  | [VRAM] External process(es) occupying ~3.4 GB of GPU memory (15.0 GB free of 23.5 GB total). Risk of OOM during training. Run `nvidia-smi` and kill any unnecessary GPU processes.
+2026-03-18 19:22:32 | root | INFO     | precision: bf16
+2026-03-18 19:22:32 | root | INFO     | torch.compile applied (mode=reduce-overhead)
+2026-03-18 19:22:32 | train | WARNING  | warmup_steps capped 500 → 211 (dataset has only 2110 opt steps over 10 epochs)
+2026-03-18 19:22:32 | train | DEBUG    | [Diagnostics] Callback registered (ai_diagnose=True, provider=auto)
+2026-03-18 19:22:32 | train | DEBUG    | [LiveDashboard] Callback registered for experiment 4
+2026-03-18 19:22:32 | root | INFO     | Gradient checkpointing enabled (use_reentrant=False)
+2026-03-18 19:22:38 | data_pipeline | INFO     |   SROIE field coverage: company = 500/500 (100.0%)
+2026-03-18 19:22:38 | data_pipeline | INFO     |   SROIE field coverage: date = 500/500 (100.0%)
+2026-03-18 19:22:38 | data_pipeline | INFO     |   SROIE field coverage: address = 500/500 (100.0%)
+2026-03-18 19:22:38 | data_pipeline | INFO     |   SROIE field coverage: total = 499/500 (99.8%)
+2026-03-18 19:22:38 | data_pipeline | INFO     |   SROIE field coverage: company = 63/63 (100.0%)
+2026-03-18 19:22:38 | data_pipeline | INFO     |   SROIE field coverage: date = 63/63 (100.0%)
+2026-03-18 19:22:38 | data_pipeline | INFO     |   SROIE field coverage: address = 63/63 (100.0%)
+2026-03-18 19:22:38 | data_pipeline | INFO     |   SROIE field coverage: total = 63/63 (100.0%)
+2026-03-18 19:22:38 | data_pipeline | INFO     |   WildReceipt field coverage: company = 836/1267 (66.0%)
+2026-03-18 19:22:38 | data_pipeline | INFO     |   WildReceipt field coverage: date = 1072/1267 (84.6%)
+2026-03-18 19:22:38 | data_pipeline | INFO     |   WildReceipt field coverage: address = 827/1267 (65.3%)
+2026-03-18 19:22:38 | data_pipeline | INFO     |   WildReceipt field coverage: total = 1118/1267 (88.2%)
+[2026-03-18 19:22:38] CONFIG_OPTIMIZATION (Exp 5)
+- batch_size: 2 (effective=8)
+- accumulation_steps: 4
+- encoder_lr: 5.00e-05
+- decoder_lr: 1.00e-04
+- epochs: 10
+- warmup_steps: 40
+- early_stopping_patience: 3
+- reason: batch_size=2: VRAM 23.5GB (≤24 GB); DONUT at 960×1280 requires ~22.78 GB at batch=8 — using batch=2 with accumulation_steps=8 (effective batch=16) to avoid OOM; accumulation_steps=4: physical batch=2, small dataset (1886 samples) on ≤24 GB card — effective batch=8 ensures ≥200 optimizer steps even at 5 epochs; encoder_lr=5e-5, decoder_lr=1e-4 (fixed per CLAUDE.md); epochs=10 (fixed per CLAUDE.md § 3 convergence analysis); warmup_steps=40 (fixed: 500 overflowed total steps on small datasets); early_stopping_patience=3 (fixed to prevent overfitting on small val set)
+2026-03-18 19:22:38 | resource_manager | INFO     | [validate_training_config] OK: 3540 optimizer steps (batch=2, accum=4, samples=1886, epochs=15)
+2026-03-18 19:22:41 | run_experiments | INFO     | [Model] flash-attn not installed — using default attention (run fine)
+2026-03-18 19:22:43 | run_experiments | INFO     | [ResolutionSync] processor.image_processor.size = {height: 1280, width: 960}  |  model.config.encoder.image_size = [1280, 960]  ✓
+2026-03-18 19:22:43 | run_experiments | DEBUG    | [Pre-resize] Tokenizer vocab size: 57525
+2026-03-18 19:22:43 | run_experiments | DEBUG    | [Pre-resize] Decoder embed_tokens shape: torch.Size([57525, 1024])
+2026-03-18 19:22:44 | run_experiments | DEBUG    | [Post-resize] Tokenizer vocab size: 57535
+2026-03-18 19:22:44 | run_experiments | DEBUG    | [Post-resize] Decoder embed_tokens shape: torch.Size([57535, 1024])
+2026-03-18 19:22:44 | run_experiments | DEBUG    | [Post-resize] Decoder lm_head shape: torch.Size([57535, 1024])
+2026-03-18 19:22:44 | run_experiments | DEBUG    | [Token-verify] All 10 SROIE tokens successfully added to vocab
+2026-03-18 19:22:44 | run_experiments | INFO     | [GradCkpt] Enabled — VRAM=23.5 GB <= 24 GB threshold
+2026-03-18 19:22:44 | run_experiments | INFO     | [FreezeEncoder] Frozen Swin stage-0 only (37 parameters)
+2026-03-18 19:22:44 | run_experiments | INFO     | [Device] Model moved to cuda
+2026-03-18 19:22:44 | resource_manager | INFO     | [memory_manager] PIL cache check: 1886 samples x 3.52 MB = 6630 MB estimated; 41564 MB available x 6% safety = 2494 MB threshold -> SKIP
+2026-03-18 19:22:44 | train | INFO     | [RAM Cache] Skipped (ram_cache_is_safe returned False for 1886 samples at 1280x960)
+2026-03-18 19:22:44 | train | INFO     | Field masking: 303/1886 samples will have <company> masked (16.1%)
+2026-03-18 19:22:44 | train | INFO     | Field masking: 132/1886 samples will have <date> masked (7.0%)
+2026-03-18 19:22:44 | train | INFO     | Field masking: 313/1886 samples will have <address> masked (16.6%)
+2026-03-18 19:22:44 | train | INFO     | Field masking: 102/1886 samples will have <total> masked (5.4%)
+2026-03-18 19:22:44 | resource_manager | INFO     | [memory_manager] PIL cache check: 253 samples x 3.52 MB = 889 MB estimated; 41566 MB available x 6% safety = 2494 MB threshold -> ALLOW
+2026-03-18 19:22:45 | train | INFO     | [RAM Cache] 253/253 images cached
+2026-03-18 19:22:45 | train | INFO     | [Tensor Cache] Skipped (precompute_tensors=False — val/eval dataset)
+2026-03-18 19:22:45 | train | INFO     | Field masking: 60/253 samples will have <company> masked (23.7%)
+2026-03-18 19:22:45 | train | INFO     | Field masking: 28/253 samples will have <date> masked (11.1%)
+2026-03-18 19:22:45 | train | INFO     | Field masking: 58/253 samples will have <address> masked (22.9%)
+2026-03-18 19:22:45 | train | INFO     | Field masking: 19/253 samples will have <total> masked (7.5%)
+2026-03-18 19:22:45 | run_experiments | WARNING  | [VRAM] External process(es) occupying ~3.4 GB of GPU memory (14.7 GB free of 23.5 GB total). Risk of OOM during training. Run `nvidia-smi` and kill any unnecessary GPU processes.
+2026-03-18 19:22:45 | root | INFO     | precision: bf16
+2026-03-18 19:22:45 | root | INFO     | torch.compile applied (mode=reduce-overhead)
+2026-03-18 19:22:45 | train | WARNING  | warmup_steps capped 500 → 354 (dataset has only 3540 opt steps over 15 epochs)
+2026-03-18 19:22:45 | train | DEBUG    | [Diagnostics] Callback registered (ai_diagnose=True, provider=auto)
+2026-03-18 19:22:45 | train | DEBUG    | [LiveDashboard] Callback registered for experiment 5
+2026-03-18 19:22:45 | root | INFO     | Gradient checkpointing enabled (use_reentrant=False)
+2026-03-18 19:22:49 | data_pipeline | INFO     |   SROIE field coverage: company = 500/500 (100.0%)
+2026-03-18 19:22:49 | data_pipeline | INFO     |   SROIE field coverage: date = 500/500 (100.0%)
+2026-03-18 19:22:49 | data_pipeline | INFO     |   SROIE field coverage: address = 500/500 (100.0%)
+2026-03-18 19:22:49 | data_pipeline | INFO     |   SROIE field coverage: total = 499/500 (99.8%)
+2026-03-18 19:22:49 | data_pipeline | INFO     |   SROIE field coverage: company = 63/63 (100.0%)
+2026-03-18 19:22:49 | data_pipeline | INFO     |   SROIE field coverage: date = 63/63 (100.0%)
+2026-03-18 19:22:49 | data_pipeline | INFO     |   SROIE field coverage: address = 63/63 (100.0%)
+2026-03-18 19:22:49 | data_pipeline | INFO     |   SROIE field coverage: total = 63/63 (100.0%)
+2026-03-18 19:22:49 | data_pipeline | INFO     |   Invoices-DONUT field coverage: company = 415/425 (97.6%)
+2026-03-18 19:22:49 | data_pipeline | INFO     |   Invoices-DONUT field coverage: date = 417/425 (98.1%)
+2026-03-18 19:22:49 | data_pipeline | INFO     |   Invoices-DONUT field coverage: address = 414/425 (97.4%)
+2026-03-18 19:22:49 | data_pipeline | INFO     |   Invoices-DONUT field coverage: total = 414/425 (97.4%)
+[2026-03-18 19:22:49] CONFIG_OPTIMIZATION (Exp 6)
+- batch_size: 2 (effective=8)
+- accumulation_steps: 4
+- encoder_lr: 5.00e-05
+- decoder_lr: 1.00e-04
+- epochs: 10
+- warmup_steps: 40
+- early_stopping_patience: 3
+- reason: batch_size=2: VRAM 23.5GB (≤24 GB); DONUT at 960×1280 requires ~22.78 GB at batch=8 — using batch=2 with accumulation_steps=8 (effective batch=16) to avoid OOM; accumulation_steps=4: physical batch=2, small dataset (1297 samples) on ≤24 GB card — effective batch=8 ensures ≥200 optimizer steps even at 5 epochs; encoder_lr=5e-5, decoder_lr=1e-4 (fixed per CLAUDE.md); epochs=10 (fixed per CLAUDE.md § 3 convergence analysis); warmup_steps=40 (fixed: 500 overflowed total steps on small datasets); early_stopping_patience=3 (fixed to prevent overfitting on small val set)
+2026-03-18 19:22:49 | resource_manager | INFO     | [validate_training_config] OK: 2445 optimizer steps (batch=2, accum=4, samples=1297, epochs=15)
+2026-03-18 19:22:52 | run_experiments | INFO     | [Model] flash-attn not installed — using default attention (run fine)
+2026-03-18 19:22:53 | run_experiments | INFO     | [ResolutionSync] processor.image_processor.size = {height: 1280, width: 960}  |  model.config.encoder.image_size = [1280, 960]  ✓
+2026-03-18 19:22:53 | run_experiments | DEBUG    | [Pre-resize] Tokenizer vocab size: 57525
+2026-03-18 19:22:53 | run_experiments | DEBUG    | [Pre-resize] Decoder embed_tokens shape: torch.Size([57525, 1024])
+2026-03-18 19:22:54 | run_experiments | DEBUG    | [Post-resize] Tokenizer vocab size: 57535
+2026-03-18 19:22:54 | run_experiments | DEBUG    | [Post-resize] Decoder embed_tokens shape: torch.Size([57535, 1024])
+2026-03-18 19:22:54 | run_experiments | DEBUG    | [Post-resize] Decoder lm_head shape: torch.Size([57535, 1024])
+2026-03-18 19:22:54 | run_experiments | DEBUG    | [Token-verify] All 10 SROIE tokens successfully added to vocab
+2026-03-18 19:22:54 | run_experiments | INFO     | [GradCkpt] Enabled — VRAM=23.5 GB <= 24 GB threshold
+2026-03-18 19:22:54 | run_experiments | INFO     | [FreezeEncoder] Frozen Swin stage-0 only (37 parameters)
+2026-03-18 19:22:54 | run_experiments | INFO     | [Device] Model moved to cuda
+2026-03-18 19:22:54 | resource_manager | INFO     | [memory_manager] PIL cache check: 1297 samples x 3.52 MB = 4560 MB estimated; 41608 MB available x 6% safety = 2497 MB threshold -> SKIP
+2026-03-18 19:22:54 | train | INFO     | [RAM Cache] Skipped (ram_cache_is_safe returned False for 1297 samples at 1280x960)
+2026-03-18 19:22:54 | train | INFO     | Field masking: 8/1297 samples will have <company> masked (0.6%)
+2026-03-18 19:22:54 | train | INFO     | Field masking: 8/1297 samples will have <date> masked (0.6%)
+2026-03-18 19:22:54 | train | INFO     | Field masking: 9/1297 samples will have <address> masked (0.7%)
+2026-03-18 19:22:54 | train | INFO     | Field masking: 12/1297 samples will have <total> masked (0.9%)
+2026-03-18 19:22:54 | resource_manager | INFO     | [memory_manager] PIL cache check: 126 samples x 3.52 MB = 443 MB estimated; 41607 MB available x 6% safety = 2496 MB threshold -> ALLOW
+2026-03-18 19:22:55 | train | INFO     | [RAM Cache] 126/126 images cached
+2026-03-18 19:22:55 | train | INFO     | [Tensor Cache] Skipped (precompute_tensors=False — val/eval dataset)
+2026-03-18 19:22:55 | train | INFO     | Field masking: 2/126 samples will have <company> masked (1.6%)
+2026-03-18 19:22:55 | train | INFO     | Field masking: 2/126 samples will have <address> masked (1.6%)
+2026-03-18 19:22:55 | train | INFO     | Field masking: 1/126 samples will have <total> masked (0.8%)
+2026-03-18 19:22:55 | run_experiments | WARNING  | [VRAM] External process(es) occupying ~3.4 GB of GPU memory (14.4 GB free of 23.5 GB total). Risk of OOM during training. Run `nvidia-smi` and kill any unnecessary GPU processes.
+2026-03-18 19:22:55 | root | INFO     | precision: bf16
+2026-03-18 19:22:55 | root | INFO     | torch.compile applied (mode=reduce-overhead)
+2026-03-18 19:22:55 | train | WARNING  | warmup_steps capped 500 → 244 (dataset has only 2445 opt steps over 15 epochs)
+2026-03-18 19:22:55 | train | DEBUG    | [Diagnostics] Callback registered (ai_diagnose=True, provider=auto)
+2026-03-18 19:22:55 | train | DEBUG    | [LiveDashboard] Callback registered for experiment 6
+2026-03-18 19:22:55 | root | INFO     | Gradient checkpointing enabled (use_reentrant=False)
+2026-03-18 19:23:00 | data_pipeline | INFO     |   SROIE field coverage: company = 500/500 (100.0%)
+2026-03-18 19:23:00 | data_pipeline | INFO     |   SROIE field coverage: date = 500/500 (100.0%)
+2026-03-18 19:23:00 | data_pipeline | INFO     |   SROIE field coverage: address = 500/500 (100.0%)
+2026-03-18 19:23:00 | data_pipeline | INFO     |   SROIE field coverage: total = 499/500 (99.8%)
+2026-03-18 19:23:00 | data_pipeline | INFO     |   SROIE field coverage: company = 63/63 (100.0%)
+2026-03-18 19:23:00 | data_pipeline | INFO     |   SROIE field coverage: date = 63/63 (100.0%)
+2026-03-18 19:23:00 | data_pipeline | INFO     |   SROIE field coverage: address = 63/63 (100.0%)
+2026-03-18 19:23:00 | data_pipeline | INFO     |   SROIE field coverage: total = 63/63 (100.0%)
+2026-03-18 19:23:00 | data_pipeline | INFO     |   WildReceipt field coverage: company = 836/1267 (66.0%)
+2026-03-18 19:23:00 | data_pipeline | INFO     |   WildReceipt field coverage: date = 1072/1267 (84.6%)
+2026-03-18 19:23:00 | data_pipeline | INFO     |   WildReceipt field coverage: address = 827/1267 (65.3%)
+2026-03-18 19:23:00 | data_pipeline | INFO     |   WildReceipt field coverage: total = 1118/1267 (88.2%)
+2026-03-18 19:23:00 | data_pipeline | INFO     |   Invoices-DONUT field coverage: company = 415/425 (97.6%)
+2026-03-18 19:23:00 | data_pipeline | INFO     |   Invoices-DONUT field coverage: date = 417/425 (98.1%)
+2026-03-18 19:23:00 | data_pipeline | INFO     |   Invoices-DONUT field coverage: address = 414/425 (97.4%)
+2026-03-18 19:23:00 | data_pipeline | INFO     |   Invoices-DONUT field coverage: total = 414/425 (97.4%)
+[2026-03-18 19:23:00] CONFIG_OPTIMIZATION (Exp 7)
+- batch_size: 2 (effective=16)
+- accumulation_steps: 8
+- encoder_lr: 5.00e-05
+- decoder_lr: 1.00e-04
+- epochs: 10
+- warmup_steps: 40
+- early_stopping_patience: 3
+- reason: batch_size=2: VRAM 23.5GB (≤24 GB); DONUT at 960×1280 requires ~22.78 GB at batch=8 — using batch=2 with accumulation_steps=8 (effective batch=16) to avoid OOM; accumulation_steps=8: physical batch=2, reaching effective batch=16; encoder_lr=5e-5, decoder_lr=1e-4 (fixed per CLAUDE.md); epochs=10 (fixed per CLAUDE.md § 3 convergence analysis); warmup_steps=40 (fixed: 500 overflowed total steps on small datasets); early_stopping_patience=3 (fixed to prevent overfitting on small val set)
+2026-03-18 19:23:00 | resource_manager | INFO     | [validate_training_config] OK: 2055 optimizer steps (batch=2, accum=8, samples=2183, epochs=15)
+2026-03-18 19:23:03 | run_experiments | INFO     | [Model] flash-attn not installed — using default attention (run fine)
+2026-03-18 19:23:04 | run_experiments | INFO     | [ResolutionSync] processor.image_processor.size = {height: 1280, width: 960}  |  model.config.encoder.image_size = [1280, 960]  ✓
+2026-03-18 19:23:04 | run_experiments | DEBUG    | [Pre-resize] Tokenizer vocab size: 57525
+2026-03-18 19:23:04 | run_experiments | DEBUG    | [Pre-resize] Decoder embed_tokens shape: torch.Size([57525, 1024])
+2026-03-18 19:23:05 | run_experiments | DEBUG    | [Post-resize] Tokenizer vocab size: 57535
+2026-03-18 19:23:05 | run_experiments | DEBUG    | [Post-resize] Decoder embed_tokens shape: torch.Size([57535, 1024])
+2026-03-18 19:23:05 | run_experiments | DEBUG    | [Post-resize] Decoder lm_head shape: torch.Size([57535, 1024])
+2026-03-18 19:23:05 | run_experiments | DEBUG    | [Token-verify] All 10 SROIE tokens successfully added to vocab
+2026-03-18 19:23:05 | run_experiments | INFO     | [GradCkpt] Enabled — VRAM=23.5 GB <= 24 GB threshold
+2026-03-18 19:23:05 | run_experiments | INFO     | [FreezeEncoder] Frozen Swin stage-0 only (37 parameters)
+2026-03-18 19:23:05 | run_experiments | INFO     | [Device] Model moved to cuda
+2026-03-18 19:23:05 | resource_manager | INFO     | [memory_manager] PIL cache check: 2183 samples x 3.52 MB = 7675 MB estimated; 41444 MB available x 6% safety = 2487 MB threshold -> SKIP
+2026-03-18 19:23:05 | train | INFO     | [RAM Cache] Skipped (ram_cache_is_safe returned False for 2183 samples at 1280x960)
+2026-03-18 19:23:05 | train | INFO     | Field masking: 311/2183 samples will have <company> masked (14.2%)
+2026-03-18 19:23:05 | train | INFO     | Field masking: 140/2183 samples will have <date> masked (6.4%)
+2026-03-18 19:23:05 | train | INFO     | Field masking: 322/2183 samples will have <address> masked (14.8%)
+2026-03-18 19:23:05 | train | INFO     | Field masking: 112/2183 samples will have <total> masked (5.1%)
+2026-03-18 19:23:05 | resource_manager | INFO     | [memory_manager] PIL cache check: 316 samples x 3.52 MB = 1111 MB estimated; 41444 MB available x 6% safety = 2487 MB threshold -> ALLOW
+2026-03-18 19:23:06 | train | INFO     | [RAM Cache] 316/316 images cached
+2026-03-18 19:23:06 | train | INFO     | [Tensor Cache] Skipped (precompute_tensors=False — val/eval dataset)
+2026-03-18 19:23:06 | train | INFO     | Field masking: 62/316 samples will have <company> masked (19.6%)
+2026-03-18 19:23:06 | train | INFO     | Field masking: 28/316 samples will have <date> masked (8.9%)
+2026-03-18 19:23:06 | train | INFO     | Field masking: 60/316 samples will have <address> masked (19.0%)
+2026-03-18 19:23:07 | train | INFO     | Field masking: 20/316 samples will have <total> masked (6.3%)
+2026-03-18 19:23:07 | run_experiments | WARNING  | [VRAM] External process(es) occupying ~3.4 GB of GPU memory (14.1 GB free of 23.5 GB total). Risk of OOM during training. Run `nvidia-smi` and kill any unnecessary GPU processes.
+2026-03-18 19:23:07 | root | INFO     | precision: bf16
+2026-03-18 19:23:07 | root | INFO     | torch.compile applied (mode=reduce-overhead)
+2026-03-18 19:23:07 | train | WARNING  | warmup_steps capped 500 → 205 (dataset has only 2055 opt steps over 15 epochs)
+2026-03-18 19:23:07 | train | DEBUG    | [Diagnostics] Callback registered (ai_diagnose=True, provider=auto)
+2026-03-18 19:23:07 | train | DEBUG    | [LiveDashboard] Callback registered for experiment 7
+2026-03-18 19:23:07 | root | INFO     | Gradient checkpointing enabled (use_reentrant=False)
+2026-03-18 19:23:11 | data_pipeline | INFO     |   SROIE field coverage: company = 500/500 (100.0%)
+2026-03-18 19:23:11 | data_pipeline | INFO     |   SROIE field coverage: date = 500/500 (100.0%)
+2026-03-18 19:23:11 | data_pipeline | INFO     |   SROIE field coverage: address = 500/500 (100.0%)
+2026-03-18 19:23:11 | data_pipeline | INFO     |   SROIE field coverage: total = 499/500 (99.8%)
+2026-03-18 19:23:11 | data_pipeline | INFO     |   SROIE field coverage: company = 63/63 (100.0%)
+2026-03-18 19:23:11 | data_pipeline | INFO     |   SROIE field coverage: date = 63/63 (100.0%)
+2026-03-18 19:23:11 | data_pipeline | INFO     |   SROIE field coverage: address = 63/63 (100.0%)
+2026-03-18 19:23:11 | data_pipeline | INFO     |   SROIE field coverage: total = 63/63 (100.0%)
+2026-03-18 19:23:11 | data_pipeline | INFO     |   WildReceipt field coverage: company = 836/1267 (66.0%)
+2026-03-18 19:23:11 | data_pipeline | INFO     |   WildReceipt field coverage: date = 1072/1267 (84.6%)
+2026-03-18 19:23:11 | data_pipeline | INFO     |   WildReceipt field coverage: address = 827/1267 (65.3%)
+2026-03-18 19:23:11 | data_pipeline | INFO     |   WildReceipt field coverage: total = 1118/1267 (88.2%)
+2026-03-18 19:23:11 | data_pipeline | INFO     |   Invoices-DONUT field coverage: company = 415/425 (97.6%)
+2026-03-18 19:23:11 | data_pipeline | INFO     |   Invoices-DONUT field coverage: date = 417/425 (98.1%)
+2026-03-18 19:23:11 | data_pipeline | INFO     |   Invoices-DONUT field coverage: address = 414/425 (97.4%)
+2026-03-18 19:23:11 | data_pipeline | INFO     |   Invoices-DONUT field coverage: total = 414/425 (97.4%)
+[2026-03-18 19:23:11] CONFIG_OPTIMIZATION (Exp 8)
+- batch_size: 2 (effective=16)
+- accumulation_steps: 8
+- encoder_lr: 5.00e-05
+- decoder_lr: 1.00e-04
+- epochs: 10
+- warmup_steps: 40
+- early_stopping_patience: 3
+- reason: batch_size=2: VRAM 23.5GB (≤24 GB); DONUT at 960×1280 requires ~22.78 GB at batch=8 — using batch=2 with accumulation_steps=8 (effective batch=16) to avoid OOM; accumulation_steps=8: physical batch=2, reaching effective batch=16; encoder_lr=5e-5, decoder_lr=1e-4 (fixed per CLAUDE.md); epochs=10 (fixed per CLAUDE.md § 3 convergence analysis); warmup_steps=40 (fixed: 500 overflowed total steps on small datasets); early_stopping_patience=3 (fixed to prevent overfitting on small val set)
+2026-03-18 19:23:11 | resource_manager | INFO     | [validate_training_config] OK: 2520 optimizer steps (batch=2, accum=8, samples=2683, epochs=15)
+2026-03-18 19:23:14 | run_experiments | INFO     | [Model] flash-attn not installed — using default attention (run fine)
+2026-03-18 19:23:16 | run_experiments | INFO     | [ResolutionSync] processor.image_processor.size = {height: 1280, width: 960}  |  model.config.encoder.image_size = [1280, 960]  ✓
+2026-03-18 19:23:16 | run_experiments | DEBUG    | [Pre-resize] Tokenizer vocab size: 57525
+2026-03-18 19:23:16 | run_experiments | DEBUG    | [Pre-resize] Decoder embed_tokens shape: torch.Size([57525, 1024])
+2026-03-18 19:23:17 | run_experiments | DEBUG    | [Post-resize] Tokenizer vocab size: 57535
+2026-03-18 19:23:17 | run_experiments | DEBUG    | [Post-resize] Decoder embed_tokens shape: torch.Size([57535, 1024])
+2026-03-18 19:23:17 | run_experiments | DEBUG    | [Post-resize] Decoder lm_head shape: torch.Size([57535, 1024])
+2026-03-18 19:23:17 | run_experiments | DEBUG    | [Token-verify] All 10 SROIE tokens successfully added to vocab
+2026-03-18 19:23:17 | run_experiments | INFO     | [GradCkpt] Enabled — VRAM=23.5 GB <= 24 GB threshold
+2026-03-18 19:23:17 | run_experiments | INFO     | [FreezeEncoder] Frozen Swin stage-0 only (37 parameters)
+2026-03-18 19:23:17 | run_experiments | INFO     | [Device] Model moved to cuda
+2026-03-18 19:23:17 | resource_manager | INFO     | [memory_manager] PIL cache check: 2683 samples x 3.52 MB = 9432 MB estimated; 41561 MB available x 6% safety = 2494 MB threshold -> SKIP
+2026-03-18 19:23:17 | train | INFO     | [RAM Cache] Skipped (ram_cache_is_safe returned False for 2683 samples at 1280x960)
+2026-03-18 19:23:17 | train | INFO     | Field masking: 311/2683 samples will have <company> masked (11.6%)
+2026-03-18 19:23:17 | train | INFO     | Field masking: 140/2683 samples will have <date> masked (5.2%)
+2026-03-18 19:23:17 | train | INFO     | Field masking: 322/2683 samples will have <address> masked (12.0%)
+2026-03-18 19:23:17 | train | INFO     | Field masking: 113/2683 samples will have <total> masked (4.2%)
+2026-03-18 19:23:17 | resource_manager | INFO     | [memory_manager] PIL cache check: 316 samples x 3.52 MB = 1111 MB estimated; 41561 MB available x 6% safety = 2494 MB threshold -> ALLOW
+2026-03-18 19:23:18 | train | INFO     | [RAM Cache] 316/316 images cached
+2026-03-18 19:23:18 | train | INFO     | [Tensor Cache] Skipped (precompute_tensors=False — val/eval dataset)
+2026-03-18 19:23:18 | train | INFO     | Field masking: 62/316 samples will have <company> masked (19.6%)
+2026-03-18 19:23:18 | train | INFO     | Field masking: 28/316 samples will have <date> masked (8.9%)
+2026-03-18 19:23:18 | train | INFO     | Field masking: 60/316 samples will have <address> masked (19.0%)
+2026-03-18 19:23:18 | train | INFO     | Field masking: 20/316 samples will have <total> masked (6.3%)
+2026-03-18 19:23:18 | run_experiments | WARNING  | [VRAM] External process(es) occupying ~3.4 GB of GPU memory (13.9 GB free of 23.5 GB total). Risk of OOM during training. Run `nvidia-smi` and kill any unnecessary GPU processes.
+2026-03-18 19:23:18 | root | INFO     | precision: bf16
+2026-03-18 19:23:18 | root | INFO     | torch.compile applied (mode=reduce-overhead)
+2026-03-18 19:23:18 | train | WARNING  | warmup_steps capped 500 → 252 (dataset has only 2520 opt steps over 15 epochs)
+2026-03-18 19:23:18 | train | DEBUG    | [Diagnostics] Callback registered (ai_diagnose=True, provider=auto)
+2026-03-18 19:23:18 | train | DEBUG    | [LiveDashboard] Callback registered for experiment 8
+2026-03-18 19:23:18 | root | INFO     | Gradient checkpointing enabled (use_reentrant=False)
+2026-03-18 19:23:23 | data_pipeline | INFO     |   SROIE field coverage: company = 500/500 (100.0%)
+2026-03-18 19:23:23 | data_pipeline | INFO     |   SROIE field coverage: date = 500/500 (100.0%)
+2026-03-18 19:23:23 | data_pipeline | INFO     |   SROIE field coverage: address = 500/500 (100.0%)
+2026-03-18 19:23:23 | data_pipeline | INFO     |   SROIE field coverage: total = 499/500 (99.8%)
+2026-03-18 19:23:23 | data_pipeline | INFO     |   SROIE field coverage: company = 63/63 (100.0%)
+2026-03-18 19:23:23 | data_pipeline | INFO     |   SROIE field coverage: date = 63/63 (100.0%)
+2026-03-18 19:23:23 | data_pipeline | INFO     |   SROIE field coverage: address = 63/63 (100.0%)
+2026-03-18 19:23:23 | data_pipeline | INFO     |   SROIE field coverage: total = 63/63 (100.0%)
+2026-03-18 19:23:23 | data_pipeline | INFO     |   Invoices-DONUT field coverage: company = 415/425 (97.6%)
+2026-03-18 19:23:23 | data_pipeline | INFO     |   Invoices-DONUT field coverage: date = 417/425 (98.1%)
+2026-03-18 19:23:23 | data_pipeline | INFO     |   Invoices-DONUT field coverage: address = 414/425 (97.4%)
+2026-03-18 19:23:23 | data_pipeline | INFO     |   Invoices-DONUT field coverage: total = 414/425 (97.4%)
+2026-03-18 19:23:26 | run_experiments | INFO     | [Model] flash-attn not installed — using default attention (run fine)
+2026-03-18 19:23:27 | run_experiments | INFO     | [ResolutionSync] processor.image_processor.size = {height: 1280, width: 960}  |  model.config.encoder.image_size = [1280, 960]  ✓
+2026-03-18 19:23:27 | run_experiments | DEBUG    | [Pre-resize] Tokenizer vocab size: 57525
+2026-03-18 19:23:27 | run_experiments | DEBUG    | [Pre-resize] Decoder embed_tokens shape: torch.Size([57525, 1024])
+2026-03-18 19:23:28 | run_experiments | DEBUG    | [Post-resize] Tokenizer vocab size: 57535
+2026-03-18 19:23:28 | run_experiments | DEBUG    | [Post-resize] Decoder embed_tokens shape: torch.Size([57535, 1024])
+2026-03-18 19:23:28 | run_experiments | DEBUG    | [Post-resize] Decoder lm_head shape: torch.Size([57535, 1024])
+2026-03-18 19:23:28 | run_experiments | DEBUG    | [Token-verify] All 10 SROIE tokens successfully added to vocab
+2026-03-18 19:23:28 | run_experiments | INFO     | [GradCkpt] Enabled — VRAM=23.5 GB <= 24 GB threshold
+2026-03-18 19:23:28 | run_experiments | INFO     | [FreezeEncoder] Frozen Swin stage-0 only (37 parameters)
+2026-03-18 19:23:28 | run_experiments | INFO     | [Device] Model moved to cuda
+2026-03-18 19:23:28 | resource_manager | INFO     | [memory_manager] PIL cache check: 1297 samples x 3.52 MB = 4560 MB estimated; 41509 MB available x 6% safety = 2491 MB threshold -> SKIP
+2026-03-18 19:23:28 | train | INFO     | [RAM Cache] Skipped (ram_cache_is_safe returned False for 1297 samples at 1280x960)
+2026-03-18 19:23:28 | train | INFO     | Field masking: 8/1297 samples will have <company> masked (0.6%)
+2026-03-18 19:23:28 | train | INFO     | Field masking: 8/1297 samples will have <date> masked (0.6%)
+2026-03-18 19:23:28 | train | INFO     | Field masking: 9/1297 samples will have <address> masked (0.7%)
+2026-03-18 19:23:28 | train | INFO     | Field masking: 12/1297 samples will have <total> masked (0.9%)
+2026-03-18 19:23:28 | resource_manager | INFO     | [memory_manager] PIL cache check: 126 samples x 3.52 MB = 443 MB estimated; 41510 MB available x 6% safety = 2491 MB threshold -> ALLOW
+2026-03-18 19:23:29 | train | INFO     | [RAM Cache] 126/126 images cached
+2026-03-18 19:23:29 | train | INFO     | [Tensor Cache] Skipped (precompute_tensors=False — val/eval dataset)
+2026-03-18 19:23:29 | train | INFO     | Field masking: 2/126 samples will have <company> masked (1.6%)
+2026-03-18 19:23:29 | train | INFO     | Field masking: 2/126 samples will have <address> masked (1.6%)
+2026-03-18 19:23:29 | train | INFO     | Field masking: 1/126 samples will have <total> masked (0.8%)
+2026-03-18 19:23:29 | run_experiments | WARNING  | [VRAM] External process(es) occupying ~3.4 GB of GPU memory (13.6 GB free of 23.5 GB total). Risk of OOM during training. Run `nvidia-smi` and kill any unnecessary GPU processes.
+2026-03-18 19:23:29 | root | INFO     | precision: bf16
+2026-03-18 19:23:29 | root | INFO     | torch.compile applied (mode=reduce-overhead)
+2026-03-18 19:23:29 | train | WARNING  | warmup_steps capped 500 → 82 (dataset has only 820 opt steps over 10 epochs)
+2026-03-18 19:23:30 | train | DEBUG    | [Diagnostics] Callback registered (ai_diagnose=True, provider=auto)
+2026-03-18 19:23:30 | train | DEBUG    | [LiveDashboard] Callback registered for experiment 10
+2026-03-18 19:23:30 | root | INFO     | Gradient checkpointing enabled (use_reentrant=False)
+2026-03-18 19:23:37 | data_pipeline | INFO     |   SROIE field coverage: company = 500/500 (100.0%)
+2026-03-18 19:23:37 | data_pipeline | INFO     |   SROIE field coverage: date = 500/500 (100.0%)
+2026-03-18 19:23:37 | data_pipeline | INFO     |   SROIE field coverage: address = 500/500 (100.0%)
+2026-03-18 19:23:37 | data_pipeline | INFO     |   SROIE field coverage: total = 499/500 (99.8%)
+2026-03-18 19:23:37 | data_pipeline | INFO     |   SROIE field coverage: company = 63/63 (100.0%)
+2026-03-18 19:23:37 | data_pipeline | INFO     |   SROIE field coverage: date = 63/63 (100.0%)
+2026-03-18 19:23:37 | data_pipeline | INFO     |   SROIE field coverage: address = 63/63 (100.0%)
+2026-03-18 19:23:37 | data_pipeline | INFO     |   SROIE field coverage: total = 63/63 (100.0%)
+2026-03-18 19:23:37 | data_pipeline | INFO     |   Invoices-DONUT field coverage: company = 415/425 (97.6%)
+2026-03-18 19:23:37 | data_pipeline | INFO     |   Invoices-DONUT field coverage: date = 417/425 (98.1%)
+2026-03-18 19:23:37 | data_pipeline | INFO     |   Invoices-DONUT field coverage: address = 414/425 (97.4%)
+2026-03-18 19:23:37 | data_pipeline | INFO     |   Invoices-DONUT field coverage: total = 414/425 (97.4%)
+2026-03-18 19:23:41 | run_experiments | INFO     | [Model] flash-attn not installed — using default attention (run fine)
+2026-03-18 19:23:42 | run_experiments | INFO     | [ResolutionSync] processor.image_processor.size = {height: 1280, width: 960}  |  model.config.encoder.image_size = [1280, 960]  ✓
+2026-03-18 19:23:42 | run_experiments | DEBUG    | [Pre-resize] Tokenizer vocab size: 57525
+2026-03-18 19:23:42 | run_experiments | DEBUG    | [Pre-resize] Decoder embed_tokens shape: torch.Size([57525, 1024])
+2026-03-18 19:23:43 | run_experiments | DEBUG    | [Post-resize] Tokenizer vocab size: 57535
+2026-03-18 19:23:43 | run_experiments | DEBUG    | [Post-resize] Decoder embed_tokens shape: torch.Size([57535, 1024])
+2026-03-18 19:23:43 | run_experiments | DEBUG    | [Post-resize] Decoder lm_head shape: torch.Size([57535, 1024])
+2026-03-18 19:23:43 | run_experiments | DEBUG    | [Token-verify] All 10 SROIE tokens successfully added to vocab
+2026-03-18 19:23:43 | run_experiments | INFO     | [GradCkpt] Enabled — VRAM=23.5 GB <= 24 GB threshold
+2026-03-18 19:23:43 | run_experiments | INFO     | [FreezeEncoder] Frozen Swin stage-0 only (37 parameters)
+2026-03-18 19:23:43 | run_experiments | INFO     | [Device] Model moved to cuda
+2026-03-18 19:23:43 | resource_manager | INFO     | [memory_manager] PIL cache check: 1297 samples x 3.52 MB = 4560 MB estimated; 41377 MB available x 6% safety = 2483 MB threshold -> SKIP
+2026-03-18 19:23:43 | train | INFO     | [RAM Cache] Skipped (ram_cache_is_safe returned False for 1297 samples at 1280x960)
+2026-03-18 19:23:43 | train | INFO     | Field masking: 8/1297 samples will have <company> masked (0.6%)
+2026-03-18 19:23:44 | train | INFO     | Field masking: 8/1297 samples will have <date> masked (0.6%)
+2026-03-18 19:23:44 | train | INFO     | Field masking: 9/1297 samples will have <address> masked (0.7%)
+2026-03-18 19:23:44 | train | INFO     | Field masking: 12/1297 samples will have <total> masked (0.9%)
+2026-03-18 19:23:44 | resource_manager | INFO     | [memory_manager] PIL cache check: 126 samples x 3.52 MB = 443 MB estimated; 41385 MB available x 6% safety = 2483 MB threshold -> ALLOW
+2026-03-18 19:23:44 | train | INFO     | [RAM Cache] 126/126 images cached
+2026-03-18 19:23:44 | train | INFO     | [Tensor Cache] Skipped (precompute_tensors=False — val/eval dataset)
+2026-03-18 19:23:44 | train | INFO     | Field masking: 2/126 samples will have <company> masked (1.6%)
+2026-03-18 19:23:44 | train | INFO     | Field masking: 2/126 samples will have <address> masked (1.6%)
+2026-03-18 19:23:44 | train | INFO     | Field masking: 1/126 samples will have <total> masked (0.8%)
+2026-03-18 19:23:44 | run_experiments | WARNING  | [VRAM] External process(es) occupying ~3.4 GB of GPU memory (13.3 GB free of 23.5 GB total). Risk of OOM during training. Run `nvidia-smi` and kill any unnecessary GPU processes.
+2026-03-18 19:23:44 | root | INFO     | precision: bf16
+2026-03-18 19:23:45 | root | INFO     | torch.compile applied (mode=reduce-overhead)
+2026-03-18 19:23:45 | train | WARNING  | warmup_steps capped 500 → 82 (dataset has only 820 opt steps over 10 epochs)
+2026-03-18 19:23:45 | train | DEBUG    | [Diagnostics] Callback registered (ai_diagnose=True, provider=auto)
+2026-03-18 19:23:45 | train | DEBUG    | [LiveDashboard] Callback registered for experiment 11
+2026-03-18 19:23:45 | root | INFO     | Gradient checkpointing enabled (use_reentrant=False)
+2026-03-18 19:25:00 | data_pipeline | INFO     |   SROIE field coverage: company = 500/500 (100.0%)
+2026-03-18 19:25:00 | data_pipeline | INFO     |   SROIE field coverage: date = 500/500 (100.0%)
+2026-03-18 19:25:00 | data_pipeline | INFO     |   SROIE field coverage: address = 500/500 (100.0%)
+2026-03-18 19:25:00 | data_pipeline | INFO     |   SROIE field coverage: total = 499/500 (99.8%)
+2026-03-18 19:25:00 | data_pipeline | INFO     |   SROIE field coverage: company = 63/63 (100.0%)
+2026-03-18 19:25:00 | data_pipeline | INFO     |   SROIE field coverage: date = 63/63 (100.0%)
+2026-03-18 19:25:00 | data_pipeline | INFO     |   SROIE field coverage: address = 63/63 (100.0%)
+2026-03-18 19:25:00 | data_pipeline | INFO     |   SROIE field coverage: total = 63/63 (100.0%)
+2026-03-18 19:25:00 | data_pipeline | INFO     |   Invoices-DONUT field coverage: company = 415/425 (97.6%)
+2026-03-18 19:25:00 | data_pipeline | INFO     |   Invoices-DONUT field coverage: date = 417/425 (98.1%)
+2026-03-18 19:25:00 | data_pipeline | INFO     |   Invoices-DONUT field coverage: address = 414/425 (97.4%)
+2026-03-18 19:25:00 | data_pipeline | INFO     |   Invoices-DONUT field coverage: total = 414/425 (97.4%)
+2026-03-18 19:25:04 | run_experiments | INFO     | [Model] flash-attn not installed — using default attention (run fine)
+2026-03-18 19:25:06 | run_experiments | INFO     | [ResolutionSync] processor.image_processor.size = {height: 1280, width: 960}  |  model.config.encoder.image_size = [1280, 960]  ✓
+2026-03-18 19:25:06 | run_experiments | DEBUG    | [Pre-resize] Tokenizer vocab size: 57525
+2026-03-18 19:25:06 | run_experiments | DEBUG    | [Pre-resize] Decoder embed_tokens shape: torch.Size([57525, 1024])
+2026-03-18 19:25:07 | run_experiments | DEBUG    | [Post-resize] Tokenizer vocab size: 57535
+2026-03-18 19:25:07 | run_experiments | DEBUG    | [Post-resize] Decoder embed_tokens shape: torch.Size([57535, 1024])
+2026-03-18 19:25:07 | run_experiments | DEBUG    | [Post-resize] Decoder lm_head shape: torch.Size([57535, 1024])
+2026-03-18 19:25:07 | run_experiments | DEBUG    | [Token-verify] All 10 SROIE tokens successfully added to vocab
+2026-03-18 19:25:07 | run_experiments | INFO     | [GradCkpt] Enabled — VRAM=23.5 GB <= 24 GB threshold
+2026-03-18 19:25:07 | run_experiments | INFO     | [FreezeEncoder] Frozen Swin stage-0 only (37 parameters)
+2026-03-18 19:25:07 | run_experiments | INFO     | [Device] Model moved to cuda
+2026-03-18 19:25:07 | resource_manager | INFO     | [memory_manager] PIL cache check: 1297 samples x 3.52 MB = 4560 MB estimated; 41160 MB available x 6% safety = 2470 MB threshold -> SKIP
+2026-03-18 19:25:07 | train | INFO     | [RAM Cache] Skipped (ram_cache_is_safe returned False for 1297 samples at 1280x960)
+2026-03-18 19:25:07 | train | INFO     | Field masking: 8/1297 samples will have <company> masked (0.6%)
+2026-03-18 19:25:07 | train | INFO     | Field masking: 8/1297 samples will have <date> masked (0.6%)
+2026-03-18 19:25:07 | train | INFO     | Field masking: 9/1297 samples will have <address> masked (0.7%)
+2026-03-18 19:25:07 | train | INFO     | Field masking: 12/1297 samples will have <total> masked (0.9%)
+2026-03-18 19:25:07 | resource_manager | INFO     | [memory_manager] PIL cache check: 126 samples x 3.52 MB = 443 MB estimated; 41160 MB available x 6% safety = 2470 MB threshold -> ALLOW
+2026-03-18 19:25:08 | train | INFO     | [RAM Cache] 126/126 images cached
+2026-03-18 19:25:08 | train | INFO     | [Tensor Cache] Skipped (precompute_tensors=False — val/eval dataset)
+2026-03-18 19:25:08 | train | INFO     | Field masking: 2/126 samples will have <company> masked (1.6%)
+2026-03-18 19:25:08 | train | INFO     | Field masking: 2/126 samples will have <address> masked (1.6%)
+2026-03-18 19:25:08 | train | INFO     | Field masking: 1/126 samples will have <total> masked (0.8%)
+2026-03-18 19:25:08 | run_experiments | WARNING  | [VRAM] External process(es) occupying ~3.4 GB of GPU memory (13.5 GB free of 23.5 GB total). Risk of OOM during training. Run `nvidia-smi` and kill any unnecessary GPU processes.
+2026-03-18 19:25:08 | root | INFO     | precision: bf16
+2026-03-18 19:25:08 | root | INFO     | torch.compile applied (mode=reduce-overhead)
+2026-03-18 19:25:08 | train | WARNING  | warmup_steps capped 500 → 82 (dataset has only 820 opt steps over 10 epochs)
+2026-03-18 19:25:08 | train | DEBUG    | [Diagnostics] Callback registered (ai_diagnose=True, provider=auto)
+2026-03-18 19:25:09 | train | DEBUG    | [LiveDashboard] Callback registered for experiment 13
+2026-03-18 19:25:09 | root | INFO     | Gradient checkpointing enabled (use_reentrant=False)
+2026-03-18 19:25:14 | data_pipeline | INFO     |   SROIE field coverage: company = 500/500 (100.0%)
+2026-03-18 19:25:14 | data_pipeline | INFO     |   SROIE field coverage: date = 500/500 (100.0%)
+2026-03-18 19:25:14 | data_pipeline | INFO     |   SROIE field coverage: address = 500/500 (100.0%)
+2026-03-18 19:25:14 | data_pipeline | INFO     |   SROIE field coverage: total = 499/500 (99.8%)
+2026-03-18 19:25:14 | data_pipeline | INFO     |   SROIE field coverage: company = 63/63 (100.0%)
+2026-03-18 19:25:14 | data_pipeline | INFO     |   SROIE field coverage: date = 63/63 (100.0%)
+2026-03-18 19:25:14 | data_pipeline | INFO     |   SROIE field coverage: address = 63/63 (100.0%)
+2026-03-18 19:25:14 | data_pipeline | INFO     |   SROIE field coverage: total = 63/63 (100.0%)
+2026-03-18 19:25:14 | data_pipeline | INFO     |   Invoices-DONUT field coverage: company = 415/425 (97.6%)
+2026-03-18 19:25:14 | data_pipeline | INFO     |   Invoices-DONUT field coverage: date = 417/425 (98.1%)
+2026-03-18 19:25:14 | data_pipeline | INFO     |   Invoices-DONUT field coverage: address = 414/425 (97.4%)
+2026-03-18 19:25:14 | data_pipeline | INFO     |   Invoices-DONUT field coverage: total = 414/425 (97.4%)
+2026-03-18 19:25:18 | run_experiments | INFO     | [Model] flash-attn not installed — using default attention (run fine)
+2026-03-18 19:25:20 | run_experiments | INFO     | [ResolutionSync] processor.image_processor.size = {height: 1280, width: 960}  |  model.config.encoder.image_size = [1280, 960]  ✓
+2026-03-18 19:25:20 | run_experiments | DEBUG    | [Pre-resize] Tokenizer vocab size: 57525
+2026-03-18 19:25:20 | run_experiments | DEBUG    | [Pre-resize] Decoder embed_tokens shape: torch.Size([57525, 1024])
+2026-03-18 19:25:21 | run_experiments | DEBUG    | [Post-resize] Tokenizer vocab size: 57535
+2026-03-18 19:25:21 | run_experiments | DEBUG    | [Post-resize] Decoder embed_tokens shape: torch.Size([57535, 1024])
+2026-03-18 19:25:21 | run_experiments | DEBUG    | [Post-resize] Decoder lm_head shape: torch.Size([57535, 1024])
+2026-03-18 19:25:21 | run_experiments | DEBUG    | [Token-verify] All 10 SROIE tokens successfully added to vocab
+2026-03-18 19:25:21 | run_experiments | INFO     | [GradCkpt] Enabled — VRAM=23.5 GB <= 24 GB threshold
+2026-03-18 19:25:21 | run_experiments | INFO     | [FreezeEncoder] Frozen Swin stage-0 only (37 parameters)
+2026-03-18 19:25:21 | run_experiments | INFO     | [Device] Model moved to cuda
+2026-03-18 19:25:21 | resource_manager | INFO     | [memory_manager] PIL cache check: 1297 samples x 3.52 MB = 4560 MB estimated; 41266 MB available x 6% safety = 2476 MB threshold -> SKIP
+2026-03-18 19:25:21 | train | INFO     | [RAM Cache] Skipped (ram_cache_is_safe returned False for 1297 samples at 1280x960)
+2026-03-18 19:25:21 | train | INFO     | Field masking: 8/1297 samples will have <company> masked (0.6%)
+2026-03-18 19:25:21 | train | INFO     | Field masking: 8/1297 samples will have <date> masked (0.6%)
+2026-03-18 19:25:21 | train | INFO     | Field masking: 9/1297 samples will have <address> masked (0.7%)
+2026-03-18 19:25:21 | train | INFO     | Field masking: 12/1297 samples will have <total> masked (0.9%)
+2026-03-18 19:25:21 | resource_manager | INFO     | [memory_manager] PIL cache check: 126 samples x 3.52 MB = 443 MB estimated; 41266 MB available x 6% safety = 2476 MB threshold -> ALLOW
+2026-03-18 19:25:22 | train | INFO     | [RAM Cache] 126/126 images cached
+2026-03-18 19:25:22 | train | INFO     | [Tensor Cache] Skipped (precompute_tensors=False — val/eval dataset)
+2026-03-18 19:25:22 | train | INFO     | Field masking: 2/126 samples will have <company> masked (1.6%)
+2026-03-18 19:25:22 | train | INFO     | Field masking: 2/126 samples will have <address> masked (1.6%)
+2026-03-18 19:25:22 | train | INFO     | Field masking: 1/126 samples will have <total> masked (0.8%)
+2026-03-18 19:25:22 | run_experiments | WARNING  | [VRAM] External process(es) occupying ~3.4 GB of GPU memory (12.7 GB free of 23.5 GB total). Risk of OOM during training. Run `nvidia-smi` and kill any unnecessary GPU processes.
+2026-03-18 19:25:22 | root | INFO     | precision: bf16
+2026-03-18 19:25:22 | root | INFO     | torch.compile applied (mode=reduce-overhead)
+2026-03-18 19:25:22 | train | WARNING  | warmup_steps capped 500 → 82 (dataset has only 820 opt steps over 10 epochs)
+2026-03-18 19:25:22 | train | DEBUG    | [Diagnostics] Callback registered (ai_diagnose=True, provider=auto)
+2026-03-18 19:25:22 | train | DEBUG    | [LiveDashboard] Callback registered for experiment 14
+2026-03-18 19:25:22 | root | INFO     | Gradient checkpointing enabled (use_reentrant=False)
+2026-03-18 19:26:37 | data_pipeline | INFO     |   SROIE field coverage: company = 500/500 (100.0%)
+2026-03-18 19:26:37 | data_pipeline | INFO     |   SROIE field coverage: date = 500/500 (100.0%)
+2026-03-18 19:26:37 | data_pipeline | INFO     |   SROIE field coverage: address = 500/500 (100.0%)
+2026-03-18 19:26:37 | data_pipeline | INFO     |   SROIE field coverage: total = 499/500 (99.8%)
+2026-03-18 19:26:37 | data_pipeline | INFO     |   SROIE field coverage: company = 63/63 (100.0%)
+2026-03-18 19:26:37 | data_pipeline | INFO     |   SROIE field coverage: date = 63/63 (100.0%)
+2026-03-18 19:26:37 | data_pipeline | INFO     |   SROIE field coverage: address = 63/63 (100.0%)
+2026-03-18 19:26:37 | data_pipeline | INFO     |   SROIE field coverage: total = 63/63 (100.0%)
+2026-03-18 19:26:37 | data_pipeline | INFO     |   Invoices-DONUT field coverage: company = 415/425 (97.6%)
+2026-03-18 19:26:37 | data_pipeline | INFO     |   Invoices-DONUT field coverage: date = 417/425 (98.1%)
+2026-03-18 19:26:37 | data_pipeline | INFO     |   Invoices-DONUT field coverage: address = 414/425 (97.4%)
+2026-03-18 19:26:37 | data_pipeline | INFO     |   Invoices-DONUT field coverage: total = 414/425 (97.4%)
+2026-03-18 19:26:43 | run_experiments | INFO     | [Model] flash-attn not installed — using default attention (run fine)
+2026-03-18 19:26:45 | run_experiments | INFO     | [ResolutionSync] processor.image_processor.size = {height: 1280, width: 960}  |  model.config.encoder.image_size = [1280, 960]  ✓
+2026-03-18 19:26:45 | run_experiments | DEBUG    | [Pre-resize] Tokenizer vocab size: 57525
+2026-03-18 19:26:45 | run_experiments | DEBUG    | [Pre-resize] Decoder embed_tokens shape: torch.Size([57525, 1024])
+2026-03-18 19:26:46 | run_experiments | DEBUG    | [Post-resize] Tokenizer vocab size: 57535
+2026-03-18 19:26:46 | run_experiments | DEBUG    | [Post-resize] Decoder embed_tokens shape: torch.Size([57535, 1024])
+2026-03-18 19:26:46 | run_experiments | DEBUG    | [Post-resize] Decoder lm_head shape: torch.Size([57535, 1024])
+2026-03-18 19:26:46 | run_experiments | DEBUG    | [Token-verify] All 10 SROIE tokens successfully added to vocab
+2026-03-18 19:26:46 | run_experiments | INFO     | [GradCkpt] Enabled — VRAM=23.5 GB <= 24 GB threshold
+2026-03-18 19:26:46 | run_experiments | INFO     | [FreezeEncoder] Frozen Swin stage-0 only (37 parameters)
+2026-03-18 19:26:46 | run_experiments | INFO     | [Device] Model moved to cuda
+2026-03-18 19:26:47 | resource_manager | INFO     | [memory_manager] PIL cache check: 1297 samples x 3.52 MB = 4560 MB estimated; 40939 MB available x 6% safety = 2456 MB threshold -> SKIP
+2026-03-18 19:26:47 | train | INFO     | [RAM Cache] Skipped (ram_cache_is_safe returned False for 1297 samples at 1280x960)
+2026-03-18 19:26:47 | train | INFO     | Field masking: 8/1297 samples will have <company> masked (0.6%)
+2026-03-18 19:26:47 | train | INFO     | Field masking: 8/1297 samples will have <date> masked (0.6%)
+2026-03-18 19:26:47 | train | INFO     | Field masking: 9/1297 samples will have <address> masked (0.7%)
+2026-03-18 19:26:47 | train | INFO     | Field masking: 12/1297 samples will have <total> masked (0.9%)
+2026-03-18 19:26:47 | resource_manager | INFO     | [memory_manager] PIL cache check: 126 samples x 3.52 MB = 443 MB estimated; 40939 MB available x 6% safety = 2456 MB threshold -> ALLOW
+2026-03-18 19:26:47 | train | INFO     | [RAM Cache] 126/126 images cached
+2026-03-18 19:26:47 | train | INFO     | [Tensor Cache] Skipped (precompute_tensors=False — val/eval dataset)
+2026-03-18 19:26:47 | train | INFO     | Field masking: 2/126 samples will have <company> masked (1.6%)
+2026-03-18 19:26:47 | train | INFO     | Field masking: 2/126 samples will have <address> masked (1.6%)
+2026-03-18 19:26:48 | train | INFO     | Field masking: 1/126 samples will have <total> masked (0.8%)
+2026-03-18 19:26:48 | run_experiments | WARNING  | [VRAM] External process(es) occupying ~3.4 GB of GPU memory (12.9 GB free of 23.5 GB total). Risk of OOM during training. Run `nvidia-smi` and kill any unnecessary GPU processes.
+2026-03-18 19:26:48 | root | INFO     | precision: bf16
+2026-03-18 19:26:48 | root | INFO     | torch.compile applied (mode=reduce-overhead)
+2026-03-18 19:26:48 | train | WARNING  | warmup_steps capped 500 → 82 (dataset has only 820 opt steps over 10 epochs)
+2026-03-18 19:26:48 | train | DEBUG    | [Diagnostics] Callback registered (ai_diagnose=True, provider=auto)
+2026-03-18 19:26:48 | train | DEBUG    | [LiveDashboard] Callback registered for experiment 16
+2026-03-18 19:26:48 | root | INFO     | Gradient checkpointing enabled (use_reentrant=False)
+2026-03-18 19:26:52 | data_pipeline | INFO     |   SROIE field coverage: company = 500/500 (100.0%)
+2026-03-18 19:26:52 | data_pipeline | INFO     |   SROIE field coverage: date = 500/500 (100.0%)
+2026-03-18 19:26:52 | data_pipeline | INFO     |   SROIE field coverage: address = 500/500 (100.0%)
+2026-03-18 19:26:52 | data_pipeline | INFO     |   SROIE field coverage: total = 499/500 (99.8%)
+2026-03-18 19:26:52 | data_pipeline | INFO     |   SROIE field coverage: company = 63/63 (100.0%)
+2026-03-18 19:26:52 | data_pipeline | INFO     |   SROIE field coverage: date = 63/63 (100.0%)
+2026-03-18 19:26:52 | data_pipeline | INFO     |   SROIE field coverage: address = 63/63 (100.0%)
+2026-03-18 19:26:52 | data_pipeline | INFO     |   SROIE field coverage: total = 63/63 (100.0%)
+2026-03-18 19:26:52 | data_pipeline | INFO     |   Invoices-DONUT field coverage: company = 415/425 (97.6%)
+2026-03-18 19:26:52 | data_pipeline | INFO     |   Invoices-DONUT field coverage: date = 417/425 (98.1%)
+2026-03-18 19:26:52 | data_pipeline | INFO     |   Invoices-DONUT field coverage: address = 414/425 (97.4%)
+2026-03-18 19:26:52 | data_pipeline | INFO     |   Invoices-DONUT field coverage: total = 414/425 (97.4%)
+2026-03-18 19:26:57 | run_experiments | INFO     | [Model] flash-attn not installed — using default attention (run fine)
+2026-03-18 19:27:00 | run_experiments | INFO     | [ResolutionSync] processor.image_processor.size = {height: 1280, width: 960}  |  model.config.encoder.image_size = [1280, 960]  ✓
+2026-03-18 19:27:00 | run_experiments | DEBUG    | [Pre-resize] Tokenizer vocab size: 57525
+2026-03-18 19:27:00 | run_experiments | DEBUG    | [Pre-resize] Decoder embed_tokens shape: torch.Size([57525, 1024])
+2026-03-18 19:27:01 | run_experiments | DEBUG    | [Post-resize] Tokenizer vocab size: 57535
+2026-03-18 19:27:01 | run_experiments | DEBUG    | [Post-resize] Decoder embed_tokens shape: torch.Size([57535, 1024])
+2026-03-18 19:27:01 | run_experiments | DEBUG    | [Post-resize] Decoder lm_head shape: torch.Size([57535, 1024])
+2026-03-18 19:27:01 | run_experiments | DEBUG    | [Token-verify] All 10 SROIE tokens successfully added to vocab
+2026-03-18 19:27:01 | run_experiments | INFO     | [GradCkpt] Enabled — VRAM=23.5 GB <= 24 GB threshold
+2026-03-18 19:27:01 | run_experiments | INFO     | [FreezeEncoder] Frozen Swin stage-0 only (37 parameters)
+2026-03-18 19:27:02 | run_experiments | INFO     | [Device] Model moved to cuda
+2026-03-18 19:27:02 | resource_manager | INFO     | [memory_manager] PIL cache check: 1297 samples x 3.52 MB = 4560 MB estimated; 41365 MB available x 6% safety = 2482 MB threshold -> SKIP
+2026-03-18 19:27:02 | train | INFO     | [RAM Cache] Skipped (ram_cache_is_safe returned False for 1297 samples at 1280x960)
+2026-03-18 19:27:02 | train | INFO     | Field masking: 8/1297 samples will have <company> masked (0.6%)
+2026-03-18 19:27:02 | train | INFO     | Field masking: 8/1297 samples will have <date> masked (0.6%)
+2026-03-18 19:27:02 | train | INFO     | Field masking: 9/1297 samples will have <address> masked (0.7%)
+2026-03-18 19:27:02 | train | INFO     | Field masking: 12/1297 samples will have <total> masked (0.9%)
+2026-03-18 19:27:02 | resource_manager | INFO     | [memory_manager] PIL cache check: 126 samples x 3.52 MB = 443 MB estimated; 41365 MB available x 6% safety = 2482 MB threshold -> ALLOW
+2026-03-18 19:27:03 | train | INFO     | [RAM Cache] 126/126 images cached
+2026-03-18 19:27:03 | train | INFO     | [Tensor Cache] Skipped (precompute_tensors=False — val/eval dataset)
+2026-03-18 19:27:03 | train | INFO     | Field masking: 2/126 samples will have <company> masked (1.6%)
+2026-03-18 19:27:03 | train | INFO     | Field masking: 2/126 samples will have <address> masked (1.6%)
+2026-03-18 19:27:03 | train | INFO     | Field masking: 1/126 samples will have <total> masked (0.8%)
+2026-03-18 19:27:03 | run_experiments | WARNING  | [VRAM] External process(es) occupying ~3.4 GB of GPU memory (12.2 GB free of 23.5 GB total). Risk of OOM during training. Run `nvidia-smi` and kill any unnecessary GPU processes.
+2026-03-18 19:27:03 | root | INFO     | precision: bf16
+2026-03-18 19:27:03 | root | INFO     | torch.compile applied (mode=reduce-overhead)
+2026-03-18 19:27:03 | train | WARNING  | warmup_steps capped 500 → 82 (dataset has only 820 opt steps over 10 epochs)
+2026-03-18 19:27:03 | train | DEBUG    | [Diagnostics] Callback registered (ai_diagnose=True, provider=auto)
+2026-03-18 19:27:03 | train | DEBUG    | [LiveDashboard] Callback registered for experiment 17
+2026-03-18 19:27:03 | root | INFO     | Gradient checkpointing enabled (use_reentrant=False)
+2026-03-18 19:27:07 | data_pipeline | INFO     |   SROIE field coverage: company = 500/500 (100.0%)
+2026-03-18 19:27:07 | data_pipeline | INFO     |   SROIE field coverage: date = 500/500 (100.0%)
+2026-03-18 19:27:07 | data_pipeline | INFO     |   SROIE field coverage: address = 500/500 (100.0%)
+2026-03-18 19:27:07 | data_pipeline | INFO     |   SROIE field coverage: total = 499/500 (99.8%)
+2026-03-18 19:27:07 | data_pipeline | INFO     |   SROIE field coverage: company = 63/63 (100.0%)
+2026-03-18 19:27:07 | data_pipeline | INFO     |   SROIE field coverage: date = 63/63 (100.0%)
+2026-03-18 19:27:07 | data_pipeline | INFO     |   SROIE field coverage: address = 63/63 (100.0%)
+2026-03-18 19:27:07 | data_pipeline | INFO     |   SROIE field coverage: total = 63/63 (100.0%)
+2026-03-18 19:27:07 | data_pipeline | INFO     |   WildReceipt field coverage: company = 836/1267 (66.0%)
+2026-03-18 19:27:07 | data_pipeline | INFO     |   WildReceipt field coverage: date = 1072/1267 (84.6%)
+2026-03-18 19:27:07 | data_pipeline | INFO     |   WildReceipt field coverage: address = 827/1267 (65.3%)
+2026-03-18 19:27:07 | data_pipeline | INFO     |   WildReceipt field coverage: total = 1118/1267 (88.2%)
+2026-03-18 19:27:13 | run_experiments | INFO     | [Model] flash-attn not installed — using default attention (run fine)
+2026-03-18 19:27:16 | run_experiments | INFO     | [ResolutionSync] processor.image_processor.size = {height: 1280, width: 960}  |  model.config.encoder.image_size = [1280, 960]  ✓
+2026-03-18 19:27:16 | run_experiments | DEBUG    | [Pre-resize] Tokenizer vocab size: 57525
+2026-03-18 19:27:16 | run_experiments | DEBUG    | [Pre-resize] Decoder embed_tokens shape: torch.Size([57525, 1024])
+2026-03-18 19:27:17 | run_experiments | DEBUG    | [Post-resize] Tokenizer vocab size: 57535
+2026-03-18 19:27:17 | run_experiments | DEBUG    | [Post-resize] Decoder embed_tokens shape: torch.Size([57535, 1024])
+2026-03-18 19:27:17 | run_experiments | DEBUG    | [Post-resize] Decoder lm_head shape: torch.Size([57535, 1024])
+2026-03-18 19:27:17 | run_experiments | DEBUG    | [Token-verify] All 10 SROIE tokens successfully added to vocab
+2026-03-18 19:27:17 | run_experiments | INFO     | [GradCkpt] Enabled — VRAM=23.5 GB <= 24 GB threshold
+2026-03-18 19:27:17 | run_experiments | INFO     | [FreezeEncoder] Frozen Swin stage-0 only (37 parameters)
+2026-03-18 19:27:18 | run_experiments | INFO     | [Device] Model moved to cuda
+2026-03-18 19:27:18 | resource_manager | INFO     | [memory_manager] PIL cache check: 1886 samples x 3.52 MB = 6630 MB estimated; 41528 MB available x 6% safety = 2492 MB threshold -> SKIP
+2026-03-18 19:27:18 | train | INFO     | [RAM Cache] Skipped (ram_cache_is_safe returned False for 1886 samples at 1280x960)
+2026-03-18 19:27:18 | train | INFO     | Field masking: 303/1886 samples will have <company> masked (16.1%)
+2026-03-18 19:27:18 | train | INFO     | Field masking: 132/1886 samples will have <date> masked (7.0%)
+2026-03-18 19:27:18 | train | INFO     | Field masking: 313/1886 samples will have <address> masked (16.6%)
+2026-03-18 19:27:18 | train | INFO     | Field masking: 102/1886 samples will have <total> masked (5.4%)
+2026-03-18 19:27:18 | resource_manager | INFO     | [memory_manager] PIL cache check: 253 samples x 3.52 MB = 889 MB estimated; 41527 MB available x 6% safety = 2492 MB threshold -> ALLOW
+2026-03-18 19:27:18 | train | INFO     | [RAM Cache] 253/253 images cached
+2026-03-18 19:27:18 | train | INFO     | [Tensor Cache] Skipped (precompute_tensors=False — val/eval dataset)
+2026-03-18 19:27:18 | train | INFO     | Field masking: 60/253 samples will have <company> masked (23.7%)
+2026-03-18 19:27:18 | train | INFO     | Field masking: 28/253 samples will have <date> masked (11.1%)
+2026-03-18 19:27:18 | train | INFO     | Field masking: 58/253 samples will have <address> masked (22.9%)
+2026-03-18 19:27:18 | train | INFO     | Field masking: 19/253 samples will have <total> masked (7.5%)
+2026-03-18 19:27:18 | run_experiments | WARNING  | [VRAM] External process(es) occupying ~3.4 GB of GPU memory (11.9 GB free of 23.5 GB total). Risk of OOM during training. Run `nvidia-smi` and kill any unnecessary GPU processes.
+2026-03-18 19:27:18 | root | INFO     | precision: bf16
+2026-03-18 19:27:18 | root | INFO     | torch.compile applied (mode=reduce-overhead)
+2026-03-18 19:27:18 | train | DEBUG    | [Diagnostics] Callback registered (ai_diagnose=True, provider=auto)
+2026-03-18 19:27:18 | train | DEBUG    | [LiveDashboard] Callback registered for experiment 100
+2026-03-18 19:27:18 | root | INFO     | Gradient checkpointing enabled (use_reentrant=False)
+2026-03-18 19:28:41 | constants | INFO     | DONUT benchmark   0%
+2026-03-18 19:29:05 | constants | INFO     | DONUT benchmark  11%
+2026-03-18 19:29:28 | constants | INFO     | DONUT benchmark  22%
+2026-03-18 19:29:50 | constants | INFO     | DONUT benchmark  33%
+2026-03-18 19:30:14 | constants | INFO     | DONUT benchmark  45%
+2026-03-18 19:30:37 | constants | INFO     | DONUT benchmark  56%
+2026-03-18 19:30:59 | constants | INFO     | DONUT benchmark  67%
+2026-03-18 19:31:24 | constants | INFO     | DONUT benchmark  79%
+2026-03-18 19:31:47 | constants | INFO     | DONUT benchmark  90%
+2026-03-18 19:32:07 | constants | INFO     | DONUT benchmark 100%
+2026-03-18 19:32:12 | data_pipeline | INFO     |   SROIE field coverage: company = 500/500 (100.0%)
+2026-03-18 19:32:12 | data_pipeline | INFO     |   SROIE field coverage: date = 500/500 (100.0%)
+2026-03-18 19:32:12 | data_pipeline | INFO     |   SROIE field coverage: address = 500/500 (100.0%)
+2026-03-18 19:32:12 | data_pipeline | INFO     |   SROIE field coverage: total = 499/500 (99.8%)
+2026-03-18 19:32:12 | data_pipeline | INFO     |   SROIE field coverage: company = 63/63 (100.0%)
+2026-03-18 19:32:12 | data_pipeline | INFO     |   SROIE field coverage: date = 63/63 (100.0%)
+2026-03-18 19:32:12 | data_pipeline | INFO     |   SROIE field coverage: address = 63/63 (100.0%)
+2026-03-18 19:32:12 | data_pipeline | INFO     |   SROIE field coverage: total = 63/63 (100.0%)
+2026-03-18 19:32:12 | data_pipeline | INFO     |   SROIE field coverage: company = 63/63 (100.0%)
+2026-03-18 19:32:12 | data_pipeline | INFO     |   SROIE field coverage: date = 63/63 (100.0%)
+2026-03-18 19:32:12 | data_pipeline | INFO     |   SROIE field coverage: address = 62/63 (98.4%)
+2026-03-18 19:32:12 | data_pipeline | INFO     |   SROIE field coverage: total = 63/63 (100.0%)
+2026-03-18 19:32:13 | reporting | INFO     | [PDF] No LaTeX compiler found (pdflatex / latexmk / xelatex). Install texlive-latex-base or MiKTeX to auto-compile PDFs.
+2026-03-18 19:32:13 | reporting | INFO     | [PDF] No LaTeX compiler found (pdflatex / latexmk / xelatex). Install texlive-latex-base or MiKTeX to auto-compile PDFs.
+2026-03-18 19:32:13 | diagnostics | INFO     | Pipeline diagnostics saved → results/pipeline_diagnostics.json
