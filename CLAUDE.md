@@ -846,7 +846,7 @@ DISABLE_DIAGNOSTICS=1 python run_all.py
 ### Enabling AI-powered diagnosis
 
 ```bash
-# Claude (fast, cheap — claude-haiku-4-5-20251001 default)
+# Claude (claude-sonnet-4-5-20251001 default)
 export ANTHROPIC_API_KEY=sk-ant-...
 AI_DIAGNOSE=1 python run_all.py --experiment 3
 

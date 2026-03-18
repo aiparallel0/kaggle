@@ -294,7 +294,7 @@ Keep response under 300 words. Be concise."""
 def evaluate_test_results(
     test_result: TestSuiteResult,
     provider: str = "auto",
-    claude_model: str = "claude-haiku-4-5-20251001",
+    claude_model: str = "claude-sonnet-4-5-20251001",
 ) -> dict:
     """Send test results to AI for evaluation.
 

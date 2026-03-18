@@ -477,7 +477,7 @@ Keep response under 300 words."""
 
 def _call_claude(
     context: dict,
-    model: str = "claude-haiku-4-5-20251001",
+    model: str = "claude-sonnet-4-5-20251001",
     system_prompt: str | None = None,
     max_tokens: int = 500,
 ) -> str | None:
@@ -868,7 +868,7 @@ def github_report_failure(
 def ai_diagnose(
     context: dict,
     provider: str = "auto",
-    claude_model: str = "claude-haiku-4-5-20251001",
+    claude_model: str = "claude-sonnet-4-5-20251001",
     mistral_model: str = "mistral-small-latest",
     system_prompt: str | None = None,
     max_tokens: int = 500,

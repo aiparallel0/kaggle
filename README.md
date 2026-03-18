@@ -482,7 +482,7 @@ Checks: import chain, model load, token ID roundtrip (GP-3/GP-4), and a dummy fo
 When a critical pattern is detected, optionally call an AI API for root-cause analysis and a concrete fix:
 
 ```bash
-# With Claude (claude-haiku-4-5-20251001 by default — fast + cheap)
+# With Claude (claude-sonnet-4-5-20251001 by default)
 export ANTHROPIC_API_KEY=sk-ant-...
 AI_DIAGNOSE=1 python run_all.py --experiment 3
 
