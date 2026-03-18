@@ -22,10 +22,12 @@ from __future__ import annotations
 
 import ast
 import logging
+import re
 import subprocess
 import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s: %(message)s")
@@ -539,7 +541,9 @@ def autonomous_pipeline(
     fix_attempts = []
     if evaluation["verdict"] == "BLOCK" and not no_auto_fix:
         logger.warning("[CI] Tests failed. Starting auto-fix loop...")
-        success, fix_attempts = auto_fix_and_retry(test_result, max_attempts=max_fix_attempts, provider=ai_provider)
+        success, fix_attempts = auto_fix_and_retry(
+            test_result, max_attempts=max_fix_attempts, provider=ai_provider
+        )
 
         if success:
             logger.info("[CI] ✅ Auto-fix succeeded! Re-evaluating...")
@@ -550,7 +554,9 @@ def autonomous_pipeline(
 
     # 5. Post to GitHub (if PR exists)
     if pr_number and repo:
-        post_ci_results_comment(test_result, evaluation, pr_number, repo=repo, fix_attempts=fix_attempts)
+        post_ci_results_comment(
+            test_result, evaluation, pr_number, repo=repo, fix_attempts=fix_attempts
+        )
 
     # 6. Auto-merge (if verdict is MERGE and conditions met)
     if evaluation["verdict"] == "MERGE" and pr_number and repo and not no_merge and not pr_only:
@@ -565,6 +571,18 @@ def autonomous_pipeline(
 # 4. Autonomous Auto-Fix Loop
 # ============================================================================
 
+_REPO_ROOT = Path(__file__).parent
+
+_AUTOFIX_SYSTEM_PROMPT = (
+    "You are an expert Python code fixer for a machine learning pipeline codebase. "
+    "You will be given the CURRENT CONTENT of a Python file together with the exact error "
+    "that the test suite reported for it. "
+    "Return ONLY the complete, corrected Python file content — no markdown fences, "
+    "no ``` delimiters, no explanations, no commentary. "
+    "Just the raw Python source code that should replace the file, starting with the "
+    "first line of the file (imports / module docstring) and ending with the last line."
+)
+
 
 @dataclass
 class AutoFixAttempt:
@@ -577,46 +595,6 @@ class AutoFixAttempt:
     fix_description: str = ""
     error: str | None = None
     success: bool = False
-
-
-def _generate_fix_code(
-    test_result: TestSuiteResult,
-    previous_failures: list[str],
-    provider: str = "auto",
-) -> str:
-    """Ask AI to generate code fix based on test failures.
-
-    Returns Python code (as string) that fixes the issue.
-    """
-    from diagnostics import ai_diagnose
-
-    # Build context from failed tests
-    failed_tests = [t for t in test_result.tests if not t.passed]
-    failure_details = "\n".join(
-        [
-            f"Test: {t.name}\nError: {t.error}\nOutput: {t.output[-300:]}"
-            for t in failed_tests
-        ]
-    )
-
-    context = {
-        "failed_tests": test_result.to_dict(),
-        "failure_details": failure_details,
-        "previous_attempts": previous_failures,
-        "task": "Generate Python code to fix the above test failures. Return ONLY valid Python code, no explanation.",
-    }
-
-    fix_code = ai_diagnose(
-        context,
-        provider=provider,
-        system_prompt=(
-            "You are a Python code fixer. Analyze the test failures and generate a surgical fix "
-            "that addresses the root cause. Return ONLY valid, syntactically correct Python code. "
-            "No comments, no explanations, no markdown formatting — just runnable code."
-        ),
-    )
-
-    return fix_code or ""
 
 
 def _validate_python_syntax(code: str) -> tuple[bool, str | None]:
@@ -633,30 +611,117 @@ def _validate_python_syntax(code: str) -> tuple[bool, str | None]:
         return False, f"ParseError: {e}"
 
 
-def _apply_fix_to_file(file_path: str, fix_code: str) -> tuple[bool, str]:
-    """Apply fix code to a file in the whitelist.
+def _strip_markdown_fences(text: str) -> str:
+    """Remove ```python ... ``` or ``` ... ``` wrappers that AI sometimes adds."""
+    text = text.strip()
+    # Remove leading fence (```python or ```)
+    text = re.sub(r"^```(?:python)?\s*\n?", "", text)
+    # Remove trailing fence
+    text = re.sub(r"\n?```\s*$", "", text)
+    return text.strip()
 
-    The fix code should be a Python snippet that modifies the file.
-    Returns (success, description).
+
+def _identify_files_to_fix(test_result: TestSuiteResult) -> list[tuple[str, str]]:
+    """Map failing tests to candidate files that need fixing.
+
+    Returns a deduplicated list of (filename, combined_error_context) pairs,
+    ordered from most-specific to least-specific guess.
     """
-    if file_path not in AUTOFIX_WHITELIST:
-        return False, f"File {file_path} not in auto-fix whitelist"
+    candidates: list[tuple[str, str]] = []  # (filename, error_context)
 
-    full_path = f"/home/user/kaggle/{file_path}"
+    for test in test_result.tests:
+        if test.passed:
+            continue
+        output = (test.output or "") + "\n" + (test.error or "")
 
-    # Validate syntax first
-    is_valid, error = _validate_python_syntax(fix_code)
-    if not is_valid:
-        return False, f"Generated code has syntax error: {error}"
+        if test.name == "import_check":
+            # The error output names the module that failed.
+            # e.g. "ImportError: cannot import name 'X' from 'constants'"
+            # Map module names to filenames.
+            module_to_file = {
+                "constants": "constants.py",
+                "data_pipeline": "data_pipeline.py",
+                "diagnostics": "diagnostics.py",
+                "train": "train.py",
+                "run_experiments": "run_experiments.py",
+                "run_all": "run_all.py",
+                "autonomous_ci": "autonomous_ci.py",
+            }
+            matched = False
+            for module, fname in module_to_file.items():
+                if module in output:
+                    candidates.append((fname, output))
+                    matched = True
+            if not matched:
+                # Can't tell — try the three most-imported files
+                for fname in ["constants.py", "data_pipeline.py", "diagnostics.py"]:
+                    candidates.append((fname, output))
 
+        elif test.name == "ruff_lint":
+            # ruff output lines: "path/to/file.py:line:col: EXX message"
+            for line in output.splitlines():
+                m = re.match(r"^([a-zA-Z_][a-zA-Z0-9_/]*\.py):\d+:\d+:", line)
+                if m:
+                    fname = Path(m.group(1)).name  # strip any leading path
+                    if fname in AUTOFIX_WHITELIST:
+                        candidates.append((fname, line))
+
+        elif test.name == "smoke_test":
+            # Smoke test errors are usually in diagnostics.py or constants.py
+            for fname in ["diagnostics.py", "constants.py", "run_experiments.py"]:
+                candidates.append((fname, output))
+
+    # Deduplicate by filename; combine all error contexts for the same file
+    seen: dict[str, list[str]] = {}
+    for fname, ctx in candidates:
+        seen.setdefault(fname, []).append(ctx)
+
+    return [(fname, "\n---\n".join(ctxs)) for fname, ctxs in seen.items()]
+
+
+def _generate_file_fix(
+    filename: str,
+    error_context: str,
+    previous_failures: list[str],
+    provider: str = "auto",
+) -> str | None:
+    """Ask AI to return a corrected version of *filename*.
+
+    Returns the complete new file content as a string, or None if AI is unavailable.
+    """
+    from diagnostics import ai_diagnose
+
+    full_path = _REPO_ROOT / filename
     try:
-        # For now, just log the fix (don't apply automatically)
-        # In a real system, we'd use AST transformation or regex replacement
-        logger.info(f"[AutoFix] Generated fix for {file_path}:")
-        logger.info(fix_code[:200])
-        return True, f"Generated fix for {file_path}"
-    except Exception as e:
-        return False, f"Failed to apply fix: {e}"
+        current_content = full_path.read_text()
+    except OSError as exc:
+        logger.warning(f"[AutoFix] Cannot read {filename}: {exc}")
+        return None
+
+    prev_note = ""
+    if previous_failures:
+        prev_note = "\n\nPrevious fix attempts for this file failed:\n" + "\n".join(
+            previous_failures[-3:]
+        )
+
+    context = {
+        "filename": filename,
+        "current_file_content": current_content,
+        "errors": error_context[-3000:],
+        "task": (
+            f"The file '{filename}' is causing the test failures shown in 'errors'. "
+            f"Return the COMPLETE corrected content of '{filename}'. "
+            f"No markdown, no explanation — the raw Python code only."
+        )
+        + prev_note,
+    }
+
+    return ai_diagnose(
+        context,
+        provider=provider,
+        system_prompt=_AUTOFIX_SYSTEM_PROMPT,
+        max_tokens=4096,
+    )
 
 
 def auto_fix_and_retry(
@@ -664,108 +729,132 @@ def auto_fix_and_retry(
     max_attempts: int = 10,
     provider: str = "auto",
 ) -> tuple[bool, list[AutoFixAttempt]]:
-    """Attempt to auto-fix failures by generating code and retrying.
+    """Attempt to auto-fix test failures by having AI rewrite broken files.
+
+    For each attempt:
+      1. Identify which files are likely broken (from error output).
+      2. Ask AI for the complete corrected file content.
+      3. Validate syntax, strip markdown fences, write to disk.
+      4. Run ruff --fix + ruff format to ensure style compliance.
+      5. Git add + commit (skip gracefully if nothing changed).
+      6. Re-run the full test suite.
+      7. If all pass → return success.  Otherwise loop.
 
     Returns (success, list_of_attempts).
     """
-    attempts = []
-    previous_failures = []
+    attempts: list[AutoFixAttempt] = []
+    previous_failures: list[str] = []
 
     for attempt_num in range(1, max_attempts + 1):
         logger.info(f"[AutoFix] Attempt {attempt_num}/{max_attempts}")
 
-        # 1. Generate fix based on current failure
-        logger.info("[AutoFix] Generating fix code from AI...")
-        fix_code = _generate_fix_code(test_result, previous_failures, provider=provider)
+        # 1. Identify candidate files
+        files_to_fix = _identify_files_to_fix(test_result)
+        if not files_to_fix:
+            # Fallback: try the most fundamental file
+            files_to_fix = [("constants.py", test_result.summary)]
 
-        if not fix_code:
-            attempt = AutoFixAttempt(
-                attempt_num=attempt_num,
-                max_attempts=max_attempts,
-                test_result=test_result,
-                error="AI did not generate fix code",
-            )
-            attempts.append(attempt)
-            previous_failures.append(f"Attempt {attempt_num}: No code generated")
-            continue
-
-        # 2. Validate syntax
-        is_valid, syntax_error = _validate_python_syntax(fix_code)
-        if not is_valid:
-            attempt = AutoFixAttempt(
-                attempt_num=attempt_num,
-                max_attempts=max_attempts,
-                test_result=test_result,
-                error=f"Invalid syntax: {syntax_error}",
-            )
-            attempts.append(attempt)
-            previous_failures.append(f"Attempt {attempt_num}: {syntax_error}")
-            continue
-
-        # 3. Apply fix to appropriate file(s)
-        # For now, we'll auto-fix specific known patterns
         fix_applied = False
-        fix_description = ""
+        fix_description_parts: list[str] = []
+        fix_error: str | None = None
+        patched_files: list[str] = []
 
-        # Check for common failures and apply targeted fixes
-        for test in test_result.tests:
-            if not test.passed and "import" in test.error.lower():
-                # Handle import errors
-                fix_applied = True
-                fix_description = "Applied import fix (placeholder)"
-                break
+        # 2. Generate + apply fix for each candidate file (cap at 3 per attempt)
+        for filename, error_ctx in files_to_fix[:3]:
+            logger.info(f"[AutoFix] Requesting AI fix for {filename}...")
+            new_content = _generate_file_fix(
+                filename, error_ctx, previous_failures, provider=provider
+            )
 
-        if fix_applied:
-            # 4. Git commit the fix
+            if not new_content:
+                fix_error = f"AI returned no content for {filename}"
+                logger.warning(f"[AutoFix] {fix_error}")
+                continue
+
+            # Strip markdown fences that AI sometimes wraps around code
+            new_content = _strip_markdown_fences(new_content)
+
+            # Validate syntax before writing
+            is_valid, syntax_error = _validate_python_syntax(new_content)
+            if not is_valid:
+                fix_error = f"AI output for {filename} has syntax error: {syntax_error}"
+                logger.warning(f"[AutoFix] {fix_error}")
+                previous_failures.append(f"Attempt {attempt_num}: {fix_error}")
+                continue
+
+            # Write corrected content to disk
+            full_path = _REPO_ROOT / filename
             try:
-                subprocess.run(
-                    [
-                        "git",
-                        "commit",
-                        "-am",
-                        f"[auto-fix {attempt_num}/{max_attempts}] Apply generated fix",
-                    ],
-                    capture_output=True,
-                    timeout=10,
-                )
-                logger.info(f"[AutoFix] Committed fix attempt {attempt_num}")
-            except Exception as e:
-                logger.error(f"[AutoFix] Failed to commit fix: {e}")
-                fix_applied = False
+                full_path.write_text(new_content)
+                logger.info(f"[AutoFix] Wrote fix to {filename}")
+                fix_applied = True
+                patched_files.append(filename)
+                fix_description_parts.append(f"rewrote {filename}")
+            except OSError as exc:
+                fix_error = f"Could not write {filename}: {exc}"
+                logger.error(f"[AutoFix] {fix_error}")
+                continue
+
+        # 3. Auto-format patched files with ruff (don't fail if ruff absent)
+        if patched_files:
+            subprocess.run(
+                ["ruff", "check", "--fix"] + patched_files, capture_output=True, cwd=_REPO_ROOT
+            )
+            subprocess.run(["ruff", "format"] + patched_files, capture_output=True, cwd=_REPO_ROOT)
+
+        # 4. Git add + commit (check return code — "nothing to commit" is OK)
+        if patched_files:
+            subprocess.run(
+                ["git", "add", "--"] + patched_files, capture_output=True, cwd=_REPO_ROOT
+            )
+            commit_msg = (
+                f"[auto-fix {attempt_num}/{max_attempts}] {'; '.join(fix_description_parts)}"
+            )
+            commit_result = subprocess.run(
+                ["git", "commit", "-m", commit_msg],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                cwd=_REPO_ROOT,
+            )
+            combined_output = commit_result.stdout + commit_result.stderr
+            if commit_result.returncode == 0:
+                logger.info(f"[AutoFix] Committed: {commit_msg}")
+            elif "nothing to commit" in combined_output:
+                logger.info("[AutoFix] AI produced identical content — no commit needed")
+            else:
+                logger.warning(f"[AutoFix] git commit failed: {combined_output[:300]}")
 
         # 5. Re-run tests
         logger.info("[AutoFix] Re-running tests...")
         new_test_result = run_test_suite()
-
-        if new_test_result.all_passed:
-            logger.info(f"[AutoFix] ✅ Tests PASSED on attempt {attempt_num}!")
-            attempt = AutoFixAttempt(
-                attempt_num=attempt_num,
-                max_attempts=max_attempts,
-                test_result=new_test_result,
-                fix_applied=fix_applied,
-                fix_description=fix_description,
-                success=True,
-            )
-            attempts.append(attempt)
-            return True, attempts
-
-        # 6. If tests still fail, prepare for next iteration
-        test_result = new_test_result
-        previous_failures.append(f"Attempt {attempt_num}: {test_result.summary}")
 
         attempt = AutoFixAttempt(
             attempt_num=attempt_num,
             max_attempts=max_attempts,
             test_result=new_test_result,
             fix_applied=fix_applied,
-            fix_description=fix_description,
-            error=test_result.summary,
+            fix_description=(
+                "; ".join(fix_description_parts)
+                if fix_description_parts
+                else (fix_error or "No fix generated")
+            ),
+            error=None if new_test_result.all_passed else new_test_result.summary,
+            success=new_test_result.all_passed,
         )
         attempts.append(attempt)
 
-    # All attempts exhausted
-    logger.error(f"[AutoFix] ❌ Failed to fix after {max_attempts} attempts")
+        if new_test_result.all_passed:
+            logger.info(f"[AutoFix] Tests PASSED on attempt {attempt_num}!")
+            return True, attempts
+
+        # 6. Prepare next iteration
+        test_result = new_test_result
+        previous_failures.append(
+            f"Attempt {attempt_num}: {test_result.summary} — fixed: {'; '.join(fix_description_parts) or 'nothing'}"
+        )
+
+    logger.error(f"[AutoFix] Failed to fix after {max_attempts} attempts")
     return False, attempts
 
 
@@ -777,7 +866,9 @@ def auto_fix_and_retry(
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Autonomous CI/CD pipeline with AI evaluation and auto-fix")
+    parser = argparse.ArgumentParser(
+        description="Autonomous CI/CD pipeline with AI evaluation and auto-fix"
+    )
     parser.add_argument(
         "--branch",
         default=None,
