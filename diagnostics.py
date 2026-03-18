@@ -22,6 +22,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
+import subprocess
 import time
 import traceback
 from dataclasses import dataclass, field
@@ -636,8 +638,26 @@ def _get_github_token() -> str:
 
 
 def _get_github_repo() -> str:
-    """Read target repo (owner/repo) from GITHUB_REPO env var."""
-    return os.environ.get("GITHUB_REPO", "")
+    """Read target repo (owner/repo) from GITHUB_REPO env var or git remote."""
+    repo = os.environ.get("GITHUB_REPO", "")
+    if repo:
+        return repo
+    # Auto-detect from git remote origin
+    try:
+        result = subprocess.run(
+            ["git", "remote", "get-url", "origin"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            url = result.stdout.strip()
+            m = re.search(r"github\.com[:/](.+?)(?:\.git)?$", url)
+            if m:
+                return m.group(1)
+    except Exception:
+        pass
+    return ""
 
 
 def _github_request(

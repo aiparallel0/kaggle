@@ -41,6 +41,12 @@ AUTOFIX_WHITELIST = {
     "run_all.py",
     "diagnostics.py",
     "autonomous_ci.py",
+    "reporting.py",
+    "validation.py",
+    "cloud_orchestration.py",
+    "sweep.py",
+    "resource_manager.py",
+    "train_trocr_yolo.py",
 }
 
 # ============================================================================
