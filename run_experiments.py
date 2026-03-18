@@ -3709,6 +3709,20 @@ def train_experiment(
         if frozen_count:
             logger.info("[FreezeEncoder] Frozen Swin stage-0 only (%d parameters)", frozen_count)
 
+        # Move model to the training device (GPU when available).
+        # Without this explicit call the model stays on CPU even when CUDA is
+        # present, causing GPU Load 0% and ~20× slower training.
+        _mdl = _mdl.to(DEVICE)
+        _actual_device = next(_mdl.parameters()).device.type
+        # Compare type-only strings (e.g. "cuda" == "cuda" when DEVICE="cuda",
+        # even if the physical device is "cuda:0").
+        if _actual_device != str(DEVICE).split(":")[0]:
+            raise RuntimeError(
+                f"Model.to({DEVICE!r}) failed — parameters still on {_actual_device!r}. "
+                f"Check CUDA installation and torch device availability."
+            )
+        logger.info("[Device] Model moved to %s", DEVICE)
+
         # Build PyTorch datasets
         _train_ds = MultiDataset(samples, _proc, max_length=config.max_length)
         _val_ds = (

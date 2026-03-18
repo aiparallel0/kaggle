@@ -1596,6 +1596,33 @@ except ImportError:
             Returns:
                 _ModelOutput with .loss (scalar if labels given) and .logits (B, tgt_len, V)
             """
+            # Derive decoder_input_ids from labels when not provided (standard
+            # teacher-forcing shift-right, matching HF VisionEncoderDecoderModel
+            # behavior).  Without this, calling forward(pixel_values, labels=...)
+            # would pass None to the decoder and crash.
+            if decoder_input_ids is None and labels is not None:
+                start_id = self.config.decoder_start_token_id
+                if start_id is None:
+                    raise RuntimeError(
+                        "decoder_start_token_id is not set on model.config. "
+                        "Call tokenizer.convert_tokens_to_ids(['<s_sroie>'])[0] and "
+                        "assign it to model.config.decoder_start_token_id."
+                    )
+                pad_id = self.config.pad_token_id
+                if pad_id is None:
+                    raise RuntimeError(
+                        "pad_token_id is not set on model.config. "
+                        "Assign tokenizer.pad_token_id to model.config.pad_token_id."
+                    )
+            # Standard teacher-forcing shift-right: prepend decoder_start_token_id,
+            # drop the last label token.  -100 is the HuggingFace ignore index
+            # (used to mask padding positions in the cross-entropy loss) and must
+            # be replaced with a real token ID before embedding lookup.
+            bos = labels.new_full((labels.shape[0], 1), start_id)
+            _labels_clean = labels.clone()
+            _labels_clean[_labels_clean == -100] = pad_id  # replace ignore-index with pad
+            decoder_input_ids = torch.cat([bos, _labels_clean[:, :-1]], dim=1)  # shift right
+
             # Encode image
             encoder_out = self.encoder(pixel_values)  # (B, src_len, 1024)
 
@@ -3525,11 +3552,26 @@ class DonutTrainer:
             _hf_ds.Dataset = type("_HFDatasetStub", (), {})  # type: ignore[attr-defined]
             sys.modules["datasets"] = _hf_ds
 
+        # Custom data collator: stacks pixel_values and labels only, deliberately
+        # omitting decoder_input_ids.  Without this, HF DataCollatorForSeq2Seq
+        # (used implicitly in some transformers versions) would create
+        # decoder_input_ids by shifting labels, while the HF
+        # VisionEncoderDecoderModel simultaneously creates decoder_inputs_embeds
+        # from labels — causing the MBart decoder to raise:
+        #   ValueError: You cannot specify both decoder_input_ids and
+        #               decoder_inputs_embeds at the same time
+        def _donut_data_collator(features: list[dict]) -> dict:
+            return {
+                "pixel_values": torch.stack([f["pixel_values"] for f in features]),
+                "labels": torch.stack([f["labels"] for f in features]),
+            }
+
         trainer = Seq2SeqTrainer(
             model=self.model,
             args=training_args,
             train_dataset=self.train_dataset,
             eval_dataset=self.val_dataset,
+            data_collator=_donut_data_collator,
             callbacks=callbacks or None,
             optimizers=(optimizer, custom_scheduler),
         )
