@@ -150,23 +150,29 @@ def run_smoke_test() -> TestResult:
 
 
 def run_ruff_lint() -> TestResult:
-    """Run ruff linting."""
+    """Run ruff lint check and format check."""
     t0 = time.time()
     try:
-        result = subprocess.run(
+        check = subprocess.run(
             ["ruff", "check", "."],
             capture_output=True,
             text=True,
             timeout=30,
         )
-        passed = result.returncode == 0
-        output = result.stdout + "\n" + result.stderr
+        fmt = subprocess.run(
+            ["ruff", "format", "--check", "."],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        passed = check.returncode == 0 and fmt.returncode == 0
+        output = check.stdout + check.stderr + fmt.stdout + fmt.stderr
         return TestResult(
             name="ruff_lint",
             passed=passed,
             duration_sec=time.time() - t0,
             output=output,
-            error=None if passed else "Linting failed",
+            error=None if passed else "Lint/format check failed",
         )
     except FileNotFoundError:
         return TestResult(

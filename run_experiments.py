@@ -3689,7 +3689,9 @@ def train_experiment(
         if _enable_grad_ckpt:
             _mdl.config.use_cache = False  # Required with gradient_checkpointing
             _mdl.decoder.config.use_cache = False
-            _mdl.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+            _mdl.gradient_checkpointing_enable(
+                gradient_checkpointing_kwargs={"use_reentrant": False}
+            )
         else:
             # use_cache=True is the default and correct when not using grad checkpointing
             _mdl.config.use_cache = True
