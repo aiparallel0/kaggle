@@ -473,7 +473,12 @@ Analyze the runtime context and provide:
 Keep response under 300 words."""
 
 
-def _call_claude(context: dict, model: str = "claude-haiku-4-5-20251001") -> str | None:
+def _call_claude(
+    context: dict,
+    model: str = "claude-haiku-4-5-20251001",
+    system_prompt: str | None = None,
+    max_tokens: int = 500,
+) -> str | None:
     """Call Claude API for diagnosis. Returns response text or None."""
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not api_key:
@@ -495,8 +500,8 @@ def _call_claude(context: dict, model: str = "claude-haiku-4-5-20251001") -> str
         client = anthropic.Anthropic(api_key=api_key)
         response = client.messages.create(
             model=model,
-            max_tokens=500,
-            system=_DIAGNOSIS_SYSTEM_PROMPT,
+            max_tokens=max_tokens,
+            system=system_prompt or _DIAGNOSIS_SYSTEM_PROMPT,
             messages=[
                 {
                     "role": "user",
@@ -513,7 +518,12 @@ def _call_claude(context: dict, model: str = "claude-haiku-4-5-20251001") -> str
         return None
 
 
-def _call_mistral(context: dict, model: str = "mistral-small-latest") -> str | None:
+def _call_mistral(
+    context: dict,
+    model: str = "mistral-small-latest",
+    system_prompt: str | None = None,
+    max_tokens: int = 500,
+) -> str | None:
     """Call Mistral API for diagnosis. Returns response text or None."""
     api_key = os.environ.get("MISTRAL_API_KEY", "")
     if not api_key:
@@ -535,13 +545,13 @@ def _call_mistral(context: dict, model: str = "mistral-small-latest") -> str | N
         response = client.chat.complete(
             model=model,
             messages=[
-                {"role": "system", "content": _DIAGNOSIS_SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt or _DIAGNOSIS_SYSTEM_PROMPT},
                 {
                     "role": "user",
                     "content": f"Diagnose this pipeline issue:\n\n{json.dumps(context, indent=2, default=str)}",
                 },
             ],
-            max_tokens=500,
+            max_tokens=max_tokens,
         )
         return response.choices[0].message.content
     except ImportError:
@@ -552,7 +562,12 @@ def _call_mistral(context: dict, model: str = "mistral-small-latest") -> str | N
         return None
 
 
-def _call_mistral_httpx(context: dict, model: str = "mistral-small-latest") -> str | None:
+def _call_mistral_httpx(
+    context: dict,
+    model: str = "mistral-small-latest",
+    system_prompt: str | None = None,
+    max_tokens: int = 500,
+) -> str | None:
     """Call Mistral API via raw HTTP (no SDK required). Returns response text or None."""
     api_key = os.environ.get("MISTRAL_API_KEY", "")
     if not api_key:
@@ -571,9 +586,9 @@ def _call_mistral_httpx(context: dict, model: str = "mistral-small-latest") -> s
     payload = json.dumps(
         {
             "model": model,
-            "max_tokens": 500,
+            "max_tokens": max_tokens,
             "messages": [
-                {"role": "system", "content": _DIAGNOSIS_SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt or _DIAGNOSIS_SYSTEM_PROMPT},
                 {
                     "role": "user",
                     "content": f"Diagnose this pipeline issue:\n\n{json.dumps(context, indent=2, default=str)}",
@@ -835,6 +850,8 @@ def ai_diagnose(
     provider: str = "auto",
     claude_model: str = "claude-haiku-4-5-20251001",
     mistral_model: str = "mistral-small-latest",
+    system_prompt: str | None = None,
+    max_tokens: int = 500,
 ) -> str | None:
     """Call an AI provider to diagnose a pipeline failure.
 
@@ -849,6 +866,10 @@ def ai_diagnose(
         Claude model ID.
     mistral_model : str
         Mistral model ID.
+    system_prompt : str or None
+        Override the default diagnosis system prompt.
+    max_tokens : int
+        Maximum tokens in the AI response (default 500; use higher for code generation).
 
     Returns
     -------
@@ -856,20 +877,32 @@ def ai_diagnose(
         Diagnosis text, or None if no API is available.
     """
     if provider == "claude":
-        return _call_claude(context, model=claude_model)
+        return _call_claude(
+            context, model=claude_model, system_prompt=system_prompt, max_tokens=max_tokens
+        )
     if provider == "mistral":
-        result = _call_mistral(context, model=mistral_model)
+        result = _call_mistral(
+            context, model=mistral_model, system_prompt=system_prompt, max_tokens=max_tokens
+        )
         if result is None:
-            result = _call_mistral_httpx(context, model=mistral_model)
+            result = _call_mistral_httpx(
+                context, model=mistral_model, system_prompt=system_prompt, max_tokens=max_tokens
+            )
         return result
     # auto: try claude first, then mistral
-    result = _call_claude(context, model=claude_model)
+    result = _call_claude(
+        context, model=claude_model, system_prompt=system_prompt, max_tokens=max_tokens
+    )
     if result is not None:
         return result
-    result = _call_mistral(context, model=mistral_model)
+    result = _call_mistral(
+        context, model=mistral_model, system_prompt=system_prompt, max_tokens=max_tokens
+    )
     if result is not None:
         return result
-    return _call_mistral_httpx(context, model=mistral_model)
+    return _call_mistral_httpx(
+        context, model=mistral_model, system_prompt=system_prompt, max_tokens=max_tokens
+    )
 
 
 # ---------------------------------------------------------------------------
