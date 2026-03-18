@@ -2307,7 +2307,7 @@ class DonutEvaluator:
             outputs = self.model.generate(
                 pixel_values,
                 decoder_input_ids=decoder_input_ids,
-                max_length=self.max_length,
+                max_new_tokens=self.max_length,
                 use_cache=True,
                 num_beams=1,
                 bad_words_ids=[[self.processor.tokenizer.unk_token_id]],
@@ -2435,7 +2435,7 @@ class DonutEvaluator:
         outputs = self.model.generate(
             pixel_values,
             decoder_input_ids=decoder_input_ids,
-            max_length=self.max_length,
+            max_new_tokens=self.max_length,
             use_cache=True,
             num_beams=1,
             bad_words_ids=[[self.processor.tokenizer.unk_token_id]],
@@ -2626,7 +2626,7 @@ def run_inference(model, processor, image_path, task_prompt, max_length=512, pre
     outputs = model.generate(
         pixel_values,
         decoder_input_ids=decoder_input_ids,
-        max_length=max_length,
+        max_new_tokens=max_length,
         use_cache=True,
         num_beams=1,
         bad_words_ids=[[processor.tokenizer.unk_token_id]],
@@ -3031,7 +3031,7 @@ def evaluate_donut_on_test(
             outputs = model.generate(
                 pixel_values,
                 decoder_input_ids=decoder_input_ids,
-                max_length=MAX_LENGTH,
+                max_new_tokens=MAX_LENGTH,
                 use_cache=True,
                 num_beams=1,
                 bad_words_ids=[[processor.tokenizer.unk_token_id]],

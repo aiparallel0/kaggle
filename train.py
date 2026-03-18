@@ -3304,18 +3304,14 @@ class DonutTrainer:
         use_fp16 = torch.cuda.is_available() and not use_bf16
         logging.info("precision: %s", "bf16" if use_bf16 else ("fp16" if use_fp16 else "fp32"))
 
-        # torch.compile: Ampere+ (sm≥80) GPUs including RTX 4090 / A100 / Blackwell.
-        # First batch is slow (kernel compilation); subsequent batches get ~15-30% speedup.
-        _compile_supported = (
-            hasattr(torch, "compile")
-            and torch.cuda.is_available()
-            and torch.cuda.get_device_capability()[0] >= 8  # Ampere+, includes 4090
-        )
-        if _compile_supported:
-            self.model = torch.compile(self.model, mode="reduce-overhead")
-            logging.info("torch.compile applied (mode=reduce-overhead)")
-        else:
-            logging.info("torch.compile skipped (not supported on this device)")
+        # torch.compile DISABLED for DONUT: mode="reduce-overhead" uses CUDA
+        # graphs which assume fixed tensor shapes, but autoregressive generate()
+        # (used during evaluation via predict_with_generate=True) changes shape
+        # at every decoding step.  This causes silent failures or ValueError
+        # during evaluation, producing F1=0.  The ~15-30% training speedup is
+        # negated by the ~1.5-2 min kernel compilation overhead per experiment
+        # and the broken evaluation.
+        logging.info("torch.compile skipped (incompatible with autoregressive generate)")
 
         # Cap warmup_steps to ≤10% of total optimizer steps.
         # warmup=500 is correct for large datasets (Exp 8, ~3940 samples, ~1250 opt steps),
