@@ -1157,7 +1157,7 @@ class FUNSDLoader(BaseDatasetLoader):
         try:
             from datasets import load_dataset  # type: ignore
 
-            self._log("Downloading %s from HuggingFace ...", _funsd_repo)
+            self._log(f"Downloading {_funsd_repo} from HuggingFace ...")
             _kw: dict = {"trust_remote_code": False}
             if _funsd_rev:
                 _kw["revision"] = _funsd_rev
@@ -1425,7 +1425,7 @@ class InvoicesDonutLoader(BaseDatasetLoader):
         try:
             from datasets import load_dataset  # type: ignore
 
-            self._log("Downloading %s from HuggingFace ...", _inv_repo)
+            self._log(f"Downloading {_inv_repo} from HuggingFace ...")
             _kw: dict = {"trust_remote_code": False}
             if _inv_rev:
                 _kw["revision"] = _inv_rev
@@ -1667,7 +1667,7 @@ class CORDv2Loader(BaseDatasetLoader):
         try:
             from datasets import load_dataset  # type: ignore
 
-            self._log("Downloading %s from HuggingFace ...", _cord_repo)
+            self._log(f"Downloading {_cord_repo} from HuggingFace ...")
             _kw: dict = {"trust_remote_code": False}
             if _cord_rev:
                 _kw["revision"] = _cord_rev
