@@ -1,5 +1,5 @@
 # Multi-Dataset Fine-Tuning of DONUT for Receipt Information Extraction
-
+# Be careful to preserve debelopmental history of the repo.
 A systematic study of multi-dataset fine-tuning for receipt key information extraction (KIE) using the DONUT (Document Understanding Transformer) model and TrOCR+YOLO comparison.
 
 **Status:** ✅ **Stable & Complete** (2026-03-18)
