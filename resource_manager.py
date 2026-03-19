@@ -815,20 +815,37 @@ class TrainingAuditLogger:
         with open(self.log_path, "a", encoding="utf-8") as f:
             f.write("\n".join(lines))
 
-    def log_config_decision(self, experiment_id: int, config: ResourceOptimizedConfig) -> None:
+    def log_config_decision(
+        self,
+        experiment_id: int,
+        config: ResourceOptimizedConfig,
+        actual_epochs: int | None = None,
+    ) -> None:
         """Log hyperparameter optimization decision.
 
         Args:
             experiment_id: Experiment number (1-8)
             config: ResourceOptimizedConfig with recommended hyperparameters
+            actual_epochs: The epoch count that will actually be used in training
+                (from ExperimentConfig, which may differ from config.epochs=10 for
+                Exps 5-8 which use 15 epochs per CLAUDE.md § 3).  When provided,
+                this value is logged instead of config.epochs to avoid the
+                misleading CONFIG_OPTIMIZATION entry that showed epochs=10 while
+                validate_training_config reported 15 epochs for those experiments.
         """
+        displayed_epochs = actual_epochs if actual_epochs is not None else config.epochs
+        epoch_note = (
+            f" (resource optimizer default={config.epochs}; experiment config overrides to {actual_epochs})"
+            if actual_epochs is not None and actual_epochs != config.epochs
+            else ""
+        )
         lines = [
             f"[{self._timestamp()}] CONFIG_OPTIMIZATION (Exp {experiment_id})",
             f"- batch_size: {config.batch_size} (effective={config.batch_size * config.gradient_accumulation_steps})",
             f"- accumulation_steps: {config.gradient_accumulation_steps}",
             f"- encoder_lr: {config.encoder_lr:.2e}",
             f"- decoder_lr: {config.decoder_lr:.2e}",
-            f"- epochs: {config.epochs}",
+            f"- epochs: {displayed_epochs}{epoch_note}",
             f"- warmup_steps: {config.warmup_steps}",
             f"- early_stopping_patience: {config.early_stopping_patience}",
             f"- reason: {config.config_explanation}",

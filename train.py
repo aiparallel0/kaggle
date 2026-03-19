@@ -3911,6 +3911,54 @@ def main():
     )
     model.decoder.resize_token_embeddings(len(processor.tokenizer))
 
+    # Semantic initialisation of new SROIE special-token embeddings.
+    # Replace random vectors with averages of semantically similar existing tokens
+    # so the model converges on the correct XML structure in fewer optimizer steps.
+    # (With only ~630 optimizer steps from random init, the model learns field values
+    # but fails to learn the structural tags, producing </s_sroie> delimiters instead
+    # of <s_company>VALUE</s_company> sequences.)
+    _semantic_seed_words: dict[str, list[str]] = {
+        "<s_company>": ["company", "store", "name", "shop", "merchant"],
+        "<s_date>": ["date", "time", "day"],
+        "<s_address>": ["address", "location", "street", "place"],
+        "<s_total>": ["total", "amount", "price", "sum"],
+    }
+    _embed_w = model.decoder.model.decoder.embed_tokens.weight
+    _lm_w = model.decoder.lm_head.weight
+    _bos_id = processor.tokenizer.bos_token_id or 0
+    _eos_id = processor.tokenizer.eos_token_id or 2
+    _opening_vecs: dict[str, Any] = {}
+    with torch.no_grad():
+        for _tok in NEW_TOKENS:
+            _tid = processor.tokenizer.convert_tokens_to_ids([_tok])[0]
+            if _tid >= _embed_w.shape[0]:
+                continue
+            if _tok == "<s_sroie>":
+                _vec = _embed_w.data[_bos_id].clone()
+            elif _tok == "</s_sroie>":
+                _vec = _embed_w.data[_eos_id].clone()
+            elif _tok in _semantic_seed_words:
+                _seed_vecs = []
+                for _sw in _semantic_seed_words[_tok]:
+                    for _swid in processor.tokenizer.encode(_sw, add_special_tokens=False):
+                        if _swid < _embed_w.shape[0]:
+                            _seed_vecs.append(_embed_w.data[_swid].clone())
+                _vec = (
+                    torch.stack(_seed_vecs).mean(dim=0)
+                    if _seed_vecs
+                    else _embed_w.data[_eos_id].clone()
+                )
+                _opening_vecs[_tok] = _vec
+            elif _tok.startswith("</s_") and _tok.endswith(">"):
+                _open = _tok.replace("</", "<")
+                _vec = _opening_vecs.get(_open, _embed_w.data[_eos_id]).clone()
+            else:
+                continue
+            _embed_w.data[_tid] = _vec
+            if _lm_w.shape[0] > _tid:
+                _lm_w.data[_tid] = _vec
+    logging.info("[SemanticInit] Initialised %d new SROIE token embeddings", len(NEW_TOKENS))
+
     # After resize, embed_tokens and lm_head are separate tensors with
     # independent random init for the new tokens.  Set tie_word_embeddings=False
     # so save_pretrained() saves BOTH weights independently.  Without this,
