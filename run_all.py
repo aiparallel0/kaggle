@@ -369,6 +369,43 @@ class _DualStreamHandler(logging.Handler):
         "Loading model from",
         "CONFIG_OPTIMIZATION",
         "[progress]",
+        # Stage-level verbose lines (file-only)
+        "Pre-downloading base model",
+        "Base model cached",
+        "Pre-loading base model",
+        "Base model pre-loaded",
+        "GPU memory freed",
+        "YOLO weights cached",
+        "TrOCR model cached",
+        "CORD-transfer baseline",
+        "Evaluating on ",
+        "Loading pretrained model",
+        "Pretrained Global F1",
+        "Saved →",
+        "TrOCR+YOLO data already",
+        "Training YOLOv8",
+        "Training TrOCR",
+        "Evaluating TrOCR+YOLO",
+        "DONUT model  :",
+        "YOLO model   :",
+        "TrOCR model  :",
+        "Test images  :",
+        "Test labels  :",
+        "Running DONUT inference",
+        "Running YOLOv8+TrOCR",
+        "Benchmark complete",
+        "[stage_experiments]",
+        "[force]",
+        "[AutoRetry]",
+        "arch=",
+        "zero_shot=",
+        "Datasets: [",
+        "generate_training_plots",
+        "Convergence/barchart tex",
+        "% === TABLE",
+        "generate_convergence",
+        "generate_f1_barchart",
+        "INFO: paper/presentation",
     )
 
     # CONFIG_OPTIMIZATION sub-line prefixes that are file-only.
@@ -399,14 +436,16 @@ class _DualStreamHandler(logging.Handler):
             msg = self.format(record)
             self._write_to_file(msg)
 
-            # Selectively write to console
-            if record.levelno >= logging.INFO:  # noqa: SIM102
-                if not self._should_suppress_console(msg):
-                    # Always show ERROR/WARNING
+            # Selectively write to console using a compact format (no timestamp/logger name).
+            if record.levelno >= logging.INFO:
+                plain = record.getMessage()
+                if not self._should_suppress_console(plain):
+                    level_tag = record.levelname[:4]  # INFO, WARN, ERRO, CRIT
+                    console_line = f"{level_tag}: {plain}"
                     if record.levelno >= logging.WARNING:
-                        print(f"[{record.levelname:8s}] {msg}", file=sys.stderr)
+                        print(console_line, file=sys.stderr)
                     else:
-                        print(f"[{record.levelname:8s}] {msg}")
+                        print(console_line)
                     sys.stdout.flush()
         except Exception:
             self.handleError(record)
@@ -429,26 +468,27 @@ class _DualStreamHandler(logging.Handler):
             self.file_handle.write(msg + "\n")
             self.file_handle.flush()
 
-    def _should_suppress_console(self, msg: str) -> bool:
+    def _should_suppress_console(self, plain: str) -> bool:
         """Return True if this log line should be omitted from console output.
 
+        Receives the plain message text (no timestamp/logger name).
         Progress lines (epoch/step counters) are dedup-collapsed.
         Verbose internal diagnostic lines are routed to terminal.txt only.
         Per-step loss dicts and CONFIG_OPTIMIZATION sub-lines are also suppressed.
         """
         # Dedup repetitive progress lines (tqdm-style bars, epoch counters).
-        if any(x in msg for x in self._PROGRESS_TRIGGERS):
-            if msg == self._last_console_line:
+        if any(x in plain for x in self._PROGRESS_TRIGGERS):
+            if plain == self._last_console_line:
                 self._console_repeat_count += 1
                 return True
-            self._last_console_line = msg
+            self._last_console_line = plain
             self._console_repeat_count = 0
 
         # Verbose internal lines that belong in terminal.txt only.
-        if any(x in msg for x in self._SUPPRESS_SUBSTRINGS):
+        if any(x in plain for x in self._SUPPRESS_SUBSTRINGS):
             return True
 
-        stripped = msg.lstrip()
+        stripped = plain.lstrip()
 
         # Per-step loss dicts: "{'loss': ...}" and "{'eval_loss': ...}"
         if stripped.startswith("{'loss':") or stripped.startswith("{'eval_loss':"):
@@ -549,51 +589,93 @@ class HyperparameterGrid:
 # Helpers
 # ---------------------------------------------------------------------------
 
+# When True, fancy box-drawing banners and tables are printed to console.
+# Set by --fancy CLI flag in main().  All verbose output still goes to
+# terminal.txt regardless of this flag.
+_FANCY_OUTPUT: bool = False
+
 
 def _banner(text: str) -> None:
-    width = 72
-    print(f"\n{'=' * width}")
-    print(f"  {text}")
-    print(f"{'=' * width}")
+    """Print a section banner.  Always written to terminal.txt; shown on
+    console only when --fancy is active."""
+    logging.getLogger(__name__).debug("=== %s ===", text)
+    if _FANCY_OUTPUT:
+        width = 72
+        print(f"\n{'=' * width}")
+        print(f"  {text}")
+        print(f"{'=' * width}")
 
 
 def _step(n: int, total: int, desc: str) -> None:
-    print(f"\n[{n}/{total}] {desc}")
-    print("-" * 60)
+    """Print a numbered step header.  Always written to terminal.txt;
+    shown on console only when --fancy is active."""
+    logging.getLogger(__name__).debug("[%d/%d] %s", n, total, desc)
+    if _FANCY_OUTPUT:
+        print(f"\n[{n}/{total}] {desc}")
+        print("-" * 60)
 
 
-def _print_final_summary(results_dir: Path, pdf_compiled: bool | None = None) -> None:
-    """Print a box-drawing summary table of all experiment results.
+def _load_summary_rows(results_dir: Path) -> list[dict]:
+    """Load experiment result rows from JSON files for summary display."""
+    rows = []
+    for rf in sorted(results_dir.glob("experiment_*.json")):
+        try:
+            with open(rf) as fh:
+                data = json.load(fh)
+            m = data.get("metrics", {})
+            rows.append(
+                {
+                    "exp": data.get("experiment_id", "?"),
+                    "name": data.get("name", "")[:29],
+                    "f1": m.get("global_f1", float("nan")),
+                    "company": m.get("company_f1", float("nan")),
+                    "date": m.get("date_f1", float("nan")),
+                    "addr": m.get("address_f1", float("nan")),
+                    "total": m.get("total_f1", float("nan")),
+                    "time": m.get("training_time_sec", 0.0) / 60,
+                }
+            )
+        except Exception:
+            continue
+    return rows
+
+
+def _compact_summary(results_dir: Path, pdf_compiled: bool | None = None) -> None:
+    """Print a compact plain-text results summary (default mode)."""
+    try:
+        rows = _load_summary_rows(results_dir)
+        if not rows:
+            return
+        valid = [r for r in rows if not math.isnan(r["f1"])]
+        best = max(valid, key=lambda r: r["f1"]) if valid else None
+        print("Results:")
+        for r in rows:
+            f1_s = f"{r['f1']:.4f}" if not math.isnan(r["f1"]) else " N/A "
+            mark = " *" if best and r["exp"] == best["exp"] else ""
+            print(f"  Exp {r['exp']:>2}: {r['name']:<29} F1={f1_s} ({r['time']:.1f}m){mark}")
+        if best:
+            co_s = f"{best['company']:.4f}" if not math.isnan(best["company"]) else "N/A"
+            da_s = f"{best['date']:.4f}" if not math.isnan(best["date"]) else "N/A"
+            ad_s = f"{best['addr']:.4f}" if not math.isnan(best["addr"]) else "N/A"
+            to_s = f"{best['total']:.4f}" if not math.isnan(best["total"]) else "N/A"
+            print(
+                f"  Best Exp {best['exp']}: F1={best['f1']:.4f}  co={co_s} dt={da_s} addr={ad_s} tot={to_s}"
+            )
+        if pdf_compiled is not None:
+            pdf_tag = "compiled" if pdf_compiled else "skipped (no LaTeX)"
+            print(f"  PDF: {pdf_tag}")
+    except Exception:
+        pass
+
+
+def _print_fancy_summary(results_dir: Path, pdf_compiled: bool | None = None) -> None:
+    """Print a box-drawing summary table of all experiment results (--fancy mode).
 
     Format is AI-agent-friendly: copy-pastable, fixed-width columns, minimal tokens.
     Includes best experiment highlight and per-field F1 for the winner.
     """
     try:
-        result_files = sorted(results_dir.glob("experiment_*.json"))
-        if not result_files:
-            return
-
-        rows = []
-        for rf in result_files:
-            try:
-                with open(rf) as fh:
-                    data = json.load(fh)
-                m = data.get("metrics", {})
-                rows.append(
-                    {
-                        "exp": data.get("experiment_id", "?"),
-                        "name": data.get("name", "")[:29],
-                        "f1": m.get("global_f1", float("nan")),
-                        "company": m.get("company_f1", float("nan")),
-                        "date": m.get("date_f1", float("nan")),
-                        "addr": m.get("address_f1", float("nan")),
-                        "total": m.get("total_f1", float("nan")),
-                        "time": m.get("training_time_sec", 0.0) / 60,
-                    }
-                )
-            except Exception:
-                continue
-
+        rows = _load_summary_rows(results_dir)
         if not rows:
             return
 
@@ -643,6 +725,14 @@ def _print_final_summary(results_dir: Path, pdf_compiled: bool | None = None) ->
         print("└" + "─" * footer_w + "┘")
     except Exception:
         pass
+
+
+def _print_final_summary(results_dir: Path, pdf_compiled: bool | None = None) -> None:
+    """Print results summary. Uses compact plain-text by default; box-drawing with --fancy."""
+    if _FANCY_OUTPUT:
+        _print_fancy_summary(results_dir, pdf_compiled)
+    else:
+        _compact_summary(results_dir, pdf_compiled)
 
 
 # ---------------------------------------------------------------------------
@@ -1005,15 +1095,15 @@ def stage_install(args) -> StageResult:
 
     # Verify: img/ should now contain exactly the train images
     remaining = sum(1 for p in img_dir.iterdir() if p.is_file() and p.suffix.lower() in IMAGE_EXTS)
-    print(f"  Train images : {remaining} (in img/, after moving val+test out)")
-    print(f"  Val images   : {len(val_imgs)} (in val_img/)")
-    print(f"  Test images  : {len(test_imgs)} (in test_img/)")
+    _log_inst = logging.getLogger(__name__)
+    _log_inst.info(
+        "SROIE split: train=%d  val=%d  test=%d", remaining, len(val_imgs), len(test_imgs)
+    )
     if remaining != len(train_imgs):
-        print(
-            f"  WARNING: Expected {len(train_imgs)} train images in img/ but found {remaining}",
-            file=sys.stderr,
+        _log_inst.warning(
+            "Expected %d train images in img/ but found %d", len(train_imgs), remaining
         )
-    print(f"  SROIE data ready at {sroie_data_dir}")
+    _log_inst.debug("SROIE data ready at %s", sroie_data_dir)
 
     return StageResult(name="SROIE Install", duration=0.0, exit_status=0, warnings=warnings)
 
@@ -1036,19 +1126,21 @@ def stage_download(args) -> StageResult:
     sroie_img = Path(args.sroie_dir) / "img"
     sroie_test_img = Path(args.sroie_dir) / "test_img"
     if not sroie_img.exists():
-        print(f"ERROR: SROIE data not found at {args.sroie_dir}.", file=sys.stderr)
-        print("       Expected subdirs: img/, key/", file=sys.stderr)
+        logging.getLogger(__name__).error(
+            "SROIE data not found at %s. Expected subdirs: img/, key/", args.sroie_dir
+        )
         sys.exit(2)
 
     train_samples = dataset_loaders.load_sroie_train()
     test_samples = dataset_loaders.load_sroie_test()
     val_samples = dataset_loaders.load_sroie_val()
-    print(f"  SROIE train : {len(train_samples)} samples")
-    print(f"  SROIE val   : {len(val_samples)} samples")
-    print(f"  SROIE test  : {len(test_samples)} samples")
+    _log_dl = logging.getLogger(__name__)
+    _log_dl.info(
+        "SROIE: train=%d  val=%d  test=%d", len(train_samples), len(val_samples), len(test_samples)
+    )
     if not sroie_test_img.exists() or len(test_samples) == 0:
         w = "SROIE test split not found or empty — evaluation will be skipped."
-        print(f"  WARNING: {w}", file=sys.stderr)
+        _log_dl.warning("%s", w)
         warnings.append(w)
 
     # Download all auxiliary datasets in parallel (I/O-bound, threads are fine)
@@ -1066,7 +1158,7 @@ def stage_download(args) -> StageResult:
         except Exception as exc:
             return (ds_name, 0, str(exc), 0.0)
 
-    print(f"  Downloading {len(aux_datasets)} datasets in parallel ...")
+    _log_dl.debug("Downloading %d datasets in parallel ...", len(aux_datasets))
     counts = {
         "sroie": len(train_samples),
         "wildreceipt": 0,
@@ -1079,21 +1171,19 @@ def stage_download(args) -> StageResult:
             ds_name, count, error, elapsed = future.result()
             if error:
                 w = f"'{ds_name}' failed: {error}"
-                print(f"    → WARNING: {w}")
+                _log_dl.warning("%s", w)
                 failed_datasets.append(ds_name)
                 warnings.append(w)
             else:
                 counts[ds_name] = count
-                print(f"    → '{ds_name}' ready: {count} train samples ({elapsed:.1f}s)")
+                _log_dl.debug("  '%s' ready: %d samples (%.1fs)", ds_name, count, elapsed)
 
-    print(f"\n  +{'-' * 50}+")
-    print(f"  | {'Dataset':<25} {'Samples':>10} {'Status':>12} |")
-    print(f"  +{'-' * 50}+")
-    for ds_name in ["sroie", "wildreceipt", "funsd", "invoices_donut"]:
-        count = counts.get(ds_name, 0)
-        status_sym = "[OK]" if count > 0 else "[EMPTY]"
-        print(f"  | {ds_name:<25} {count:>10} {status_sym:>12} |")
-    print(f"  +{'-' * 50}+")
+    # Log dataset summary at debug level (file-only).
+    _dl_summary = "\n".join(
+        f"  {ds:<25} {counts.get(ds, 0):>10}  {'[OK]' if counts.get(ds, 0) > 0 else '[EMPTY]'}"
+        for ds in ["sroie", "wildreceipt", "funsd", "invoices_donut"]
+    )
+    _log_dl.debug("Dataset counts:\n%s", _dl_summary)
 
     if failed_datasets:
         # Report which experiment IDs are affected by the failed downloads
@@ -1104,14 +1194,11 @@ def stage_download(args) -> StageResult:
             for exp_id, exp in re_mod.EXPERIMENTS.items()
             if any(ds in exp.datasets for ds in failed_datasets)
         ]
-        print(
-            f"\n  WARNING: {len(failed_datasets)} auxiliary dataset(s) failed to load: "
-            f"{failed_datasets}",
-            file=sys.stderr,
-        )
-        print(
-            f"  Affected experiment IDs: {affected_exp_ids}",
-            file=sys.stderr,
+        _log_dl.warning(
+            "%d auxiliary dataset(s) failed: %s  Affected experiments: %s",
+            len(failed_datasets),
+            failed_datasets,
+            affected_exp_ids,
         )
 
     # Blocking model pre-download — ensures the model is fully HF-cached
@@ -1163,6 +1250,7 @@ def stage_pretrained_baseline(args) -> StageResult:
     import run_experiments as eval_mod
 
     _banner("STAGE 1.5 — CORD-transfer baseline evaluation (cross-dataset CORD→SROIE)")
+    _log = logging.getLogger(__name__)
     warnings: list[str] = []
 
     workspace = Path(args.workspace)
@@ -1171,11 +1259,11 @@ def stage_pretrained_baseline(args) -> StageResult:
     test_samples = dataset_loaders.load_sroie_test()
     if len(test_samples) == 0:
         w = "SROIE test split is empty — skipping pretrained baseline evaluation."
-        print(f"  WARNING: {w}", file=sys.stderr)
+        _log.warning("%s", w)
         warnings.append(w)
         return StageResult(name="Pretrained Eval", duration=0.0, exit_status=1, warnings=warnings)
 
-    print(f"  Evaluating on {len(test_samples)} test images ...")
+    _log.debug("Evaluating on %d test images ...", len(test_samples))
 
     ground_truths = [s[1] for s in test_samples]
     image_paths = [s[0] for s in test_samples]
@@ -1184,7 +1272,7 @@ def stage_pretrained_baseline(args) -> StageResult:
     # BASE_MODEL is now donut-base (no task fine-tuning), so this stage hardcodes
     # the CORD checkpoint to keep a meaningful zero-shot comparison point.
     pretrained_model_id = "naver-clova-ix/donut-base-finetuned-cord-v2"
-    print(f"  Loading pretrained model: {pretrained_model_id}")
+    _log.debug("Loading pretrained model: %s", pretrained_model_id)
     pre_processor = DonutProcessor.from_pretrained(pretrained_model_id)
     pre_model = VisionEncoderDecoderModel.from_pretrained(pretrained_model_id)
     # Silence "tied weights" warning: checkpoint already has separate embed_tokens
@@ -1201,13 +1289,13 @@ def stage_pretrained_baseline(args) -> StageResult:
             pretrained_preds.append(eval_mod.remap_cord_to_sroie(raw))
 
     pretrained_metrics = eval_mod.compute_metrics(pretrained_preds, ground_truths)
-    print(f"  Pretrained Global F1 = {pretrained_metrics.get('global_f1', 'N/A')}")
+    _log.info("Pretrained baseline F1=%s", pretrained_metrics.get("global_f1", "N/A"))
 
     workspace.mkdir(parents=True, exist_ok=True)
     output = {"pretrained_metrics": pretrained_metrics}
     with open(output_path, "w") as fh:
         json.dump(output, fh, indent=2, default=str)
-    print(f"  Saved → {output_path}")
+    _log.debug("Pretrained baseline saved → %s", output_path)
 
     # Free the CORD baseline model from GPU before DONUT training starts.
     # NOTE: local references MUST be deleted before _gpu_cleanup() is called,
@@ -1442,13 +1530,15 @@ def _autonomous_feedback_loop(
     if not failed_ids:
         return []
 
+    _log_ar = logging.getLogger(__name__)
     if os.environ.get("DISABLE_DIAGNOSTICS", "0") == "1":
-        print("  [AutoRetry] DISABLE_DIAGNOSTICS=1 — skipping feedback loop")
+        _log_ar.debug("[AutoRetry] DISABLE_DIAGNOSTICS=1 — skipping feedback loop")
         return failed_ids
 
-    print(
-        f"\n  [AutoRetry] {len(failed_ids)} experiment(s) failed "
-        f"({failed_ids}) — running autonomous CI auto-fix..."
+    _log_ar.debug(
+        "[AutoRetry] %d experiment(s) failed (%s) — running autonomous CI auto-fix...",
+        len(failed_ids),
+        failed_ids,
     )
 
     # Run CI auto-fix (no git merge, no PR post — fixes code in-place).
@@ -1462,29 +1552,29 @@ def _autonomous_feedback_loop(
             max_fix_attempts=3,
             skip_smoke_test=False,
         )
-        print(f"  [AutoRetry] CI auto-fix returned: {'PASS' if ci_fixed else 'FAIL'}")
+        _log_ar.debug("[AutoRetry] CI auto-fix returned: %s", "PASS" if ci_fixed else "FAIL")
     except Exception as _ci_exc:
-        print(f"  [AutoRetry] CI auto-fix error: {_ci_exc}")
+        _log_ar.debug("[AutoRetry] CI auto-fix error: %s", _ci_exc)
         return failed_ids
 
     if not ci_fixed:
-        print("  [AutoRetry] CI could not fix issues — experiments remain failed")
+        _log_ar.debug("[AutoRetry] CI could not fix issues — experiments remain failed")
         return failed_ids
 
     # Reload run_experiments so patched code is live without restarting the process.
-    print("  [AutoRetry] Reloading run_experiments module to pick up fixes...")
+    _log_ar.debug("[AutoRetry] Reloading run_experiments module to pick up fixes...")
     try:
         import run_experiments as _re_retry
 
         importlib.reload(_re_retry)
     except Exception as _reload_exc:
-        print(f"  [AutoRetry] Module reload failed: {_reload_exc} — skipping retry")
+        _log_ar.debug("[AutoRetry] Module reload failed: %s — skipping retry", _reload_exc)
         return failed_ids
 
     # Retry failed experiments with the patched code.
     still_failed: list = []
     for exp_id in failed_ids:
-        print(f"  [AutoRetry] Retrying experiment {exp_id}...")
+        _log_ar.debug("[AutoRetry] Retrying experiment %d...", exp_id)
         try:
             yaml_cfg = yaml_cfg_map.get(exp_id)
             arch = getattr(yaml_cfg, "arch_type", "donut") if yaml_cfg else "donut"
@@ -1502,20 +1592,23 @@ def _autonomous_feedback_loop(
                     overrides=getattr(args, "param_overrides", None) or None,
                 )
 
-            print(
-                f"  [AutoRetry] Experiment {exp_id} succeeded on retry "
-                f"(F1={result.get('metrics', {}).get('global_f1', 'N/A')})"
+            _log_ar.debug(
+                "[AutoRetry] Experiment %d succeeded (F1=%s)",
+                exp_id,
+                result.get("metrics", {}).get("global_f1", "N/A"),
             )
         except Exception as _retry_exc:
-            print(f"  [AutoRetry] Experiment {exp_id} still failed: {_retry_exc}")
+            _log_ar.debug("[AutoRetry] Experiment %d still failed: %s", exp_id, _retry_exc)
             still_failed.append(exp_id)
 
     if still_failed:
-        print(
-            f"  [AutoRetry] {len(still_failed)} experiment(s) could not be recovered: {still_failed}"
+        _log_ar.debug(
+            "[AutoRetry] %d experiment(s) could not be recovered: %s",
+            len(still_failed),
+            still_failed,
         )
     else:
-        print("  [AutoRetry] All failed experiments recovered successfully!")
+        _log_ar.debug("[AutoRetry] All failed experiments recovered successfully!")
 
     return still_failed
 
@@ -1536,13 +1629,14 @@ def stage_experiments(args) -> StageResult:
 
     # Honour --force by clearing cached result files first
     if getattr(args, "force", False):
+        _log_force = logging.getLogger(__name__)
         for result_file in results_dir.glob("experiment_*.json"):
             result_file.unlink()
-            print(f"  [force] Deleted cached result: {result_file}")
+            _log_force.debug("[force] Deleted cached result: %s", result_file)
         summary_file = results_dir / "all_experiments.json"
         if summary_file.exists():
             summary_file.unlink()
-            print(f"  [force] Deleted cached summary: {summary_file}")
+            _log_force.debug("[force] Deleted cached summary: %s", summary_file)
 
     # Determine which experiments to run.
     # If --experiment N is given (legacy single-exp flag), use just that one.
@@ -1575,6 +1669,7 @@ def stage_experiments(args) -> StageResult:
     # This mirrors the pattern already used correctly in run_experiments.py main().
     _base_processor = None
     _base_model = None
+    _log_se = logging.getLogger(__name__)
     if not args.experiment:
         # Only pre-load when running all experiments; single-experiment runs
         # load directly in train_experiment() via from_pretrained().
@@ -1582,14 +1677,16 @@ def stage_experiments(args) -> StageResult:
             from transformers import DonutProcessor, VisionEncoderDecoderModel
 
             _cfg0 = re_mod.EXPERIMENTS[1]
-            print(f"  [stage_experiments] Pre-loading base model: {_cfg0.base_model}")
+            _log_se.debug("[stage_experiments] Pre-loading base model: %s", _cfg0.base_model)
             _base_processor = DonutProcessor.from_pretrained(_cfg0.base_model)
             _base_model = VisionEncoderDecoderModel.from_pretrained(_cfg0.base_model)
-            print("  [stage_experiments] Base model pre-loaded (will deep-copy per experiment).")
+            _log_se.debug(
+                "[stage_experiments] Base model pre-loaded (will deep-copy per experiment)."
+            )
         except Exception as _preload_exc:
-            print(
-                f"  [stage_experiments] Base model pre-load failed ({_preload_exc}); "
-                "each experiment will load from disk."
+            _log_se.debug(
+                "[stage_experiments] Base model pre-load failed (%s); each experiment will load from disk.",
+                _preload_exc,
             )
             _base_processor = None
             _base_model = None
@@ -1632,7 +1729,7 @@ def stage_experiments(args) -> StageResult:
                         overrides=getattr(args, "param_overrides", None) or None,
                     )
 
-            print("  [stage_experiments] --parallel: using DAGScheduler")
+            _log_se.debug("[stage_experiments] --parallel: using DAGScheduler")
             scheduler = DAGScheduler(yaml_configs, _parallel_run_fn)
             dag_results = scheduler.run()
             had_empty_dag = any(
@@ -1648,17 +1745,19 @@ def stage_experiments(args) -> StageResult:
                 warnings=warnings,
             )
         except ImportError as _dag_exc:
-            print(
-                f"  [stage_experiments] DAGScheduler unavailable ({_dag_exc}) "
-                "— falling back to serial execution"
+            _log_se.debug(
+                "[stage_experiments] DAGScheduler unavailable (%s) — falling back to serial execution",
+                _dag_exc,
             )
 
     # ── Serial loop ───────────────────────────────────────────────────────
+    _log = logging.getLogger(__name__)
     for i, exp_id in enumerate(exp_ids, 1):
         exp_name = _exp_display_name(exp_id)
         _step(i, total, f"Experiment {exp_id}: {exp_name}")
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-        print(f"  ▶ Experiment {exp_id} — {exp_name} started at {ts}")
+        _log.debug("Experiment %d — %s started at %s", exp_id, exp_name, ts)
+        _log.info("Exp %d/%d: %s", i, total, exp_name)
 
         # Determine arch_type for dispatch
         yaml_cfg = _yaml_cfg_map.get(exp_id)
@@ -1666,12 +1765,14 @@ def stage_experiments(args) -> StageResult:
         is_zero_shot = yaml_cfg.is_zero_shot if yaml_cfg is not None else False
 
         if yaml_cfg is not None:
-            print(
-                f"    arch={arch_type}  zero_shot={is_zero_shot}  "
-                f"datasets={[d.name for d in yaml_cfg.datasets]}"
+            _log.debug(
+                "  arch=%s  zero_shot=%s  datasets=%s",
+                arch_type,
+                is_zero_shot,
+                [d.name for d in yaml_cfg.datasets],
             )
         elif exp_id in re_mod.EXPERIMENTS:
-            print(f"    Datasets: {re_mod.EXPERIMENTS[exp_id].datasets}")
+            _log.debug("  Datasets: %s", re_mod.EXPERIMENTS[exp_id].datasets)
 
         t0 = time.monotonic()
         try:
@@ -1699,10 +1800,8 @@ def stage_experiments(args) -> StageResult:
                 )
         except Exception as exc:
             elapsed = time.monotonic() - t0
-            ts_end = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
             w = f"Experiment {exp_id} ({exp_name}) crashed: {type(exc).__name__}: {exc}"
-            print(f"\n  ✗ FATAL: {w}")
-            print("    Traceback follows:")
+            _log.error("Exp %d CRASHED: %s", exp_id, exc)
             traceback.print_exc()
             # Clean up any GPU memory leaked by the crashed experiment so that
             # subsequent experiments start with a clean, defragmented GPU.
@@ -1719,13 +1818,10 @@ def stage_experiments(args) -> StageResult:
             had_empty = True
             continue
         elapsed = time.monotonic() - t0
-        ts_end = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         f1 = result.get("metrics", {}).get("global_f1", "N/A")
-        print(f"  ◀ Experiment {exp_id} — {exp_name} finished at {ts_end} ({elapsed:.1f}s)")
-        print(
-            f"    done in {elapsed / 60:.1f}min | F1={f1} "
-            f"| Samples={result.get('num_train_samples', '?')}"
-        )
+        n_samples = result.get("num_train_samples", "?")
+        _log.info("Exp %d done: F1=%s  samples=%s  time=%.1fm", exp_id, f1, n_samples, elapsed / 60)
+        _log.debug("Experiment %d finished (%.1fs)", exp_id, elapsed)
         completed += 1
         if result.get("num_train_samples", 0) == 0 and not is_zero_shot:
             had_empty = True
@@ -1755,7 +1851,6 @@ def stage_experiments(args) -> StageResult:
                         f"Run: python diagnostics.py --smoke-test"
                     )
                     logging.warning(_vw)
-                    print(f"\n  ⚠  {_vw}\n")
                     warnings.append(_vw)
                     had_empty = True
                     if exp_id not in failed_experiments:
@@ -1820,9 +1915,9 @@ def _run_trocr_yolo_experiment(args, cfg) -> dict:
     Dispatch Experiment 12 (arch_type=trocr_yolo) to the TrOCR+YOLO training path.
     Returns a result dict compatible with the stage_experiments summary logic.
     """
+    logging.getLogger(__name__).debug("[dispatch] arch=trocr_yolo → train_trocr_yolo.py")
     import train_trocr_yolo  # noqa: F401  # early import to fail fast if package missing
 
-    print("  [dispatch] arch=trocr_yolo → train_trocr_yolo.py")
     # Ensure TrOCR+YOLO data is prepared before running experiments.
     # stage_trocr_data_prep() is idempotent — it skips if data already exists.
     yolo_val_images = Path(args.workspace) / "data" / "yolo" / "images" / "val"
@@ -1853,7 +1948,9 @@ def _run_zero_shot_experiment(args, cfg) -> dict:
     Run a zero-shot evaluation (no training).  Loads the base checkpoint,
     runs inference on the SROIE test set, and saves results.
     """
-    print("  [dispatch] is_zero_shot=True → evaluation only (no training)")
+    logging.getLogger(__name__).debug(
+        "[dispatch] is_zero_shot=True → evaluation only (no training)"
+    )
     results_file = Path(cfg.results_file) if cfg.results_file else None
     # If a result already exists and --force is not set, return it
     if results_file and results_file.exists() and not getattr(args, "force", False):
@@ -1887,7 +1984,9 @@ def _run_zero_shot_experiment(args, cfg) -> dict:
                 json.dump(result, fh, indent=2)
         return result
     except Exception as exc:
-        print(f"  [zero-shot] Evaluation failed: {exc}; returning empty metrics")
+        logging.getLogger(__name__).warning(
+            "[zero-shot] Evaluation failed: %s; returning empty metrics", exc
+        )
         return {
             "experiment_id": cfg.id,
             "name": cfg.name,
@@ -1902,7 +2001,9 @@ def _run_yaml_donut_experiment(args, cfg, base_processor=None, base_model=None) 
     Run a DONUT experiment defined purely in YAML (IDs 9+ not in legacy EXPERIMENTS dict).
     Delegates to run_experiments.run_experiment_from_config().
     """
-    print(f"  [dispatch] arch=donut (YAML-only exp {cfg.id}) → DONUT training path")
+    logging.getLogger(__name__).debug(
+        "[dispatch] arch=donut (YAML-only exp %d) → DONUT training path", cfg.id
+    )
     import run_experiments as re_mod
 
     if not hasattr(re_mod, "run_experiment_from_config"):
@@ -1933,6 +2034,7 @@ def stage_trocr_data_prep(args) -> StageResult:
     Idempotent: skips if output directories already exist.
     """
     _banner("STAGE 3 — TrOCR+YOLO dataset preparation")
+    _log = logging.getLogger(__name__)
     warnings: list[str] = []
 
     workspace = Path(args.workspace)
@@ -1940,7 +2042,7 @@ def stage_trocr_data_prep(args) -> StageResult:
     trocr_train_meta = workspace / "data" / "trocr" / "train" / "metadata.jsonl"
 
     if yolo_train_images.exists() and trocr_train_meta.exists():
-        print("  TrOCR+YOLO data already prepared — skipping.")
+        _log.debug("TrOCR+YOLO data already prepared — skipping.")
         return StageResult(name="TrOCR Data Prep", duration=0.0, exit_status=0, warnings=warnings)
 
     try:
@@ -1948,10 +2050,10 @@ def stage_trocr_data_prep(args) -> StageResult:
 
         counts = ds_prep.prepare_all()
         for key, count in counts.items():
-            print(f"  {key}: {count}")
+            _log.debug("  %s: %s", key, count)
     except Exception as exc:
         w = f"TrOCR data prep failed: {exc}"
-        print(f"  WARNING: {w}", file=sys.stderr)
+        _log.warning("%s", w)
         warnings.append(w)
         return StageResult(name="TrOCR Data Prep", duration=0.0, exit_status=1, warnings=warnings)
 
@@ -1972,6 +2074,7 @@ def stage_trocr_experiments(args) -> StageResult:
     """
 
     _banner("STAGE 4 — TrOCR+YOLO training & evaluation")
+    _log = logging.getLogger(__name__)
     warnings: list[str] = []
 
     try:
@@ -1994,29 +2097,29 @@ def stage_trocr_experiments(args) -> StageResult:
                     "skipping YOLO training. Ensure SROIE data is installed "
                     "(run without --yolo first, or run stage_install)."
                 )
-                print(f"  WARNING: {w}", file=sys.stderr)
+                _log.warning("%s", w)
                 warnings.append(w)
                 return StageResult(
                     name="TrOCR+YOLO", duration=0.0, exit_status=1, warnings=warnings
                 )
-            print("  Training YOLOv8 text detector ...")
+            _log.info("Training YOLOv8 text detector ...")
             trocr_yolo.train_yolo(yolo_output)
         else:
-            print(f"  YOLO weights cached at {yolo_weights}")
+            _log.debug("YOLO weights cached at %s", yolo_weights)
 
         # Explicit GPU cleanup between YOLO and TrOCR to prevent OOM.
         _gpu_cleanup()
-        print("  GPU memory freed between YOLO and TrOCR stages.")
+        _log.debug("GPU memory freed between YOLO and TrOCR stages.")
 
         # Stage 4b: Train TrOCR
         trocr_output = workspace / "models" / "trocr_finetuned"
         trocr_best = trocr_output / "best"
         trocr_history: dict = {"train_loss": [], "val_loss": [], "num_train_samples": 0}
         if not trocr_best.exists():
-            print("  Training TrOCR OCR model ...")
+            _log.info("Training TrOCR OCR model ...")
             trocr_history = trocr_yolo.train_trocr(trocr_output)
         else:
-            print(f"  TrOCR model cached at {trocr_best}")
+            _log.debug("TrOCR model cached at %s", trocr_best)
             # Read num_train_samples from saved training history if available
             hist_path = trocr_output / "training_history.json"
             if hist_path.exists():
@@ -2027,10 +2130,10 @@ def stage_trocr_experiments(args) -> StageResult:
         test_samples = eval_mod.load_test_samples()
         if len(test_samples) == 0:
             w = "No test samples found — skipping TrOCR+YOLO evaluation."
-            print(f"  WARNING: {w}", file=sys.stderr)
+            _log.warning("%s", w)
             warnings.append(w)
         else:
-            print(f"  Evaluating TrOCR+YOLO on {len(test_samples)} test images ...")
+            _log.debug("Evaluating TrOCR+YOLO on %d test images ...", len(test_samples))
 
             if yolo_weights.exists() and trocr_best.exists():
                 metrics = eval_mod.evaluate_trocr_yolo_on_test(
@@ -2053,10 +2156,10 @@ def stage_trocr_experiments(args) -> StageResult:
                 out_path = results_dir / "trocr_yolo_results.json"
                 with open(out_path, "w") as fh:
                     json.dump(trocr_results, fh, indent=2)
-                print(f"  TrOCR+YOLO results saved -> {out_path}")
+                _log.info("TrOCR+YOLO F1=%s  saved → %s", metrics.get("global_f1", "N/A"), out_path)
             else:
                 w = "YOLO or TrOCR model weights missing — skipping evaluation."
-                print(f"  WARNING: {w}", file=sys.stderr)
+                _log.warning("%s", w)
                 warnings.append(w)
 
         # GPU cleanup after TrOCR+YOLO stage.
@@ -2067,7 +2170,7 @@ def stage_trocr_experiments(args) -> StageResult:
 
         traceback.print_exc()
         w = f"TrOCR+YOLO stage failed: {type(exc).__name__}: {exc}"
-        print(f"  WARNING: {w}", file=sys.stderr)
+        _log.warning("%s", w)
         warnings.append(w)
         return StageResult(name="TrOCR+YOLO", duration=0.0, exit_status=1, warnings=warnings)
 
@@ -2087,6 +2190,7 @@ def stage_benchmark(args) -> StageResult:
     accuracy / speed metrics and journal-ready plots.
     """
     _banner("STAGE 5 — Head-to-head benchmark (DONUT vs YOLOv8+TrOCR+Regex)")
+    _log = logging.getLogger(__name__)
     warnings: list[str] = []
     # Defensive GPU flush: prior stages may not have cleaned up if they failed
     # mid-way (e.g. TrOCR+YOLO aborting on missing cv2). Loading DONUT on a
@@ -2101,7 +2205,7 @@ def stage_benchmark(args) -> StageResult:
     # --- Validate test data exists ---
     if not test_img_dir.exists() or not test_key_dir.exists():
         w = "SROIE test_img/ or test_key/ not found — skipping benchmark."
-        print(f"  WARNING: {w}", file=sys.stderr)
+        _log.warning("%s", w)
         warnings.append(w)
         return StageResult(name="Benchmark", duration=0.0, exit_status=1, warnings=warnings)
 
@@ -2138,39 +2242,38 @@ def stage_benchmark(args) -> StageResult:
                 f"No fine-tuned DONUT model found at {donut_model_dir} "
                 f"— falling back to pretrained base model."
             )
-            print(f"  WARNING: {w}")
+            _log.warning("%s", w)
             warnings.append(w)
             donut_model_dir = BASE_MODEL  # plain str — valid HuggingFace hub ID
 
-    print(f"  DONUT model  : {donut_model_dir} (experiment {best_exp_id}, F1={best_f1:.4f})")
+    _log.debug("DONUT model: %s (exp %d, F1=%.4f)", donut_model_dir, best_exp_id, best_f1)
 
     # --- Find YOLO best.pt ---
     yolo_weights = workspace / "models" / "yolo_finetuned" / "run" / "weights" / "best.pt"
     skip_yolo = not yolo_weights.exists()
     if skip_yolo:
         w = f"YOLO weights not found at {yolo_weights} — benchmark will run DONUT only."
-        print(f"  WARNING: {w}")
+        _log.warning("%s", w)
         warnings.append(w)
     else:
-        print(f"  YOLO model   : {yolo_weights}")
+        _log.debug("YOLO model: %s", yolo_weights)
 
     # --- Find fine-tuned TrOCR model (for fair comparison vs base pretrained) ---
     trocr_finetuned_dir = workspace / "models" / "trocr_finetuned" / "best"
     if _is_valid_model_dir(trocr_finetuned_dir):
         trocr_model_id = str(trocr_finetuned_dir)
-        print(f"  TrOCR model  : {trocr_model_id} (fine-tuned)")
+        _log.debug("TrOCR model: %s (fine-tuned)", trocr_model_id)
     else:
         trocr_model_id = "microsoft/trocr-base-printed"
         w = (
             f"Fine-tuned TrOCR model not found at {trocr_finetuned_dir} "
             "— falling back to pretrained base model for benchmark."
         )
-        print(f"  WARNING: {w}")
+        _log.warning("%s", w)
         warnings.append(w)
-        print(f"  TrOCR model  : {trocr_model_id} (pretrained base)")
+        _log.debug("TrOCR model: %s (pretrained base)", trocr_model_id)
 
-    print(f"  Test images  : {test_img_dir}")
-    print(f"  Test labels  : {test_key_dir}")
+    _log.debug("Test images: %s | labels: %s", test_img_dir, test_key_dir)
 
     # --- Run benchmark_compare programmatically ---
     try:
@@ -2179,12 +2282,12 @@ def stage_benchmark(args) -> StageResult:
         import reporting as bench_mod
 
         pairs = bench_mod.find_pairs(test_img_dir, test_key_dir)
-        print(f"  Found {len(pairs)} test image+label pairs.")
+        _log.debug("Found %d test image+label pairs.", len(pairs))
 
         all_results = []
 
         # Run DONUT pipeline
-        print("\n  Running DONUT inference ...")
+        _log.debug("Running DONUT inference ...")
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         gc.collect()
@@ -2201,7 +2304,7 @@ def stage_benchmark(args) -> StageResult:
 
         # Run YOLOv8+TrOCR+Regex pipeline (if weights available)
         if not skip_yolo:
-            print("\n  Running YOLOv8+TrOCR+Regex inference ...")
+            _log.debug("Running YOLOv8+TrOCR+Regex inference ...")
             yolo_pipe = bench_mod.TrOCRYOLOPipeline(
                 yolo_model_path=str(yolo_weights),
                 trocr_model_id=trocr_model_id,
@@ -2215,7 +2318,7 @@ def stage_benchmark(args) -> StageResult:
                 torch.cuda.empty_cache()
             gc.collect()
 
-        # Print comparison report
+        # Print comparison report (goes to terminal.txt via bench_mod.print_report → stdout)
         bench_mod.print_report(all_results, n_samples=len(pairs))
 
         # Save JSON + plots
@@ -2223,15 +2326,14 @@ def stage_benchmark(args) -> StageResult:
         out_dir.mkdir(parents=True, exist_ok=True)
         bench_mod.save_json(all_results, out_dir / "benchmark_results.json")
         bench_mod.plot_results(all_results, out_dir=out_dir / "figures")
-
-        print(f"\n  Benchmark complete — results saved to {out_dir}")
+        _log.info("Benchmark saved → %s", out_dir)
 
     except Exception as exc:
         import traceback
 
         traceback.print_exc()
         w = f"Benchmark stage failed: {type(exc).__name__}: {exc}"
-        print(f"  WARNING: {w}", file=sys.stderr)
+        _log.warning("%s", w)
         warnings.append(w)
         return StageResult(name="Benchmark", duration=0.0, exit_status=1, warnings=warnings)
 
@@ -2250,6 +2352,7 @@ def stage_comparison(args) -> StageResult:
     TrOCR+YOLO across all 8 experiments.
     """
     _banner("STAGE 6 — Cross-architecture comparison")
+    _log = logging.getLogger(__name__)
     warnings: list[str] = []
 
     try:
@@ -2258,7 +2361,7 @@ def stage_comparison(args) -> StageResult:
         compare_mod.compare_all()
     except Exception as exc:
         w = f"Comparison stage failed: {exc}"
-        print(f"  WARNING: {w}", file=sys.stderr)
+        _log.warning("%s", w)
         warnings.append(w)
         return StageResult(name="Comparison", duration=0.0, exit_status=1, warnings=warnings)
 
@@ -2279,16 +2382,20 @@ def stage_paper(args) -> StageResult:
     ``sys.exit()`` — returns a non-zero ``exit_status`` instead so the
     orchestrator can continue.
     """
+    import contextlib
+    import io as _io
+
     import data_pipeline as dataset_loaders
     import reporting as ir  # local module
 
     _banner("STAGE 7 — LaTeX paper generation")
+    _log = logging.getLogger(__name__)
     warnings: list[str] = []
 
     results_path = Path("results") / "all_experiments.json"
     if not results_path.exists():
         w = f"{results_path} not found — generating paper with placeholder values only."
-        print(f"  WARNING: {w}", file=sys.stderr)
+        _log.warning("%s", w)
         warnings.append(w)
         all_exp = {}  # no results yet — fall through to fill with "---" placeholders
     else:
@@ -2300,7 +2407,7 @@ def stage_paper(args) -> StageResult:
         ir.generate_training_plots(Path("results"))
     except Exception as exc:
         w = f"generate_training_plots failed: {exc}; skipping plots."
-        print(f"  WARNING: {w}")
+        _log.warning("%s", w)
         warnings.append(w)
 
     # Compute actual dataset counts for Table 1
@@ -2313,18 +2420,23 @@ def stage_paper(args) -> StageResult:
     except Exception:
         actual_counts = None
 
-    ir.print_table1_dataset_stats(actual_counts)
-    ir.print_table2_experiments(all_exp)
-    ir.print_table3_perfield(all_exp)
-    ir.print_table4_leaderboard(all_exp)
+    # Redirect LaTeX table print output to terminal.txt (debug level) not console.
+    _buf = _io.StringIO()
+    with contextlib.redirect_stdout(_buf):
+        ir.print_table1_dataset_stats(actual_counts)
+        ir.print_table2_experiments(all_exp)
+        ir.print_table3_perfield(all_exp)
+        ir.print_table4_leaderboard(all_exp)
 
     # Print TrOCR+YOLO and cross-architecture comparison tables
     trocr_path = Path("results") / "trocr_yolo_results.json"
     if trocr_path.exists():
         with open(trocr_path) as fh:
             trocr_exp = json.load(fh)
-        ir.print_table5_trocr_yolo(trocr_exp)
-        ir.print_table6_cross_architecture(all_exp, trocr_exp)
+        with contextlib.redirect_stdout(_buf):
+            ir.print_table5_trocr_yolo(trocr_exp)
+            ir.print_table6_cross_architecture(all_exp, trocr_exp)
+    _log.debug("LaTeX tables:\n%s", _buf.getvalue())
 
     try:
         ir.generate_convergence_data(str(results_path))
@@ -2332,7 +2444,7 @@ def stage_paper(args) -> StageResult:
         ir.generate_f1_barchart_tex(str(results_path))
     except Exception as exc:
         w = f"Convergence/barchart tex generation failed: {exc}; skipping."
-        print(f"  WARNING: {w}")
+        _log.warning("%s", w)
         warnings.append(w)
 
     # Build a single var_map that covers both paper.tex and presentation.tex
@@ -2344,34 +2456,29 @@ def stage_paper(args) -> StageResult:
     if paper_template.exists():
         try:
             ir.fill_paper(str(paper_template), str(output_paper), var_map)
-            print(f"\n  Complete paper written -> {output_paper}")
+            _log.info("Paper written → %s", output_paper)
         except Exception as exc:
             w = f"fill_paper failed for {paper_template}: {exc}"
-            print(f"  WARNING: {w}")
+            _log.warning("%s", w)
             warnings.append(w)
 
         # ── Compile paper → PDF ────────────────────────────────────────────
         try:
             paper_pdf = ir.compile_pdf(output_paper, work_dir=output_paper.parent)
             if paper_pdf:
-                print(f"  PDF compiled   -> {paper_pdf}")
+                _log.info("PDF compiled → %s", paper_pdf)
             else:
-                print("  ℹ️  LaTeX → PDF compilation skipped. No compiler found.")
-                print(
-                    "     Linux:   apt-get install texlive-latex-base texlive-fonts-recommended texlive-latex-extra"
+                _log.info(
+                    "LaTeX → PDF skipped (no compiler). Install: apt-get install texlive-latex-base"
                 )
-                print("              or: apt-get install texlive-full  (larger, ~2GB)")
-                print("     macOS:   brew install --cask mactex  (or install BasicTeX)")
-                print("     Windows: https://miktex.org/download")
-                print(f"     The .tex file is at: {output_paper}")
-                print(f"     Compile manually: pdflatex {output_paper}")
+                _log.debug("PDF compile hint: pdflatex %s", output_paper)
         except Exception as exc:
             w = f"PDF compilation failed: {exc}"
-            print(f"  WARNING: {w}")
+            _log.warning("%s", w)
             warnings.append(w)
     else:
         w = f"paper template not found at {paper_template}; skipping paper_filled.tex generation."
-        print(f"  WARNING: {w}")
+        _log.warning("%s", w)
         warnings.append(w)
 
     # Also fill presentation.tex → presentation_filled.tex
@@ -2380,21 +2487,21 @@ def stage_paper(args) -> StageResult:
     if pres_template.exists():
         try:
             ir.fill_paper(str(pres_template), str(pres_output), var_map)
-            print(f"  Complete presentation written -> {pres_output}")
+            _log.debug("Presentation written → %s", pres_output)
         except Exception as exc:
             w = f"fill_paper failed for {pres_template}: {exc}"
-            print(f"  WARNING: {w}")
+            _log.warning("%s", w)
             warnings.append(w)
 
         # ── Compile presentation → PDF ─────────────────────────────────────
         try:
             pres_pdf = ir.compile_pdf(pres_output, work_dir=pres_output.parent)
             if pres_pdf:
-                print(f"  PDF compiled   -> {pres_pdf}")
+                _log.debug("Presentation PDF compiled → %s", pres_pdf)
         except Exception as exc:
             warnings.append(f"Presentation PDF compilation failed: {exc}")
     else:
-        print(f"  INFO: {pres_template} not found; skipping presentation_filled.tex generation.")
+        _log.debug("%s not found; skipping presentation_filled.tex generation.", pres_template)
 
     # Paper generation itself succeeded (even with placeholder values).
     # exit_status reflects paper generation, not experiment completeness.
@@ -2505,8 +2612,10 @@ class PipelineOrchestrator:
 
     def _run_stage(self, name: str, func) -> StageResult:
         """Time a stage, catch exceptions, and record the StageResult."""
+        _log = logging.getLogger(__name__)
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-        print(f"\n  ▶ {name} started at {ts}")
+        _log.debug("Stage %s started at %s", name, ts)
+        _log.info("Stage: %s", name)
         t0 = time.monotonic()
         try:
             result = func(self.args)
@@ -2537,7 +2646,7 @@ class PipelineOrchestrator:
                             provider=_ai_prov,
                         )
                         if _diagnosis:
-                            print(f"\n[AI Diagnosis] Stage {name!r}:\n{_diagnosis}")
+                            _log.warning("[AI Diagnosis] Stage %r: %s", name, _diagnosis)
                 except Exception:
                     pass  # diagnosis itself failed — don't mask the real error
 
@@ -2548,7 +2657,11 @@ class PipelineOrchestrator:
                 warnings=[f"Uncaught exception: {type(exc).__name__}: {exc}"],
             )
         ts_end = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-        print(f"  ◀ {name} finished at {ts_end} ({result.duration:.1f}s)")
+        status = (
+            "OK" if result.exit_status == 0 else ("PART" if result.exit_status == 1 else "FAIL")
+        )
+        _log.info("Stage %s done: %s (%.1fs)", name, status, result.duration)
+        _log.debug("Stage %s finished at %s (%.1fs)", name, ts_end, result.duration)
         self.stages.append(result)
 
         # Record to pipeline diagnostics
@@ -2571,7 +2684,9 @@ class PipelineOrchestrator:
 
         if self.args.paper_only:
             self._run_stage("Paper Generation", stage_paper)
-            print(repr(self))
+            logging.getLogger(__name__).debug("\n%s", repr(self))
+            if _FANCY_OUTPUT:
+                print(repr(self))
             return exit_code
 
         # --yolo: jump straight to TrOCR+YOLO stages, skipping install,
@@ -2628,9 +2743,12 @@ class PipelineOrchestrator:
             try:
                 self._diag.save_report()
             except Exception as _diag_exc:
-                print(f"[Diagnostics] Failed to save pipeline report: {_diag_exc}")
+                logging.getLogger(__name__).warning("Failed to save pipeline report: %s", _diag_exc)
 
-        print(repr(self))
+        # Log full box-drawing execution table to terminal.txt (debug); show compact on console.
+        logging.getLogger(__name__).debug("\n%s", repr(self))
+        if _FANCY_OUTPUT:
+            print(repr(self))
         return exit_code
 
     def __repr__(self) -> str:
@@ -3355,6 +3473,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Quiet mode: suppress progress bars and verbose output; print only structured summary blocks. AI-agent-friendly.",
     )
     p.add_argument(
+        "--fancy",
+        action="store_true",
+        help=(
+            "Enable fancy console output: box-drawing banners, stage headers, "
+            "and the full box-drawing results table. By default the console is "
+            "minimal (plain text, no decorations) so output fits in Copilot chat."
+        ),
+    )
+    p.add_argument(
         "--mini",
         action="store_true",
         help=(
@@ -3543,9 +3670,7 @@ def main() -> None:
     logger = _setup_logging()
 
     # Phase 2: Log configuration (using new logger)
-    logger.info("=" * 72)
-    logger.info(f"Pipeline started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    logger.info("=" * 72)
+    logger.info("Pipeline started at %s", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
     # Set up HuggingFace authentication for faster downloads
     _setup_hf_auth()
@@ -3561,6 +3686,11 @@ def main() -> None:
         logging.getLogger("transformers").setLevel(logging.ERROR)
         logging.getLogger("datasets").setLevel(logging.ERROR)
         logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
+
+    # Fancy mode: enable box-drawing banners and decorative console output.
+    if getattr(args, "fancy", False):
+        global _FANCY_OUTPUT  # noqa: PLW0603
+        _FANCY_OUTPUT = True
 
     # EARLY DISPATCH: Check for quick mode before running full pipeline
     if args.quick:
@@ -3622,18 +3752,28 @@ def main() -> None:
     if getattr(args, "yolo", False):
         logger.info("--yolo flag detected: starting from TrOCR+YOLO stages (Stage 3+)")
 
-    # ── Diagnostic: environment snapshot ──────────────────────────────────
+    # ── Environment snapshot (full details to terminal.txt; brief summary to console) ──
     import torch
 
     _banner("ENVIRONMENT DIAGNOSTICS")
-    print(f"  Python       : {platform.python_version()} ({sys.executable})")
-    print(f"  Platform     : {platform.platform()}")
-    print(f"  CUDA avail   : {torch.cuda.is_available()}")
-    if torch.cuda.is_available():
-        print(f"  CUDA device  : {torch.cuda.get_device_name(0)}")
-        print(f"  CUDA version : {torch.version.cuda}")
-        gpu_mem = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-        print(f"  GPU memory   : {gpu_mem:.1f} GB")
+    # Brief single-line GPU/Python summary always shown on console.
+    _py_ver = platform.python_version()
+    _cuda = torch.cuda.is_available()
+    if _cuda:
+        _gpu_name = torch.cuda.get_device_name(0)
+        _gpu_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+        logger.info(
+            "Python %s | GPU: %s (%.0f GB) | CUDA %s",
+            _py_ver,
+            _gpu_name,
+            _gpu_gb,
+            torch.version.cuda,
+        )
+    else:
+        logger.info("Python %s | GPU: not available", _py_ver)
+    # Full package list goes to terminal.txt only (debug level).
+    logger.debug("Platform: %s", platform.platform())
+    logger.debug("Executable: %s", sys.executable)
     for pkg in [
         "torch",
         "transformers",
@@ -3649,27 +3789,27 @@ def main() -> None:
                 pkg.replace("-", "_").lower() if pkg != "Pillow" else "PIL"
             )
             ver = getattr(mod, "__version__", "?")
-            print(f"  {pkg:20s}: {ver}")
+            logger.debug("  %-20s: %s", pkg, ver)
         except ImportError:
-            print(f"  {pkg:20s}: NOT INSTALLED")
-    print(f"  Workspace    : {args.workspace}")
-    print(f"  SROIE dir    : {args.sroie_dir}")
-    print(f"  CWD          : {Path.cwd()}")
+            logger.debug("  %-20s: NOT INSTALLED", pkg)
+    logger.debug("Workspace: %s", args.workspace)
+    logger.debug("SROIE dir: %s", args.sroie_dir)
+    logger.debug("CWD: %s", Path.cwd())
     try:
         from resource_manager import _get_available_ram_bytes
 
         _avail = _get_available_ram_bytes()
-        print(f"  RAM          : {_avail / (1024**3):.1f} GB available")
+        logger.debug("RAM: %.1f GB available", _avail / (1024**3))
     except Exception:
         pass
-    print(f"  CPU cores    : {os.cpu_count()}")
+    logger.debug("CPU cores: %d", os.cpu_count() or 0)
 
     # Run the pipeline via the orchestrator (all stages sequential)
     orchestrator = PipelineOrchestrator(args)
     exit_code = orchestrator.run()
 
     total_elapsed = time.monotonic() - t_start
-    _banner(f"DONE — total wall time {total_elapsed / 60:.1f} min  |  exit code {exit_code}")
+    logger.info("DONE — total %.1f min | exit code %d", total_elapsed / 60, exit_code)
     _print_final_summary(Path("results"))
     sys.exit(exit_code)
 
