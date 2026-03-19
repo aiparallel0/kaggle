@@ -1796,6 +1796,8 @@ def stage_experiments(args) -> StageResult:
                     base_processor=_base_processor,
                     base_model=_base_model,
                     overrides=getattr(args, "param_overrides", None) or None,
+                    keep_model=getattr(args, "keep_models", False),
+                    no_disk_cleanup=getattr(args, "no_disk_cleanup", False),
                 )
         except Exception as exc:
             elapsed = time.monotonic() - t0
@@ -1887,6 +1889,16 @@ def stage_experiments(args) -> StageResult:
             _gpu_cleanup()
         except Exception:
             pass
+
+    # ── Disk usage summary ───────────────────────────────────────────────────
+    try:
+        from constants import format_bytes, get_disk_usage
+
+        _, used_after, free_after = get_disk_usage()
+        _log_se.info("[Disk] After experiments: %s free", format_bytes(free_after))
+        print(f"[Disk] Space after experiments: {format_bytes(free_after)} free")
+    except Exception:
+        pass
 
     # ── Autonomous feedback loop ────────────────────────────────────────────
     # If any experiments crashed with non-OOM code errors, run the CI auto-fix
@@ -3604,6 +3616,28 @@ def build_parser() -> argparse.ArgumentParser:
             "Logs a WARNING if F1 == 0.0 (silent failure indicator). "
             "Use with --experiment N for targeted validation. "
             "Exits with code 1 if any experiment produces F1=0 after training."
+        ),
+    )
+    p.add_argument(
+        "--keep-models",
+        action="store_true",
+        default=False,
+        help=(
+            "Keep model checkpoint directories after evaluation instead of deleting them. "
+            "By default, model directories are removed after each experiment to save disk space "
+            "(only the result JSON is needed for the paper pipeline). "
+            "Use this flag if you want to reuse checkpoints or inspect model weights."
+        ),
+    )
+    p.add_argument(
+        "--no-disk-cleanup",
+        action="store_true",
+        default=False,
+        help=(
+            "Disable all automatic disk cleanup between experiments. "
+            "By default, model directories are deleted after evaluation to prevent "
+            "'No space left on device' (OS error 28) crashes. "
+            "Use for debugging only."
         ),
     )
     return p

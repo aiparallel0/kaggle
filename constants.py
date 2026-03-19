@@ -28,6 +28,9 @@ __all__ = [
     "EMPTY_GT",
     "DEVICE",
     "WORKSPACE",
+    # Disk utilities
+    "format_bytes",
+    "get_disk_usage",
     # Project metadata
     "PROJECT_NAME",
     "PROJECT_VERSION",
@@ -325,10 +328,53 @@ def _edit_distance(s1: str, s2: str) -> int:
     return dp[n]
 
 
-def _progress(iterable, desc: str = "", total: int | None = None):
-    """Progress iterator: single \r console line + file logging at 10 % milestones.
+def format_bytes(n_bytes: int) -> str:
+    """Return a human-readable byte count string (e.g. '1.2 GB', '340 MB').
 
-    Console: overwrites a single line in-place — e.g. ``Evaluating 33/63 [52%]``.
+    Uses binary (1024-based) units: KB = 1024 B, MB = 1024 KB, GB = 1024 MB.
+    Safe to call with 0 or negative values.
+    """
+    n = max(0, int(n_bytes))
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if n < 1024 or unit == "TB":
+            return f"{n:.1f} {unit}" if unit != "B" else f"{n} {unit}"
+        n //= 1024
+    return f"{n} TB"  # unreachable but satisfies type checker
+
+
+def get_disk_usage(path: "str | Path | None" = None) -> "tuple[int, int, int]":
+    """Return (total, used, free) disk space in bytes for the partition containing *path*.
+
+    Parameters
+    ----------
+    path:
+        Path on the partition to query.  Defaults to the workspace root
+        (``WORKSPACE``), or ``/`` if the workspace does not exist.
+
+    Returns
+    -------
+    tuple[int, int, int]
+        ``(total_bytes, used_bytes, free_bytes)``.
+        Returns ``(0, 0, 0)`` if ``shutil.disk_usage`` fails (e.g. unsupported OS).
+    """
+    import shutil
+
+    if path is None:
+        path = WORKSPACE if WORKSPACE.exists() else Path("/")
+    try:
+        usage = shutil.disk_usage(str(path))
+        return usage.total, usage.used, usage.free
+    except OSError:
+        return 0, 0, 0
+
+
+def _progress(iterable, desc: str = "", total: int | None = None):
+    """Progress iterator: rich progress bar when available, else single \\r console line.
+
+    When ``rich`` is installed the iterator renders a proper progress bar with
+    ETA that updates in-place without cluttering the terminal.  Falls back
+    gracefully to the original ``\\r`` overwrite behaviour when ``rich`` is absent.
+
     File (terminal.txt): emits one DEBUG log line at each 10 % milestone so the
     file retains a human-readable audit trail without flooding the console.
     """
@@ -340,6 +386,43 @@ def _progress(iterable, desc: str = "", total: int | None = None):
     n = total if total is not None else len(items)  # type: ignore[arg-type]
     step = max(1, -(-n // 10))  # ceiling division by 10
     label = desc if desc else "Progress"
+
+    # Try rich progress bar first
+    try:
+        from rich.progress import (
+            BarColumn,
+            MofNCompleteColumn,
+            Progress,
+            SpinnerColumn,
+            TaskProgressColumn,
+            TextColumn,
+            TimeRemainingColumn,
+        )
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[bold cyan]{task.description}"),
+            BarColumn(bar_width=30),
+            MofNCompleteColumn(),
+            TaskProgressColumn(),
+            TimeRemainingColumn(),
+            transient=True,
+        ) as progress:
+            task = progress.add_task(label, total=n)
+            for idx, item in enumerate(items):
+                # File: only at 10 % milestones
+                if idx % step == 0 or idx == n - 1:
+                    pct = int(100 * (idx + 1) / max(n, 1))
+                    if desc:
+                        _log.debug("[progress] %s %3d%%", desc, pct)
+                    else:
+                        _log.debug("[progress] %3d%%", pct)
+                yield item
+                progress.advance(task)
+        return
+    except Exception:
+        pass  # rich not available or failed — fall through to plain \r
+
     for idx, item in enumerate(items):
         pct = int(100 * (idx + 1) / max(n, 1))
         # Console: single overwriting line (bypasses logging system entirely).

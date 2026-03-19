@@ -4196,6 +4196,105 @@ def evaluate_experiment(
 
 
 # ---------------------------------------------------------------------------
+# Disk space management
+# ---------------------------------------------------------------------------
+
+
+def cleanup_checkpoints_after_eval(model_dir: Path, keep_model: bool = False) -> int:
+    """Delete checkpoints (and optionally the whole model directory) after evaluation.
+
+    Safe to call even if *model_dir* does not exist.
+
+    Parameters
+    ----------
+    model_dir:
+        Directory that HuggingFace Trainer wrote checkpoints into, e.g.
+        ``/workspace/models/experiment_2``.
+    keep_model:
+        When *False* (default) the entire *model_dir* is removed after
+        evaluation, recovering ~800 MB per experiment.  Only the result JSON in
+        ``results/`` is needed for the paper pipeline.
+        When *True* only ``checkpoint-*`` subdirectories are removed; the final
+        model weights (``config.json``, ``model.safetensors``, etc.) are kept.
+
+    Returns
+    -------
+    int
+        Approximate bytes freed (sum of deleted file sizes).  0 if nothing was
+        deleted or on any error.
+    """
+    import shutil
+
+    try:
+        from constants import format_bytes
+    except ImportError:
+
+        def format_bytes(n):  # type: ignore[misc]
+            return f"{n} B"
+
+    freed = 0
+    if not model_dir.exists():
+        return 0
+
+    try:
+        if not keep_model:
+            # Remove entire model directory (default — only JSON result matters)
+            for p in model_dir.rglob("*"):
+                if p.is_file():
+                    freed += p.stat().st_size
+            shutil.rmtree(model_dir, ignore_errors=True)
+            print(f"[Cleanup] Removed {model_dir} ({format_bytes(freed)} freed)")
+        else:
+            # Keep final model weights but delete checkpoint-N subdirectories
+            for child in sorted(model_dir.iterdir()):
+                if child.is_dir() and child.name.startswith("checkpoint-"):
+                    for p in child.rglob("*"):
+                        if p.is_file():
+                            freed += p.stat().st_size
+                    shutil.rmtree(child, ignore_errors=True)
+            if freed > 0:
+                print(
+                    f"[Cleanup] Removed intermediate checkpoints from {model_dir} "
+                    f"({format_bytes(freed)} freed)"
+                )
+    except Exception as exc:
+        print(f"[Cleanup] WARNING: cleanup of {model_dir} failed: {exc}")
+
+    return freed
+
+
+def _check_disk_space_before_experiment(exp_id: int) -> bool:
+    """Log a warning/error if disk space is dangerously low.
+
+    Returns *True* when it is safe to proceed, *False* when the experiment
+    should be skipped to avoid a mid-training "No space left on device" crash.
+    """
+    _MIN_DISK_SPACE_GB = 1.0  # below this → skip experiment (OS error 28 risk)
+    _WARN_DISK_SPACE_GB = 3.0  # below this → log warning but proceed
+    try:
+        from constants import format_bytes, get_disk_usage
+
+        _, _, free = get_disk_usage()
+        free_gb = free / (1024**3)
+        if free_gb < _MIN_DISK_SPACE_GB:
+            print(
+                f"[Exp {exp_id}] ERROR: Only {format_bytes(free)} disk free "
+                f"(need ≥ {_MIN_DISK_SPACE_GB:.0f} GB). "
+                "Skipping experiment to avoid OS error 28."
+            )
+            return False
+        if free_gb < _WARN_DISK_SPACE_GB:
+            print(
+                f"[Exp {exp_id}] WARNING: Low disk space ({format_bytes(free)} free). "
+                f"Recommend ≥ {_WARN_DISK_SPACE_GB:.0f} GB. "
+                "Proceeding, but risk of 'No space left on device'."
+            )
+    except Exception:
+        pass  # disk check is best-effort — never block an experiment
+    return True
+
+
+# ---------------------------------------------------------------------------
 # Single experiment runner
 # ---------------------------------------------------------------------------
 
@@ -4205,6 +4304,8 @@ def run_experiment(
     base_processor=None,
     base_model=None,
     overrides: dict | None = None,
+    keep_model: bool = False,
+    no_disk_cleanup: bool = False,
 ) -> dict:
     """Run a single experiment: train, evaluate, save results.
 
@@ -4220,6 +4321,13 @@ def run_experiment(
     to the base ExperimentConfig via dataclasses.replace() before training.
     This allows ``--param`` CLI overrides without mutating the global EXPERIMENTS
     dict (GP-1).
+
+    When *keep_model* is *False* (default), the model checkpoint directory is
+    removed after evaluation completes to free disk space.  Set *True* to keep
+    it (e.g. when passing ``--keep-models`` via CLI).
+
+    When *no_disk_cleanup* is *True*, no disk cleanup is performed regardless
+    of *keep_model* (for debugging purposes).
     """
     import dataclasses as _dc
 
@@ -4236,6 +4344,21 @@ def run_experiment(
     print(f"Description: {config.description}")
     print(f"Datasets: {config.datasets}")
     print(f"{'=' * 72}")
+
+    # Disk space pre-flight check — skip experiment if < 1 GB free to avoid OS error 28
+    if not _check_disk_space_before_experiment(exp_id):
+        result = {
+            "experiment_id": exp_id,
+            "name": config.name,
+            "datasets": config.datasets,
+            "config": _config_to_dict(EXPERIMENTS[exp_id]),
+            "num_train_samples": 0,
+            "metrics": {},
+            "error": "Skipped: insufficient disk space (< 1 GB free)",
+        }
+        result_file = RESULTS_DIR / f"experiment_{exp_id}.json"
+        result_file.write_text(json.dumps(result, indent=2))
+        return result
 
     # Validate that multi-dataset runs use sroie_oversample >= 2.
     # Without 2× oversampling, auxiliary data dilutes the SROIE training signal
@@ -4517,6 +4640,14 @@ def run_experiment(
     _print_experiment_summary(
         exp_id, config, metrics, elapsed_sec=metrics.get("training_time_sec", 0.0)
     )
+
+    # Disk cleanup — remove model checkpoints after evaluation to free space.
+    # Default: remove entire model directory (only the result JSON is needed).
+    # Disabled by no_disk_cleanup=True (--no-disk-cleanup flag) or
+    # preserved to keep_model=True (--keep-models flag).
+    if not no_disk_cleanup:
+        cleanup_checkpoints_after_eval(model_dir, keep_model=keep_model)
+
     return result
 
 
@@ -4679,26 +4810,88 @@ def run_experiment_from_config(
 def _print_experiment_summary(
     exp_id: int, config: ExperimentConfig, metrics: dict, elapsed_sec: float = 0.0
 ) -> None:
-    """Print a compact one-line JSON summary for the experiment result.
+    """Print a rich Panel summary for the experiment result (plain text fallback).
 
-    Format is AI-agent-friendly: machine-readable, minimal tokens, single line.
+    Rich: shows a formatted panel with per-field F1 bars, timing, and disk space.
+    Plain: machine-readable JSON (AI-agent-friendly).
     """
     # Respect DONUT_QUIET env var — suppress if quiet mode is active
     if os.environ.get("DONUT_QUIET") == "1":
         return
+
+    global_f1 = metrics.get("global_f1", 0.0)
+
+    # Try rich panel first
+    try:
+        from rich.console import Console
+        from rich.panel import Panel
+        from rich.table import Table
+        from rich.text import Text
+
+        console = Console()
+        grid = Table.grid(padding=(0, 1))
+        grid.add_column(style="dim", width=14)
+        grid.add_column()
+
+        grid.add_row("Experiment", f"[bold]{exp_id}[/] — {config.name}")
+        grid.add_row("Datasets", ", ".join(config.datasets))
+        grid.add_row("Train samples", str(metrics.get("num_train_samples", 0)))
+        grid.add_row("Epochs", str(config.epochs))
+        if elapsed_sec > 0:
+            grid.add_row("Duration", f"{elapsed_sec / 60:.1f} min")
+
+        f1_color = "green" if global_f1 >= 0.8 else ("yellow" if global_f1 >= 0.5 else "red")
+        grid.add_row("Global F1", Text(f"{global_f1:.4f}", style=f"bold {f1_color}"))
+
+        # Per-field F1 bar chart (text-based, 20 chars wide)
+        for field in ("company", "date", "address", "total"):
+            fv = metrics.get(f"{field}_f1")
+            if fv is not None:
+                bar_len = int(fv * 20)
+                bar = "█" * bar_len + "░" * (20 - bar_len)
+                fc = "green" if fv >= 0.8 else ("yellow" if fv >= 0.5 else "red")
+                grid.add_row(f"  {field}", f"[{fc}]{bar}[/] {fv:.3f}")
+
+        parse_fail = metrics.get("parse_failures", 0)
+        if parse_fail:
+            grid.add_row("Parse failures", Text(str(parse_fail), style="yellow"))
+
+        try:
+            from constants import format_bytes, get_disk_usage
+
+            _, _, disk_free = get_disk_usage()
+            grid.add_row("Disk free", format_bytes(disk_free))
+        except Exception:
+            pass
+
+        status_icon = "✓" if global_f1 > 0 else "✗"
+        border = "green" if global_f1 > 0 else "red"
+        console.print(
+            Panel(
+                grid,
+                title=f"[bold {border}]{status_icon} Exp {exp_id} Complete[/]",
+                border_style=border,
+                padding=(0, 1),
+            )
+        )
+        return
+    except Exception:
+        pass
+
+    # Plain text fallback (AI-agent-friendly JSON)
     summary = {
         "exp": exp_id,
         "name": config.name,
         "samples": metrics.get("num_train_samples", 0),
         "epochs": config.epochs,
         "time_min": round(elapsed_sec / 60, 1),
-        "f1": round(metrics.get("global_f1", 0.0), 4),
+        "f1": round(global_f1, 4),
         "company_f1": round(metrics.get("company_f1", 0.0), 4),
         "date_f1": round(metrics.get("date_f1", 0.0), 4),
         "address_f1": round(metrics.get("address_f1", 0.0), 4),
         "total_f1": round(metrics.get("total_f1", 0.0), 4),
         "parse_failures": metrics.get("parse_failures", 0),
-        "status": "ok" if metrics.get("global_f1", 0.0) > 0 else "empty",
+        "status": "ok" if global_f1 > 0 else "empty",
     }
     print(f"--- EXP {exp_id} RESULT ---")
     print(json.dumps(summary))
@@ -4723,7 +4916,74 @@ def save_summary() -> None:
     summary_file.write_text(json.dumps(all_results, indent=2))
     print(f"\nSummary saved -> {summary_file}")
 
-    # Pretty-print leaderboard
+    if not all_results:
+        return
+
+    # Find best F1 for highlighting
+    best_f1 = -1.0
+    best_exp_id_str = None
+    for exp_id_str, res in all_results.items():
+        f1 = res.get("metrics", {}).get("global_f1", float("nan"))
+        if not math.isnan(f1) and f1 > best_f1:
+            best_f1 = f1
+            best_exp_id_str = exp_id_str
+
+    # Try rich table
+    try:
+        from rich.console import Console
+        from rich.table import Table
+        from rich.text import Text
+
+        console = Console()
+        table = Table(
+            title="[bold]DONUT SROIE — Experiment Leaderboard[/]",
+            show_header=True,
+            header_style="bold dim",
+            border_style="dim",
+            show_lines=False,
+        )
+        table.add_column("Exp", justify="right", style="dim", width=4)
+        table.add_column("Name", width=34)
+        table.add_column("Samples", justify="right", width=8)
+        table.add_column("Global F1", justify="right", width=10)
+        table.add_column("Rank", justify="center", width=5)
+
+        sorted_by_f1 = sorted(
+            all_results.items(),
+            key=lambda x: x[1].get("metrics", {}).get("global_f1", -1),
+            reverse=True,
+        )
+        rank_map = {eid: i + 1 for i, (eid, _) in enumerate(sorted_by_f1)}
+
+        for exp_id_str, res in sorted(all_results.items(), key=lambda x: int(x[0])):
+            name = res.get("name", "")[:33]
+            n = res.get("num_train_samples", 0)
+            f1 = res.get("metrics", {}).get("global_f1", float("nan"))
+            rank = rank_map.get(exp_id_str, "—")
+            is_best = exp_id_str == best_exp_id_str
+
+            if is_best:
+                f1_text = Text(f"{f1:.4f} ★", style="bold green")
+                name_text = Text(name, style="bold")
+                rank_text = Text("#1", style="bold green")
+            elif not math.isnan(f1):
+                f1_color = "green" if f1 >= 0.8 else ("yellow" if f1 >= 0.5 else "red")
+                f1_text = Text(f"{f1:.4f}", style=f1_color)
+                name_text = Text(name)
+                rank_text = Text(f"#{rank}", style="dim")
+            else:
+                f1_text = Text("N/A", style="dim")
+                name_text = Text(name, style="dim")
+                rank_text = Text("—", style="dim")
+
+            table.add_row(exp_id_str, name_text, str(n), f1_text, rank_text)
+
+        console.print(table)
+        return
+    except Exception:
+        pass
+
+    # Plain text fallback
     print(f"\n{'=' * 72}")
     print(f"{'Exp':<5} {'Name':<35} {'Train Samples':>14} {'Global F1':>10}")
     print(f"{'-' * 72}")
@@ -4732,7 +4992,8 @@ def save_summary() -> None:
         n = res.get("num_train_samples", 0)
         f1 = res.get("metrics", {}).get("global_f1", float("nan"))
         f1_str = f"{f1:>10.4f}" if not math.isnan(f1) else "       N/A"
-        print(f"{exp_id_str:<5} {name:<35} {n:>14} {f1_str}")
+        marker = " ★" if exp_id_str == best_exp_id_str else ""
+        print(f"{exp_id_str:<5} {name:<35} {n:>14} {f1_str}{marker}")
     print(f"{'=' * 72}\n")
 
 
