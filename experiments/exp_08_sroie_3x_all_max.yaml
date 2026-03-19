@@ -45,7 +45,7 @@ datasets:
   # Note: original CLAUDE.md quotes ~3,940 — verify registry counts before run
 
 training:
-  epochs: 10
+  epochs: 15
   batch_size: 8
   gradient_accumulation_steps: 2   # if OOM, try batch_size=4 + gradient_accumulation_steps=4
   mixed_precision: fp16
