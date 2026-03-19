@@ -1219,6 +1219,7 @@ def smoke_test(verbose: bool = True) -> bool:
         model = VisionEncoderDecoderModel.from_pretrained(BASE_MODEL)
         model.decoder.resize_token_embeddings(len(processor.tokenizer))
         model.config.tie_word_embeddings = False
+        model.decoder.config.tie_word_embeddings = False
 
     _check("Model + processor load", _check_model_load)
 
@@ -1257,6 +1258,7 @@ def smoke_test(verbose: bool = True) -> bool:
         model = VisionEncoderDecoderModel.from_pretrained(BASE_MODEL)
         model.decoder.resize_token_embeddings(len(processor.tokenizer))
         model.config.tie_word_embeddings = False
+        model.decoder.config.tie_word_embeddings = False
         model.eval()
 
         # Create dummy image (3x1280x960 random tensor → pixel_values)
