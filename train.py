@@ -3481,7 +3481,7 @@ class DonutTrainer:
         # Detect bf16 support (Ampere+ GPUs including Blackwell) — prefer over fp16
         use_bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
         use_fp16 = torch.cuda.is_available() and not use_bf16
-        logging.info("precision: %s", "bf16" if use_bf16 else ("fp16" if use_fp16 else "fp32"))
+        logging.debug("precision: %s", "bf16" if use_bf16 else ("fp16" if use_fp16 else "fp32"))
 
         # torch.compile DISABLED for DONUT: mode="reduce-overhead" uses CUDA
         # graphs which assume fixed tensor shapes, but autoregressive generate()
@@ -3490,7 +3490,7 @@ class DonutTrainer:
         # during evaluation, producing F1=0.  The ~15-30% training speedup is
         # negated by the ~1.5-2 min kernel compilation overhead per experiment
         # and the broken evaluation.
-        logging.info("torch.compile skipped (incompatible with autoregressive generate)")
+        logging.debug("torch.compile skipped (incompatible with autoregressive generate)")
 
         # Cap warmup_steps to ≤10% of total optimizer steps.
         # warmup=500 is correct for large datasets (Exp 8, ~3940 samples, ~1250 opt steps),
@@ -3719,7 +3719,7 @@ class DonutTrainer:
         self.model.gradient_checkpointing_enable(
             gradient_checkpointing_kwargs={"use_reentrant": False}
         )
-        logging.info("Gradient checkpointing enabled (use_reentrant=False)")
+        logging.debug("Gradient checkpointing enabled (use_reentrant=False)")
 
         # Guard: transformers Seq2SeqTrainer does
         #   isinstance(dataset, datasets.Dataset)
@@ -4147,7 +4147,7 @@ def main():
             _embed_w.data[_tid] = _vec
             if _lm_w.shape[0] > _tid:
                 _lm_w.data[_tid] = _vec
-    logging.info("[SemanticInit] Initialised %d new SROIE token embeddings", len(NEW_TOKENS))
+    logging.debug("[SemanticInit] Initialised %d new SROIE token embeddings", len(NEW_TOKENS))
 
     # After resize, embed_tokens and lm_head are separate tensors with
     # independent random init for the new tokens.  Set tie_word_embeddings=False

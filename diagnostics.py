@@ -371,10 +371,8 @@ class DiagnosticCallback:
             )
             if severity == "critical":
                 logger.error(msg)
-                print(f"\n{'!' * 72}\n{msg}\n{'!' * 72}")
             else:
                 logger.warning(msg)
-                print(f"\n[WARN] {msg}")
 
     def _run_ai_diagnosis(self, cp: RuntimeCheckpoint, issues: list[dict]):
         """Call AI API (Claude or Mistral) for deeper diagnosis of critical issues."""
@@ -393,7 +391,6 @@ class DiagnosticCallback:
 
         if diagnosis:
             logger.info("[AI Diagnosis] Exp %d:\n%s", self.experiment_id, diagnosis)
-            print(f"\n[AI Diagnosis] Exp {self.experiment_id}:\n{diagnosis}")
 
             # Attach to checkpoint
             cp.metrics["ai_diagnosis"] = diagnosis

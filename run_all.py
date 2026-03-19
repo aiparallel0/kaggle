@@ -230,7 +230,9 @@ def _install_dependencies() -> None:
             # to the caller (_verify_critical_packages) rather than looping.
             return
 
-        print(f"[setup] Missing packages: {', '.join(missing_packages)}")
+        logging.getLogger(__name__).debug(
+            "[setup] Missing packages: %s", ", ".join(missing_packages)
+        )
 
         # Build a filtered requirements list.  flash-attn is excluded because:
         #  a) its build step requires torch to be importable (not true in the
@@ -245,7 +247,9 @@ def _install_dependencies() -> None:
             and "flash-attn" not in stripped.lower()
         ]
 
-        print("[setup] Installing dependencies from requirements.txt...")
+        logging.getLogger(__name__).debug(
+            "[setup] Installing dependencies from requirements.txt..."
+        )
         with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as tmp:
             tmp.write("\n".join(req_lines))
             tmp_path = tmp.name
@@ -259,7 +263,7 @@ def _install_dependencies() -> None:
                     timeout=1800,  # 30-minute cap; ultralytics + torch can exceed 5 min on slow connections
                 )
             if result.returncode == 0:
-                print(
+                logging.getLogger(__name__).debug(
                     "[setup] Dependencies installed successfully — restarting to load new packages..."
                 )
                 # os.execv replaces the current process (no fork) so terminal.txt
@@ -268,13 +272,15 @@ def _install_dependencies() -> None:
                 os.execv(sys.executable, [sys.executable] + sys.argv)
             else:
                 if result.stderr:
-                    print(f"[setup] pip stderr: {result.stderr[:1000]}")
+                    logging.getLogger(__name__).debug(
+                        "[setup] pip stderr: %s", result.stderr[:1000]
+                    )
                 if result.stdout:
-                    print(f"[setup] pip stdout: {result.stdout[:500]}")
+                    logging.getLogger(__name__).debug("[setup] pip stdout: %s", result.stdout[:500])
         except subprocess.TimeoutExpired:
-            print(
-                "[setup] TIMEOUT: pip install exceeded 1800s — packages may be partially installed.\n"
-                "[setup] Run manually: pip install -r requirements.txt"
+            logging.getLogger(__name__).warning(
+                "[setup] TIMEOUT: pip install exceeded 1800s — packages may be partially installed. "
+                "Run manually: pip install -r requirements.txt"
             )
         finally:
             try:
@@ -405,6 +411,25 @@ class _DualStreamHandler(logging.Handler):
         "generate_convergence",
         "generate_f1_barchart",
         "INFO: paper/presentation",
+        # Ultra-minimal: suppress noisy progress/status patterns
+        "Evaluating ",
+        "DONUT benchmark",
+        "Resource optimization applied",
+        "Training on ",
+        "Hyperparams:",
+        "Validation set:",
+        "Results saved",
+        "Processor spot-check",
+        "subsample_train",
+        "Pipeline started",
+        "SROIE split:",
+        "SROIE: train=",
+        "Stage Dataset Download done",
+        "Stage Download done",
+        "[Resources]",
+        "GPU memory released",
+        "step-count validation skipped",
+        "--param overrides applied",
     )
 
     # CONFIG_OPTIMIZATION sub-line prefixes that are file-only.
@@ -609,10 +634,7 @@ def _banner(text: str) -> None:
         Console().print(Rule(f"[bold cyan]{text}[/]", style="cyan"))
     except Exception:
         # Plain fallback (also used when DISABLE_LIVE_DASHBOARD=1)
-        width = 72
-        print(f"\n{'=' * width}")
         print(f"  {text}")
-        print(f"{'=' * width}")
 
 
 def _step(n: int, total: int, desc: str) -> None:
@@ -629,7 +651,6 @@ def _step(n: int, total: int, desc: str) -> None:
         Console().print(Text(f"\n  [{n}/{total}] ", style="bold dim") + Text(desc, style="bold"))
     except Exception:
         print(f"\n[{n}/{total}] {desc}")
-        print("-" * 60)
 
 
 def _load_summary_rows(results_dir: Path) -> list[dict]:
@@ -1046,7 +1067,7 @@ def _setup_hf_auth() -> None:
         if token_file.exists():
             token = token_file.read_text().strip()
             if token and not token.startswith("#"):
-                print(f"  [HF Auth] Loaded token from {token_file}")
+                logging.getLogger(__name__).debug("[HF Auth] Loaded token from %s", token_file)
             else:
                 token = None
     if token:
@@ -1056,24 +1077,27 @@ def _setup_hf_auth() -> None:
         # Validate token format (HF tokens start with 'hf_' or are 39 chars legacy format)
         token_masked = f"{token[:4]}****" if len(token) > 8 else "****"
         if not (token.startswith("hf_") or len(token) == 39):
-            print(
-                "  [HF Auth] WARNING: Token format may be invalid (expected 'hf_...' or 39-char legacy)"
+            logging.getLogger(__name__).debug(
+                "[HF Auth] Token format may be invalid (expected 'hf_...' or 39-char legacy). "
+                "Preview: %s",
+                token_masked,
             )
-            print(f"            Token preview: {token_masked}")
 
         try:
             from huggingface_hub import login
 
             login(token=token, add_to_git_credential=False)
-            print(f"  [HF Auth] Authenticated (token: {token_masked}) — faster downloads enabled")
+            logging.getLogger(__name__).debug(
+                "[HF Auth] Authenticated (token: %s) — faster downloads enabled", token_masked
+            )
         except Exception as e:
-            print(f"  [HF Auth] Login failed: {e} — continuing unauthenticated")
+            logging.getLogger(__name__).debug(
+                "[HF Auth] Login failed: %s — continuing unauthenticated", e
+            )
     else:
-        print(
-            "  [HF Auth] No token found — running unauthenticated. "
-            "Downloads will work but may be slower or rate-limited.\n"
-            "  Tip: create hf_token.txt in the project root or set HF_TOKEN env var "
-            "for 5-10x faster downloads."
+        logging.getLogger(__name__).debug(
+            "[HF Auth] No token found — running unauthenticated. "
+            "Tip: create hf_token.txt or set HF_TOKEN env var for 5-10x faster downloads."
         )
 
 
@@ -1093,7 +1117,9 @@ def stage_install(args) -> StageResult:
     sroie_val_img = sroie_data_dir / "val_img"
 
     if sroie_img.exists() and sroie_test_img.exists() and sroie_val_img.exists():
-        print(f"  SROIE data already present at {sroie_data_dir} — skipping install.")
+        logging.getLogger(__name__).debug(
+            "SROIE data already present at %s — skipping install.", sroie_data_dir
+        )
         return StageResult(name="SROIE Install", duration=0.0, exit_status=0, warnings=warnings)
 
     # Clone from GitHub into the parent directory of sroie_data_dir
@@ -1103,7 +1129,7 @@ def stage_install(args) -> StageResult:
     clone_target = parent_dir / "ICDAR-2019-SROIE-repo"
 
     if not clone_target.exists():
-        print(f"  Cloning {repo_url} ...")
+        logging.getLogger(__name__).debug("Cloning %s ...", repo_url)
         try:
             subprocess.run(
                 ["git", "clone", "--depth", "1", repo_url, str(clone_target)],
@@ -1556,9 +1582,11 @@ def _ensure_processor_config(path: str = "processor_config.json") -> None:
     cfg = {"image_processor": {"size": {"height": 1280, "width": 960}}}
     try:
         p.write_text(json.dumps(cfg, indent=2) + "\n")
-        print(f"  [env] Generated {p} (height=1280, width=960)")
+        logging.getLogger(__name__).debug("[env] Generated %s (height=1280, width=960)", p)
     except OSError as exc:
-        print(f"  [env] Could not write {p}: {exc} — continuing without it")
+        logging.getLogger(__name__).debug(
+            "[env] Could not write %s: %s — continuing without it", p, exc
+        )
 
 
 def _incremental_push_result(exp_id: int) -> None:
