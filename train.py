@@ -234,6 +234,7 @@ except ImportError:
             eval_dataset=None,
             callbacks=None,
             optimizers=(None, None),
+            data_collator=None,
             **kwargs,
         ):
             self.model = model
@@ -243,6 +244,7 @@ except ImportError:
             self.callbacks = callbacks or []
             self._optimizer, self._scheduler = optimizers
             self.state = _TrainerState()
+            self.data_collator = data_collator
 
         def _call_callbacks(self, event: str, control=None, **kw):
             if control is None:
@@ -299,6 +301,7 @@ except ImportError:
                 shuffle=True,
                 num_workers=args.dataloader_num_workers,
                 pin_memory=args.dataloader_pin_memory,
+                collate_fn=self.data_collator,
             )
             eval_loader = None
             if self.eval_dataset is not None and args.eval_strategy != "no":
@@ -307,6 +310,7 @@ except ImportError:
                     batch_size=args.per_device_eval_batch_size,
                     shuffle=False,
                     num_workers=args.dataloader_num_workers,
+                    collate_fn=self.data_collator,
                 )
 
             optimizer = self._optimizer
@@ -2510,9 +2514,26 @@ from constants import (  # noqa: E402
     _optimal_num_workers,
 )
 
-__all__ = ["SROIEDataset", "MultiDataset", "DonutTrainer", "TrainingResult"]
+__all__ = ["SROIEDataset", "MultiDataset", "DonutTrainer", "TrainingResult", "_ensure_dual_config"]
 
 logger = logging.getLogger(__name__)
+
+
+def _ensure_dual_config(model, field: str, value) -> None:
+    """Set a config field on both model.config and model.decoder.config.
+
+    This prevents the silent failure where model.config and model.decoder.config
+    disagree — the model trains correctly using model.config but save_pretrained()
+    serializes model.decoder.config, so the reloaded model uses the wrong value.
+
+    The function is intentionally defensive: if model.decoder or
+    model.decoder.config does not exist, the setter is skipped for the decoder
+    config without raising an exception.
+    """
+    setattr(model.config, field, value)
+    if hasattr(model, "decoder") and hasattr(model.decoder, "config"):
+        setattr(model.decoder.config, field, value)
+
 
 # ---------------------------------------------------------------------------
 # LmHeadCloneCallback — prevent safetensors from deduplicating lm_head
@@ -3608,6 +3629,18 @@ class DonutTrainer:
                 loss = outputs.loss
                 return (loss, outputs) if return_outputs else loss
 
+            def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
+                # Strip decoder collision keys before HF evaluation loop runs.
+                # HF Seq2SeqTrainer.prediction_step() calls model(**inputs) for
+                # eval-loss computation, and that call can trigger the same
+                # decoder_input_ids / decoder_inputs_embeds collision that
+                # compute_loss guards against during training.
+                inputs.pop("decoder_input_ids", None)
+                inputs.pop("decoder_inputs_embeds", None)
+                return super().prediction_step(
+                    model, inputs, prediction_loss_only, ignore_keys=ignore_keys
+                )
+
         trainer = _DonutSeq2SeqTrainer(
             model=self.model,
             args=training_args,
@@ -3676,6 +3709,33 @@ class DonutTrainer:
                     "and model.decoder.resize_token_embeddings(len(processor.tokenizer)) "
                     "before training. See CLAUDE.md §7."
                 )
+
+        # Guardrail 5: model.config and model.decoder.config must agree on
+        # critical token-ID fields.  A mismatch means the model trains correctly
+        # (using model.config) but produces wrong output after save/reload
+        # (save_pretrained serialises model.decoder.config).
+        for _cfg_field in ("decoder_start_token_id", "pad_token_id"):
+            _top_val = getattr(self.model.config, _cfg_field, None)
+            _dec_val = getattr(_decoder_config, _cfg_field, None)
+            if _top_val != _dec_val:
+                raise ValueError(
+                    f"CRITICAL: model.config.{_cfg_field}={_top_val} != "
+                    f"model.decoder.config.{_cfg_field}={_dec_val}. "
+                    f"Both must be set to the same value. The model will train correctly "
+                    f"but produce wrong output after save/reload. "
+                    f"Use _ensure_dual_config(model, '{_cfg_field}', <value>) to set both."
+                )
+
+        # Guardrail 6: tie_word_embeddings must be False on model.config as well.
+        # Guardrail 1 already checked model.decoder.config; this catches the case
+        # where only model.config is True (HF tie_weights() checks model.config).
+        _top_tie = getattr(self.model.config, "tie_word_embeddings", None)
+        if _top_tie is True:
+            raise ValueError(
+                "CRITICAL: model.config.tie_word_embeddings is True. "
+                "Must be False on BOTH model.config AND model.decoder.config. "
+                "Use _ensure_dual_config(model, 'tie_word_embeddings', False)."
+            )
 
         logger.info(
             "Pre-training guardrails PASSED: tie_word_embeddings=False, "
@@ -3856,16 +3916,11 @@ def main():
     # so save_pretrained() saves BOTH weights independently.  Without this,
     # the saved checkpoint omits lm_head (or tie_weights() overwrites the
     # learned lm_head with embed_tokens), causing F1=0 on reload.
-    model.decoder.config.tie_word_embeddings = False
+    _ensure_dual_config(model, "tie_word_embeddings", False)
 
-    model.config.pad_token_id = processor.tokenizer.pad_token_id
-    model.decoder.config.pad_token_id = processor.tokenizer.pad_token_id
-    model.config.decoder_start_token_id = processor.tokenizer.convert_tokens_to_ids(["<s_sroie>"])[
-        0
-    ]
-    model.decoder.config.decoder_start_token_id = processor.tokenizer.convert_tokens_to_ids(
-        ["<s_sroie>"]
-    )[0]
+    _ensure_dual_config(model, "pad_token_id", processor.tokenizer.pad_token_id)
+    _sroie_start_id = processor.tokenizer.convert_tokens_to_ids(["<s_sroie>"])[0]
+    _ensure_dual_config(model, "decoder_start_token_id", _sroie_start_id)
     # ── Guardrail: verify decoder_start_token_id decodes back to the task token ──
     _decoded = processor.tokenizer.decode([model.config.decoder_start_token_id])
     if _decoded != "<s_sroie>":
@@ -3875,8 +3930,7 @@ def main():
             f"convert_tokens_to_ids was called, or the list-wrapping syntax is missing. "
             f"Use: tokenizer.convert_tokens_to_ids(['<s_sroie>'])[0]"
         )
-    model.config.use_cache = False  # Required with gradient_checkpointing
-    model.decoder.config.use_cache = False
+    _ensure_dual_config(model, "use_cache", False)  # Required with gradient_checkpointing
     model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
 
     # Load SROIE data using canonical loaders (single source of truth)

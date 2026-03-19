@@ -96,7 +96,7 @@ from constants import (  # noqa: E402
 )
 from data_pipeline import load_sroie_test  # noqa: E402
 from resource_manager import TrainingAuditLogger  # noqa: E402
-from train import MultiDataset  # noqa: E402
+from train import MultiDataset, _ensure_dual_config  # noqa: E402
 
 try:
     import yaml  # noqa: E402
@@ -2065,7 +2065,7 @@ def load_model_with_tied_weights(model_path: str, device: str = DEVICE, processo
     return model
 
 
-def _retie_decoder_head(model, missing_keys=None) -> None:
+def _retie_decoder_head(model, missing_keys=None, model_path=None) -> None:
     """Re-tie or recover lm_head.weight after from_pretrained().
 
     Parameters
@@ -2079,6 +2079,8 @@ def _retie_decoder_head(model, missing_keys=None) -> None:
         lossy but far better than random init (F1 ~0.42 → comparable to
         embed_tokens quality).  The real fix is LmHeadCloneCallback in
         train.py which prevents this situation from arising.
+    model_path : str, optional
+        Path to the checkpoint being loaded, used for diagnostic messages.
     """
     if missing_keys is None:
         missing_keys = []
@@ -2088,6 +2090,16 @@ def _retie_decoder_head(model, missing_keys=None) -> None:
     if not getattr(decoder.config, "tie_word_embeddings", True):
         lm_head_missing = any("lm_head.weight" in k for k in missing_keys)
         if lm_head_missing:
+            # Emit a loud CRITICAL warning immediately — before any recovery
+            # attempt — so it is visible even if recovery later fails.
+            logger.error(
+                "CRITICAL: decoder.lm_head.weight MISSING from checkpoint at %s. "
+                "Falling back to embed_tokens.weight copy — this is LOSSY and will "
+                "produce degraded F1 (~0.42). The root cause is that "
+                "LmHeadCloneCallback did not fire during training. "
+                "Re-train this experiment with LmHeadCloneCallback registered.",
+                model_path or "<unknown path>",
+            )
             # lm_head was not in the checkpoint — randomly re-initialized.
             # Recover by copying embed_tokens.weight as a starting point.
             embed_tokens = None
@@ -3665,14 +3677,11 @@ def train_experiment(
         # so save_pretrained() saves BOTH weights independently.  Without this,
         # the saved checkpoint omits lm_head (or tie_weights() overwrites the
         # learned lm_head with embed_tokens), causing F1=0 on reload.
-        _mdl.decoder.config.tie_word_embeddings = False
+        _ensure_dual_config(_mdl, "tie_word_embeddings", False)
 
-        _mdl.config.pad_token_id = _proc.tokenizer.pad_token_id
-        _mdl.decoder.config.pad_token_id = _proc.tokenizer.pad_token_id
-        _mdl.config.decoder_start_token_id = _proc.tokenizer.convert_tokens_to_ids(["<s_sroie>"])[0]
-        _mdl.decoder.config.decoder_start_token_id = _proc.tokenizer.convert_tokens_to_ids(
-            ["<s_sroie>"]
-        )[0]
+        _ensure_dual_config(_mdl, "pad_token_id", _proc.tokenizer.pad_token_id)
+        _sroie_start_id = _proc.tokenizer.convert_tokens_to_ids(["<s_sroie>"])[0]
+        _ensure_dual_config(_mdl, "decoder_start_token_id", _sroie_start_id)
         # ── Guardrail: verify decoder_start_token_id decodes back to the task token ──
         _decoded = _proc.tokenizer.decode([_mdl.config.decoder_start_token_id])
         if _decoded != "<s_sroie>":
@@ -3696,7 +3705,6 @@ def train_experiment(
                 _mdl.generation_config.max_length = None
             # Set decoder_start_token_id on generation_config (not just model.config)
             # so generate() uses the correct start token without needing a prompt.
-            _sroie_start_id = _proc.tokenizer.convert_tokens_to_ids(["<s_sroie>"])[0]
             _mdl.generation_config.decoder_start_token_id = _sroie_start_id
 
         # Only enable gradient checkpointing when VRAM is constrained (< 24 GB).
