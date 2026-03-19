@@ -262,6 +262,10 @@ except ImportError:
                         k: v.to(self.model.device) if hasattr(v, "to") else v
                         for k, v in batch.items()
                     }
+                    # Strip decoder keys so the model derives them from labels
+                    # internally — same guard as in training (see _DonutSeq2SeqTrainer).
+                    batch.pop("decoder_input_ids", None)
+                    batch.pop("decoder_inputs_embeds", None)
                     out = self.model(**batch)
                     if hasattr(out, "loss") and out.loss is not None:
                         total_loss += out.loss.item()
@@ -3589,14 +3593,20 @@ class DonutTrainer:
         # can inject decoder_input_ids into the batch even after the data collator
         # has omitted them.  VisionEncoderDecoderModel then also derives
         # decoder_inputs_embeds from encoder hidden states, so MBart receives both
-        # simultaneously and raises ValueError.  Stripping both keys here ensures
-        # the model's forward() sees only pixel_values + labels and handles the
-        # shift-right step internally — which is the correct code path.
+        # simultaneously and raises ValueError.
+        #
+        # The fix: bypass super().compute_loss() entirely and call the model
+        # directly with only pixel_values + labels.  The model's own forward()
+        # handles the shift-right derivation of decoder_input_ids internally —
+        # that is the correct code path.  super().compute_loss() must NOT be
+        # called because it re-injects decoder_input_ids after the pop.
         class _DonutSeq2SeqTrainer(Seq2SeqTrainer):
             def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
                 inputs.pop("decoder_input_ids", None)
                 inputs.pop("decoder_inputs_embeds", None)
-                return super().compute_loss(model, inputs, return_outputs=return_outputs, **kwargs)
+                outputs = model(**inputs)
+                loss = outputs.loss
+                return (loss, outputs) if return_outputs else loss
 
         trainer = _DonutSeq2SeqTrainer(
             model=self.model,
