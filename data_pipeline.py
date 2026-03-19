@@ -2025,7 +2025,8 @@ def split_dataset(
 def get_combined_dataset(
     dataset_names: list[str],
     sroie_oversample: int = 1,
-) -> tuple[list[Sample], list[Sample]]:
+    return_sources: bool = False,
+) -> tuple[list[Sample], list[Sample]] | tuple[list[Sample], list[Sample], list[str]]:
     """Merge multiple datasets into train and validation lists.
 
     SROIE training samples are added to train as-is (train split from img/).
@@ -2046,13 +2047,23 @@ def get_combined_dataset(
         Number of times to duplicate SROIE training samples (default 1).
         Use 2 or 3 to counteract SROIE field dilution when combining with
         large auxiliary datasets.
+    return_sources : bool, optional
+        When True, returns a third element: a list of dataset-source strings
+        (e.g. "sroie", "wildreceipt") aligned with train_samples.  Used by
+        the aux_loss_weight feature in MultiDataset to scale auxiliary losses.
+        Default False preserves the original two-tuple return type.
 
     Returns
     -------
     (train_samples, val_samples) : Tuple[List[Sample], List[Sample]]
+        When return_sources is False (default).
+    (train_samples, val_samples, train_sources) : Tuple[...] | Tuple[..., List[str]]
+        When return_sources is True.  train_sources[i] is the dataset name
+        for train_samples[i] (e.g. "sroie" or "wildreceipt").
     """
     combined_train: list[Sample] = []
     combined_val: list[Sample] = []
+    combined_train_sources: list[str] = []
     per_loader_counts: dict[str, int] = {}
 
     for name in dataset_names:
@@ -2071,20 +2082,35 @@ def get_combined_dataset(
             # val split → combined_val (never oversampled).
             # List multiplication creates N references to the same immutable
             # Sample tuples — safe and memory-efficient for read-only iteration.
-            combined_train.extend(data * max(1, sroie_oversample))
+            oversample_count = max(1, sroie_oversample)
+            combined_train.extend(data * oversample_count)
+            combined_train_sources.extend(["sroie"] * (len(data) * oversample_count))
             sroie_val = load_sroie_val()
             combined_val.extend(sroie_val)
         else:
             # Auxiliary datasets: 70/15/15 split
             train_split, val_split, _ = split_dataset(data, seed=SEED)
             combined_train.extend(train_split)
+            combined_train_sources.extend([name] * len(train_split))
             combined_val.extend(val_split)
 
-    # Fixed-seed shuffle to interleave samples from different datasets
+    # Fixed-seed shuffle to interleave samples from different datasets.
+    # Use the same RNG state for both combined_train and combined_train_sources
+    # so that sources[i] still maps to samples[i] after shuffling.
     rng = random.Random(SEED)
-    rng.shuffle(combined_train)
+    if return_sources:
+        # Shuffle (sample, source) pairs together to keep alignment.
+        paired = list(zip(combined_train, combined_train_sources))
+        rng.shuffle(paired)
+        combined_train[:] = [p[0] for p in paired]
+        combined_train_sources[:] = [p[1] for p in paired]
+    else:
+        rng.shuffle(combined_train)
+    # Val shuffle uses a continuation of the same RNG (preserves original behavior).
     rng.shuffle(combined_val)
 
+    if return_sources:
+        return combined_train, combined_val, combined_train_sources
     return combined_train, combined_val
 
 

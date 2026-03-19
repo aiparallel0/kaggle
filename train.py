@@ -2860,6 +2860,8 @@ class MultiDataset(Dataset):
         max_length: int = MAX_LENGTH,
         cache_in_ram: bool = True,
         precompute_tensors: bool = True,
+        sample_sources: list[str] | None = None,
+        aux_loss_weight: float = 1.0,
     ):
         self.samples = samples
         self.processor = processor
@@ -2867,6 +2869,15 @@ class MultiDataset(Dataset):
         self._image_cache: dict[int, Image.Image] = {}
         self._pixel_cache: dict[int, Any] = {}  # precomputed pixel_values tensors
         self._label_cache: dict[int, Any] = {}  # precomputed label token tensors
+        # Per-sample loss weights: 1.0 for SROIE, aux_loss_weight for auxiliary.
+        # None means all weights are 1.0 (default / no-op).
+        if sample_sources is not None and len(sample_sources) != len(samples):
+            raise ValueError(
+                f"sample_sources length ({len(sample_sources)}) must match "
+                f"samples length ({len(samples)})."
+            )
+        self._sample_sources: list[str] | None = sample_sources
+        self._aux_loss_weight: float = aux_loss_weight
 
         if cache_in_ram and len(samples) > 0:
             # Determine actual image dimensions from processor_config.json so
@@ -3043,7 +3054,16 @@ class MultiDataset(Dataset):
             labels[labels == self.processor.tokenizer.pad_token_id] = -100
             labels = _mask_empty_field_labels(labels, gt, self.processor.tokenizer)
 
-        return {"pixel_values": pixel_values, "labels": labels}
+        item = {"pixel_values": pixel_values, "labels": labels}
+
+        # Per-sample loss weight: 1.0 for SROIE, aux_loss_weight for auxiliary.
+        # Only added when aux_loss_weight != 1.0 to avoid any overhead on default runs.
+        if self._sample_sources is not None and self._aux_loss_weight != 1.0:
+            src = self._sample_sources[idx] if idx < len(self._sample_sources) else "sroie"
+            w = 1.0 if src == "sroie" else self._aux_loss_weight
+            item["loss_weight"] = torch.tensor(w, dtype=torch.float32)
+
+        return item
 
 
 # ---------------------------------------------------------------------------
@@ -3171,7 +3191,35 @@ class LiveDashboardCallback:
         except Exception:
             return ""
 
+    def on_log(
+        self, args: "Any", state: "Any", control: "Any", logs: dict | None = None, **kwargs: "Any"
+    ) -> None:
+        """Print a single overwriting \r progress line to console during training.
+
+        Full per-step logs are written to terminal.txt via the logging system;
+        this method just keeps the console to one clean line.
+        Only fires on training steps (logs contains 'loss' key), not eval steps.
+        """
+        if logs is None or "loss" not in logs:
+            return
+        loss = logs["loss"]
+        epoch = int(getattr(state, "epoch", 0))
+        step = int(getattr(state, "global_step", 0))
+        max_steps = int(getattr(state, "max_steps", 0))
+        exp_label = f"Exp {self._experiment_id}" if self._experiment_id else "Training"
+        total_ep = self._total_epochs if self._total_epochs else "?"
+        line = (
+            f"\r{exp_label} | Epoch {epoch}/{total_ep}"
+            f" | Step {step}/{max_steps}"
+            f" | Loss: {loss:.3f}   "
+        )
+        sys.stdout.write(line)
+        sys.stdout.flush()
+
     def on_epoch_end(self, args: "Any", state: "Any", control: "Any", **kwargs: "Any") -> None:
+        # Clear the \r progress line so epoch summary starts on a fresh line.
+        sys.stdout.write("\n")
+        sys.stdout.flush()
         log = state.log_history if state is not None else []
         train_loss = float("nan")
         val_loss = float("nan")
@@ -3602,11 +3650,16 @@ class DonutTrainer:
         # from labels — causing the MBart decoder to raise:
         #   ValueError: You cannot specify both decoder_input_ids and
         #               decoder_inputs_embeds at the same time
+        # If the dataset provides per-sample loss_weight tensors (for aux_loss_weight
+        # < 1.0), they are stacked into a 1-D batch tensor for compute_loss().
         def _donut_data_collator(features: list[dict]) -> dict:
-            return {
+            batch = {
                 "pixel_values": torch.stack([f["pixel_values"] for f in features]),
                 "labels": torch.stack([f["labels"] for f in features]),
             }
+            if "loss_weight" in features[0]:
+                batch["loss_weight"] = torch.stack([f["loss_weight"] for f in features])
+            return batch
 
         # Subclass that prevents decoder_input_ids/decoder_inputs_embeds conflict.
         #
@@ -3625,8 +3678,39 @@ class DonutTrainer:
             def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
                 inputs.pop("decoder_input_ids", None)
                 inputs.pop("decoder_inputs_embeds", None)
+                # Extract optional per-sample loss weights (from aux_loss_weight feature).
+                # These are NOT passed to the model — model.forward() only accepts
+                # pixel_values + labels.
+                loss_weights = inputs.pop("loss_weight", None)
                 outputs = model(**inputs)
-                loss = outputs.loss
+                if loss_weights is not None:
+                    # Per-sample weighted loss: recompute cross-entropy per sample using
+                    # the already-computed logits.  outputs.loss is a scalar mean over
+                    # all (batch × seq_len) tokens; we need per-sample granularity so
+                    # SROIE samples get weight 1.0 and auxiliary samples get aux_weight.
+                    # logits shape: (B, T, V) — already aligned with labels by the model.
+                    import torch.nn.functional as _F  # noqa: PLC0415
+
+                    _logits = outputs.logits  # (B, T, V)
+                    _labels = inputs["labels"]  # (B, T)
+                    _per_tok = _F.cross_entropy(
+                        _logits.reshape(-1, _logits.size(-1)),
+                        _labels.reshape(-1),
+                        reduction="none",
+                        ignore_index=-100,
+                    ).view(_labels.size())  # (B, T)
+                    _valid = (_labels != -100).float()
+                    _per_sample = (_per_tok * _valid).sum(dim=1) / _valid.sum(dim=1).clamp(
+                        min=1
+                    )  # (B,)
+                    # Weighted mean: sum(w_i * loss_i) / sum(w_i)
+                    # → SROIE samples (w=1.0) contribute at full scale
+                    # → Auxiliary samples (w<1.0) contribute proportionally less
+                    # → Eval path (prediction_step) never calls compute_loss,
+                    #   so eval_loss remains unweighted for fair early-stopping.
+                    loss = (_per_sample * loss_weights).sum() / loss_weights.sum()
+                else:
+                    loss = outputs.loss
                 return (loss, outputs) if return_outputs else loss
 
             def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
@@ -3637,6 +3721,8 @@ class DonutTrainer:
                 # compute_loss guards against during training.
                 inputs.pop("decoder_input_ids", None)
                 inputs.pop("decoder_inputs_embeds", None)
+                # Also strip loss_weight — it is only for training, not eval.
+                inputs.pop("loss_weight", None)
                 return super().prediction_step(
                     model, inputs, prediction_loss_only, ignore_keys=ignore_keys
                 )

@@ -3538,6 +3538,14 @@ class ExperimentConfig:
     image_width: int = 960
     allow_high_res: bool = False
 
+    # -- Auxiliary dataset loss weighting --------------------------------
+    # When aux_loss_weight < 1.0, the loss from auxiliary dataset samples
+    # (WildReceipt, Invoices-DONUT, etc.) is multiplied by this factor.
+    # SROIE samples always get weight 1.0.  Default 1.0 = no change (all
+    # existing experiments 1–8 are unaffected by this field).
+    # Requires aux dataset presence; does nothing for SROIE-only experiments.
+    aux_loss_weight: float = 1.0
+
     # -- Duck-typed aliases for DonutTrainer compatibility ----------------
     # DonutTrainer reads config.max_epochs, config.learning_rate, etc.
     # These properties ensure a single source of truth (no duplication).
@@ -3648,6 +3656,32 @@ EXPERIMENTS: dict[int, ExperimentConfig] = {
         sroie_oversample=3,
         experiment_id=8,
     ),
+    9: ExperimentConfig(
+        name="SROIE + WildReceipt (2x SROIE, aux_w=0.5)",
+        datasets=["sroie", "wildreceipt"],
+        description=(
+            "SROIE + WildReceipt with 2x SROIE oversampling and aux_loss_weight=0.5. "
+            "Auxiliary samples contribute half-weight loss to reduce overfitting on "
+            "WildReceipt domain noise while retaining visual diversity."
+        ),
+        epochs=15,
+        sroie_oversample=2,
+        aux_loss_weight=0.5,
+        experiment_id=9,
+    ),
+    10: ExperimentConfig(
+        name="SROIE + Invoices (2x SROIE, aux_w=0.6)",
+        datasets=["sroie", "invoices_donut"],
+        description=(
+            "SROIE + Invoices-DONUT with 2x SROIE oversampling and aux_loss_weight=0.6. "
+            "Mirrors Exp 6 (the historical best) but with 60% auxiliary loss weighting "
+            "to reduce cross-domain overfitting."
+        ),
+        epochs=15,
+        sroie_oversample=2,
+        aux_loss_weight=0.6,
+        experiment_id=10,
+    ),
 }
 
 # ---------------------------------------------------------------------------
@@ -3717,6 +3751,7 @@ def train_experiment(
     base_processor=None,
     base_model=None,
     config=None,
+    sample_sources: list[str] | None = None,
 ) -> list[dict]:
     """Fine-tune DONUT on *samples* and save the model to *output_dir*.
 
@@ -3929,7 +3964,14 @@ def train_experiment(
         logger.info("[Device] Model moved to %s", DEVICE)
 
         # Build PyTorch datasets
-        _train_ds = MultiDataset(samples, _proc, max_length=config.max_length)
+        _aux_w = getattr(config, "aux_loss_weight", 1.0)
+        _train_ds = MultiDataset(
+            samples,
+            _proc,
+            max_length=config.max_length,
+            sample_sources=sample_sources,
+            aux_loss_weight=_aux_w,
+        )
         _val_ds = (
             MultiDataset(
                 val_samples,
@@ -4233,17 +4275,28 @@ def run_experiment(
             print(f"[Exp {exp_id}] Valid cached result found - skipping.")
             return cached
 
-    # Load data
-    train_samples, val_samples = dataset_loaders.get_combined_dataset(
-        config.datasets, sroie_oversample=config.sroie_oversample
-    )
+    # Load data — request source labels when aux_loss_weight is active
+    _aux_w = getattr(config, "aux_loss_weight", 1.0)
+    _need_sources = _aux_w < 1.0
+    if _need_sources:
+        train_samples, val_samples, train_sources = dataset_loaders.get_combined_dataset(
+            config.datasets, sroie_oversample=config.sroie_oversample, return_sources=True
+        )
+    else:
+        train_samples, val_samples = dataset_loaders.get_combined_dataset(
+            config.datasets, sroie_oversample=config.sroie_oversample
+        )
+        train_sources = None
 
     # Micro/mini subsample — deterministic RNG so repeated runs give the same split
     if getattr(config, "subsample_train", 0) > 0 and len(train_samples) > config.subsample_train:
         import random as _rnd
 
         _rng = _rnd.Random(config.seed)
-        train_samples = _rng.sample(train_samples, config.subsample_train)
+        _indices = _rng.sample(range(len(train_samples)), config.subsample_train)
+        train_samples = [train_samples[i] for i in _indices]
+        if train_sources is not None:
+            train_sources = [train_sources[i] for i in _indices]
         print(f"[Exp {exp_id}] subsample_train: using {len(train_samples)} samples")
 
     if len(train_samples) == 0:
@@ -4347,6 +4400,7 @@ def run_experiment(
         base_processor=base_processor,
         base_model=base_model,
         config=config,
+        sample_sources=train_sources,
     )
     _train_duration_sec = time.monotonic() - _t_train_start
 
@@ -4491,10 +4545,17 @@ def run_custom_experiment(config: ExperimentConfig, result_file: Path) -> dict:
     print(f"Batch size={config.batch_size}, epochs={config.epochs}, lr={config.lr:.0e}")
     print(f"{'=' * 72}")
 
-    # Load data
-    train_samples, val_samples = dataset_loaders.get_combined_dataset(
-        config.datasets, sroie_oversample=config.sroie_oversample
-    )
+    # Load data — request source labels when aux_loss_weight is active
+    _aux_w_sweep = getattr(config, "aux_loss_weight", 1.0)
+    if _aux_w_sweep < 1.0:
+        train_samples, val_samples, train_sources_sweep = dataset_loaders.get_combined_dataset(
+            config.datasets, sroie_oversample=config.sroie_oversample, return_sources=True
+        )
+    else:
+        train_samples, val_samples = dataset_loaders.get_combined_dataset(
+            config.datasets, sroie_oversample=config.sroie_oversample
+        )
+        train_sources_sweep = None
     if len(train_samples) == 0:
         print(f"[Sweep Exp {exp_id}] WARNING: No samples loaded - saving empty result.")
         result = {
@@ -4517,6 +4578,7 @@ def run_custom_experiment(config: ExperimentConfig, result_file: Path) -> dict:
         model_dir,
         val_samples=val_samples,
         config=config,
+        sample_sources=train_sources_sweep,
     )
 
     # Evaluate (pass custom config to avoid EXPERIMENTS lookup)

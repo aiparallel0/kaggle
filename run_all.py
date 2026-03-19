@@ -77,6 +77,10 @@ if _SCRIPT_DIR not in sys.path:
 
 # Set before constants.py triggers torch import to reduce GPU memory fragmentation.
 os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
+# Suppress third-party tqdm bars (e.g. HuggingFace datasets, YOLO) before any import
+# that might initialise tqdm internally.
+os.environ["TQDM_DISABLE"] = "1"
+os.environ["TRANSFORMERS_NO_PROGRESS_BAR"] = "1"
 
 from constants import BASE_MODEL, IMAGE_EXTS, SEED, _gpu_cleanup  # noqa: E402, I001
 
@@ -329,6 +333,7 @@ class _DualStreamHandler(logging.Handler):
         "LmHeadCloneCallback",
         "Self-test raw token IDs",
         "Self-test decoder_input_ids",
+        "Self-test PASSED",
         "tie_word_embeddings",
         "The new embeddings will be initialized",
         "The new lm_head weights",
@@ -337,6 +342,33 @@ class _DualStreamHandler(logging.Handler):
         "eval_runtime",
         "eval_samples_per_second",
         "eval_steps_per_second",
+        # Additional verbose internal patterns (file-only)
+        "[memory_manager]",
+        "[CheckpointValidator]",
+        "[SemanticInit]",
+        "Model + processor saved",
+        "Post-save verification",
+        "Post-save lm_head check",
+        "Inference #",
+        "run_inference #",
+        "token2json returned list",
+        "[validate_training_config]",
+        "precision: bf16",
+        "precision: fp16",
+        "torch.compile skipped",
+        "warmup_steps capped",
+        "[Diagnostics] Callback registered",
+        "[LiveDashboard] Callback registered",
+        "Gradient checkpointing enabled",
+        "Pre-training guardrails PASSED",
+        "[Device] Model moved",
+        "SROIE parser returned empty",
+        "shutdown train dl workers",
+        "shutdown eval dl workers",
+        "Eval DataLoader workers shut down",
+        "Loading model from",
+        "CONFIG_OPTIMIZATION",
+        "[progress]",
     )
 
     # CONFIG_OPTIMIZATION sub-line prefixes that are file-only.
@@ -530,11 +562,11 @@ def _step(n: int, total: int, desc: str) -> None:
     print("-" * 60)
 
 
-def _print_final_summary(results_dir: Path) -> None:
-    """Print a compact final summary table of all experiment results.
+def _print_final_summary(results_dir: Path, pdf_compiled: bool | None = None) -> None:
+    """Print a box-drawing summary table of all experiment results.
 
-    Format is AI-agent-friendly: tabular, fixed-width columns, minimal tokens.
-    Also respects DONUT_QUIET env var for AI-agent mode.
+    Format is AI-agent-friendly: copy-pastable, fixed-width columns, minimal tokens.
+    Includes best experiment highlight and per-field F1 for the winner.
     """
     try:
         result_files = sorted(results_dir.glob("experiment_*.json"))
@@ -550,8 +582,7 @@ def _print_final_summary(results_dir: Path) -> None:
                 rows.append(
                     {
                         "exp": data.get("experiment_id", "?"),
-                        "name": data.get("name", "")[:28],
-                        "samples": data.get("num_train_samples", 0),
+                        "name": data.get("name", "")[:29],
                         "f1": m.get("global_f1", float("nan")),
                         "company": m.get("company_f1", float("nan")),
                         "date": m.get("date_f1", float("nan")),
@@ -566,21 +597,50 @@ def _print_final_summary(results_dir: Path) -> None:
         if not rows:
             return
 
-        print("\n--- FINAL SUMMARY ---")
-        hdr = f"{'exp':>3} | {'name':<28} | {'samples':>7} | {'f1':>6} | {'company':>7} | {'date':>6} | {'addr':>6} | {'total':>6} | {'time':>5}"
-        print(hdr)
-        print("-" * len(hdr))
+        # Find best experiment (highest F1, ignoring NaN)
+        valid = [r for r in rows if not math.isnan(r["f1"])]
+        best = max(valid, key=lambda r: r["f1"]) if valid else None
+
+        # Box-drawing column widths (change here to update the whole layout)
+        _CW_EXP = 5  # "│  1 " including separator
+        _CW_NAME = 31  # "│ Name...             "
+        _CW_F1 = 8  # "│  0.7343"
+        _CW_TIME = 9  # "│   8.2m  "
+        footer_w = _CW_EXP + 1 + _CW_NAME + 1 + _CW_F1 + 1 + _CW_TIME
+
+        h_line = "─" * _CW_EXP + "┬" + "─" * _CW_NAME + "┬" + "─" * _CW_F1 + "┬" + "─" * _CW_TIME
+        m_line = "─" * _CW_EXP + "┼" + "─" * _CW_NAME + "┼" + "─" * _CW_F1 + "┼" + "─" * _CW_TIME
+
+        print()
+        print("┌" + "─" * footer_w + "┐")
+        title = "PIPELINE RESULTS SUMMARY"
+        print("│" + title.center(footer_w) + "│")
+        print("├" + h_line + "┤")
+        print(f"│ {'Exp':>3} │ {'Name':<29} │ {'F1':>6} │ {'Time':>7} │")
+        print("├" + m_line + "┤")
         for r in rows:
-            f1_s = f"{r['f1']:>6.4f}" if not math.isnan(r["f1"]) else "   N/A"
-            co_s = f"{r['company']:>7.4f}" if not math.isnan(r["company"]) else "    N/A"
-            da_s = f"{r['date']:>6.4f}" if not math.isnan(r["date"]) else "   N/A"
-            ad_s = f"{r['addr']:>6.4f}" if not math.isnan(r["addr"]) else "   N/A"
-            to_s = f"{r['total']:>6.4f}" if not math.isnan(r["total"]) else "   N/A"
-            ti_s = f"{r['time']:>4.1f}m"
-            print(
-                f"{r['exp']:>3} | {r['name']:<28} | {r['samples']:>7} | {f1_s} | {co_s} | {da_s} | {ad_s} | {to_s} | {ti_s}"
-            )
-        print("--- END SUMMARY ---")
+            f1_s = f"{r['f1']:6.4f}" if not math.isnan(r["f1"]) else "  N/A "
+            ti_s = f"{r['time']:5.1f}m"
+            marker = " ◀" if best and r["exp"] == best["exp"] else "  "
+            print(f"│ {r['exp']:>3} │ {r['name']:<29} │ {f1_s} │ {ti_s:>7} │{marker}")
+        print("├" + "─" * footer_w + "┤")
+
+        # Footer lines: best experiment + per-field breakdown
+        if best:
+            co_s = f"{best['company']:.4f}" if not math.isnan(best["company"]) else "N/A"
+            da_s = f"{best['date']:.4f}" if not math.isnan(best["date"]) else "N/A"
+            ad_s = f"{best['addr']:.4f}" if not math.isnan(best["addr"]) else "N/A"
+            to_s = f"{best['total']:.4f}" if not math.isnan(best["total"]) else "N/A"
+            best_line = f" Best: Exp {best['exp']} (F1={best['f1']:.4f})"
+            field_line = f" Per-field: co={co_s} | dt={da_s} | addr={ad_s} | tot={to_s}"
+            print("│" + best_line.ljust(footer_w) + "│")
+            print("│" + field_line.ljust(footer_w) + "│")
+
+        if pdf_compiled is not None:
+            pdf_status = " PDF: compiled ✓" if pdf_compiled else " PDF: no LaTeX compiler (skipped)"
+            print("│" + pdf_status.ljust(footer_w) + "│")
+
+        print("└" + "─" * footer_w + "┘")
     except Exception:
         pass
 
@@ -2296,10 +2356,15 @@ def stage_paper(args) -> StageResult:
             if paper_pdf:
                 print(f"  PDF compiled   -> {paper_pdf}")
             else:
+                print("  ℹ️  LaTeX → PDF compilation skipped. No compiler found.")
                 print(
-                    "  INFO: No LaTeX compiler found — install texlive-latex-base "
-                    "or MiKTeX to auto-compile PDFs."
+                    "     Linux:   apt-get install texlive-latex-base texlive-fonts-recommended texlive-latex-extra"
                 )
+                print("              or: apt-get install texlive-full  (larger, ~2GB)")
+                print("     macOS:   brew install --cask mactex  (or install BasicTeX)")
+                print("     Windows: https://miktex.org/download")
+                print(f"     The .tex file is at: {output_paper}")
+                print(f"     Compile manually: pdflatex {output_paper}")
         except Exception as exc:
             w = f"PDF compilation failed: {exc}"
             print(f"  WARNING: {w}")
