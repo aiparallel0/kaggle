@@ -326,21 +326,35 @@ def _edit_distance(s1: str, s2: str) -> int:
 
 
 def _progress(iterable, desc: str = "", total: int | None = None):
-    """Logging-based progress — replaces tqdm. Emits at 0 %, 10 %, … 100 %."""
+    """Progress iterator: single \r console line + file logging at 10 % milestones.
+
+    Console: overwrites a single line in-place — e.g. ``Evaluating 33/63 [52%]``.
+    File (terminal.txt): emits one DEBUG log line at each 10 % milestone so the
+    file retains a human-readable audit trail without flooding the console.
+    """
     import logging as _logging
+    import sys as _sys
 
     _log = _logging.getLogger(__name__)
     items = list(iterable) if not hasattr(iterable, "__len__") and total is None else iterable
     n = total if total is not None else len(items)  # type: ignore[arg-type]
     step = max(1, -(-n // 10))  # ceiling division by 10
+    label = desc if desc else "Progress"
     for idx, item in enumerate(items):
+        pct = int(100 * (idx + 1) / max(n, 1))
+        # Console: single overwriting line (bypasses logging system entirely).
+        _sys.stdout.write(f"\r{label} {idx + 1}/{n} [{pct}%]   ")
+        _sys.stdout.flush()
+        # File: only at 10 % milestones (DEBUG → goes to terminal.txt, not console).
         if idx % step == 0 or idx == n - 1:
-            pct = int(100 * idx / max(n - 1, 1))
             if desc:
-                _log.info("%s %3d%%", desc, pct)
+                _log.debug("[progress] %s %3d%%", desc, pct)
             else:
-                _log.info("%3d%%", pct)
+                _log.debug("[progress] %3d%%", pct)
         yield item
+    # Finalize: newline so subsequent log output starts on a fresh line.
+    _sys.stdout.write("\n")
+    _sys.stdout.flush()
 
 
 # ---------------------------------------------------------------------------
