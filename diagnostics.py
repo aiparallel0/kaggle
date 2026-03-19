@@ -231,6 +231,7 @@ class DiagnosticCallback:
                                 {
                                     "pattern": "eval_loss_diverging",
                                     "severity": "warning",
+                                    "description": "Eval loss increasing while train loss decreasing — overfitting",
                                     "evidence": (
                                         f"Eval loss rising 3 consecutive evals: "
                                         f"{[f'{x:.4f}' for x in recent]} while train loss decreasing"
@@ -363,10 +364,10 @@ class DiagnosticCallback:
             severity = issue.get("severity", "warning")
             msg = (
                 f"[Diagnostics] Exp {self.experiment_id} | "
-                f"PATTERN DETECTED: {issue['pattern']} ({severity})\n"
-                f"  Description: {issue['description']}\n"
-                f"  Evidence: {issue['evidence']}\n"
-                f"  Suggested fix: {issue['fix']}"
+                f"PATTERN DETECTED: {issue.get('pattern', 'unknown')} ({severity})\n"
+                f"  Description: {issue.get('description', 'No description available')}\n"
+                f"  Evidence: {issue.get('evidence', 'N/A')}\n"
+                f"  Suggested fix: {issue.get('fix', 'N/A')}"
             )
             if severity == "critical":
                 logger.error(msg)
