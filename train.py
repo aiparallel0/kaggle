@@ -3097,6 +3097,9 @@ class LiveDashboardCallback:
         experiment_id: int = 0,
         use_rich: "bool | None" = None,
         total_epochs: int = 0,
+        total_experiments: int = 0,
+        dataset_names: "list[str] | None" = None,
+        num_samples: int = 0,
     ) -> None:
         try:
             from transformers import TrainerCallback
@@ -3114,6 +3117,9 @@ class LiveDashboardCallback:
         self._csv_path = Path(csv_path)
         self._experiment_id = experiment_id
         self._total_epochs = total_epochs
+        self._total_experiments = total_experiments
+        self._dataset_names: list[str] = dataset_names or []
+        self._num_samples = num_samples
         self._rows: list[_EpochRow] = []
         self._best_f1: float = float("nan")
         self._live: Any = None  # rich.live.Live instance when active
@@ -3147,7 +3153,7 @@ class LiveDashboardCallback:
         try:
             from rich.live import Live
 
-            self._live = Live(self._build_table(), refresh_per_second=4, transient=False)
+            self._live = Live(self._build_table(), refresh_per_second=4, transient=True)
             self._live.start()
         except Exception as exc:
             logger.debug("[LiveDashboard] Could not start rich.live.Live: %s", exc)
@@ -3159,9 +3165,22 @@ class LiveDashboardCallback:
             from rich.table import Table
             from rich.text import Text
 
+            # Header: experiment progress indicator
+            exp_str = (
+                f"Exp {self._experiment_id}/{self._total_experiments}"
+                if self._total_experiments
+                else f"Exp {self._experiment_id}"
+            )
             epoch_str = f"[{len(self._rows)}/{self._total_epochs}]" if self._total_epochs else ""
+            datasets_str = ", ".join(self._dataset_names[:3]) if self._dataset_names else ""
+            samples_str = f"  {self._num_samples} samples" if self._num_samples else ""
+            subtitle = (
+                f"[dim]{datasets_str}{samples_str}[/]" if (datasets_str or samples_str) else None
+            )
+
             table = Table(
-                title=f"[bold cyan]Exp {self._experiment_id}[/] — Training {epoch_str}",
+                title=f"[bold cyan]{exp_str}[/] — Training {epoch_str}",
+                caption=subtitle,
                 show_header=True,
                 header_style="bold dim",
                 border_style="dim",
@@ -3173,10 +3192,21 @@ class LiveDashboardCallback:
             table.add_column("Best F1 ↑", justify="right", style="bold green", width=10)
             table.add_column("Δ F1", justify="right", style="dim", width=8)
 
+            prev_val_loss = float("nan")
             prev_f1 = float("nan")
             for r in self._rows[-15:]:
                 tl = f"{r.train_loss:.4f}" if r.train_loss == r.train_loss else "—"
-                vl = f"{r.val_loss:.4f}" if r.val_loss == r.val_loss else "—"
+                # Color-code val loss: green if decreasing, red if increasing
+                if r.val_loss == r.val_loss:
+                    if prev_val_loss == prev_val_loss and r.val_loss < prev_val_loss:
+                        vl = Text(f"{r.val_loss:.4f}", style="green")
+                    elif prev_val_loss == prev_val_loss and r.val_loss > prev_val_loss:
+                        vl = Text(f"{r.val_loss:.4f}", style="red")
+                    else:
+                        vl = Text(f"{r.val_loss:.4f}")
+                    prev_val_loss = r.val_loss
+                else:
+                    vl = Text("—", style="dim")
                 bf = f"{r.best_f1:.4f}" if r.best_f1 == r.best_f1 else "—"
                 if r.best_f1 == r.best_f1 and prev_f1 == prev_f1:
                     delta = r.best_f1 - prev_f1
@@ -3187,6 +3217,28 @@ class LiveDashboardCallback:
                 if r.best_f1 == r.best_f1:
                     prev_f1 = r.best_f1
                 table.add_row(str(r.epoch), tl, vl, bf, delta_cell)
+
+            # Footer row: disk + VRAM usage
+            try:
+                from constants import format_bytes, get_disk_usage
+
+                _, _, disk_free = get_disk_usage()
+                footer_parts = [f"Disk free: {format_bytes(disk_free)}"]
+                try:
+                    import torch
+
+                    if torch.cuda.is_available():
+                        vram_used = torch.cuda.memory_allocated()
+                        vram_total = torch.cuda.get_device_properties(0).total_memory
+                        footer_parts.append(
+                            f"VRAM: {format_bytes(vram_used)}/{format_bytes(vram_total)}"
+                        )
+                except Exception:
+                    pass
+                table.caption = Text(" · ".join(footer_parts), style="dim")
+            except Exception:
+                pass
+
             return table
         except Exception:
             return ""
@@ -3194,13 +3246,18 @@ class LiveDashboardCallback:
     def on_log(
         self, args: "Any", state: "Any", control: "Any", logs: dict | None = None, **kwargs: "Any"
     ) -> None:
-        """Print a single overwriting \r progress line to console during training.
+        """Print a single overwriting \\r progress line to console during training.
 
         Full per-step logs are written to terminal.txt via the logging system;
         this method just keeps the console to one clean line.
         Only fires on training steps (logs contains 'loss' key), not eval steps.
+        When running inside a rich.live.Live context, the \\r line is suppressed
+        (the live table already shows progress).
         """
         if logs is None or "loss" not in logs:
+            return
+        # If rich.live is active, don't clutter output with \r lines
+        if self._live is not None:
             return
         loss = logs["loss"]
         epoch = int(getattr(state, "epoch", 0))
@@ -3217,9 +3274,11 @@ class LiveDashboardCallback:
         sys.stdout.flush()
 
     def on_epoch_end(self, args: "Any", state: "Any", control: "Any", **kwargs: "Any") -> None:
-        # Clear the \r progress line so epoch summary starts on a fresh line.
-        sys.stdout.write("\n")
-        sys.stdout.flush()
+        # Clear the \r progress line so epoch summary starts on a fresh line
+        # (only needed when not inside a rich.live.Live context).
+        if self._live is None:
+            sys.stdout.write("\n")
+            sys.stdout.flush()
         log = state.log_history if state is not None else []
         train_loss = float("nan")
         val_loss = float("nan")
@@ -3239,20 +3298,11 @@ class LiveDashboardCallback:
                 writer.writerow([epoch, train_loss, val_loss, self._best_f1])
         except OSError as exc:
             logger.warning("[LiveDashboard] CSV write failed: %s", exc)
-        if self._rich_enabled:
-            if self._live is not None:
-                try:
-                    self._live.update(self._build_table())
-                except Exception as exc:
-                    logger.debug("[LiveDashboard] live.update failed: %s", exc)
-            else:
-                # Fallback: plain console.print
-                try:
-                    from rich.console import Console
-
-                    Console().print(self._build_table())
-                except Exception:
-                    pass
+        if self._rich_enabled and self._live is not None:
+            try:
+                self._live.update(self._build_table())
+            except Exception as exc:
+                logger.debug("[LiveDashboard] live.update failed: %s", exc)
 
     def update_best_f1(self, f1: float) -> None:
         if f1 > self._best_f1 or self._best_f1 != self._best_f1:
@@ -3265,14 +3315,65 @@ class LiveDashboardCallback:
                 except Exception:
                     pass
 
-    def close(self) -> None:
-        """Stop the rich.live.Live context (called at end of training)."""
+    def close(self, metrics: "dict | None" = None) -> None:
+        """Stop the rich.live.Live context and print a final summary card."""
         if self._live is not None:
             try:
                 self._live.stop()
             except Exception:
                 pass
             self._live = None
+
+        # Print a clean final summary card
+        if self._rich_enabled and self._rows:
+            try:
+                from rich.console import Console
+                from rich.panel import Panel
+                from rich.table import Table
+                from rich.text import Text
+
+                console = Console()
+                best_f1 = self._best_f1 if self._best_f1 == self._best_f1 else 0.0
+                exp_str = (
+                    f"Exp {self._experiment_id}/{self._total_experiments}"
+                    if self._total_experiments
+                    else f"Exp {self._experiment_id}"
+                )
+                datasets_str = ", ".join(self._dataset_names) if self._dataset_names else "—"
+                summary_table = Table.grid(padding=(0, 1))
+                summary_table.add_column(style="dim")
+                summary_table.add_column()
+                summary_table.add_row("Experiment", f"[bold]{exp_str}[/]")
+                summary_table.add_row("Datasets", datasets_str)
+                if self._num_samples:
+                    summary_table.add_row("Samples", str(self._num_samples))
+                summary_table.add_row("Epochs", f"{len(self._rows)}/{self._total_epochs}")
+                f1_color = "green" if best_f1 >= 0.8 else ("yellow" if best_f1 >= 0.5 else "red")
+                summary_table.add_row("Best F1", Text(f"{best_f1:.4f}", style=f"bold {f1_color}"))
+                if metrics:
+                    for field in ("company", "date", "address", "total"):
+                        fv = metrics.get(f"{field}_f1")
+                        if fv is not None:
+                            bar_len = int(fv * 20)
+                            bar = "█" * bar_len + "░" * (20 - bar_len)
+                            summary_table.add_row(f"  {field}", f"[cyan]{bar}[/] {fv:.3f}")
+                try:
+                    from constants import format_bytes, get_disk_usage
+
+                    _, _, disk_free = get_disk_usage()
+                    summary_table.add_row("Disk free", format_bytes(disk_free))
+                except Exception:
+                    pass
+                console.print(
+                    Panel(
+                        summary_table,
+                        title=f"[bold green]✓ Training Complete[/] — {exp_str}",
+                        border_style="green",
+                        padding=(0, 1),
+                    )
+                )
+            except Exception:
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -3598,6 +3699,9 @@ class DonutTrainer:
                     csv_path=_csv_path,
                     experiment_id=exp_id,
                     total_epochs=self.config.max_epochs,
+                    total_experiments=getattr(self.config, "total_experiments", 0),
+                    dataset_names=getattr(self.config, "datasets", []),
+                    num_samples=len(self.train_dataset) if self.train_dataset else 0,
                 )
                 callbacks.append(_live_cb)
                 logger.debug("[LiveDashboard] Callback registered for experiment %d", exp_id)

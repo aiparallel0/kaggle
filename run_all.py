@@ -595,10 +595,20 @@ _FANCY_OUTPUT: bool = False
 
 
 def _banner(text: str) -> None:
-    """Print a section banner.  Always written to terminal.txt; shown on
-    console only when --fancy is active."""
+    """Print a section banner — always shown on console.
+
+    Uses ``rich.rule`` when rich is installed for a polished look;
+    falls back to a plain ``===`` separator otherwise.
+    The banner is also written to terminal.txt via the logging system.
+    """
     logging.getLogger(__name__).debug("=== %s ===", text)
-    if _FANCY_OUTPUT:
+    try:
+        from rich.console import Console
+        from rich.rule import Rule
+
+        Console().print(Rule(f"[bold cyan]{text}[/]", style="cyan"))
+    except Exception:
+        # Plain fallback (also used when DISABLE_LIVE_DASHBOARD=1)
         width = 72
         print(f"\n{'=' * width}")
         print(f"  {text}")
@@ -606,10 +616,18 @@ def _banner(text: str) -> None:
 
 
 def _step(n: int, total: int, desc: str) -> None:
-    """Print a numbered step header.  Always written to terminal.txt;
-    shown on console only when --fancy is active."""
+    """Print a numbered step header — always shown on console.
+
+    Uses ``rich.text`` when rich is installed; falls back to plain text.
+    Also written to terminal.txt via the logging system.
+    """
     logging.getLogger(__name__).debug("[%d/%d] %s", n, total, desc)
-    if _FANCY_OUTPUT:
+    try:
+        from rich.console import Console
+        from rich.text import Text
+
+        Console().print(Text(f"\n  [{n}/{total}] ", style="bold dim") + Text(desc, style="bold"))
+    except Exception:
         print(f"\n[{n}/{total}] {desc}")
         print("-" * 60)
 
@@ -727,7 +745,83 @@ def _print_fancy_summary(results_dir: Path, pdf_compiled: bool | None = None) ->
 
 
 def _print_final_summary(results_dir: Path, pdf_compiled: bool | None = None) -> None:
-    """Print results summary. Uses compact plain-text by default; box-drawing with --fancy."""
+    """Print results summary.
+
+    Uses a rich Table when rich is available (regardless of --fancy);
+    falls back to the box-drawing ASCII table when --fancy is set;
+    uses compact plain-text as the last resort.
+    """
+    # Try rich table first
+    try:
+        import math as _math
+
+        from rich.console import Console
+        from rich.table import Table
+        from rich.text import Text
+
+        rows = _load_summary_rows(results_dir)
+        if not rows:
+            if _FANCY_OUTPUT:
+                _print_fancy_summary(results_dir, pdf_compiled)
+            else:
+                _compact_summary(results_dir, pdf_compiled)
+            return
+
+        valid = [r for r in rows if not _math.isnan(r["f1"])]
+        best = max(valid, key=lambda r: r["f1"]) if valid else None
+
+        console = Console()
+        table = Table(
+            title="[bold]Pipeline Results Summary[/]",
+            show_header=True,
+            header_style="bold dim",
+            border_style="dim",
+        )
+        table.add_column("Exp", justify="right", style="dim", width=4)
+        table.add_column("Name", width=30)
+        table.add_column("Global F1", justify="right", width=10)
+        table.add_column("Company", justify="right", width=8)
+        table.add_column("Date", justify="right", width=8)
+        table.add_column("Address", justify="right", width=8)
+        table.add_column("Total", justify="right", width=8)
+        table.add_column("Time", justify="right", width=7)
+
+        for r in rows:
+            is_best = best and r["exp"] == best["exp"]
+            f1_s = f"{r['f1']:.4f}" if not _math.isnan(r["f1"]) else "N/A"
+            co_s = f"{r['company']:.3f}" if not _math.isnan(r["company"]) else "—"
+            da_s = f"{r['date']:.3f}" if not _math.isnan(r["date"]) else "—"
+            ad_s = f"{r['addr']:.3f}" if not _math.isnan(r["addr"]) else "—"
+            to_s = f"{r['total']:.3f}" if not _math.isnan(r["total"]) else "—"
+            ti_s = f"{r['time']:.1f}m"
+            if is_best:
+                f1_color = "bold green"
+                name_text = Text(r["name"] + " ★", style="bold")
+            elif not _math.isnan(r["f1"]):
+                f1_color = "green" if r["f1"] >= 0.8 else ("yellow" if r["f1"] >= 0.5 else "red")
+                name_text = Text(r["name"])
+            else:
+                f1_color = "dim"
+                name_text = Text(r["name"], style="dim")
+            table.add_row(
+                str(r["exp"]),
+                name_text,
+                Text(f1_s, style=f1_color),
+                co_s,
+                da_s,
+                ad_s,
+                to_s,
+                ti_s,
+            )
+        console.print(table)
+
+        if pdf_compiled is not None:
+            pdf_tag = "[green]compiled ✓[/]" if pdf_compiled else "[dim]skipped (no LaTeX)[/]"
+            console.print(f"  PDF: {pdf_tag}")
+        return
+    except Exception:
+        pass
+
     if _FANCY_OUTPUT:
         _print_fancy_summary(results_dir, pdf_compiled)
     else:
@@ -1796,6 +1890,8 @@ def stage_experiments(args) -> StageResult:
                     base_processor=_base_processor,
                     base_model=_base_model,
                     overrides=getattr(args, "param_overrides", None) or None,
+                    keep_model=getattr(args, "keep_models", False),
+                    no_disk_cleanup=getattr(args, "no_disk_cleanup", False),
                 )
         except Exception as exc:
             elapsed = time.monotonic() - t0
@@ -1887,6 +1983,16 @@ def stage_experiments(args) -> StageResult:
             _gpu_cleanup()
         except Exception:
             pass
+
+    # ── Disk usage summary ───────────────────────────────────────────────────
+    try:
+        from constants import format_bytes, get_disk_usage
+
+        _, used_after, free_after = get_disk_usage()
+        _log_se.info("[Disk] After experiments: %s free", format_bytes(free_after))
+        print(f"[Disk] Space after experiments: {format_bytes(free_after)} free")
+    except Exception:
+        pass
 
     # ── Autonomous feedback loop ────────────────────────────────────────────
     # If any experiments crashed with non-OOM code errors, run the CI auto-fix
@@ -3604,6 +3710,28 @@ def build_parser() -> argparse.ArgumentParser:
             "Logs a WARNING if F1 == 0.0 (silent failure indicator). "
             "Use with --experiment N for targeted validation. "
             "Exits with code 1 if any experiment produces F1=0 after training."
+        ),
+    )
+    p.add_argument(
+        "--keep-models",
+        action="store_true",
+        default=False,
+        help=(
+            "Keep model checkpoint directories after evaluation instead of deleting them. "
+            "By default, model directories are removed after each experiment to save disk space "
+            "(only the result JSON is needed for the paper pipeline). "
+            "Use this flag if you want to reuse checkpoints or inspect model weights."
+        ),
+    )
+    p.add_argument(
+        "--no-disk-cleanup",
+        action="store_true",
+        default=False,
+        help=(
+            "Disable all automatic disk cleanup between experiments. "
+            "By default, model directories are deleted after evaluation to prevent "
+            "'No space left on device' (OS error 28) crashes. "
+            "Use for debugging only."
         ),
     )
     return p
