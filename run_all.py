@@ -333,7 +333,6 @@ class _DualStreamHandler(logging.Handler):
         "LmHeadCloneCallback",
         "Self-test raw token IDs",
         "Self-test decoder_input_ids",
-        "Self-test PASSED",
         "tie_word_embeddings",
         "The new embeddings will be initialized",
         "The new lm_head weights",
@@ -2421,21 +2420,34 @@ def stage_paper(args) -> StageResult:
         actual_counts = None
 
     # Redirect LaTeX table print output to terminal.txt (debug level) not console.
+    # Each table call is individually guarded so one failure doesn't skip the rest.
     _buf = _io.StringIO()
-    with contextlib.redirect_stdout(_buf):
-        ir.print_table1_dataset_stats(actual_counts)
-        ir.print_table2_experiments(all_exp)
-        ir.print_table3_perfield(all_exp)
-        ir.print_table4_leaderboard(all_exp)
+    for _table_fn, _table_args in [
+        (ir.print_table1_dataset_stats, (actual_counts,)),
+        (ir.print_table2_experiments, (all_exp,)),
+        (ir.print_table3_perfield, (all_exp,)),
+        (ir.print_table4_leaderboard, (all_exp,)),
+    ]:
+        try:
+            with contextlib.redirect_stdout(_buf):
+                _table_fn(*_table_args)
+        except Exception as _tbl_exc:
+            _log.warning("Table generation %s failed: %s", _table_fn.__name__, _tbl_exc)
 
     # Print TrOCR+YOLO and cross-architecture comparison tables
     trocr_path = Path("results") / "trocr_yolo_results.json"
     if trocr_path.exists():
         with open(trocr_path) as fh:
             trocr_exp = json.load(fh)
-        with contextlib.redirect_stdout(_buf):
-            ir.print_table5_trocr_yolo(trocr_exp)
-            ir.print_table6_cross_architecture(all_exp, trocr_exp)
+        for _table_fn, _table_args in [
+            (ir.print_table5_trocr_yolo, (trocr_exp,)),
+            (ir.print_table6_cross_architecture, (all_exp, trocr_exp)),
+        ]:
+            try:
+                with contextlib.redirect_stdout(_buf):
+                    _table_fn(*_table_args)
+            except Exception as _tbl_exc:
+                _log.warning("Table generation %s failed: %s", _table_fn.__name__, _tbl_exc)
     _log.debug("LaTeX tables:\n%s", _buf.getvalue())
 
     try:
