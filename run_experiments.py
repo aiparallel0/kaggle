@@ -56,7 +56,6 @@ import re
 import struct
 import sys
 import time
-import warnings
 import zlib
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
@@ -308,28 +307,18 @@ class _YAMLExperimentConfig:
                 f"Set allow_high_res: true in the YAML to bypass this guard."
             )
         if self.image_height > 1280 and self.allow_high_res:
-            warnings.warn(
-                f"\n{'=' * 60}\n"
-                f"WARNING: Exp {self.id} has image_height={self.image_height} "
-                f"(>{1280}). allow_high_res=True bypasses the guard.\n"
-                f"RAM scales as (H*W)/(1280*960). "
-                f"At 2560x1920 this is 4x.\n"
-                f"Ensure processor_config.json is updated BEFORE training.\n"
-                f"REVERT processor_config.json AFTER this experiment.\n"
-                f"{'=' * 60}",
-                stacklevel=3,
+            logger.debug(
+                "[Exp %d] High-res mode: height=%d (>1280). allow_high_res=True bypasses guard. "
+                "Ensure processor_config.json updated before training.",
+                self.id,
+                self.image_height,
             )
         if self.image_width > 960 and self.allow_high_res:
-            warnings.warn(
-                f"\n{'=' * 60}\n"
-                f"WARNING: Exp {self.id} has image_width={self.image_width} "
-                f"(>{960}). allow_high_res=True bypasses the guard.\n"
-                f"RAM scales as (H*W)/(1280*960). "
-                f"At 2560x1920 this is 4x.\n"
-                f"Ensure processor_config.json is updated BEFORE training.\n"
-                f"REVERT processor_config.json AFTER this experiment.\n"
-                f"{'=' * 60}",
-                stacklevel=3,
+            logger.debug(
+                "[Exp %d] High-res mode: width=%d (>960). allow_high_res=True bypasses guard. "
+                "Ensure processor_config.json updated before training.",
+                self.id,
+                self.image_width,
             )
 
         # Weight-tying guard
@@ -3774,14 +3763,18 @@ def train_experiment(
         config = EXPERIMENTS[exp_id]
 
     set_seed(config.seed)
-    print(f"\n[Exp {exp_id}] Training on {len(samples)} samples -> {output_dir}")
-    print(
-        f"[Exp {exp_id}] Hyperparams: epochs={config.epochs}, "
-        f"lr={config.lr}, batch_size={config.batch_size}, "
-        f"warmup={config.warmup_steps}, wd={config.weight_decay}"
+    logger.debug("[Exp %d] Training on %d samples -> %s", exp_id, len(samples), output_dir)
+    logger.debug(
+        "[Exp %d] Hyperparams: epochs=%s, lr=%s, batch_size=%s, warmup=%s, wd=%s",
+        exp_id,
+        config.epochs,
+        config.lr,
+        config.batch_size,
+        config.warmup_steps,
+        config.weight_decay,
     )
     if val_samples:
-        print(f"[Exp {exp_id}] Validation set: {len(val_samples)} samples")
+        logger.debug("[Exp %d] Validation set: %d samples", exp_id, len(val_samples))
 
     # ---------------------------------------------------------------------------
     # Inner helper: build a fresh model, processor, and datasets.
@@ -4086,22 +4079,28 @@ def train_experiment(
     _spot_id = _spot_proc.tokenizer.convert_tokens_to_ids(["<s_sroie>"])[0]
     _spot_decoded = _spot_proc.tokenizer.decode([_spot_id])
     if _spot_decoded == "<s_sroie>":
-        print(
-            f"[Exp {exp_id}] Processor spot-check PASS: "
-            f"<s_sroie> → id={_spot_id} → '{_spot_decoded}'"
+        logger.debug(
+            "[Exp %d] Processor spot-check PASS: <s_sroie> → id=%d → '%s'",
+            exp_id,
+            _spot_id,
+            _spot_decoded,
         )
     else:
-        print(
-            f"[Exp {exp_id}] Processor spot-check FAIL: "
-            f"<s_sroie> → id={_spot_id} → '{_spot_decoded}' "
-            f"(unk_token_id={_spot_proc.tokenizer.unk_token_id}) — "
-            "processor is corrupt, evaluation will produce F1=0.0"
+        logger.warning(
+            "[Exp %d] Processor spot-check FAIL: <s_sroie> → id=%d → '%s' "
+            "(unk_token_id=%s) — processor is corrupt, evaluation will produce F1=0.0",
+            exp_id,
+            _spot_id,
+            _spot_decoded,
+            _spot_proc.tokenizer.unk_token_id,
         )
 
-    print(
-        f"[Exp {exp_id}] Training complete "
-        f"(duration={result.duration_seconds:.1f}s, "
-        f"train={result.train_samples}, val={result.val_samples})"
+    logger.debug(
+        "[Exp %d] Training complete (duration=%.1fs, train=%d, val=%d)",
+        exp_id,
+        result.duration_seconds,
+        result.train_samples,
+        result.val_samples,
     )
 
     # FIX: Explicit GPU cleanup between experiments to prevent OOM on GPUs
@@ -4126,7 +4125,7 @@ def train_experiment(
     if torch.cuda.is_available():
         torch.cuda.synchronize()  # Ensure all CUDA ops complete before freeing
     torch.cuda.empty_cache()
-    print(f"[Exp {exp_id}] GPU memory released")
+    logger.debug("[Exp %d] GPU memory released", exp_id)
 
     return log_history
 
@@ -4163,9 +4162,11 @@ def evaluate_experiment(
 
         _rng = _rnd.Random(getattr(config, "seed", SEED))
         test_samples = _rng.sample(test_samples, config.subsample_eval)
-        print(f"[Exp {exp_id}] subsample_eval: evaluating on {len(test_samples)} test samples")
+        logger.debug(
+            "[Exp %d] subsample_eval: evaluating on %d test samples", exp_id, len(test_samples)
+        )
     else:
-        print(f"[Exp {exp_id}] Evaluating on {len(test_samples)} SROIE test images")
+        logger.debug("[Exp %d] Evaluating on %d SROIE test images", exp_id, len(test_samples))
 
     # Load processor from the fine-tuned model directory
     processor = DonutProcessor.from_pretrained(str(model_dir))
@@ -4187,9 +4188,11 @@ def evaluate_experiment(
     metrics = eval_result.to_dict()
 
     if eval_result.parse_failures > 0:
-        print(
-            f"[Exp {exp_id}] WARNING: {eval_result.parse_failures} of "
-            f"{eval_result.num_samples} predictions had parse failures"
+        logger.warning(
+            "[Exp %d] %d of %d predictions had parse failures",
+            exp_id,
+            eval_result.parse_failures,
+            eval_result.num_samples,
         )
 
     return metrics
@@ -4338,12 +4341,8 @@ def run_experiment(
     config = EXPERIMENTS[exp_id]
     if overrides:
         config = _dc.replace(config, **overrides)
-        print(f"[Exp {exp_id}] --param overrides applied: {overrides}")
-    print(f"\n{'=' * 72}")
-    print(f"Experiment {exp_id}: {config.name}")
-    print(f"Description: {config.description}")
-    print(f"Datasets: {config.datasets}")
-    print(f"{'=' * 72}")
+        logger.debug("[Exp %d] --param overrides applied: %s", exp_id, overrides)
+    logger.debug("[Exp %d] %s | datasets=%s", exp_id, config.name, config.datasets)
 
     # Disk space pre-flight check — skip experiment if < 1 GB free to avoid OS error 28
     if not _check_disk_space_before_experiment(exp_id):
@@ -4423,7 +4422,7 @@ def run_experiment(
         print(f"[Exp {exp_id}] subsample_train: using {len(train_samples)} samples")
 
     if len(train_samples) == 0:
-        print(f"[Exp {exp_id}] WARNING: No samples loaded - saving empty result.")
+        print(f"[Exp {exp_id}] WARNING: No samples loaded.")
         result = {
             "experiment_id": exp_id,
             "name": config.name,
@@ -4469,15 +4468,16 @@ def run_experiment(
         encoder_lr=optimized_config.encoder_lr,
         decoder_lr=optimized_config.decoder_lr,
     )
-    print(
-        f"[Exp {exp_id}] Resource optimization applied: "
-        f"batch_size {old_batch} → {config.batch_size}, "
-        f"grad_accum {old_accum} → {config.gradient_accumulation_steps}"
-        + (
-            " (grad_accum preserved: micro/mini mode)"
-            if _is_micro
-            else f" ({optimized_config.config_explanation})"
-        )
+    logger.debug(
+        "[Exp %d] Resource optimization applied: batch_size %d → %d, grad_accum %d → %d%s",
+        exp_id,
+        old_batch,
+        config.batch_size,
+        old_accum,
+        config.gradient_accumulation_steps,
+        " (grad_accum preserved: micro/mini mode)"
+        if _is_micro
+        else f" ({optimized_config.config_explanation})",
     )
 
     # Log the config decision to terminal.txt for audit trail.
@@ -4509,7 +4509,7 @@ def run_experiment(
             epochs=config.epochs,
         )
     else:
-        print(f"[Exp {exp_id}] step-count validation skipped (micro/mini mode)")
+        logger.debug("[Exp %d] step-count validation skipped (micro/mini mode)", exp_id)
 
     # Train — pass config explicitly so train_experiment uses the optimized values
     model_dir = WORKSPACE / "models" / f"experiment_{exp_id}"
@@ -4604,11 +4604,12 @@ def run_experiment(
             )
         if _diag_issues:
             for _issue in _diag_issues:
-                print(
-                    f"\n{'!' * 72}\n"
-                    f"[Diagnostics] Exp {exp_id} | PATTERN: {_issue['pattern']} "
-                    f"({_issue['severity']})\n  {_issue['evidence']}\n"
-                    f"{'!' * 72}"
+                logger.warning(
+                    "[Diagnostics] Exp %d | PATTERN: %s (%s)  %s",
+                    exp_id,
+                    _issue["pattern"],
+                    _issue["severity"],
+                    _issue["evidence"],
                 )
             # AI diagnosis if enabled
             if os.environ.get("AI_DIAGNOSE", "0") == "1":
@@ -4617,7 +4618,7 @@ def run_experiment(
                     provider=os.environ.get("AI_DIAGNOSE_PROVIDER", "auto"),
                 )
                 if _dx:
-                    print(f"\n[AI Diagnosis] Exp {exp_id}:\n{_dx}")
+                    logger.info("[AI Diagnosis] Exp %d:\n%s", exp_id, _dx)
     except ImportError:
         pass  # diagnostics.py not present
 
@@ -4635,7 +4636,7 @@ def run_experiment(
         "training_log": log_history,
     }
     result_file.write_text(json.dumps(result, indent=2))
-    print(f"[Exp {exp_id}] Results saved -> {result_file}")
+    logger.debug("[Exp %d] Results saved -> %s", exp_id, result_file)
     print(f"[Exp {exp_id}] Global F1 = {metrics.get('global_f1', 'N/A')}")
     _print_experiment_summary(
         exp_id, config, metrics, elapsed_sec=metrics.get("training_time_sec", 0.0)
@@ -4670,11 +4671,7 @@ def run_custom_experiment(config: ExperimentConfig, result_file: Path) -> dict:
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     exp_id = config.experiment_id
 
-    print(f"\n{'=' * 72}")
-    print(f"Sweep Experiment {exp_id}: {config.name}")
-    print(f"Datasets: {config.datasets}")
-    print(f"Batch size={config.batch_size}, epochs={config.epochs}, lr={config.lr:.0e}")
-    print(f"{'=' * 72}")
+    logger.debug("[Sweep Exp %d] %s | datasets=%s", exp_id, config.name, config.datasets)
 
     # Load data — request source labels when aux_loss_weight is active
     _aux_w_sweep = getattr(config, "aux_loss_weight", 1.0)
@@ -4688,7 +4685,7 @@ def run_custom_experiment(config: ExperimentConfig, result_file: Path) -> dict:
         )
         train_sources_sweep = None
     if len(train_samples) == 0:
-        print(f"[Sweep Exp {exp_id}] WARNING: No samples loaded - saving empty result.")
+        print(f"[Sweep Exp {exp_id}] WARNING: No samples loaded.")
         result = {
             "experiment_id": exp_id,
             "name": config.name,
@@ -4725,7 +4722,7 @@ def run_custom_experiment(config: ExperimentConfig, result_file: Path) -> dict:
         "training_log": log_history,
     }
     result_file.write_text(json.dumps(result, indent=2))
-    print(f"[Sweep Exp {exp_id}] Results saved -> {result_file}")
+    logger.debug("[Sweep Exp %d] Results saved -> %s", exp_id, result_file)
     print(f"[Sweep Exp {exp_id}] Global F1 = {metrics.get('global_f1', 'N/A')}")
     return result
 
@@ -4878,23 +4875,17 @@ def _print_experiment_summary(
     except Exception:
         pass
 
-    # Plain text fallback (AI-agent-friendly JSON)
-    summary = {
-        "exp": exp_id,
-        "name": config.name,
-        "samples": metrics.get("num_train_samples", 0),
-        "epochs": config.epochs,
-        "time_min": round(elapsed_sec / 60, 1),
-        "f1": round(global_f1, 4),
-        "company_f1": round(metrics.get("company_f1", 0.0), 4),
-        "date_f1": round(metrics.get("date_f1", 0.0), 4),
-        "address_f1": round(metrics.get("address_f1", 0.0), 4),
-        "total_f1": round(metrics.get("total_f1", 0.0), 4),
-        "parse_failures": metrics.get("parse_failures", 0),
-        "status": "ok" if global_f1 > 0 else "empty",
-    }
-    print(f"--- EXP {exp_id} RESULT ---")
-    print(json.dumps(summary))
+    # Plain text fallback — single compact line
+    logger.debug(
+        "[Exp %d] F1=%.4f company=%.4f date=%.4f address=%.4f total=%.4f (%.1fm)",
+        exp_id,
+        global_f1,
+        metrics.get("company_f1", 0.0),
+        metrics.get("date_f1", 0.0),
+        metrics.get("address_f1", 0.0),
+        metrics.get("total_f1", 0.0),
+        elapsed_sec / 60,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -5007,9 +4998,12 @@ def main() -> None:
     audit_logger = TrainingAuditLogger(append_to_file="terminal.txt")
     resources = _mm.detect_system_resources()
     audit_logger.log_resource_detection(resources)
-    print(
-        f"[Resources] GPU: {resources.device_name} ({resources.vram_gb:.1f}GB), "
-        f"RAM: {resources.ram_gb:.1f}GB, CPU: {resources.cpu_cores} cores"
+    logger.debug(
+        "[Resources] GPU: %s (%.1fGB), RAM: %.1fGB, CPU: %d cores",
+        resources.device_name,
+        resources.vram_gb,
+        resources.ram_gb,
+        resources.cpu_cores,
     )
 
     parser = argparse.ArgumentParser(description="Run DONUT SROIE experiments")
@@ -5030,7 +5024,7 @@ def main() -> None:
     if args.force:
         for result_file in RESULTS_DIR.glob("experiment_*.json"):
             result_file.unlink()
-            print(f"[force] Deleted cached result: {result_file}")
+            logger.debug("[force] Deleted cached result: %s", result_file)
 
     if args.all:
         # Load base model once and pass to each experiment via deep-copy.
