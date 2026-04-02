@@ -839,6 +839,7 @@ __all__ = [
     "TrOCRReceiptDataset",
     "train_yolo",
     "train_trocr",
+    "_build_experiment_trocr_metadata",
     "run_trocr_yolo_inference",
     "_materialize_meta_buffers",
     "_EXPECTED_MISSING_TROCR",
@@ -1304,10 +1305,118 @@ def _print_trocr_load_report(model_id: str, loading_info: dict) -> None:
     print()
 
 
-def train_trocr(output_dir: Path | None = None) -> dict:
+def _build_experiment_trocr_metadata(
+    exp_datasets: list,
+    sroie_oversample: int,
+    output_dir: Path,
+) -> Path:
+    """Build a per-experiment TrOCR training metadata.jsonl.
+
+    Merges SROIE TrOCR crops (from TROCR_DATA_DIR/train, repeated
+    *sroie_oversample* times) with pseudo-crops from auxiliary datasets
+    (full receipt images whose ground-truth field values serve as text labels).
+
+    Uses absolute paths in ``file_name`` entries so no file copying is needed:
+    ``Path(data_dir) / "/absolute/path"`` resolves to the absolute path on
+    POSIX, which is how ``TrOCRReceiptDataset.__getitem__`` loads images.
+
+    Parameters
+    ----------
+    exp_datasets : list[str]
+        Dataset names for this experiment, e.g. ``["sroie", "wildreceipt"]``.
+    sroie_oversample : int
+        How many times to repeat SROIE crops (mirrors DONUT oversampling).
+    output_dir : Path
+        Directory where ``metadata.jsonl`` is written.
+
+    Returns
+    -------
+    Path
+        *output_dir* (created if it did not exist).
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    records: list[dict] = []
+
+    # ── 1. SROIE TrOCR crops with oversampling ──────────────────────────────
+    base_train_dir = TROCR_DATA_DIR / "train"
+    base_meta = base_train_dir / "metadata.jsonl"
+    if base_meta.exists():
+        with open(base_meta) as _fh:
+            base_records = [json.loads(line) for line in _fh if line.strip()]
+        n_base = len(base_records)
+        for _ in range(max(1, sroie_oversample)):
+            for rec in base_records:
+                abs_path = str((base_train_dir / rec["file_name"]).resolve())
+                records.append({"file_name": abs_path, "text": rec["text"]})
+        print(
+            f"  [TrOCR-exp] SROIE: {n_base} crops "
+            f"× {sroie_oversample} = {n_base * sroie_oversample} records"
+        )
+    else:
+        print(f"  [TrOCR-exp] Warning: SROIE TrOCR data not found at {base_train_dir}")
+
+    # ── 2. Auxiliary datasets (full image + field values as text labels) ─────
+    aux_names = [ds for ds in exp_datasets if ds != "sroie"]
+    for ds_name in aux_names:
+        try:
+            import data_pipeline as _dp  # noqa: PLC0415
+
+            loader_fn = _dp.get_dataset_loader(ds_name)
+            if loader_fn is None:
+                print(
+                    f"  [TrOCR-exp] Warning: no loader registered for dataset '{ds_name}' — skipping"
+                )
+                continue
+            samples = loader_fn()
+            before = len(records)
+            for img_path, gt_dict in samples:
+                abs_path = str(Path(img_path).resolve())
+                for field_val in gt_dict.values():
+                    if field_val and str(field_val).strip():
+                        records.append({"file_name": abs_path, "text": str(field_val).strip()})
+            added = len(records) - before
+            print(f"  [TrOCR-exp] {ds_name}: {len(samples)} images → {added} records")
+        except ImportError as _exc:
+            print(
+                f"  [TrOCR-exp] Warning: data_pipeline import failed — skipping '{ds_name}': {_exc}"
+            )
+        except Exception as _exc:
+            import traceback as _tb
+
+            print(f"  [TrOCR-exp] Warning: unexpected error loading '{ds_name}': {_exc}")
+            _tb.print_exc()
+
+    # ── Write metadata.jsonl ─────────────────────────────────────────────────
+    meta_path = output_dir / "metadata.jsonl"
+    with open(meta_path, "w") as _fh:
+        for r in records:
+            _fh.write(json.dumps(r, ensure_ascii=False) + "\n")
+    print(f"  [TrOCR-exp] Total: {len(records)} records → {meta_path}")
+    return output_dir
+
+
+def train_trocr(
+    output_dir: Path | None = None,
+    train_data_dir: Path | None = None,
+) -> dict:
     """Fine-tune TrOCR on line crops from receipts.
 
-    Returns the training history dict.
+    Parameters
+    ----------
+    output_dir : Path, optional
+        Directory where checkpoints (``best/``, ``final/``) are saved.
+        Defaults to ``WORKSPACE/models/trocr_finetuned``.
+    train_data_dir : Path, optional
+        Directory containing ``metadata.jsonl`` for training crops.
+        Defaults to ``TROCR_DATA_DIR/train`` (SROIE only).
+        Pass a per-experiment directory built by
+        ``_build_experiment_trocr_metadata()`` to use a mixed-dataset split.
+
+    Returns
+    -------
+    dict
+        Training history with keys ``train_loss``, ``val_loss``, and
+        ``num_train_samples``.
     """
     # Defensive GPU cleanup — free any leaked memory from prior stages
     # (DONUT experiments, YOLO training, etc.) before loading the 246M-param
@@ -1426,7 +1535,7 @@ def train_trocr(output_dir: Path | None = None) -> dict:
         else:
             print(f"  [TrOCR] VRAM OK: batch_size={trocr_batch}, free={free_gb:.1f} GiB")
 
-    train_dir = TROCR_DATA_DIR / "train"
+    train_dir = train_data_dir if train_data_dir is not None else TROCR_DATA_DIR / "train"
     val_dir = TROCR_DATA_DIR / "val"
 
     if not train_dir.exists() or not (train_dir / "metadata.jsonl").exists():
