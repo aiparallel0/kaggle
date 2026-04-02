@@ -2397,7 +2397,11 @@ def _print_backend_comparison(all_results: dict, logger: "logging.Logger") -> No
         m = data.get("metrics", {})
         params_raw = data.get("params", 0)
         if isinstance(params_raw, int) and params_raw > 0:
-            params_str = f"{params_raw / 1e6:.2f}M" if params_raw >= 1_000_000 else f"{params_raw / 1e3:.0f}K"
+            params_str = (
+                f"{params_raw / 1e6:.2f}M"
+                if params_raw >= 1_000_000
+                else f"{params_raw / 1e3:.0f}K"
+            )
         else:
             params_str = "0 (rules)"
         label = data.get("backend", backend_key)
@@ -2430,9 +2434,8 @@ def _print_backend_comparison(all_results: dict, logger: "logging.Logger") -> No
     except ImportError:
         # Plain-text table — always visible on console
         w_label = 24
-        header = (
-            f"{'Backend / Assignment':<{w_label}}"
-            + "".join(f"{c:>{w}}" for c, w in zip(_COLS, _W))
+        header = f"{'Backend / Assignment':<{w_label}}" + "".join(
+            f"{c:>{w}}" for c, w in zip(_COLS, _W)
         )
         sep = "─" * len(header)
         lines = [sep, header, sep]
@@ -2440,9 +2443,12 @@ def _print_backend_comparison(all_results: dict, logger: "logging.Logger") -> No
             f1 = m.get("global_f1", 0.0)
             marker = " ◀ BEST" if f1 == best_f1 and best_f1 > 0.0 else ""
             vals = [m.get(k, 0.0) for k in _KEYS]
-            row = f"{label:<{w_label}}" + "".join(
-                f"{v:{w}.4f}" for v, w in zip(vals, _W[:-1])
-            ) + f"{params_str:>{_W[-1]}}" + marker
+            row = (
+                f"{label:<{w_label}}"
+                + "".join(f"{v:{w}.4f}" for v, w in zip(vals, _W[:-1]))
+                + f"{params_str:>{_W[-1]}}"
+                + marker
+            )
             lines.append(row)
         lines.append(sep)
         table_str = "\n".join(lines)
@@ -2542,9 +2548,13 @@ def stage_trocr_all_backends(args) -> StageResult:
 
         # ── Steps 4–6: Train and evaluate each field-assigner backend ────────
         _FA_BACKENDS = [
-            ("char",      532_000,   "Char embeddings — 532K params, no pretrained weights"),
-            ("lm",      4_900_000,   "Frozen BERT-tiny — 4.9M params"),
-            ("lm+vision", 5_100_000, "BERT-tiny + TrOCR vision features + consistency loss — 5.1M params"),
+            ("char", 532_000, "Char embeddings — 532K params, no pretrained weights"),
+            ("lm", 4_900_000, "Frozen BERT-tiny — 4.9M params"),
+            (
+                "lm+vision",
+                5_100_000,
+                "BERT-tiny + TrOCR vision features + consistency loss — 5.1M params",
+            ),
         ]
 
         results_dir = Path("results")
@@ -2589,7 +2599,9 @@ def stage_trocr_all_backends(args) -> StageResult:
                 }
                 _log.info(
                     "[%d/6] Backend '%s' done in %.1fs  F1=%.4f",
-                    step, backend, training_time,
+                    step,
+                    backend,
+                    training_time,
                     metrics.get("global_f1", 0.0),
                 )
 

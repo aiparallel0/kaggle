@@ -2377,9 +2377,9 @@ class PaperInjector:
         # Placeholders: trocr_regex_f1, trocr_char_f1, trocr_lm_f1, trocr_lmv_f1
         # and per-field variants trocr_<backend>_<field>_f1 / _ned
         _BACKEND_PREFIX_MAP = {
-            "regex":     "trocr_regex",
-            "char":      "trocr_char",
-            "lm":        "trocr_lm",
+            "regex": "trocr_regex",
+            "char": "trocr_char",
+            "lm": "trocr_lm",
             "lm+vision": "trocr_lmv",
         }
         _all_backends_path = self.results_dir / "trocr_all_backends.json"
