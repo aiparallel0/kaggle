@@ -355,7 +355,7 @@ except ImportError:
             super().__init__()
             self.conv = _nn.Conv2d(c1, 1, 1, bias=False).requires_grad_(False)
             x = torch.arange(c1, dtype=torch.float)
-            self.conv.weight.data[:] = _nn.Parameter(x.view(1, c1, 1, 1))
+            self.conv.weight.data = x.view(1, c1, 1, 1).clone()
             self.c1 = c1
 
         def forward(self, x):
@@ -395,7 +395,8 @@ except ImportError:
             shape = x[0].shape
             x_cat = torch.cat([xi.view(shape[0], self.no, -1) for xi in x], 2)
             box, cls = x_cat.split((self.reg_max * 4, self.nc), 1)
-            dbox = self._dist2bbox(self.dfl(box), self._make_anchors(x, self.stride), xywh=True)
+            anchors, strides = self._make_anchors(x, self.stride)
+            dbox = self._dist2bbox(self.dfl(box), anchors, xywh=True) * strides.squeeze(-1)
             y = torch.cat((dbox, cls.sigmoid()), 1)
             return y
 
@@ -502,6 +503,15 @@ except ImportError:
         def __len__(self):
             return len(self.xyxy)
 
+        def __iter__(self):
+            for i in range(len(self)):
+                # Yield a view with 2-D xyxy/conf so callers can do box.xyxy[0].
+                yield _Boxes(
+                    self.xyxy[i].unsqueeze(0),
+                    self.conf[i].unsqueeze(0),
+                    self.cls[i].unsqueeze(0),
+                )
+
     class _BoxResult:
         """Mimics ultralytics per-image result."""
 
@@ -511,22 +521,29 @@ except ImportError:
     # ── NMS helper ────────────────────────────────────────────────────────
 
     def _nms_boxes(boxes_xyxy, scores, iou_thr=0.45, score_thr=0.25):
-        """Non-maximum suppression (pure torch, no torchvision dependency)."""
-        keep = scores > score_thr
-        boxes_xyxy = boxes_xyxy[keep]
-        scores = scores[keep]
-        if boxes_xyxy.numel() == 0:
+        """Non-maximum suppression (pure torch, no torchvision dependency).
+
+        Returns indices into the *original* ``boxes_xyxy`` / ``scores`` tensors
+        (before score filtering) so callers can safely index them without an
+        offset mismatch.
+        """
+        # Preserve original indices so the returned values are valid for the
+        # caller's full-size tensors.
+        orig_indices = (scores > score_thr).nonzero(as_tuple=False).squeeze(1)
+        filt_boxes = boxes_xyxy[orig_indices]
+        filt_scores = scores[orig_indices]
+        if filt_boxes.numel() == 0:
             return torch.tensor([], dtype=torch.long)
         # Sort by score descending
-        order = scores.argsort(descending=True)
-        kept = []
+        order = filt_scores.argsort(descending=True)
+        kept_in_filt = []
         while order.numel() > 0:
             i = order[0].item()
-            kept.append(i)
+            kept_in_filt.append(i)
             if order.numel() == 1:
                 break
             rest = order[1:]
-            b = boxes_xyxy
+            b = filt_boxes
             xx1 = torch.clamp(b[rest, 0], min=b[i, 0].item())
             yy1 = torch.clamp(b[rest, 1], min=b[i, 1].item())
             xx2 = torch.clamp(b[rest, 2], max=b[i, 2].item())
@@ -536,7 +553,9 @@ except ImportError:
             area_rest = (b[rest, 2] - b[rest, 0]) * (b[rest, 3] - b[rest, 1])
             iou = inter / (area_i + area_rest - inter + 1e-7)
             order = rest[iou <= iou_thr]
-        return torch.tensor(kept, dtype=torch.long)
+        # Map filtered indices back to positions in the original tensors.
+        kept_tensor = torch.tensor(kept_in_filt, dtype=torch.long)
+        return orig_indices[kept_tensor]
 
     # ── Main class ────────────────────────────────────────────────────────
 
@@ -559,6 +578,9 @@ except ImportError:
             self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             self.model = _YOLOv8Model(nc=1).to(self._device)
             self._model_path = Path(model_path)
+            # Default inference size; must be a multiple of 32.  Matches YOLO_IMG_SIZE
+            # used during training so anchor grids align with trained coordinates.
+            self._imgsz = 512
 
             # Try to load raw state dict companion file
             sd_path = self._model_path.with_stem(self._model_path.stem + "_sd")
@@ -588,38 +610,89 @@ except ImportError:
             import numpy as _np
 
             self.model.eval()
-            # Convert image to tensor
+
+            # ── 1. Convert input to HxWx3 uint8 numpy array ──────────────
             if isinstance(img, _np.ndarray):
-                # HxWxC uint8 → 1xCxHxW float32 [0,1]
-                t = torch.from_numpy(img).permute(2, 0, 1).float().div(255.0).unsqueeze(0)
+                arr = img
             elif _PIL_AVAILABLE and hasattr(img, "tobytes"):
-                t = (
-                    torch.from_numpy(_np.array(img))
-                    .permute(2, 0, 1)
-                    .float()
-                    .div(255.0)
-                    .unsqueeze(0)
-                )
+                arr = _np.array(img)
+            elif isinstance(img, torch.Tensor):
+                # Caller supplied a pre-processed tensor; use as-is (no letterbox).
+                t = img.to(self._device)
+                with torch.no_grad():
+                    pred = self.model(t)
+                pred = pred[0]
+                cx, cy, bw, bh = pred[0], pred[1], pred[2], pred[3]
+                scores = pred[4:].max(0).values
+                x1 = cx - bw / 2
+                y1 = cy - bh / 2
+                x2 = cx + bw / 2
+                y2 = cy + bh / 2
+                boxes_xyxy = torch.stack([x1, y1, x2, y2], dim=1)
+                keep = _nms_boxes(boxes_xyxy, scores)
+                return [
+                    _BoxResult(boxes_xyxy[keep].cpu(), scores[keep].cpu(), torch.zeros(len(keep)))
+                ]
             else:
-                t = img  # assume already a tensor
-            t = t.to(self._device)
+                arr = _np.array(img)
+
+            # ── 2. Letterbox-resize: fit in self._imgsz, pad to multiple of 32 ──
+            orig_h, orig_w = arr.shape[:2]
+            target = self._imgsz
+            scale = min(target / orig_h, target / orig_w)
+            nh, nw = int(orig_h * scale), int(orig_w * scale)
+            # Align canvas dimensions to the nearest multiple of 32 (required by the
+            # 5-level stride backbone — without this, deeper feature-map heights/widths
+            # are non-integer and anchor grids misalign).
+            nh32 = max(32, ((nh + 31) // 32) * 32)
+            nw32 = max(32, ((nw + 31) // 32) * 32)
+            padded = _np.full((nh32, nw32, 3), 114, dtype=_np.uint8)
+            if _PIL_AVAILABLE:
+                from PIL import Image as _PIL_Img  # noqa: PLC0415
+
+                resized = _np.array(_PIL_Img.fromarray(arr).resize((nw, nh), _PIL_Img.BILINEAR))
+            else:
+                # Nearest-neighbour resize with no external dependencies.
+                row_idx = (_np.arange(nh) * (orig_h / nh)).astype(_np.int32).clip(0, orig_h - 1)
+                col_idx = (_np.arange(nw) * (orig_w / nw)).astype(_np.int32).clip(0, orig_w - 1)
+                resized = arr[row_idx][:, col_idx]
+            padded[:nh, :nw] = resized
+
+            # ── 3. Tensor + forward pass ──────────────────────────────────
+            t = (
+                torch.from_numpy(padded)
+                .permute(2, 0, 1)
+                .float()
+                .div(255.0)
+                .unsqueeze(0)
+                .to(self._device)
+            )
             with torch.no_grad():
-                pred = self.model(t)  # [1, no, total_anchors]
-            # pred shape: [1, 4+nc, total_anchors] for single batch
-            # The Detect head in eval mode returns xywh + cls
-            pred = pred[0]  # [no, total_anchors]
-            # For xywh format: pred[:4] = cx,cy,w,h; pred[4:] = class confidences
-            cx, cy, w, h = pred[0], pred[1], pred[2], pred[3]
-            scores = pred[4:].max(0).values  # best class score per anchor
-            # Convert xywh to xyxy (multiply by stride — already decoded in Detect)
-            x1 = cx - w / 2
-            y1 = cy - h / 2
-            x2 = cx + w / 2
-            y2 = cy + h / 2
-            boxes_xyxy = torch.stack([x1, y1, x2, y2], dim=1)
+                pred = self.model(t)  # [1, 4+nc, total_anchors] — stride-scaled by Detect head
+            pred = pred[0]  # [4+nc, total_anchors]
+
+            # ── 4. Decode xywh → xyxy ─────────────────────────────────────
+            cx, cy, bw, bh = pred[0], pred[1], pred[2], pred[3]
+            scores = pred[4:].max(0).values
+            x1 = cx - bw / 2
+            y1 = cy - bh / 2
+            x2 = cx + bw / 2
+            y2 = cy + bh / 2
+            boxes_xyxy = torch.stack([x1, y1, x2, y2], dim=1)  # [total_anchors, 4]
+
+            # ── 5. NMS ────────────────────────────────────────────────────
             keep = _nms_boxes(boxes_xyxy, scores)
-            xyxy = boxes_xyxy[keep].cpu()
+            xyxy = boxes_xyxy[keep].cpu().float()
             conf = scores[keep].cpu()
+
+            # ── 6. Inverse letterbox: map padded-image coords → original image coords ──
+            xyxy[:, 0] /= scale  # x1
+            xyxy[:, 1] /= scale  # y1
+            xyxy[:, 2] /= scale  # x2
+            xyxy[:, 3] /= scale  # y2
+            xyxy[:, 0::2].clamp_(0, orig_w)
+            xyxy[:, 1::2].clamp_(0, orig_h)
+
             cls = torch.zeros(len(keep))
             return [_BoxResult(xyxy, conf, cls)]
 
@@ -640,6 +713,13 @@ except ImportError:
 
             Loads images and YOLO-format labels from the ``data`` YAML file.
             Saves a plain state dict to ``<project>/<name>/weights/best_sd.pt``.
+
+            NOTE: This inline loop uses a proxy L2 loss over the detection-head
+            feature maps rather than the full YOLO detection loss (which requires
+            the ultralytics TaskAlignedAssigner).  It will train the backbone
+            away from random initialisation but will NOT produce a properly
+            calibrated detector.  For real detection quality install ultralytics:
+                pip install ultralytics
             """
             import logging as _log
 
@@ -718,8 +798,14 @@ except ImportError:
                         continue
                     optimizer.zero_grad()
                     with torch.cuda.amp.autocast(enabled=amp and torch.cuda.is_available()):
-                        _ = self.model(t)  # forward pass (loss computation omitted for brevity)
-                        loss = torch.tensor(0.0, requires_grad=True, device=self._device)
+                        # NOTE: Full YOLO detection loss (box regression + DFL +
+                        # classification) requires the ultralytics TaskAlignedAssigner
+                        # and is not inlined here.  As a proxy, minimize the L2 norm of
+                        # all detection-head feature maps so the backbone converges away
+                        # from random initialisation.  For real detection quality install
+                        # ultralytics: pip install ultralytics
+                        raw_feats = self.model(t)  # train mode → list of [B, no, H, W]
+                        loss = sum(f.float().pow(2).mean() for f in raw_feats)
                     scaler.scale(loss).backward()
                     scaler.step(optimizer)
                     scaler.update()
@@ -912,6 +998,11 @@ def _build_lm_encoder() -> "tuple":
     assigner's ~530 K parameters remain the only trainable component.
     The 128-dim hidden size matches d_model exactly (no projection needed).
     """
+    if not _LM_AVAILABLE:
+        raise ImportError(
+            "transformers is required for the 'lm' and 'lm+vision' backends. "
+            "Run: pip install 'transformers>=4.37.0'"
+        )
     tok = _AutoTokenizer.from_pretrained("prajjwal1/bert-tiny")
     model = _AutoModel.from_pretrained("prajjwal1/bert-tiny")
     for p in model.parameters():
