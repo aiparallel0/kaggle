@@ -752,9 +752,15 @@ except ImportError:
             best_sd_path = out_dir / "best_sd.pt"
 
             self.model.train()
-            optimizer = torch.optim.AdamW(self.model.parameters(), lr=1e-3, weight_decay=5e-4)
+            # lr=1e-4 instead of 1e-3: the L2 proxy loss has a degenerate global
+            # minimum at weights=0.  At lr=1e-3 the first AdamW step pushes all
+            # feature maps to near-zero in a single epoch, reporting 0 loss for
+            # all subsequent epochs (weight collapse).  Gradient clipping below
+            # is the primary safeguard; the lower LR provides a second layer.
+            optimizer = torch.optim.AdamW(self.model.parameters(), lr=1e-4, weight_decay=5e-4)
             scaler = torch.cuda.amp.GradScaler(enabled=amp and torch.cuda.is_available())
             best_loss = float("inf")
+            _skipped_steps_total = 0  # track GradScaler overflows across all epochs
 
             _logger.info(
                 "Starting inline YOLO training: %d images × %d epochs", len(img_files), epochs
@@ -762,11 +768,15 @@ except ImportError:
             for epoch in range(epochs):
                 epoch_loss = 0.0
                 count = 0
+                skipped_steps = 0
                 for img_path in img_files:
                     # Load image
                     try:
                         raw = _load_image(img_path)
-                    except Exception:
+                    except Exception as _img_exc:
+                        _logger.debug(
+                            "[inline-YOLO] Could not load %s: %s — skipping", img_path, _img_exc
+                        )
                         continue
                     # Resize to imgsz × imgsz
                     import numpy as _np
@@ -812,16 +822,67 @@ except ImportError:
                         raw_feats = self.model(t)  # train mode → list of [B, no, H, W]
                         loss = sum(f.float().pow(2).mean() for f in raw_feats)
                     scaler.scale(loss).backward()
+                    # Gradient clipping: MUST unscale before clip so clip sees
+                    # true gradient magnitudes, not GradScaler-inflated ones.
+                    # max_norm=1.0 prevents the first-step weight collapse that
+                    # drives feature maps to zero (L2 proxy loss degenerate min).
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                    _scale_before = scaler.get_scale()
                     scaler.step(optimizer)
                     scaler.update()
+                    # Detect GradScaler-skipped steps (inf/nan gradients).
+                    if scaler.get_scale() < _scale_before:
+                        skipped_steps += 1
                     epoch_loss += loss.item()
                     count += 1
 
-                avg_loss = epoch_loss / max(count, 1)
+                if count == 0:
+                    _logger.warning(
+                        "[inline-YOLO] Epoch %d/%d: 0 images processed "
+                        "(no label files found or all images failed to load). "
+                        "Check that label files exist at <root>/labels/<split>/<stem>.txt",
+                        epoch + 1,
+                        epochs,
+                    )
+                    continue
+
+                avg_loss = epoch_loss / count
+                _skipped_steps_total += skipped_steps
+                if skipped_steps > 0:
+                    _logger.warning(
+                        "[inline-YOLO] Epoch %d/%d: GradScaler skipped %d/%d steps "
+                        "(inf/nan gradients under AMP fp16). "
+                        "Weights were NOT updated for those steps.",
+                        epoch + 1,
+                        epochs,
+                        skipped_steps,
+                        count,
+                    )
                 _logger.info("Epoch %d/%d — loss=%.4f", epoch + 1, epochs, avg_loss)
+                # Detect weight collapse: L2 proxy loss reaching near-zero means all
+                # feature maps are near-zero (degenerate solution).  The model will
+                # produce no detections.  This is a known limitation of the proxy loss.
+                if epoch > 0 and avg_loss < 1e-6:
+                    _logger.warning(
+                        "[inline-YOLO] Epoch %d/%d: avg_loss=%.2e — feature maps have "
+                        "collapsed to near-zero (degenerate proxy-loss minimum). "
+                        "This model will not produce useful detections. "
+                        "Install ultralytics for real YOLO training: pip install ultralytics",
+                        epoch + 1,
+                        epochs,
+                        avg_loss,
+                    )
                 if avg_loss < best_loss:
                     best_loss = avg_loss
                     torch.save(self.model.state_dict(), best_sd_path)
+
+            if _skipped_steps_total > 0:
+                _logger.warning(
+                    "[inline-YOLO] Training complete: %d total GradScaler-skipped steps. "
+                    "Consider switching to bf16 or fp32 to avoid AMP overflow.",
+                    _skipped_steps_total,
+                )
 
             _logger.info("Inline YOLO training done. Best weights → %s", best_sd_path)
             # Also write best.pt stub so downstream code finds the expected path
@@ -1672,12 +1733,41 @@ def train_trocr(
         # Always free GPU memory even if training raised an exception.
         # Without this, a mid-training crash leaves TrOCR (246M params) on the
         # GPU and causes CUDA OOM when the next stage (DONUT) loads its model.
-        del model, optimizer, scheduler
-        if scaler is not None:
+        # ROBUSTNESS: each variable is deleted in its own try/except so that a
+        # NameError (variable never assigned due to an earlier exception) does
+        # not abort the block and skip _gpu_cleanup().
+        try:
+            del model
+        except Exception:
+            pass
+        try:
+            del optimizer
+        except Exception:
+            pass
+        try:
+            del scheduler
+        except Exception:
+            pass
+        try:
             del scaler
-        del train_ds, val_ds, train_loader
-        if val_loader is not None:
+        except Exception:
+            pass
+        try:
+            del train_ds
+        except Exception:
+            pass
+        try:
+            del val_ds
+        except Exception:
+            pass
+        try:
+            del train_loader
+        except Exception:
+            pass
+        try:
             del val_loader
+        except Exception:
+            pass
         _gpu_cleanup()
 
     return history

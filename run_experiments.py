@@ -154,6 +154,27 @@ __all__ = [
 ]
 
 # ---------------------------------------------------------------------------
+# Sentinel exception for expected evaluation failures (undertrained models)
+# ---------------------------------------------------------------------------
+
+
+class EvaluationUndertrainedError(RuntimeError):
+    """Raised when a model is too undertrained to produce parseable output.
+
+    Using a dedicated class instead of RuntimeError + string matching means:
+    - Catch sites can target this exact exception, not any RuntimeError.
+    - A real RuntimeError (tensor shape mismatch, CUDA error, etc.) is never
+      silently converted to F1=0.0 just because its message happens to contain
+      one of the old sentinel substrings.
+    - Future refactoring can rename the message without breaking catch sites.
+
+    Raised by:
+    - DonutEvaluator.evaluate() when parse_failure_count > 50% threshold.
+    - DonutEvaluator._self_test() when the model produces an empty prediction.
+    """
+
+
+# ---------------------------------------------------------------------------
 # Logging Configuration — MUST be set before any third-party imports
 # ---------------------------------------------------------------------------
 
@@ -2404,7 +2425,7 @@ class DonutEvaluator:
                 f"The model is likely broken — check token2json compatibility."
             )
             if not allow_high_parse_failures:
-                raise RuntimeError(msg)
+                raise EvaluationUndertrainedError(msg)
             logger.warning("%s — returning zero-metric result", msg)
             return EvaluationResult(
                 global_precision=0.0,
@@ -2498,7 +2519,7 @@ class DonutEvaluator:
             try:
                 parsed = _parse_sroie_output(cleaned)
             except Exception as exc:
-                raise RuntimeError(
+                raise EvaluationUndertrainedError(
                     f"Self-test FAILED: SROIE parser raised {type(exc).__name__}: {exc}\n"
                     f"  Raw tokens: {raw_tokens!r}\n"
                     f"  Cleaned:    {cleaned!r}\n"
@@ -2508,7 +2529,7 @@ class DonutEvaluator:
             try:
                 parsed = self.processor.token2json(cleaned)
             except Exception as exc:
-                raise RuntimeError(
+                raise EvaluationUndertrainedError(
                     f"Self-test FAILED: token2json raised {type(exc).__name__}: {exc}\n"
                     f"  Raw tokens: {raw_tokens!r}\n"
                     f"  Cleaned:    {cleaned!r}\n"
@@ -4536,12 +4557,16 @@ def run_experiment(
     try:
         metrics = evaluate_experiment(exp_id, model_dir)
         metrics["training_time_sec"] = _train_duration_sec
-    except RuntimeError as exc:
+    except EvaluationUndertrainedError as exc:
         # Catch self-test failures and parse-failure-threshold errors for any
         # run type (not just micro/mini).  An undertrained full-run model that
         # hasn't converged to the SROIE tag format should record F1=0.0 and
         # let the remaining experiments continue, not crash the pipeline.
-        if "Self-test FAILED" in str(exc) or "Parse failure threshold exceeded" in str(exc):
+        # ROBUSTNESS: using EvaluationUndertrainedError (not bare RuntimeError +
+        # string matching) ensures only genuine undertrained-model errors are
+        # caught here.  Real RuntimeErrors (CUDA error, shape mismatch, etc.)
+        # propagate to the caller as intended.
+        if True:  # kept for minimal diff; the except clause already filters precisely
             print(
                 f"[Exp {exp_id}] WARNING: evaluation failed (undertrained model) — "
                 f"saving zero-metric result. Error: {exc}"

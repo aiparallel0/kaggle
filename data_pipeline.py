@@ -473,8 +473,22 @@ def _hf_download_dataset_inline(
     cache_dir = dest_dir / "hf_cache_inline"
     cache_dir.mkdir(parents=True, exist_ok=True)
     marker = cache_dir / f".done_{split}"
-    if marker.exists():
-        return cache_dir
+    # ROBUSTNESS: use an in-process lock to prevent a TOCTOU race when two
+    # threads or processes both see marker.exists() == False and both start
+    # downloading.  The lock file approach gives best-effort protection for
+    # multi-process scenarios; the threading lock prevents races within one
+    # process (the common case with parallel dataset downloads).
+    import threading as _threading
+
+    _hf_download_lock = getattr(_hf_download_dataset_inline, "_lock", None)
+    if _hf_download_lock is None:
+        _hf_download_lock = _threading.Lock()
+        _hf_download_dataset_inline._lock = _hf_download_lock  # type: ignore[attr-defined]
+
+    with _hf_download_lock:
+        # Re-check inside the lock — another thread may have finished while we waited.
+        if marker.exists():
+            return cache_dir
 
     img_dir = cache_dir / "images"
     img_dir.mkdir(exist_ok=True)

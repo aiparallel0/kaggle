@@ -250,10 +250,14 @@ def _install_dependencies() -> None:
         logging.getLogger(__name__).debug(
             "[setup] Installing dependencies from requirements.txt..."
         )
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as tmp:
-            tmp.write("\n".join(req_lines))
-            tmp_path = tmp.name
+        # ROBUSTNESS: assign tmp_path before the nested try so the finally
+        # block can always reference it without a NameError if NamedTemporaryFile
+        # raises (e.g. disk-full or permission denied on /tmp).
+        tmp_path: str | None = None
         try:
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as tmp:
+                tmp.write("\n".join(req_lines))
+                tmp_path = tmp.name
             with _InstallWatchdog():
                 result = subprocess.run(
                     [sys.executable, "-m", "pip", "install", "-q", "-r", tmp_path],
@@ -272,8 +276,10 @@ def _install_dependencies() -> None:
                 os.execv(sys.executable, [sys.executable] + sys.argv)
             else:
                 if result.stderr:
-                    logging.getLogger(__name__).debug(
-                        "[setup] pip stderr: %s", result.stderr[:1000]
+                    logging.getLogger(__name__).warning(
+                        "[setup] pip install failed (exit %d). stderr: %s",
+                        result.returncode,
+                        result.stderr[:2000],
                     )
                 if result.stdout:
                     logging.getLogger(__name__).debug("[setup] pip stdout: %s", result.stdout[:500])
@@ -283,16 +289,24 @@ def _install_dependencies() -> None:
                 "Run manually: pip install -r requirements.txt"
             )
         finally:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
+            if tmp_path is not None:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
         # flash-attn is NOT auto-installed here.  To install it manually:
         #   pip install flash-attn --no-build-isolation
         # or use a prebuilt wheel: https://flashattn.dev/wheel-finder/
-    except Exception:
-        # Silently ignore all errors — pipeline may still work if packages are present.
-        pass
+    except Exception as _install_exc:
+        # Non-fatal: if pip install itself errors (e.g. requirements.txt unreadable,
+        # disk full, unexpected OSError), log the cause at WARNING level so it is
+        # visible in the log file, then continue.  The pipeline will fail later with
+        # a clear ImportError if a critical package is actually missing.
+        logging.getLogger(__name__).warning(
+            "[setup] _auto_install_packages encountered an unexpected error: %s — "
+            "continuing (pipeline will fail later if required packages are absent).",
+            _install_exc,
+        )
 
 
 def _verify_critical_packages() -> list:

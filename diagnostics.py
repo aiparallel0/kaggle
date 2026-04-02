@@ -66,7 +66,17 @@ _BUG_PATTERNS: list[dict] = [
     {
         "name": "lm_head_dedup",
         "description": "safetensors deduplication dropped lm_head.weight (F1~0.42)",
-        "detect": lambda cp: 0.40 < (cp.eval_f1 or 1.0) < 0.44 and (cp.epoch or 0) > 2,
+        # ROBUSTNESS: The 0.40–0.44 range is calibrated specifically for SROIE
+        # fine-tuning of donut-base.  Guard on stage=="training" (not inference)
+        # and on experiment_id being set (DONUT experiments only) to avoid false
+        # positives on other tasks or architectures where F1 legitimately falls
+        # in this range during warmup epochs.
+        "detect": lambda cp: (
+            0.40 < (cp.eval_f1 or 1.0) < 0.44
+            and (cp.epoch or 0) > 2
+            and (cp.stage or "") in ("", "training", "post_evaluation")
+            and (cp.experiment_id or 0) > 0  # DONUT experiments only (1–18)
+        ),
         "severity": "critical",
         "fix": (
             "Verify LmHeadCloneCallback is registered. Check that "

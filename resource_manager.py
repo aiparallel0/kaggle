@@ -191,7 +191,9 @@ def release_hf_dataset(ds) -> None:
                 if hasattr(split_ds, "cleanup_cache_files"):
                     split_ds.cleanup_cache_files()
     except Exception as exc:
-        logger.debug("[memory_manager] release_hf_dataset cleanup_cache_files: %s", exc)
+        # WARNING (not DEBUG): a cleanup failure means Arrow mmaps may stay resident,
+        # accumulating across experiments.  Operators need to see this to diagnose OOM.
+        logger.warning("[memory_manager] release_hf_dataset cleanup_cache_files failed: %s", exc)
     finally:
         del ds
         gc.collect()
@@ -225,7 +227,7 @@ def flush_hf_arrow_cache() -> None:
     except ImportError:
         pass  # datasets not installed — nothing to flush
     except Exception as exc:
-        logger.debug("[memory_manager] flush_hf_arrow_cache: %s", exc)
+        logger.warning("[memory_manager] flush_hf_arrow_cache failed: %s", exc)
     finally:
         gc.collect()
 
@@ -271,7 +273,9 @@ def shutdown_dataloader_workers(trainer) -> None:
                 logger.debug("[memory_manager] Train DataLoader workers shut down.")
         del train_dl
     except Exception as exc:
-        logger.debug("[memory_manager] shutdown train dl workers: %s", exc)
+        # WARNING: worker shutdown failure means ~450 MB of prefetch buffers may
+        # leak per experiment (8 workers × 56.6 MB/worker at 1280×960, batch=2).
+        logger.warning("[memory_manager] shutdown train dl workers failed: %s", exc)
 
     try:
         # Also try the eval DataLoader if it exists and has workers
@@ -283,7 +287,7 @@ def shutdown_dataloader_workers(trainer) -> None:
                 logger.debug("[memory_manager] Eval DataLoader workers shut down.")
         del eval_dl
     except Exception as exc:
-        logger.debug("[memory_manager] shutdown eval dl workers: %s", exc)
+        logger.warning("[memory_manager] shutdown eval dl workers failed: %s", exc)
 
     gc.collect()
 

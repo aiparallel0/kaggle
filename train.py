@@ -1794,10 +1794,33 @@ except ImportError:
             # Guard: detect safetensors deduplication bug (lm_head.weight missing)
             # If tie_word_embeddings is False and lm_head.weight is absent, copy
             # embed_tokens.weight as a starting point (will be overwritten by fine-tuning).
+            # ROBUSTNESS: both lm_head_key AND embed_key may be absent if the checkpoint
+            # was saved with both tensors deduplicated out (e.g. a very aggressive
+            # safetensors writer).  In that case we cannot recover silently — raise
+            # immediately so the caller knows the checkpoint is corrupt.
             lm_head_key = "decoder.lm_head.weight"
             embed_key = "decoder.model.decoder.embed_tokens.weight"
-            if lm_head_key not in state_dict and embed_key in state_dict:
-                state_dict[lm_head_key] = state_dict[embed_key].clone()
+            if lm_head_key not in state_dict:
+                if embed_key in state_dict:
+                    state_dict[lm_head_key] = state_dict[embed_key].clone()
+                    import logging as _logging_lm
+
+                    _logging_lm.getLogger(__name__).warning(
+                        "load_model_with_tied_weights: lm_head.weight missing from checkpoint "
+                        "— cloned from embed_tokens.weight as fallback. "
+                        "Ensure LmHeadCloneCallback is registered during training to prevent this."
+                    )
+                else:
+                    # Neither key present: checkpoint is corrupt and unrecoverable.
+                    _tie = getattr(getattr(model, "config", None), "tie_word_embeddings", True)
+                    if not _tie:
+                        raise RuntimeError(
+                            "CRITICAL: decoder.lm_head.weight is missing from the checkpoint "
+                            "and decoder.model.decoder.embed_tokens.weight is also absent — "
+                            "the checkpoint is corrupt and cannot be loaded safely. "
+                            "Re-train with LmHeadCloneCallback registered. "
+                            "See CLAUDE.md §16 Pattern 6."
+                        )
 
             missing, unexpected = model.load_state_dict(state_dict, strict=False)
             # Filter out expected missing keys (position_ids buffer, etc.)
@@ -1808,6 +1831,18 @@ except ImportError:
                 and not k.endswith("_attn_mask")
                 and "num_batches_tracked" not in k
             ]
+            # ROBUSTNESS: explicitly fail if lm_head.weight is still absent after load.
+            # This catches the case where our pre-load guard above was bypassed (e.g.
+            # tie_word_embeddings=True on config, so the guard's _tie check was skipped).
+            if lm_head_key in missing:
+                _tie_after = getattr(getattr(model, "config", None), "tie_word_embeddings", True)
+                if not _tie_after:
+                    raise RuntimeError(
+                        f"CRITICAL: {lm_head_key} is listed in missing_keys after "
+                        "load_state_dict(). The checkpoint is corrupt. "
+                        "Re-train with LmHeadCloneCallback registered. "
+                        "See CLAUDE.md §16 Pattern 6."
+                    )
             if truly_missing:
                 import logging as _logging_fr
 
