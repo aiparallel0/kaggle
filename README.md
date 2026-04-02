@@ -32,7 +32,7 @@ This runs the full end-to-end pipeline:
 2. Downloads and normalizes 3 auxiliary datasets
 3. Evaluates pretrained CORD baseline (zero-shot)
 4. Trains 8 DONUT experiments (train + evaluate each)
-5. Trains 8 TrOCR+YOLO experiments (train + evaluate each)
+5. Trains TrOCR+YOLO pipeline (single training run; identical metrics reported across all experiment slots)
 6. Generates comparison tables and plots
 7. Fills `paper.tex` with all real metrics → `paper_filled.tex`
 
@@ -116,32 +116,7 @@ Regenerates `paper_filled.tex` from existing results without re-training.
 
 ## 🔬 Standalone Scripts (Alternative Workflows)
 
-These scripts provide isolated entry points for development and debugging. Use them for hyperparameter exploration, data validation, or testing individual components.
-
-### dataset_preparation.py — Dataset & Annotation Prep
-
-Prepares YOLO bounding box labels and TrOCR line crops from SROIE images.
-
-```bash
-python dataset_preparation.py                # Prepare all data
-python dataset_preparation.py --validate     # Validate existing data
-python dataset_preparation.py --force        # Re-prepare (clear existing)
-```
-
-**Outputs:** `data/yolo/{train,val,test}/` and `data/trocr/{train,val,test}/`
-
-### train_donut.py — DONUT Reference Implementation
-
-Standalone DONUT fine-tuning (useful for hyperparameter exploration).
-
-```bash
-python train_donut.py                        # Train DONUT model
-python train_donut.py --dry-run              # Validate setup
-python train_donut.py --sweep                # Generate hyperparameter configs
-python train_donut.py --config N             # Train specific config
-```
-
-**Outputs:** `models/donut_finetuned/best/` and `models/donut_finetuned/training_history.json`
+These scripts provide isolated entry points for development and debugging. The following scripts are the actual files present in the repository.
 
 ### train_trocr_yolo.py — TrOCR + YOLO Pipeline
 
@@ -153,21 +128,7 @@ python train_trocr_yolo.py                   # Train TrOCR+YOLO
 
 **Outputs:** `models/yolo_finetuned/run/weights/best.pt` and `models/trocr_finetuned/best/`
 
-### evaluate_models.py — Unified Model Evaluation
-
-Evaluate both architectures on the same 63 SROIE test images with standardized metrics.
-
-```bash
-python evaluate_models.py                           # Evaluate both architectures
-python evaluate_models.py --donut-only              # DONUT only
-python evaluate_models.py --trocr-only              # TrOCR+YOLO only
-python evaluate_models.py --report                  # Generate HTML report
-```
-
-**Outputs:**
-- `results/metrics.json` — Raw metrics
-- `results/evaluation_summary.json` — Structured summary
-- `results/evaluation_report.html` — Interactive HTML report
+> **Note:** `dataset_preparation.py`, `train_donut.py`, and `evaluate_models.py` listed in older documentation no longer exist as standalone files. Their functionality is integrated into `run_all.py` and `run_experiments.py`.
 
 ---
 
@@ -201,10 +162,10 @@ python run_experiments.py --experiment 3     # single experiment
 python run_experiments.py --all --force      # force re-run
 ```
 
-### `inject_results.py` — Paper Generation
+### Paper Generation (`reporting.py` PaperInjector)
 
 ```bash
-python inject_results.py --all --paper paper/paper.tex --output paper/paper_filled.tex
+python reporting.py --all --paper paper/paper.tex --output paper/paper_filled.tex
 ```
 
 ---
@@ -264,7 +225,7 @@ python -m run_all
 
 **Auto-Install Features:**
 - Dependencies automatically installed from `requirements.txt` if needed; process restarts cleanly after install
-- The auto-installer checks for: `torch`, `transformers`, `datasets`, `accelerate` (NOT `editdistance` or `pandas` — both have inline replacements and are not in `requirements.txt`)
+- The auto-installer checks for: `torch`, `transformers` only (NOT `datasets`, `accelerate`, `editdistance` or `pandas` — all have inline replacements and are not in the critical install list)
 - flash-attn is **not** auto-installed (see Troubleshooting); PyTorch 2.x SDPA is used instead
 - Dual-stream logging: all output to `terminal.txt`, console shows filtered progress
 - Professional CLI interface with argparse-based options
@@ -314,43 +275,33 @@ python -m run_all
 ```
 kaggle/
 ├── run_all.py               # MAIN ENTRY POINT: full dual-architecture pipeline (128 KB)
-├── run_experiments.py       # 8-experiment DONUT orchestrator
+├── run_experiments.py       # 8-experiment DONUT orchestrator + ExperimentConfig + DonutEvaluator
 ├── CLAUDE.md                # Authoritative AI guide & project rules
 ├── README.md                # This file
 │
 ├── [Core Pipeline]
-├── constants.py             # Shared constants (SINGLE SOURCE OF TRUTH)
-├── dataset_loaders.py       # ABC-based dataset loaders
-├── train.py                 # DonutTrainer class
-├── donut_evaluator.py       # Evaluation & metrics computation
-├── inject_results.py        # LaTeX paper generation (PaperInjector)
-├── resource_optimizer.py    # VRAM-aware hyperparameter tuning
-├── memory_manager.py        # Centralized RAM/GPU memory authority
-├── preflight_checks.py      # Pre-flight validators + validate_pipeline()
-├── startup_diagnostics.py   # Stdlib-only startup checks (prefix, GPU zombies)
-├── pipeline_types.py        # All typed dataclasses + pipeline exceptions
-├── validators.py            # BugPatternDetector, ImportChainChecker, etc.
-├── requirements.txt         # Python dependencies
-├── pyproject.toml           # Package metadata, entry points, ruff/pytest config
+├── constants.py             # Shared constants (SINGLE SOURCE OF TRUTH) + _edit_distance() + logging utils
+├── data_pipeline.py         # Merged: dataset_loaders + dataset_normalizer + preprocess_seller_split
+├── train.py                 # DonutTrainer class + LiveDashboardCallback (inlined)
+├── reporting.py             # Merged: benchmark_compare + plot_convergence + inject_results (PaperInjector)
+├── resource_manager.py      # Merged: memory_manager + resource_optimizer (VRAM-aware scaling)
+├── validation.py            # Merged: validators + preflight_checks + startup_diagnostics
+├── diagnostics.py           # DiagnosticCallback + PipelineDiagnostics + ai_diagnose()
+├── cloud_orchestration.py   # Merged: pipeline_types + dag_scheduler + cloud_pipeline
+├── sweep.py                 # Merged: hparam_search + multi_seed_runner
+├── autonomous_ci.py         # Autonomous CI/CD: test runner + AI evaluator + auto-fix loop
+├── requirements.txt         # Python dependencies (5 direct: torch, transformers, pyyaml, accelerate, ruff)
+├── ruff.toml                # Linter/formatter config
 │
-├── [Auxiliary Pipeline Modules]
-├── benchmark_compare.py     # F1/loss comparison figures and tables
-├── cloud_pipeline.py        # Cloud mode orchestrator + GitController + TestRunner
-├── control_suite.py         # Ablation controls, DA configs, TrOCRControlConfig
-├── dag_scheduler.py         # Directed-acyclic-graph stage scheduler
-├── dataset_normalizer.py    # Cross-dataset annotation normalizer
-├── experiment_config_loader.py  # YAML-based experiment config loader
-├── hparam_search.py         # Hyperparameter search orchestrator
-├── logging_utils.py         # Shared logging helpers
-├── multi_seed_runner.py     # Multi-seed experiment runner
-├── pipeline_critic.py       # Automated pipeline code review tool
-├── plot_convergence.py      # Loss-curve convergence plotter
-├── preprocess_seller_split.py   # Seller-aware train/val/test split
+├── [TrOCR + YOLO]
+├── train_trocr_yolo.py      # TrOCR+YOLO training pipeline
 │
-├── [Standalone/Educational Scripts]
-├── dataset_preparation.py   # Data prep with validation CLI
-├── train_trocr_yolo.py      # TrOCR+YOLO pipeline
-├── evaluate_models.py       # Unified evaluation + HTML reporting
+├── [Scripts]
+├── scripts/
+│   └── validate_yaml_experiments.py  # CI YAML experiment validator
+│
+├── [Experiment Definitions]
+├── experiments/             # YAML experiment definition files (exp_01_*.yaml … exp_17_*.yaml)
 │
 ├── paper/                   # LaTeX source files
 │   ├── paper.tex            # Main paper template with \VAR{} placeholders (IEEEtran)
@@ -365,7 +316,7 @@ kaggle/
 └── [Runtime Artifacts (gitignored)]
     ├── data/                # Cached datasets
     ├── models/              # Checkpoints & fine-tuned weights
-    └── paper/paper_filled.tex  # Generated paper (auto-produced by inject_results.py)
+    └── paper/paper_filled.tex  # Generated paper (auto-produced by reporting.py PaperInjector)
 ```
 
 ---
@@ -659,7 +610,7 @@ python run_all.py
 ### Validate data setup
 
 ```bash
-python dataset_preparation.py --validate
+python run_all.py --skip-pretrained --experiment 1  # dry run with just Exp 1
 ```
 
 ---
@@ -880,14 +831,14 @@ This project has undergone significant architectural refinement since its incept
 - Multi-dataset DONUT fine-tuning pipeline (8 experiments) — **final runs 2026-03-07**
 - TrOCR + YOLOv8 two-stage pipeline for receipt KIE
 - Unified SROIE Task-3 evaluation metrics (global F1, per-field F1, NED, exact-match)
-- LaTeX paper auto-generation from results (`inject_results.py` + `paper.tex`)
+- LaTeX paper auto-generation from results (`reporting.py` PaperInjector + `paper.tex`)
 - Constants centralisation (`constants.py` — single source of truth)
 - Automated preflight validation + diagnostics layer (`diagnostics.py`)
-- Cloud pipeline orchestrator (`cloud_pipeline.py`) with mode routing
+- Cloud pipeline orchestrator (`cloud_orchestration.py`) with mode routing
 - **Three critical bugs fixed & guarded:** F1 ≈ 0.42 (safetensors), F1 ≈ 0.008 (token2json list), data leakage (val/test split)
-- Module consolidation: 36 → 8 core files + 6 standalone scripts
+- Module consolidation: 36 → 13 core files
 - Auto-install robustness: `os.execv()` restart, `_InstallWatchdog`, no flash-attn build
-- Dependency reduction: 22 → 8 direct deps (345 MB install savings)
+- Dependency reduction: 22 → 5 direct deps (345 MB install savings)
 - Comprehensive technical documentation (`CLAUDE.md` — 20 sections, guardrails, historical fixes)
 - Runtime diagnostics with 7 auto-detected failure patterns
 - AI-powered diagnosis integration (Claude/Mistral APIs for root-cause analysis)
@@ -922,7 +873,7 @@ This project has undergone significant architectural refinement since its incept
 
 ## Dependency Reference
 
-**8 direct dependencies** (down from 22). Install with `pip install -r requirements.txt`.
+**5 direct dependencies** (down from 22). Install with `pip install -r requirements.txt`.
 
 ### Critical — pipeline fails without these
 
@@ -930,32 +881,38 @@ This project has undergone significant architectural refinement since its incept
 |---|---|
 | `torch` | Tensor ops, CUDA, training loop |
 | `transformers` | DONUT + TrOCR model, processor, tokenizer |
-| `datasets` | HuggingFace Arrow dataset download/cache |
-| `Pillow` | Image loading and resizing (960×1280) |
-| `ultralytics` | YOLOv8x text-region detection |
-| `accelerate` | Mixed-precision (fp16) training |
-| `matplotlib` | F1/loss comparison figures |
-| `pytest` | Test suite: `pytest tests/` |
+| `pyyaml` | YAML experiment config loading |
+| `accelerate` | Declared dependency; used by transformers `Seq2SeqTrainer` internals |
+| `ruff` | Linter/formatter — required to pass CI |
+
+### Optional — enhances pipeline but has inline fallback
+
+| Package | Purpose | Inline fallback |
+|---|---|---|
+| `datasets` | HuggingFace Arrow dataset download/cache | `_hf_download_dataset_inline()` in `data_pipeline.py` (urllib-only) |
+| `Pillow` | Image loading and resizing (960×1280) | `_load_png/_load_bmp/_load_jpeg_pure` in `train.py`; optional but recommended for speed |
+| `ultralytics` | YOLOv8x text-region detection | `_YOLO_CLS` proxy in `train_trocr_yolo.py` — trains a placeholder model that cannot reliably detect text regions; install `ultralytics` for real YOLO detection quality |
+| `matplotlib` | F1/loss comparison figures | SVG generators in `reporting.py` (`_svg_bar_chart`, `_svg_speed_chart`, etc.) |
 
 ### Installed automatically (transitive deps — do not pin)
 
 `numpy` (via torch), `sentencepiece` (via transformers), `protobuf` (via transformers),
-`huggingface-hub`, `tokenizers`, `safetensors`, `pyyaml` (via huggingface-hub)
+`huggingface-hub`, `tokenizers`, `safetensors`
 
 ### Optional — uncomment in requirements.txt if needed
 
 | Package | Purpose |
 |---|---|
-| `torchvision` | Data augmentation presets DA1/DA2 in `control_suite.py`; pipeline works without it (gracefully returns `None`) |
+| `torchvision` | Data augmentation presets DA1/DA2; pipeline works without it (gracefully returns `None`) |
 | `flash-attn` | Faster attention on Ampere+ GPUs; see requirements.txt for install instructions |
 
 ### Removed — replaced with inline implementations (~65 lines total)
 
 | Package | Replacement | Saving |
 |---|---|---|
-| `editdistance` | 14-line Wagner-Fischer `_edit_distance()` in `donut_evaluator.py`, `benchmark_compare.py` | ~200 KB |
+| `editdistance` | 14-line Wagner-Fischer `_edit_distance()` in `constants.py` | ~200 KB |
 | `tqdm` | 16-line logging generator `_progress()` in each caller file | ~4 MB |
-| `scipy` | 15-line weighted moving-average `_smooth()` in `plot_convergence.py` | ~30 MB |
+| `scipy` | 15-line weighted moving-average `_smooth()` in `reporting.py` | ~30 MB |
 | `psutil` | 18-line `/proc/meminfo` reader `_get_total_ram_bytes()` / `_get_available_ram_bytes()` | ~1 MB |
 
 ### Removed — never imported anywhere
