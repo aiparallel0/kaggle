@@ -3255,12 +3255,17 @@ def evaluate_trocr_yolo_on_test(
     from importlib import import_module
 
     from transformers import TrOCRProcessor, VisionEncoderDecoderModel
-    from ultralytics import YOLO
 
     # Import the inference function and meta-buffer fix from train_trocr_yolo.py
     trocr_yolo_module = import_module("train_trocr_yolo")
     run_pipeline = trocr_yolo_module.run_trocr_yolo_inference
     _materialize_meta_buffers = trocr_yolo_module._materialize_meta_buffers
+
+    # Use ultralytics YOLO if available, else fall back to inline _YOLO_CLS
+    try:
+        from ultralytics import YOLO
+    except ImportError:
+        YOLO = trocr_yolo_module._YOLO_CLS  # noqa: N806
 
     yolo_model = YOLO(str(yolo_weights))
     trocr_processor = TrOCRProcessor.from_pretrained(trocr_model_path)
