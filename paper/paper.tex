@@ -623,23 +623,54 @@ spline interpolation over epoch-level checkpoints.
 
 \subsection{TrOCR+YOLO Results}
 
-Table~\ref{tab:trocr_results} compares the best results from each
-architecture under identical evaluation conditions.
+Table~\ref{tab:trocr_results} compares all four TrOCR+YOLO field-assignment
+configurations against the best DONUT experiment under identical evaluation
+conditions.  The three trainable backends replace the hand-crafted regex
+heuristic with learned attention over OCR line features: character embeddings
+(\textit{char}), a frozen BERT-tiny encoder (\textit{lm}), and the same
+encoder augmented with TrOCR visual features and a consistency regulariser
+(\textit{lm+vision}).
 
-\begin{table}[!t]
+\begin{table*}[!t]
   \caption{Cross-architecture comparison on the SROIE test set ($N{=}63$).
-           F1 is entity-level exact-match for both architectures
-           (unified SROIE Task-3 protocol; no partial-credit token overlap).}
+           F1 is entity-level exact-match (unified SROIE Task-3 protocol;
+           no partial-credit token overlap).
+           TrOCR+YOLO field-assignment backends are ordered by parameter count.
+           ``---'' indicates the backend failed or was not trained.}
   \label{tab:trocr_results}
   \centering
-  \begin{tabular}{@{}lcc@{}}
+  \begin{tabular}{@{}llccccc@{}}
     \toprule
-    \textbf{Metric} & \textbf{Best DONUT} & \textbf{TrOCR\,+\,YOLO} \\
+    \textbf{Architecture} & \textbf{Field Assignment} &
+      \textbf{Global F1\,$\uparrow$} &
+      \textbf{Company} & \textbf{Date} & \textbf{Address} & \textbf{Total} \\
     \midrule
-    Global F1\,($\uparrow$)  & \VAR{best_f1} & \VAR{trocr_best_f1} \\
+    \donut (Exp.~\VAR{best_exp})
+      & End-to-end attention
+      & \textbf{\VAR{best_f1}}
+      & \VAR{best_company_f1} & \VAR{best_date_f1}
+      & \VAR{best_address_f1} & \VAR{best_total_f1} \\
+    \midrule
+    \multirow{4}{*}{\trocr\,+\,\yolo}
+      & Regex heuristic (0 params)
+      & \VAR{trocr_regex_f1}
+      & \VAR{trocr_regex_company_f1} & \VAR{trocr_regex_date_f1}
+      & \VAR{trocr_regex_address_f1} & \VAR{trocr_regex_total_f1} \\
+    & Char attention (532\,K params)
+      & \VAR{trocr_char_f1}
+      & \VAR{trocr_char_company_f1} & \VAR{trocr_char_date_f1}
+      & \VAR{trocr_char_address_f1} & \VAR{trocr_char_total_f1} \\
+    & LM attention (4.9\,M params)
+      & \VAR{trocr_lm_f1}
+      & \VAR{trocr_lm_company_f1} & \VAR{trocr_lm_date_f1}
+      & \VAR{trocr_lm_address_f1} & \VAR{trocr_lm_total_f1} \\
+    & LM\,+\,Vision (5.1\,M params)
+      & \VAR{trocr_lmv_f1}
+      & \VAR{trocr_lmv_company_f1} & \VAR{trocr_lmv_date_f1}
+      & \VAR{trocr_lmv_address_f1} & \VAR{trocr_lmv_total_f1} \\
     \bottomrule
   \end{tabular}
-\end{table}
+\end{table*}
 
 \subsection{Comparison with Published Results}
 
@@ -714,14 +745,25 @@ the two auxiliary domains cancel at equal weighting.
 
 \subsection{Cross-Architecture Analysis}
 
-The end-to-end \donut architecture consistently outperforms the
-\trocr\,+\,\yolo pipeline.  This advantage stems from \donut's unified
+Table~\ref{tab:trocr_results} shows that the end-to-end \donut architecture
+consistently outperforms all four \trocr\,+\,\yolo configurations, including
+the best-performing learned backend (\VAR{trocr_best_backend},
+F1\,=\,\VAR{trocr_best_f1}).  This advantage stems from \donut's unified
 image-to-structure mapping, which avoids the cascading error propagation
 inherent in the detection\,$\to$\,recognition\,$\to$\,field-assignment
-pipeline.  When the YOLOv8n detector fails to localise a text region, the
+pipeline.  When the YOLOv8 detector fails to localise a text region, the
 information is irrecoverably lost to downstream stages.  Conversely,
 \donut's end-to-end attention mechanism can attend to any image region
 regardless of explicit detection.
+
+Among the three trainable backends, the learned attention approaches
+(\textit{lm}, \textit{lm+vision}) improve over the regex heuristic
+on most fields by replacing hand-crafted rules with soft assignment learned
+from SROIE training annotations.  Address F1 remains the hardest field
+across all TrOCR+YOLO configurations because multi-line addresses are split
+across several YOLO crops; the rule-based and attention-based assigners must
+reconstruct the full address from isolated line predictions, whereas \donut
+attends to the full receipt image in a single pass.
 
 \subsection{Comparison with Published DONUT}
 
@@ -776,10 +818,11 @@ SROIE benchmark.  Our findings show that:
         global F1, a gain of \VAR{gain_best_over_baseline} over the
         SROIE-only baseline and \VAR{gain_over_published} over the
         published \donut result.
-  \item The end-to-end \donut architecture outperforms the
-        \trocr\,+\,\yolo pipeline, achieving \VAR{best_f1} vs.\
-        \VAR{trocr_best_f1} global F1, due to the absence of cascading
-        error propagation.
+  \item The end-to-end \donut architecture outperforms all four
+        \trocr\,+\,\yolo field-assignment configurations, with the best
+        pipeline backend (\VAR{trocr_best_backend}) achieving
+        \VAR{trocr_best_f1} vs.\ \VAR{best_f1} global F1 for \donut,
+        due to the absence of cascading error propagation.
   \item Cross-domain invoice data (Invoices-DONUT) provides complementary
         augmentation through diverse layouts and shared KIE fields, but
         only when the SROIE target distribution is preserved via oversampling.

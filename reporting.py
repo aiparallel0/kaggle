@@ -2369,9 +2369,62 @@ class PaperInjector:
             except Exception:
                 pass
 
-        # Ensure TrOCR vars have fallback values if file was missing
+        # Ensure basic TrOCR vars have fallback values if file was missing
         for key in ["trocr_best_f1", "trocr_best_f1_pct", "trocr_best_exp"]:
             var_map.setdefault(key, "N/A")
+
+        # ── All-backends TrOCR comparison (from trocr_all_backends.json) ─────
+        # Placeholders: trocr_regex_f1, trocr_char_f1, trocr_lm_f1, trocr_lmv_f1
+        # and per-field variants trocr_<backend>_<field>_f1 / _ned
+        _BACKEND_PREFIX_MAP = {
+            "regex": "trocr_regex",
+            "char": "trocr_char",
+            "lm": "trocr_lm",
+            "lm+vision": "trocr_lmv",
+        }
+        _all_backends_path = self.results_dir / "trocr_all_backends.json"
+        if _all_backends_path.exists():
+            try:
+                with open(_all_backends_path) as _bfh:
+                    _backends_data = json.load(_bfh)
+                _best_backend_f1 = float(var_map.get("trocr_best_f1") or "0") or 0.0
+                _best_backend_name = "regex"
+                for _bkey, _prefix in _BACKEND_PREFIX_MAP.items():
+                    _bd = _backends_data.get(_bkey, {})
+                    _bm = _bd.get("metrics", {})
+                    var_map[f"{_prefix}_f1"] = _safe(_bm, "global_f1")
+                    var_map[f"{_prefix}_f1_pct"] = f"{_bm.get('global_f1', 0.0) * 100:.2f}"
+                    for _field in FIELDS:
+                        var_map[f"{_prefix}_{_field}_f1"] = _safe(_bm, f"{_field}_f1")
+                        var_map[f"{_prefix}_{_field}_ned"] = _safe(_bm, f"{_field}_ned")
+                    _bf1 = _bm.get("global_f1", 0.0)
+                    if _bf1 > _best_backend_f1:
+                        _best_backend_f1 = _bf1
+                        _best_backend_name = _bd.get("backend", _bkey)
+                        var_map["trocr_best_f1"] = f"{_bf1:.4f}"
+                        var_map["trocr_best_f1_pct"] = f"{_bf1 * 100:.2f}"
+                var_map["trocr_best_backend"] = _best_backend_name
+            except Exception:
+                pass
+
+        # Fallbacks for all backend vars so LaTeX compiles even on partial runs
+        for _bk, _pfx in _BACKEND_PREFIX_MAP.items():
+            var_map.setdefault(f"{_pfx}_f1", "---")
+            var_map.setdefault(f"{_pfx}_f1_pct", "---")
+            for _fld in FIELDS:
+                var_map.setdefault(f"{_pfx}_{_fld}_f1", "---")
+                var_map.setdefault(f"{_pfx}_{_fld}_ned", "---")
+        var_map.setdefault("trocr_best_backend", "---")
+
+        # ── Best DONUT per-field vars (for cross-arch comparison table) ───────
+        if best_exp_id in all_exp:
+            _best_m = all_exp[best_exp_id].get("metrics", {})
+            for _fld in FIELDS:
+                var_map[f"best_{_fld}_f1"] = _safe(_best_m, f"{_fld}_f1")
+                var_map[f"best_{_fld}_ned"] = _safe(_best_m, f"{_fld}_ned")
+        for _fld in FIELDS:
+            var_map.setdefault(f"best_{_fld}_f1", "---")
+            var_map.setdefault(f"best_{_fld}_ned", "---")
 
         # Experiment count / max ID (for dynamic slide titles and abstract)
         exp_ids_with_results = sorted(all_exp.keys(), key=lambda x: int(x))

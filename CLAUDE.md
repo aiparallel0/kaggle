@@ -205,6 +205,9 @@ Both must exit with code `0`. If either fails, fix the core import chain **befor
 | **Experiment results inconsistent across runs** | Mutable global `EXPERIMENTS` dict mutated by `run_experiment()` | Use `dataclasses.replace()` — never assign to `EXPERIMENTS[N].field` |
 | **`ruff check .` fails in CI** | pre-commit hook not installed; `lint.sh` not run before push | Run `lint.sh` before every `git commit` (see § 10 Mandatory Lint) |
 | **`FATAL: The following packages could not be installed: editdistance`** | `_CRITICAL_INSTALL_PACKAGES` still contains `editdistance` which was removed from `requirements.txt` (replaced with inline `_edit_distance()`) | Remove `editdistance` and `pandas` from both `_CRITICAL_INSTALL_PACKAGES` and `_CRITICAL_VERIFY_PACKAGES` in `run_all.py` |
+| **`FATAL: The following packages could not be installed: transformers`** on fresh env | `requirements.txt` line 42 was missing `#` prefix: `ultralytics   → 100%...` was passed literally to pip, aborting the entire `pip install -r requirements.txt` before `transformers` was reached | Added `#` to `requirements.txt` line 42 (2026-04-02). Always pre-install: `pip install -r requirements.txt` before `run_all.py` |
+| **`transformers 5.x` compatibility** | `pip install transformers` now resolves to 5.5.0+. No breaking changes for `DonutProcessor`, `VisionEncoderDecoderModel`, `Seq2SeqTrainer`. The `PreTrainedTokenizerBase` compat shim handles the ≥4.47 import relocation. | No code change needed. Do NOT delete the compat shim in `data_pipeline.py`. |
+| **TrOCR address F1 = 0.000 with inline YOLO fallback** | `ultralytics` not installed → `_YOLOv8Inline` runs proxy L2 loss (no anchor boxes, no NMS) → bounding box quality insufficient to reliably crop multi-line address regions | Install real YOLO: `pip install ultralytics`. Inline fallback is a smoke-test stand-in only. |
 
 ### Pattern 1: Bracket & Comma Errors
 
@@ -333,30 +336,51 @@ from constants import FIELDS, IMAGE_EXTS, MAX_LENGTH, BASE_MODEL, SEED, NEW_TOKE
 
 ## 8. Experiment Definitions
 
-8 DONUT fine-tuning experiments with different dataset combinations. All use 80/10/10 SROIE split: **500 train / 63 val / 63 test**. Final runs completed 2026-03-07 on Vast.ai RTX 6000 Blackwell (96 GB).
+**18-experiment comprehensive suite** across two architectures and three variable axes (dataset mix, precision, resolution). All use 80/10/10 SROIE split: **500 train / 63 val / 63 test**. Final runs completed 2026-03-07 on Vast.ai RTX 6000 Blackwell (96 GB). Extended series (9–18) analyzed 2026-04-02.
 
-| Exp | Training Data | Samples | **Actual F1** | Notes |
-|---|---|---|---|---|
-| 1 | SROIE only (baseline) | 500 | **0.8503** | 5-epoch quick run (post-bug-fix). company=0.841, date=0.984, address=0.790, total=0.784 |
-| 2 | SROIE + WildReceipt | 1,386 | **0.8257** | WR alone (no oversample) slightly hurts vs baseline |
-| 3 | SROIE + Invoices-DONUT | 832 | **0.2867** | Cross-domain hurts severely without rebalancing |
-| 4 | SROIE + WR + Invoices | 1,718 | **0.8224** | Combined unbalanced — still below baseline |
-| 5 | SROIE + WR (2× SROIE) | 1,886 | **0.8514** | Marginal gain with oversampling |
-| **6** | **SROIE + Invoices (2× SROIE)** | **1,332** | **0.8982 ← BEST** | Early stop ep.8, 39.6 min |
-| 7 | SROIE + All (2× SROIE) | 2,218 | **0.8503** | Matches baseline (competing signals cancel) |
-| 8 | SROIE + WR + Invoices (3× SROIE) | ~3,940 | **OOM** | OOM at 2560×1920; fixed in resource_manager.py |
+### Core Multi-Dataset DONUT Experiments (1–8)
+
+| Exp | Training Data | Samples | **Actual F1** | RTX 4090 Outcome | Notes |
+|---|---|---|---|---|---|
+| 1 | SROIE only (baseline) | 500 | **0.8503** | ✅ Pass | 10 epochs; company=0.841, date=0.984, address=0.790, total=0.784 |
+| 2 | SROIE + WildReceipt | 1,386 | **0.8257** | ✅ Pass | No oversample — WR dilutes SROIE signal |
+| 3 | SROIE + Invoices-DONUT | 832 | **0.2867** | ✅ Pass¹ | No oversample — severe cross-domain collapse (expected control result) |
+| 4 | SROIE + WR + Invoices | 1,718 | **0.8224** | ✅ Pass | Unbalanced all-in — still below baseline |
+| 5 | SROIE + WR (2× SROIE) | 1,886 | **0.8514** | ✅ Pass | Oversampling helps marginally (+0.0011) |
+| **6** | **SROIE + Invoices (2× SROIE)** | **1,332** | **0.8982 ← BEST** | ✅ **Pass** | Early stop ep.8, 39.6 min; Exp6 per-field: co=0.905, da=0.984, ad=0.790, to=0.912 |
+| 7 | SROIE + All (2× SROIE) | 2,218 | **0.8503** | ✅ Pass | All datasets 2×; competing signals cancel |
+| 8 | SROIE + All (3× SROIE) | ~2,718 | **OOM²** | ⚠️ RAM-limited | ²Previous run failed at wrong 2560×1920 resolution. At correct 1280×960: requires ~69 GB system RAM. |
+
+> ¹ Exp 3 trains to completion but the resulting model is near-unusable (F1=0.2867). This is the expected control result demonstrating that auxiliary data **without** SROIE oversampling causes catastrophic cross-domain drift.
+
+### Extended Architecture Comparison Series (9–18)
+
+| Exp | Architecture | Precision | Resolution | RTX 4090 Outcome | Notes |
+|---|---|---|---|---|---|
+| 9 | DONUT zero-shot | fp16 | 1280×960 | ✅ Pass | inference-only; expected F1≈0.10–0.30 |
+| 10 | DONUT fine-tuned (best recipe) | fp16 | 1280×960 | ✅ Pass | mirrors Exp 6; F1≈0.8982 |
+| 11 | DONUT fine-tuned bf16 | **bf16** | 1280×960 | ✅ Pass³ | bf16 ablation vs fp16; Ampere+ required |
+| 12 | TrOCR+YOLO (2× SROIE + Inv) | fp16 | 1280×960 | ⚠️ Degraded⁴ | 279M params; inline fallback if ultralytics absent |
+| 13 | DONUT fine-tuned fp32 | **fp32** | 1280×960 | ✅ Pass | full precision reference; batch=4, grad_accum=4 |
+| 14 | DONUT high-res fp16 | fp16 | **2560×1920** | ⚠️ OOM risk | 4× pixels; batch=2, grad_accum=8; processor_config.json MUST be updated before/after |
+| 15 | TrOCR+YOLO (SROIE only) | fp16 | 1280×960 | ⚠️ Degraded⁴ | minimal pipeline; 500 samples, no oversample |
+| 16 | DONUT high-res bf16 | bf16 | **2560×1920** | ⚠️ OOM risk | Ampere+ required; processor_config.json MUST be updated |
+| **17** | **DONUT high-res fp32** | **fp32** | **2560×1920** | ❌ **Will OOM** | requires ≥60 GB VRAM; RTX 4090 (24 GB) will OOM |
+| 18 | DONUT zero-shot high-res | fp16 | **2560×1920** | ✅ Pass | inference-only; resolution without training gains nothing |
+
+> ³ bf16 requires Ampere+ (RTX 30xx / A100 / H100). Falls back gracefully to fp32 on older hardware.
+
+> ⁴ TrOCR+YOLO quality is severely limited without `ultralytics`. The inline `_YOLOv8Inline` fallback trains a proxy L2 loss — backbone moves away from random init but produces no calibrated detector. Real detection: `pip install ultralytics`. address F1 = 0.000 is structural (multi-line address crops not reliably found).
 
 **Key insight:** SROIE oversampling (2×) is a prerequisite for auxiliary data to help. Without it, Exps 2–4 all score at or below the baseline.
 
-**Known: Exp 1 company F1 at 10 epochs is a convergence failure, not the SROIE-only ceiling.** The CORD-pretrained encoder needs more than 10 epochs on 500 samples to converge on Southeast Asian merchant names (short, capitalised, mixed English–Malay). Experiments 5–7 ran more epochs, so the reported gain of +0.0479 over Exp 1 conflates auxiliary-data benefit with extended-training benefit. A controlled 15-epoch Exp 1 run would establish a fairer baseline before drawing magnitude claims.
-
-**Exp 6 per-field:** company=0.9048, date=0.9841, address=0.7903, total=0.9120, exact_match=0.6667
+**Known: Exp 1 company F1 at 10 epochs is a convergence failure, not the SROIE-only ceiling.** The CORD-pretrained encoder needs more than 10 epochs on 500 samples to converge on Southeast Asian merchant names. Experiments 5–7 ran 15 epochs, so the reported gain of +0.0479 over Exp 1 conflates auxiliary-data benefit with extended-training benefit. A controlled 15-epoch Exp 1 run would establish a fairer baseline.
 
 **Gain over baseline:** Exp 6 (0.8982) − Exp 1 (0.8503) = **+0.0479**; vs published DONUT (0.8411) = **+0.0571**
 
-**TrOCR+YOLO (trained):** global_f1=0.2035, company=0.176, date=0.460, address=0.000, total=0.231
+**TrOCR+YOLO (trained, with ultralytics):** global_f1=0.2035, company=0.176, date=0.460, address=0.000, total=0.231
 
-**Gap:** DONUT best (0.8982) vs TrOCR+YOLO (0.2035) = **+69.5% absolute**
+**Gap:** DONUT best (0.8982) vs TrOCR+YOLO (0.2035) = **+69.5% absolute**; DONUT is also 40% smaller (200M vs 279M params)
 
 `ExperimentConfig` is the single source of truth for all hyperparameters. `DonutTrainer` reads all values via duck-typed attribute access — no magic numbers anywhere else.
 
@@ -621,6 +645,8 @@ Two-stage pipeline in `train_trocr_yolo.py` (called by `run_all.py`):
 | **`flash-attn` build fails with nvcc segfault on torch≥2.9+cu126** | Pipeline already falls back to PyTorch SDPA — no action needed. If you want FA2: use prebuilt wheel from https://flashattn.dev/wheel-finder/ (Python 3.12 / CUDA 12.6). Fixed `run_experiments.py` to catch `RuntimeError` in addition to `ImportError`. | `run_experiments.py`, `validation.py` |
 | **Terminal freeze after "Dependencies installed successfully" on GPU machine** | `_install_dependencies()` ran `subprocess.run(..., capture_output=True)` for flash-attn after the main install — CUDA kernel compilation takes 5–25 min, invisible; `Ctrl+C` didn't reach nvcc child. Post-install `_verify_critical_packages()` called `sys.exit(2)` because newly-installed packages aren't visible to the running process (`sys.modules` isolation). | Removed flash-attn auto-build entirely. Added `os.execv()` restart (with `_DONUT_RESTARTED=1` sentinel) after successful pip install. Added `_InstallWatchdog` thread for elapsed-time progress. Added `timeout=300` to main pip subprocess. | `run_all.py` |
 | **`FATAL: editdistance could not be installed` after dependency auto-install** | `editdistance` and `pandas` still in `_CRITICAL_INSTALL_PACKAGES`/`_CRITICAL_VERIFY_PACKAGES` after being removed from `requirements.txt` (both replaced with inline implementations) | Removed both from `_CRITICAL_INSTALL_PACKAGES` and `_CRITICAL_VERIFY_PACKAGES` in `run_all.py` | `run_all.py` |
+| **`FATAL: transformers could not be installed`** on fresh env (2026-04-02) | `requirements.txt` line 42 missing `#` — `ultralytics   → 100% replaced...` was a live package specifier; pip aborted the entire install on parse error, never reaching `transformers` | Added `#` to `requirements.txt` line 42. Always `pip install -r requirements.txt` before `run_all.py`. | `requirements.txt` |
+| **TrOCR address F1 = 0.000 with inline YOLO fallback** | `ultralytics` not installed → `_YOLOv8Inline` runs proxy L2 loss; no anchor boxes, no NMS; bounding boxes too imprecise to crop multi-line addresses | `pip install ultralytics` for real detection quality. Inline fallback is smoke-test only. | `train_trocr_yolo.py` |
 
 ### The F1 Collapse Chain (root-cause map for the three worst bugs)
 

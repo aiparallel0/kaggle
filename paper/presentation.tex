@@ -458,34 +458,104 @@
 
 % ------------------------------------------------------------------
 \begin{frame}{Cross-Architecture Comparison}
+  \centering
+  {\footnotesize
+  \begin{tabular}{@{}llccccc@{}}
+    \toprule
+    \textbf{Architecture} & \textbf{Field Assignment} &
+      \textbf{Global F1} &
+      \textbf{Co.} & \textbf{Date} & \textbf{Addr.} & \textbf{Total} \\
+    \midrule
+    \donut (Exp.~\VAR{best_exp})
+      & End-to-end
+      & \hlnum{\VAR{best_f1}}
+      & \VAR{best_company_f1} & \VAR{best_date_f1}
+      & \VAR{best_address_f1} & \VAR{best_total_f1} \\
+    \midrule
+    \multirow{4}{*}{\trocr+\yolo}
+      & Regex (0\,params)
+      & \VAR{trocr_regex_f1}
+      & \VAR{trocr_regex_company_f1} & \VAR{trocr_regex_date_f1}
+      & \VAR{trocr_regex_address_f1} & \VAR{trocr_regex_total_f1} \\
+    & Char (532\,K)
+      & \VAR{trocr_char_f1}
+      & \VAR{trocr_char_company_f1} & \VAR{trocr_char_date_f1}
+      & \VAR{trocr_char_address_f1} & \VAR{trocr_char_total_f1} \\
+    & LM (4.9\,M)
+      & \VAR{trocr_lm_f1}
+      & \VAR{trocr_lm_company_f1} & \VAR{trocr_lm_date_f1}
+      & \VAR{trocr_lm_address_f1} & \VAR{trocr_lm_total_f1} \\
+    & LM+Vision (5.1\,M)
+      & \VAR{trocr_lmv_f1}
+      & \VAR{trocr_lmv_company_f1} & \VAR{trocr_lmv_date_f1}
+      & \VAR{trocr_lmv_address_f1} & \VAR{trocr_lmv_total_f1} \\
+    \midrule
+    Published \donut & --- & 0.8411 & --- & --- & --- & --- \\
+    \bottomrule
+  \end{tabular}
+  }
+
+  \vspace{0.3cm}
   \begin{columns}[T]
-    \begin{column}{0.50\textwidth}
-      \begin{block}{Best Results}
-        \centering
-        \vspace{0.3cm}
-        \begin{tabular}{@{}lc@{}}
-          \toprule
-          \textbf{Architecture} & \textbf{Global F1} \\
-          \midrule
-          \donut (best)       & \hlnum{\VAR{best_f1}} \\
-          \trocr\,+\,\yolo    & \VAR{trocr_best_f1} \\
-          \midrule
-          Published DONUT     & 0.8411 \\
-          \bottomrule
-        \end{tabular}
-        \vspace{0.3cm}
-      \end{block}
-    \end{column}
-    \begin{column}{0.47\textwidth}
+    \begin{column}{0.48\textwidth}
       \begin{exampleblock}{Key Takeaway}
-        \donut \greenbf{outperforms} the \trocr\,+\,\yolo pipeline
-        across all experiments.\\[6pt]
-        \textbf{Why?}
+        \donut \greenbf{outperforms} all four \trocr+\yolo
+        field-assignment backends.\\[4pt]
+        \textbf{Why DONUT wins:}
         \begin{itemize}
           \item No cascading errors
           \item Unified attention over\\full image
-          \item Fewer parameters\\(200\,M vs 337\,M)
+          \item Fewer parameters (200\,M)
         \end{itemize}
+      \end{exampleblock}
+    \end{column}
+    \begin{column}{0.48\textwidth}
+      \begin{alertblock}{Address F1\,=\,0 (TrOCR+YOLO)}
+        Multi-line addresses split across\\
+        YOLO crops — each crop read\\
+        independently; full address\\
+        cannot be reconstructed.\\[3pt]
+        \donut attends to full image.
+      \end{alertblock}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% ------------------------------------------------------------------
+\begin{frame}{TrOCR+YOLO: Three Learned Field-Assignment Backends}
+  \begin{columns}[T]
+    \begin{column}{0.48\textwidth}
+      \begin{block}{Pipeline Architecture}
+        \begin{enumerate}
+          \item \textbf{YOLOv8x} detects text regions (68\,M params)
+          \item \textbf{TrOCR-base} reads each crop (246\,M params)
+          \item \textbf{Field assigner} maps OCR lines to KIE fields
+        \end{enumerate}
+        \vspace{4pt}
+        {\small Total: \textbf{$\sim$279\,M\,+\,assigner params}}
+      \end{block}
+      \vspace{0.2cm}
+      \begin{alertblock}{Without \texttt{ultralytics}}
+        Inline YOLO fallback (proxy L2 loss)\\
+        — no real detector calibration.\\
+        Install \texttt{pip install ultralytics}\\
+        for real detection quality.
+      \end{alertblock}
+    \end{column}
+    \begin{column}{0.48\textwidth}
+      \begin{exampleblock}{Backend Progression}
+        \textbf{Regex} (0 params)\\
+        {\small Rule-based: date regex, amount regex,\\
+        NED match for company/address.}\\[6pt]
+        \textbf{Char} (532\,K)\\
+        {\small Character embeddings + 2-layer\\
+        Transformer cross-attention.}\\[6pt]
+        \textbf{LM} (4.9\,M)\\
+        {\small Frozen BERT-tiny encoder\\
+        + spatial positional features.}\\[6pt]
+        \textbf{LM+Vision} (5.1\,M) \textit{[default]}\\
+        {\small LM + TrOCR ViT features\\
+        + consistency regulariser ($\lambda$=0.05).}
       \end{exampleblock}
     \end{column}
   \end{columns}
