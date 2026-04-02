@@ -817,6 +817,121 @@ _ADDRESS_RE = re.compile(
 
 
 # ════════════════════════════════════════════════════════════════════════════
+# OCR Character Correction
+# ════════════════════════════════════════════════════════════════════════════
+
+# Visually similar character pairs that TrOCR commonly confuses:
+#   0 ↔ O/o   (zero vs. oh)
+#   1 ↔ l/I/i (one vs. el/eye)
+#   5 ↔ S/s   (five vs. ess)
+#   8 ↔ B     (eight vs. bee)
+#   2 ↔ Z/z   (two vs. zed)
+_OCR_L2D = {
+    "O": "0",
+    "o": "0",
+    "I": "1",
+    "l": "1",
+    "i": "1",
+    "S": "5",
+    "s": "5",
+    "B": "8",
+    "Z": "2",
+    "z": "2",
+}
+_OCR_D2L = {"0": "O", "1": "l", "5": "S", "8": "B", "2": "Z"}
+
+
+def _correct_ocr_chars(text: str) -> str:
+    """Fix common TrOCR single-character substitution mistakes.
+
+    Splits on whitespace and corrects each token based on its inferred type:
+    - Tokens that look predominantly numeric → substitute confusable letters
+      with their digit equivalents (e.g. "O" → "0", "l" → "1").
+    - Tokens that look predominantly alphabetic → substitute confusable
+      digits with their letter equivalents (e.g. "0" → "O", "1" → "l").
+    - Ambiguous or punctuation-only tokens are passed through unchanged.
+
+    This is a lightweight pre-processing step; the FieldAttentionAssigner
+    additionally learns character-level confusion patterns from training data.
+    """
+    corrected = []
+    for token in text.split():
+        n_digit_like = sum(1 for c in token if c.isdigit() or c in _OCR_L2D)
+        n_alpha_like = sum(1 for c in token if c.isalpha() or c in _OCR_D2L)
+        if n_digit_like > n_alpha_like:
+            corrected.append("".join(_OCR_L2D.get(c, c) for c in token))
+        elif n_alpha_like > n_digit_like:
+            corrected.append("".join(_OCR_D2L.get(c, c) for c in token))
+        else:
+            corrected.append(token)
+    return " ".join(corrected)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Field-Assigner Backend Selection
+# ════════════════════════════════════════════════════════════════════════════
+#
+# Change FIELD_ASSIGNER_BACKEND to switch between the three tiers:
+#
+#   "char"       Backend 1 — character embeddings (no pretrained weights)
+#                ~532 K trainable params.  Trains from scratch on SROIE.
+#                Handles single-char OCR swaps (Hell0→Hello) via learned
+#                embedding proximity.  No internet / HF download required.
+#
+#   "lm"         Backend 2 — BERT-tiny text encoder (prajjwal1/bert-tiny)
+#                ~4.9 M params (BERT-tiny 4.4 M + assigner ~530 K).
+#                Language model prior from pretraining; morphological OCR
+#                errors resolved at subword level, not character level.
+#                Requires HF download on first use (~17 MB).
+#
+#   "lm+vision"  Backend 3 (DEFAULT) — LM encoder + TrOCR vision features
+#                                       + cross-field consistency loss
+#                ~5.1 M params.  Best quality on poor-quality images: raw
+#                pixel features from TrOCR's encoder feed directly into the
+#                assigner, bypassing any OCR decoding error on that crop.
+#                Requires HF download on first use.
+#
+# ════════════════════════════════════════════════════════════════════════════
+FIELD_ASSIGNER_BACKEND: str = "lm+vision"  # ← change here to "char" or "lm"
+
+# Try to load BERT-tiny; if unavailable, "lm" and "lm+vision" silently fall
+# back to the "char" backend.
+try:
+    from transformers import AutoModel as _AutoModel
+    from transformers import AutoTokenizer as _AutoTokenizer
+
+    _LM_AVAILABLE = True
+except ImportError:
+    _LM_AVAILABLE = False
+
+
+def _build_lm_encoder() -> "tuple":
+    """Return (tokenizer, model) for prajjwal1/bert-tiny (128-dim hidden).
+
+    BERT-tiny is frozen by default — it acts as a feature extractor so the
+    assigner's ~530 K parameters remain the only trainable component.
+    The 128-dim hidden size matches d_model exactly (no projection needed).
+    """
+    tok = _AutoTokenizer.from_pretrained("prajjwal1/bert-tiny")
+    model = _AutoModel.from_pretrained("prajjwal1/bert-tiny")
+    for p in model.parameters():
+        p.requires_grad = False
+    return tok, model
+
+
+# Soft plausibility scores used by the Backend 3 consistency regulariser.
+# Each callable returns a score in [0.1, 1.0]: 1.0 = line matches the
+# expected pattern for that field, 0.1 = very unlikely match.
+# Company has a uniform prior — no reliable pattern to enforce.
+_FIELD_PLAUSIBILITY: dict[str, object] = {
+    "date": lambda t: 1.0 if _DATE_RE.search(t) else 0.1,
+    "total": lambda t: 1.0 if (_TOTAL_RE.search(t) or _MONEY_RE.search(t)) else 0.1,
+    "company": lambda _t: 0.5,
+    "address": lambda t: 1.0 if _ADDRESS_RE.search(t) else 0.3,
+}
+
+
+# ════════════════════════════════════════════════════════════════════════════
 # TrOCR Dataset
 # ════════════════════════════════════════════════════════════════════════════
 class TrOCRReceiptDataset(Dataset):
@@ -1460,49 +1575,595 @@ def _assign_fields_heuristic(ocr_lines: list[dict]) -> dict[str, str]:
     return result
 
 
-def run_trocr_yolo_inference(
+# ════════════════════════════════════════════════════════════════════════════
+# Normalised Edit Distance helper (inline — no external deps)
+# ════════════════════════════════════════════════════════════════════════════
+
+
+def _ned(a: str, b: str) -> float:
+    """Normalised edit distance between two strings, in [0.0, 1.0]."""
+    a, b = a.strip().lower(), b.strip().lower()
+    if a == b:
+        return 0.0
+    if not a or not b:
+        return 1.0
+    la, lb = len(a), len(b)
+    dp = list(range(lb + 1))
+    for i in range(1, la + 1):
+        prev, dp[0] = dp[0], i
+        for j in range(1, lb + 1):
+            tmp = dp[j]
+            dp[j] = prev if a[i - 1] == b[j - 1] else 1 + min(prev, dp[j], dp[j - 1])
+            prev = tmp
+    return dp[lb] / max(la, lb)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Attention-Based Field Assigner
+# ════════════════════════════════════════════════════════════════════════════
+
+
+class FieldAttentionAssigner(torch.nn.Module):
+    """Trainable attention-based replacement for regex heuristics.
+
+    Three selectable backends (set via FIELD_ASSIGNER_BACKEND or the
+    ``backend`` constructor argument):
+
+    Backend 1 — "char"  (~532 K params)
+        Character-level embedding max-pooled over the token, fused with
+        normalised bounding-box spatial features, then a 2-layer Transformer
+        encoder + cross-attention field queries.  Trains from scratch.
+        Handles single-char OCR substitutions (Hell0 → Hello) via learned
+        embedding proximity.  No internet or pretrained weights required.
+
+    Backend 2 — "lm"  (~4.9 M params)
+        Replaces the char embedding with a frozen BERT-tiny encoder
+        (prajjwal1/bert-tiny, 128-dim hidden).  Gives the assigner a
+        language-model prior: morphological OCR errors resolved at subword
+        level.  BERT-tiny is frozen; only the assigner head is trained.
+
+    Backend 3 — "lm+vision"  (~5.1 M params)  ← DEFAULT
+        Backend 2 PLUS:
+        • raw pixel features from TrOCR's ViT encoder (768-dim, projected to
+          128) feed alongside text, letting the model bypass OCR decoding
+          errors on blurry crops by reading the image directly.
+        • cross-field consistency regulariser during training (KL between
+          model attention and regex-derived plausibility priors).
+
+    All three backends share the same forward / assign / checkpoint API.
+    """
+
+    # Printable ASCII chars for the "char" backend.
+    _CHARSET: str = (
+        " abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,/:;-()[]@#$%&*+='\"<>?!"
+    )
+    _CHAR2IDX: dict[str, int] = {c: i + 1 for i, c in enumerate(_CHARSET)}
+    _VOCAB_SIZE: int = len(_CHARSET) + 1  # 1-based; 0 = padding / unknown
+
+    # TrOCR encoder hidden size (used by "lm+vision" to project to d_model).
+    _VISION_DIM: int = 768
+
+    FIELDS: list[str] = ["company", "date", "address", "total"]
+    CHECKPOINT_NAME: str = "field_assigner.pt"
+
+    def __init__(
+        self,
+        d_model: int = 128,
+        n_heads: int = 4,
+        n_layers: int = 2,
+        max_text_len: int = 64,
+        dropout: float = 0.1,
+        backend: str | None = None,
+    ) -> None:
+        super().__init__()
+        self.d_model = d_model
+        self.max_text_len = max_text_len
+        self.backend = (backend or FIELD_ASSIGNER_BACKEND).lower()
+
+        # ── Text encoder (backend-dependent) ─────────────────────────────
+        if self.backend in ("lm", "lm+vision") and _LM_AVAILABLE:
+            self._lm_tokenizer, self.lm_encoder = _build_lm_encoder()
+            self._use_lm = True
+        else:
+            if self.backend in ("lm", "lm+vision"):
+                print(
+                    f"[FieldAssigner] BERT-tiny unavailable; "
+                    f"'{self.backend}' backend falls back to 'char'."
+                )
+            # char backend (also the fallback when transformers unavailable)
+            self.char_emb = torch.nn.Embedding(self._VOCAB_SIZE, d_model, padding_idx=0)
+            self.text_proj = torch.nn.Linear(d_model, d_model)
+            self._use_lm = False
+
+        # ── Spatial encoder: normalised bbox → d_model ────────────────────
+        self.spatial_mlp = torch.nn.Sequential(
+            torch.nn.Linear(4, d_model // 2),
+            torch.nn.ReLU(),
+            torch.nn.Linear(d_model // 2, d_model),
+        )
+
+        # ── Vision projection: TrOCR ViT features → d_model (mode 3 only) ─
+        _use_vision = self.backend == "lm+vision" and self._use_lm
+        if _use_vision:
+            self.vision_proj = torch.nn.Linear(self._VISION_DIM, d_model)
+
+        # ── Fusion: (text + spatial [+ vision]) → d_model ────────────────
+        fuse_in = d_model * (3 if _use_vision else 2)
+        self.fuse = torch.nn.Linear(fuse_in, d_model)
+        self._fuse_in = fuse_in  # saved to checkpoint for load validation
+
+        # ── Transformer encoder over all lines ────────────────────────────
+        enc_layer = torch.nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=n_heads,
+            dim_feedforward=d_model * 4,
+            dropout=dropout,
+            batch_first=True,
+            norm_first=True,
+        )
+        self.encoder = torch.nn.TransformerEncoder(enc_layer, num_layers=n_layers)
+
+        # ── 4 learnable field query vectors ──────────────────────────────
+        self.field_queries = torch.nn.Parameter(torch.randn(len(self.FIELDS), d_model))
+
+        # ── Cross-attention: field queries attend to line context ─────────
+        self.cross_attn = torch.nn.MultiheadAttention(
+            embed_dim=d_model,
+            num_heads=n_heads,
+            dropout=dropout,
+            batch_first=True,
+        )
+
+    # ── Internal encoding helpers ─────────────────────────────────────────
+
+    def _encode_text(self, text: str) -> torch.Tensor:
+        """Map a raw string to a (d_model,) float vector.
+
+        Uses BERT-tiny for backends "lm" / "lm+vision" (frozen, mean-pool
+        over subword tokens), or character embeddings for "char".
+        """
+        if self._use_lm:
+            dev = next(self.lm_encoder.parameters()).device
+            inputs = self._lm_tokenizer(
+                text,
+                return_tensors="pt",
+                max_length=self.max_text_len,
+                truncation=True,
+                padding=True,
+            )
+            inputs = {k: v.to(dev) for k, v in inputs.items()}
+            out = self.lm_encoder(**inputs)
+            # Mean-pool over subword tokens → (d_model,)
+            return out.last_hidden_state.squeeze(0).mean(dim=0)
+
+        # ── char backend ──────────────────────────────────────────────────
+        dev = self.char_emb.weight.device
+        indices = [self._CHAR2IDX.get(c, 0) for c in text[: self.max_text_len]]
+        if not indices:
+            return torch.zeros(self.d_model, device=dev)
+        t = torch.tensor(indices, dtype=torch.long, device=dev)
+        emb = self.char_emb(t)  # (L, d_model)
+        vec = emb.max(dim=0).values  # max-pool
+        return torch.relu(self.text_proj(vec))
+
+    def _encode_spatial(self, bbox: list[float], img_w: float, img_h: float) -> torch.Tensor:
+        """Map a [x1,y1,x2,y2] box to a (d_model,) float vector."""
+        dev = self.spatial_mlp[0].weight.device
+        x1, y1, x2, y2 = bbox
+        norm = torch.tensor(
+            [
+                x1 / max(img_w, 1.0),
+                y1 / max(img_h, 1.0),
+                x2 / max(img_w, 1.0),
+                y2 / max(img_h, 1.0),
+            ],
+            dtype=torch.float32,
+            device=dev,
+        )
+        return self.spatial_mlp(norm)
+
+    # ── Forward pass ─────────────────────────────────────────────────────
+
+    def forward(
+        self,
+        line_texts: list[str],
+        bboxes: list[list[float]],
+        img_w: float,
+        img_h: float,
+        vision_feats: "list[torch.Tensor] | None" = None,
+    ) -> torch.Tensor:
+        """Return attention weight matrix of shape (n_fields, N_lines).
+
+        vision_feats : list of N tensors, each shape (768,) — TrOCR encoder
+            mean-pool for that crop.  Only used when backend == "lm+vision"
+            and the vision_proj layer is present.  Pass None (default) to
+            silently skip vision features (e.g. when running without YOLO).
+        """
+        N = len(line_texts)
+        if N == 0:
+            return torch.zeros(len(self.FIELDS), 0, device=self.field_queries.device)
+
+        text_vecs = torch.stack([self._encode_text(t) for t in line_texts])  # (N, d_model)
+        spatial_vecs = torch.stack(
+            [self._encode_spatial(b, img_w, img_h) for b in bboxes]
+        )  # (N, d_model)
+
+        parts = [text_vecs, spatial_vecs]
+
+        # Backend 3: fuse in vision features when available
+        if hasattr(self, "vision_proj") and vision_feats is not None and len(vision_feats) == N:
+            dev = self.field_queries.device
+            vis = torch.stack(
+                [
+                    f.to(dev)
+                    if isinstance(f, torch.Tensor)
+                    else torch.zeros(self._VISION_DIM, device=dev)
+                    for f in vision_feats
+                ]
+            )  # (N, 768)
+            parts.append(self.vision_proj(vis))  # (N, d_model)
+
+        # If vision_proj exists but feats are missing, pad with zeros so fuse
+        # dimensions still match (graceful degradation).
+        elif hasattr(self, "vision_proj"):
+            dev = self.field_queries.device
+            parts.append(torch.zeros(N, self.d_model, device=dev))
+
+        line_enc = torch.relu(self.fuse(torch.cat(parts, dim=-1)))  # (N, d_model)
+
+        ctx = self.encoder(line_enc.unsqueeze(0)).squeeze(0)  # (N, d_model)
+        q = self.field_queries.unsqueeze(0)  # (1, 4, d_model)
+        kv = ctx.unsqueeze(0)  # (1, N, d_model)
+        _, attn_weights = self.cross_attn(q, kv, kv)  # (1, 4, N)
+        return attn_weights.squeeze(0)  # (4, N)
+
+    # ── Inference API ─────────────────────────────────────────────────────
+
+    @torch.no_grad()
+    def assign(
+        self,
+        ocr_lines: list[dict],
+        img_w: float = 1000.0,
+        img_h: float = 1280.0,
+        vision_feats: "list[torch.Tensor] | None" = None,
+    ) -> dict[str, str]:
+        """Assign SROIE fields from OCR lines using learned attention.
+
+        Drop-in replacement for _assign_fields_heuristic().
+
+        ocr_lines    : list of dicts with keys 'text', 'x', 'y', 'x2', 'y2'.
+        vision_feats : optional list of N (768,) tensors from TrOCR encoder
+                       (Backend 3 only).  Pass None to skip vision path.
+
+        Lines are pre-processed with _correct_ocr_chars() before encoding.
+        Each line is assigned to at most one field (exclusive selection);
+        'address' may span the top-2 lines by attention weight.
+        """
+        self.eval()
+        result: dict[str, str] = {f: "" for f in self.FIELDS}
+        if not ocr_lines:
+            return result
+
+        texts = [_correct_ocr_chars(ln.get("text", "")) for ln in ocr_lines]
+        bboxes = [
+            [ln.get("x", 0.0), ln.get("y", 0.0), ln.get("x2", img_w), ln.get("y2", img_h)]
+            for ln in ocr_lines
+        ]
+        attn = self.forward(texts, bboxes, img_w, img_h, vision_feats)  # (4, N)
+
+        used: set[int] = set()
+        for fi, field in enumerate(self.FIELDS):
+            scores = attn[fi].clone()
+            for u in used:
+                scores[u] = -1.0  # mask already-claimed lines
+
+            if field == "address":
+                k = min(2, len(ocr_lines) - len(used))
+                if k <= 0:
+                    continue
+                top_idxs = scores.topk(k).indices.tolist()
+                parts = [ocr_lines[i].get("text", "").strip() for i in sorted(top_idxs)]
+                result[field] = " ".join(p for p in parts if p)
+                used.update(top_idxs)
+            else:
+                idx = int(scores.argmax().item())
+                result[field] = ocr_lines[idx].get("text", "").strip()
+                used.add(idx)
+
+        return result
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Field Assigner — Training + Persistence
+# ════════════════════════════════════════════════════════════════════════════
+
+
+def _get_field_assigner_path() -> Path:
+    """Return the canonical checkpoint path for the FieldAttentionAssigner."""
+    return WORKSPACE / "models" / FieldAttentionAssigner.CHECKPOINT_NAME
+
+
+def _match_ocr_to_gt(
+    ocr_texts: list[str],
+    gt: dict[str, str],
+    ned_threshold: float = 0.45,
+) -> dict[str, int]:
+    """Weakly match OCR line texts to GT field values via NED.
+
+    Returns {field: best_ocr_line_index} for fields where a match was found
+    (NED < ned_threshold).  Fields with no close match are excluded.
+    """
+    field_to_idx: dict[str, int] = {}
+    field_to_ned: dict[str, float] = {}
+    for field in FieldAttentionAssigner.FIELDS:
+        gt_val = gt.get(field, "").strip()
+        if not gt_val:
+            continue
+        best_ned, best_idx = 1.0, -1
+        for li, ocr_text in enumerate(ocr_texts):
+            d = _ned(ocr_text, gt_val)
+            if d < best_ned:
+                best_ned, best_idx = d, li
+        if best_ned < ned_threshold and best_idx >= 0:
+            # Resolve collision: if two fields matched the same line, keep the
+            # one with the lower NED score.
+            existing_field = next((f for f, i in field_to_idx.items() if i == best_idx), None)
+            if existing_field is None or best_ned < field_to_ned[existing_field]:
+                if existing_field is not None:
+                    del field_to_idx[existing_field]
+                    del field_to_ned[existing_field]
+                field_to_idx[field] = best_idx
+                field_to_ned[field] = best_ned
+    return field_to_idx
+
+
+def train_field_assigner(
+    sroie_dir: Path,
+    yolo_model,
+    trocr_model,
+    trocr_processor: "TrOCRProcessor",
+    epochs: int = 30,
+    lr: float = 3e-4,
+    ned_threshold: float = 0.45,
+    device: str = DEVICE,
+    backend: str | None = None,
+    consistency_lambda: float = 0.05,
+) -> "FieldAttentionAssigner":
+    """Train a FieldAttentionAssigner on SROIE training data.
+
+    Pipeline
+    --------
+    1. For each training image, run YOLO+TrOCR to build a cached corpus.
+    2. Weakly label each OCR line to the GT field with lowest NED.
+    3. Train with cross-entropy over which line to select per field.
+    4. Backend "lm+vision" additionally:
+       - Caches TrOCR encoder features (vision feats) per crop.
+       - Adds a consistency regulariser (λ=consistency_lambda): penalises
+         attention weight on lines that don't match the field's expected
+         regex pattern (e.g. a non-date line selected for the 'date' field).
+
+    Parameters
+    ----------
+    sroie_dir          : path containing img/ and key/ subdirectories.
+    yolo_model         : loaded YOLOv8 model.
+    trocr_model        : loaded TrOCR VisionEncoderDecoderModel.
+    trocr_processor    : loaded TrOCRProcessor.
+    epochs             : training epochs.
+    lr                 : AdamW learning rate.
+    ned_threshold      : maximum NED to accept an OCR line as the GT match.
+    device             : torch device string.
+    backend            : override FIELD_ASSIGNER_BACKEND for this run.
+    consistency_lambda : weight for the Backend-3 consistency regulariser.
+                         0.0 disables it; values > 0.1 may override CE loss.
+
+    Returns
+    -------
+    Trained FieldAttentionAssigner saved to _get_field_assigner_path().
+    """
+    effective_backend = (backend or FIELD_ASSIGNER_BACKEND).lower()
+    assigner = FieldAttentionAssigner(backend=effective_backend).to(device)
+    use_vision = effective_backend == "lm+vision" and assigner._use_lm
+    use_consistency = use_vision and consistency_lambda > 0.0
+
+    optimizer = torch.optim.AdamW(assigner.parameters(), lr=lr, weight_decay=0.01)
+    ce_loss = torch.nn.CrossEntropyLoss()
+
+    img_dir = sroie_dir / "img"
+    key_dir = sroie_dir / "key"
+    if not img_dir.exists():
+        print("[FieldAssigner] img/ not found — skipping training.")
+        return assigner
+
+    image_paths = sorted(img_dir.glob("*.jpg")) + sorted(img_dir.glob("*.png"))
+    if not image_paths:
+        print("[FieldAssigner] No training images found — skipping training.")
+        return assigner
+
+    # ── Build corpus (run YOLO+TrOCR once; cache for all epochs) ─────────
+    print(
+        f"[FieldAssigner] Building corpus from {len(image_paths)} images "
+        f"(backend={effective_backend})…"
+    )
+    # Each entry: (ocr_lines, gt, img_w, img_h, vision_feats_or_None)
+    corpus: list[tuple] = []
+    for img_path in image_paths:
+        key_path = key_dir / (img_path.stem + ".txt")
+        if not key_path.exists():
+            key_path = key_dir / (img_path.stem + ".json")
+        if not key_path.exists():
+            continue
+        try:
+            gt = json.loads(key_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            continue
+        gt = {k.lower(): str(v).strip() for k, v in gt.items()}
+
+        try:
+            ocr_lines, vis_feats = _extract_ocr_lines(
+                img_path,
+                yolo_model,
+                trocr_model,
+                trocr_processor,
+                device,
+                return_vision_feats=use_vision,
+            )
+        except Exception:
+            continue
+        if not ocr_lines:
+            continue
+
+        img = _load_image(img_path)
+        img_w = float(img.size[0]) if _PIL_AVAILABLE else float(img.shape[1])  # type: ignore[union-attr]
+        img_h = float(img.size[1]) if _PIL_AVAILABLE else float(img.shape[0])  # type: ignore[union-attr]
+        corpus.append((ocr_lines, gt, img_w, img_h, vis_feats))
+
+    if not corpus:
+        print("[FieldAssigner] Corpus is empty — skipping training.")
+        return assigner
+
+    print(f"[FieldAssigner] Training {len(corpus)} samples × {epochs} epochs…")
+    assigner.train()
+    for epoch in range(epochs):
+        total_loss = 0.0
+        n_examples = 0
+        for ocr_lines, gt, img_w, img_h, vis_feats in corpus:
+            texts = [_correct_ocr_chars(ln.get("text", "")) for ln in ocr_lines]
+            bboxes = [
+                [ln.get("x", 0.0), ln.get("y", 0.0), ln.get("x2", img_w), ln.get("y2", img_h)]
+                for ln in ocr_lines
+            ]
+            field_to_idx = _match_ocr_to_gt(texts, gt, ned_threshold)
+            if not field_to_idx:
+                continue
+
+            attn = assigner.forward(texts, bboxes, img_w, img_h, vis_feats)  # (4, N)
+
+            # ── Primary loss: cross-entropy over line selection ──────────
+            loss = torch.tensor(0.0, device=device, requires_grad=True)
+            for fi, field in enumerate(FieldAttentionAssigner.FIELDS):
+                if field not in field_to_idx:
+                    continue
+                target = torch.tensor([field_to_idx[field]], dtype=torch.long, device=device)
+                loss = loss + ce_loss(attn[fi].unsqueeze(0), target)
+                n_examples += 1
+
+            # ── Backend-3 consistency regulariser ───────────────────────
+            # Penalise attending to lines that don't match the field's
+            # expected pattern (e.g. a non-date line for the 'date' field).
+            # Loss = λ × sum_f sum_i( p(i|f) × (1 − plausibility(f, line_i)) )
+            if use_consistency:
+                cons = torch.tensor(0.0, device=device, requires_grad=True)
+                for fi, field in enumerate(FieldAttentionAssigner.FIELDS):
+                    validator = _FIELD_PLAUSIBILITY[field]
+                    plaus = torch.tensor(
+                        [float(validator(t)) for t in texts],  # type: ignore[operator]
+                        dtype=torch.float32,
+                        device=device,
+                    )
+                    probs = attn[fi].softmax(-1)
+                    cons = cons + (probs * (1.0 - plaus)).sum()
+                loss = loss + consistency_lambda * cons
+
+            if n_examples == 0:
+                continue
+
+            optimizer.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(assigner.parameters(), 1.0)
+            optimizer.step()
+            total_loss += loss.item()
+
+        if (epoch + 1) % 5 == 0 or epoch == 0:
+            avg = total_loss / max(n_examples, 1)
+            print(f"[FieldAssigner] Epoch {epoch + 1}/{epochs} — loss={avg:.4f}")
+
+    # ── Save checkpoint ──────────────────────────────────────────────────
+    ckpt_path = _get_field_assigner_path()
+    ckpt_path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(
+        {
+            "state_dict": assigner.state_dict(),
+            "d_model": assigner.d_model,
+            "max_text_len": assigner.max_text_len,
+            "backend": effective_backend,
+            "fuse_in": assigner._fuse_in,
+        },
+        ckpt_path,
+    )
+    print(f"[FieldAssigner] Saved → {ckpt_path}  (backend={effective_backend})")
+    return assigner
+
+
+def load_field_assigner(device: str = DEVICE) -> "FieldAttentionAssigner | None":
+    """Load a trained FieldAttentionAssigner from disk.
+
+    The backend is restored from the checkpoint so the loaded model always
+    matches the architecture it was trained with.  Returns None if no
+    checkpoint exists, so callers fall back to _assign_fields_heuristic().
+    """
+    ckpt_path = _get_field_assigner_path()
+    if not ckpt_path.exists():
+        return None
+    try:
+        ckpt = torch.load(ckpt_path, map_location=device, weights_only=True)
+        assigner = FieldAttentionAssigner(
+            d_model=ckpt.get("d_model", 128),
+            max_text_len=ckpt.get("max_text_len", 64),
+            backend=ckpt.get("backend", FIELD_ASSIGNER_BACKEND),
+        ).to(device)
+        assigner.load_state_dict(ckpt["state_dict"])
+        assigner.eval()
+        return assigner
+    except Exception as exc:
+        print(f"[FieldAssigner] Could not load checkpoint ({exc}); falling back to heuristic.")
+        return None
+
+
+def _extract_ocr_lines(
     image_path: Path,
     yolo_model,
     trocr_model,
-    trocr_processor: TrOCRProcessor,
-) -> dict[str, str]:
-    """Run the full TrOCR+YOLO pipeline on a single image.
+    trocr_processor: "TrOCRProcessor",
+    device: str = DEVICE,
+    return_vision_feats: bool = False,
+) -> "tuple[list[dict], list[torch.Tensor] | None]":
+    """Run YOLO detection + TrOCR reading on one image.
 
-    1. YOLO detects text regions
-    2. TrOCR reads text from each crop
-    3. Heuristic assigns fields
-
-    Returns a dict with SROIE field predictions.
+    Returns
+    -------
+    ocr_lines       : list of dicts with 'text', 'x', 'y', 'x2', 'y2', 'conf'.
+    vision_feats    : list of (768,) tensors — TrOCR encoder mean-pool per crop —
+                      when return_vision_feats=True; otherwise None.
+                      Used by Backend 3 to bypass OCR decoding errors on
+                      blurry crops by passing raw pixel features to the assigner.
     """
     img = _load_image(image_path)
-    W, H = img.size if _PIL_AVAILABLE else (img.shape[1], img.shape[0])  # type: ignore[union-attr]
+    W = float(img.size[0]) if _PIL_AVAILABLE else float(img.shape[1])  # type: ignore[union-attr]
+    H = float(img.size[1]) if _PIL_AVAILABLE else float(img.shape[0])  # type: ignore[union-attr]
 
-    # Stage 1: YOLO detection
     yolo_results = yolo_model(img, verbose=False)
-    ocr_lines = []
+    ocr_lines: list[dict] = []
+    vision_feats: list[torch.Tensor] = []
 
     if yolo_results and len(yolo_results[0].boxes) > 0:
         boxes = yolo_results[0].boxes
         for box in boxes:
             x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
-            # Add padding
             pad = 4
             x1 = max(0, int(x1) - pad)
             y1 = max(0, int(y1) - pad)
             x2 = min(W, int(x2) + pad)
             y2 = min(H, int(y2) + pad)
-
             if x2 - x1 < 5 or y2 - y1 < 5:
                 continue
 
-            # Stage 2: TrOCR OCR on crop
             if _PIL_AVAILABLE:
                 crop = img.crop((x1, y1, x2, y2))  # type: ignore[union-attr]
             else:
                 import numpy as _np_crop  # noqa: PLC0415
 
-                crop = _np_crop.ascontiguousarray(img[y1:y2, x1:x2])  # type: ignore[index]
-            pixel_values = trocr_processor(crop, return_tensors="pt").pixel_values.to(DEVICE)
+                crop = _np_crop.ascontiguousarray(img[int(y1) : int(y2), int(x1) : int(x2)])  # type: ignore[index]
+            pixel_values = trocr_processor(crop, return_tensors="pt").pixel_values.to(device)
 
             with torch.no_grad():
                 generated_ids = trocr_model.generate(
@@ -1511,8 +2172,16 @@ def run_trocr_yolo_inference(
                     length_penalty=1.0,
                     no_repeat_ngram_size=0,
                 )
-            text = trocr_processor.batch_decode(generated_ids, skip_special_tokens=True)[0].strip()
+                # Backend 3: extract encoder mean-pool alongside generation.
+                # The encoder is run again (extra forward pass) so that
+                # features are available even when generate() doesn't expose
+                # them.  Adds ~10% inference time for "lm+vision".
+                if return_vision_feats:
+                    enc_out = trocr_model.encoder(pixel_values)
+                    feat = enc_out.last_hidden_state.mean(dim=1).squeeze(0).cpu()
+                    vision_feats.append(feat)
 
+            text = trocr_processor.batch_decode(generated_ids, skip_special_tokens=True)[0].strip()
             if text:
                 ocr_lines.append(
                     {
@@ -1524,8 +2193,54 @@ def run_trocr_yolo_inference(
                         "conf": float(box.conf[0]) if hasattr(box, "conf") else 1.0,
                     }
                 )
+            elif return_vision_feats and vision_feats:
+                # No text decoded — drop the corresponding vision feat so
+                # the two lists stay aligned.
+                vision_feats.pop()
 
-    # Stage 3: Heuristic field assignment
+    return ocr_lines, (vision_feats if return_vision_feats else None)
+
+
+def run_trocr_yolo_inference(
+    image_path: Path,
+    yolo_model,
+    trocr_model,
+    trocr_processor: TrOCRProcessor,
+    field_assigner: "FieldAttentionAssigner | None" = None,
+) -> dict[str, str]:
+    """Run the full TrOCR+YOLO pipeline on a single image.
+
+    1. YOLO detects text regions
+    2. TrOCR reads text from each crop
+    3. Field assignment: FieldAttentionAssigner (if provided and trained),
+       otherwise _assign_fields_heuristic() as fallback.
+
+    Returns a dict with SROIE field predictions.
+    """
+    # Stages 1+2: YOLO detection + TrOCR OCR
+    # Backend 3 ("lm+vision") also extracts encoder features per crop so the
+    # assigner can read blurry text from pixel features when decoded text is
+    # unreliable.  Other backends skip the extra encoder pass (faster).
+    need_vision = (
+        field_assigner is not None
+        and getattr(field_assigner, "backend", "") == "lm+vision"
+        and getattr(field_assigner, "_use_lm", False)
+    )
+    ocr_lines, vision_feats = _extract_ocr_lines(
+        image_path,
+        yolo_model,
+        trocr_model,
+        trocr_processor,
+        return_vision_feats=need_vision,
+    )
+
+    # Stage 3: field assignment
+    if field_assigner is not None:
+        img = _load_image(image_path)
+        img_w = float(img.size[0]) if _PIL_AVAILABLE else float(img.shape[1])  # type: ignore[union-attr]
+        img_h = float(img.size[1]) if _PIL_AVAILABLE else float(img.shape[0])  # type: ignore[union-attr]
+        return field_assigner.assign(ocr_lines, img_w=img_w, img_h=img_h, vision_feats=vision_feats)
+
     return _assign_fields_heuristic(ocr_lines)
 
 

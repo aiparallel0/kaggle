@@ -2311,8 +2311,254 @@ def stage_trocr_experiments(args) -> StageResult:
 
 
 # ---------------------------------------------------------------------------
-# Stage 5 — Head-to-head benchmark (DONUT vs YOLOv8+TrOCR+Regex)
+# TrOCR all-backends helpers
 # ---------------------------------------------------------------------------
+
+
+def _evaluate_field_assigner(
+    test_samples: list,
+    yolo_model,
+    trocr_model,
+    trocr_processor,
+    assigner,
+    logger: "logging.Logger",
+) -> dict:
+    """Run inference on every test sample with the given assigner and return F1 metrics.
+
+    Mirrors the scoring logic in run_experiments.py: exact string match
+    (case-insensitive, stripped) per field, aggregated into global F1.
+    """
+    import train_trocr_yolo as _tty  # noqa: I001
+
+    from constants import FIELDS
+
+    tp = fp = fn = 0
+    per_tp = {f: 0 for f in FIELDS}
+    per_fp = {f: 0 for f in FIELDS}
+    per_fn = {f: 0 for f in FIELDS}
+
+    for img_path, gt in test_samples:
+        try:
+            pred = _tty.run_trocr_yolo_inference(
+                Path(img_path),
+                yolo_model,
+                trocr_model,
+                trocr_processor,
+                field_assigner=assigner,
+            )
+        except Exception as _exc:
+            logger.debug("Inference failed for %s: %s", img_path, _exc)
+            pred = {f: "" for f in FIELDS}
+
+        for fname in FIELDS:
+            gt_val = gt.get(fname, "").strip().lower()
+            pred_val = pred.get(fname, "").strip().lower()
+            if gt_val and pred_val == gt_val:
+                tp += 1
+                per_tp[fname] += 1
+            elif gt_val:
+                fn += 1
+                per_fn[fname] += 1
+            if pred_val and pred_val != gt_val:
+                fp += 1
+                per_fp[fname] += 1
+
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+
+    metrics: dict = {
+        "global_f1": round(f1, 4),
+        "global_precision": round(precision, 4),
+        "global_recall": round(recall, 4),
+    }
+    for fname in FIELDS:
+        ftp, ffp, ffn = per_tp[fname], per_fp[fname], per_fn[fname]
+        fp_ = ftp / (ftp + ffp) if (ftp + ffp) > 0 else 0.0
+        fr_ = ftp / (ftp + ffn) if (ftp + ffn) > 0 else 0.0
+        metrics[f"{fname}_f1"] = round(2 * fp_ * fr_ / (fp_ + fr_) if (fp_ + fr_) > 0 else 0.0, 4)
+    return metrics
+
+
+def _print_backend_comparison(all_results: dict, logger: "logging.Logger") -> None:
+    """Log a summary table comparing all backend F1 scores."""
+    header = f"{'Backend':<20} {'Global F1':>10} {'Company':>10} {'Date':>10} {'Address':>10} {'Total':>10}"
+    sep = "-" * len(header)
+    logger.info("\n%s\n%s\n%s", sep, header, sep)
+    for backend, data in all_results.items():
+        m = data.get("metrics", {})
+        logger.info(
+            "%-20s %10.4f %10.4f %10.4f %10.4f %10.4f",
+            backend,
+            m.get("global_f1", 0.0),
+            m.get("company_f1", 0.0),
+            m.get("date_f1", 0.0),
+            m.get("address_f1", 0.0),
+            m.get("total_f1", 0.0),
+        )
+    logger.info("%s", sep)
+
+
+# ---------------------------------------------------------------------------
+# Stage 4-ALL — Comprehensive TrOCR+YOLO with all three field-assigner backends
+# ---------------------------------------------------------------------------
+
+
+def stage_trocr_all_backends(args) -> StageResult:
+    """Train TrOCR+YOLO once, then train and evaluate all three FieldAttentionAssigner backends.
+
+    Execution order
+    ---------------
+    1. YOLO text-region detector training (cached if already done).
+    2. TrOCR OCR model training (cached if already done).
+    3. Regex heuristic evaluation — the original rule-based baseline, free.
+    4. Backend "char"       (~532 K params) — char embeddings, no pretrained weights.
+    5. Backend "lm"         (~4.9 M params) — frozen BERT-tiny text encoder.
+    6. Backend "lm+vision"  (~5.1 M params) — LM + TrOCR vision features + consistency loss.
+
+    Each backend is trained on the 500-sample SROIE training split using weak NED
+    labels, then evaluated on the 63-image SROIE test set.  Results for all four
+    configurations are written to results/trocr_all_backends.json and a comparison
+    table is printed to the log.
+    """
+    _banner("STAGE 4-ALL — TrOCR comprehensive (all backends)")
+    _log = logging.getLogger(__name__)
+    warnings: list[str] = []
+    all_results: dict = {}
+
+    try:
+        import train_trocr_yolo as trocr_yolo  # noqa: I001
+        import run_experiments as eval_mod  # noqa: I001
+
+        workspace = Path(args.workspace)
+        sroie_dir = Path(args.sroie_dir)
+        yolo_weights = workspace / "models" / "yolo_finetuned" / "run" / "weights" / "best.pt"
+        trocr_best = workspace / "models" / "trocr_finetuned" / "best"
+
+        # ── Step 1/6: YOLO + TrOCR training (reuses caching logic) ──────────
+        _log.info("[1/6] YOLO + TrOCR base training…")
+        base = stage_trocr_experiments(args)
+        if base.exit_status > 1:
+            return StageResult(
+                name="TrOCR All Backends",
+                duration=0.0,
+                exit_status=base.exit_status,
+                warnings=warnings,
+            )
+
+        # ── Step 2/6: Record regex baseline from existing results ────────────
+        regex_path = Path("results") / "trocr_yolo_results.json"
+        if regex_path.exists():
+            with open(regex_path) as _fh:
+                _rx = json.load(_fh)
+            _first = next(iter(_rx.values()), {})
+            all_results["regex"] = {
+                "backend": "regex (heuristic baseline)",
+                "description": "Rule-based field assignment, no trainable parameters",
+                "params": 0,
+                "metrics": _first.get("metrics", {}),
+            }
+            _log.info(
+                "[2/6] Regex baseline F1 = %.4f",
+                all_results["regex"]["metrics"].get("global_f1", 0.0),
+            )
+        else:
+            _log.warning("[2/6] trocr_yolo_results.json not found — regex baseline skipped.")
+
+        if not yolo_weights.exists() or not trocr_best.exists():
+            w = "YOLO or TrOCR weights missing — cannot train field assigners."
+            _log.warning("%s", w)
+            warnings.append(w)
+            return StageResult(
+                name="TrOCR All Backends", duration=0.0, exit_status=1, warnings=warnings
+            )
+
+        # ── Step 3/6: Load YOLO + TrOCR for inference ───────────────────────
+        _log.info("[3/6] Loading YOLO and TrOCR for field-assigner training…")
+        _gpu_cleanup()
+        yolo_model = trocr_yolo._YOLO_CLS(str(yolo_weights))
+        trocr_processor = trocr_yolo.TrOCRProcessor.from_pretrained(str(trocr_best))
+        trocr_model = trocr_yolo.VisionEncoderDecoderModel.from_pretrained(str(trocr_best))
+        trocr_model = trocr_model.to(trocr_yolo.DEVICE)
+        trocr_model.eval()
+
+        test_samples = eval_mod.load_test_samples()
+        if not test_samples:
+            w = "No test samples found — skipping backend evaluation."
+            _log.warning("%s", w)
+            warnings.append(w)
+
+        # ── Steps 4–6: Train and evaluate each field-assigner backend ────────
+        _FA_BACKENDS = [
+            ("char", "~532 K params — char embeddings, no pretrained weights"),
+            ("lm", "~4.9 M params — frozen BERT-tiny text encoder"),
+            ("lm+vision", "~5.1 M params — LM + TrOCR vision features + consistency loss"),
+        ]
+
+        for step, (backend, description) in enumerate(_FA_BACKENDS, 4):
+            _log.info("[%d/6] Training FieldAttentionAssigner backend='%s'…", step, backend)
+            _gpu_cleanup()
+            try:
+                assigner = trocr_yolo.train_field_assigner(
+                    sroie_dir=sroie_dir,
+                    yolo_model=yolo_model,
+                    trocr_model=trocr_model,
+                    trocr_processor=trocr_processor,
+                    backend=backend,
+                    device=trocr_yolo.DEVICE,
+                )
+
+                if test_samples:
+                    _log.info("  Evaluating on %d test images…", len(test_samples))
+                    metrics = _evaluate_field_assigner(
+                        test_samples,
+                        yolo_model,
+                        trocr_model,
+                        trocr_processor,
+                        assigner,
+                        _log,
+                    )
+                    eval_mod.print_metrics(f"TrOCR+YOLO ({backend})", metrics)
+                else:
+                    metrics = {}
+
+                all_results[backend] = {
+                    "backend": backend,
+                    "description": description,
+                    "metrics": metrics,
+                }
+
+            except Exception as _exc:
+                import traceback as _tb
+
+                _tb.print_exc()
+                w = f"Backend '{backend}' failed: {type(_exc).__name__}: {_exc}"
+                _log.warning("%s", w)
+                warnings.append(w)
+
+        # ── Save all-backend results ──────────────────────────────────────────
+        results_dir = Path("results")
+        results_dir.mkdir(exist_ok=True)
+        out_path = results_dir / "trocr_all_backends.json"
+        with open(out_path, "w") as _fh:
+            json.dump(all_results, _fh, indent=2)
+        _log.info("All-backend results → %s", out_path)
+
+        _print_backend_comparison(all_results, _log)
+        _gpu_cleanup()
+
+    except Exception as exc:
+        import traceback
+
+        traceback.print_exc()
+        w = f"TrOCR all-backends stage failed: {type(exc).__name__}: {exc}"
+        _log.warning("%s", w)
+        warnings.append(w)
+        return StageResult(
+            name="TrOCR All Backends", duration=0.0, exit_status=1, warnings=warnings
+        )
+
+    return StageResult(name="TrOCR All Backends", duration=0.0, exit_status=0, warnings=warnings)
 
 
 def stage_benchmark(args) -> StageResult:
@@ -2835,6 +3081,20 @@ class PipelineOrchestrator:
                 print(repr(self))
             return exit_code
 
+        # --trocr-only: install SROIE data, prepare TrOCR dataset, then run the
+        # comprehensive all-backends stage (YOLO+TrOCR+regex+char+lm+lm+vision).
+        # Skips dataset download, pretrained baseline, and all DONUT experiments.
+        if getattr(self.args, "trocr_only", False):
+            if not self.args.skip_install:
+                self._run_stage("SROIE Install", stage_install)
+            self._run_stage("TrOCR Data Prep", stage_trocr_data_prep)
+            r = self._run_stage("TrOCR All Backends", stage_trocr_all_backends)
+            if r.exit_status > exit_code:
+                exit_code = r.exit_status
+            self._run_stage("Paper Generation", stage_paper)
+            self._run_stage("Results Push", stage_push_results)
+            return exit_code
+
         # --yolo: jump straight to TrOCR+YOLO stages, skipping install,
         # download, pretrained baseline, and all DONUT experiments.
         yolo_only = getattr(self.args, "yolo", False)
@@ -2995,7 +3255,12 @@ def _quick_mode_handler(args, logger: logging.Logger) -> int:
             return 2
 
         # Stage 3-4: TrOCR+YOLO
-        if not args.skip_trocr:
+        if getattr(args, "trocr_only", False):
+            logger.info("[Stage 3-4] TrOCR all-backends (trocr-only mode)...")
+            result_trocr = stage_trocr_data_prep(args)
+            if result_trocr.exit_status <= 1:
+                stage_trocr_all_backends(args)
+        elif not args.skip_trocr:
             logger.info("[Stage 3-4] TrOCR+YOLO training...")
             result_trocr = stage_trocr_data_prep(args)
             if result_trocr.exit_status <= 1:
@@ -3539,6 +3804,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--skip-trocr",
         action="store_true",
         help="Skip TrOCR+YOLO stages (data prep, training, evaluation)",
+    )
+    p.add_argument(
+        "--trocr-only",
+        action="store_true",
+        help=(
+            "Comprehensive TrOCR-only mode: train YOLO+TrOCR once, then train and "
+            "evaluate all three FieldAttentionAssigner backends "
+            "(char / lm / lm+vision) plus the regex heuristic baseline. "
+            "Skips all DONUT experiments. "
+            "Results saved to results/trocr_all_backends.json."
+        ),
     )
     p.add_argument(
         "--skip-flash-attn",
