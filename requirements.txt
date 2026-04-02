@@ -3,6 +3,9 @@ transformers>=4.37.0
 pyyaml>=6.0
 accelerate
 ruff>=0.4.0
+protobuf>=3.20.0
+sentencepiece
+datasets>=2.0.0
 
 # --- Optional: uncomment if needed ---
 
@@ -39,7 +42,7 @@ ruff>=0.4.0
 # protobuf      → transitive dep of transformers (always installed)
 # datasets      → 100% replaced with inline _hf_download_dataset_inline() in data_pipeline.py
 #                 (urllib-only HTTP downloader + JSONL cache; no Arrow dependency)
-ultralytics   → 100% replaced with inline _YOLO_CLS in train_trocr_yolo.py
+# ultralytics   → 100% replaced with inline _YOLO_CLS in train_trocr_yolo.py
 #                 (proxy L2 loss fallback: trains backbone away from random init but does NOT
 #                  produce a calibrated detector — install ultralytics for real detection quality)
 # matplotlib    → 100% replaced with inline SVG generators in reporting.py

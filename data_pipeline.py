@@ -72,6 +72,7 @@ __all__ = [
     "load_funsd",
     "load_invoices_donut",
     "get_combined_dataset",
+    "get_dataset_loader",
     "split_dataset",
     # from preprocess_seller_split
     "build_cache",
@@ -1984,6 +1985,25 @@ _LOADERS = {
     "invoices_donut": load_invoices_donut,
     "cord_v2": load_cord_v2,
 }
+
+
+def get_dataset_loader(name: str):
+    """Return the load function for *name*, or ``None`` if not registered.
+
+    This is the public API for looking up a dataset loader by name.
+    Prefer this over accessing the private ``_LOADERS`` dict directly.
+
+    Parameters
+    ----------
+    name : str
+        One of: ``"sroie"``, ``"wildreceipt"``, ``"funsd"``,
+        ``"invoices_donut"``, ``"cord_v2"``.
+
+    Returns
+    -------
+    callable or None
+    """
+    return _LOADERS.get(name)
 
 
 def split_dataset(

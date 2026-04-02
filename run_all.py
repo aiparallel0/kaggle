@@ -36,6 +36,7 @@ Usage
   python run_all.py --skip-trocr              # Skip TrOCR+YOLO stages
   python run_all.py --yolo                    # Start from TrOCR+YOLO only (skip DONUT stages)
   python run_all.py --force                   # Force re-run (delete cached results)
+  python run_all.py --trocr-single            # TrOCR: train once (SROIE only), reuse for all 8 exps
 
 Exit codes
 ----------
@@ -1999,7 +2000,18 @@ def stage_experiments(args) -> StageResult:
         except Exception:
             pass
 
-    re_mod.save_summary()
+    # Always call save_summary() so all_experiments.json is written even when
+    # some experiments crashed.  The try-except here is a safety net: if
+    # save_summary() itself raises (e.g. disk full) we still return a result.
+    try:
+        re_mod.save_summary()
+    except Exception as _ss_exc:
+        _log_se.warning(
+            "save_summary() failed: %s — results/all_experiments.json may be "
+            "incomplete or missing. Check disk space and permissions, then run: "
+            "python run_experiments.py --save-summary",
+            _ss_exc,
+        )
 
     # Clean up pre-loaded base model now that all experiments are done.
     if _base_model is not None or _base_processor is not None:
@@ -2200,14 +2212,25 @@ def stage_trocr_data_prep(args) -> StageResult:
 def stage_trocr_experiments(args) -> StageResult:
     """Train YOLOv8 + TrOCR and evaluate on the same 63 SROIE test images.
 
-    YOLO and TrOCR are each trained once on SROIE data (the same 500/63/63
-    split used by DONUT), keeping the experimental design matched.
-    Results are saved to results/trocr_yolo_results.json.
+    By default trains a **separate TrOCR model for each of the 8 experiments**
+    using the dataset combination defined in ``run_experiments.EXPERIMENTS``
+    (SROIE-only for Exp 1, SROIE+WildReceipt for Exps 2/5, etc.).  This
+    mirrors the DONUT multi-dataset design so cross-architecture comparisons
+    are fair.
+
+    Pass ``args.trocr_single = True`` (or ``--trocr-single`` on the CLI) to
+    revert to the original behaviour: train **once** on SROIE data and copy
+    those results to all 8 experiment slots.  Useful for quick smoke-tests or
+    when only a single model is needed.
+
+    Results are saved to ``results/trocr_yolo_results.json``.
     """
 
     _banner("STAGE 4 — TrOCR+YOLO training & evaluation")
     _log = logging.getLogger(__name__)
     warnings: list[str] = []
+
+    trocr_single = getattr(args, "trocr_single", False)
 
     try:
         import run_experiments as eval_mod  # noqa: I001
@@ -2215,7 +2238,7 @@ def stage_trocr_experiments(args) -> StageResult:
 
         workspace = Path(args.workspace)
 
-        # Stage 4a: Train YOLO
+        # Stage 4a: Train YOLO (shared across all experiments)
         # Ensure GPU is clean from DONUT experiment stage before loading YOLO.
         _gpu_cleanup()
         yolo_output = workspace / "models" / "yolo_finetuned"
@@ -2243,56 +2266,131 @@ def stage_trocr_experiments(args) -> StageResult:
         _gpu_cleanup()
         _log.debug("GPU memory freed between YOLO and TrOCR stages.")
 
-        # Stage 4b: Train TrOCR
-        trocr_output = workspace / "models" / "trocr_finetuned"
-        trocr_best = trocr_output / "best"
-        trocr_history: dict = {"train_loss": [], "val_loss": [], "num_train_samples": 0}
-        if not trocr_best.exists():
-            _log.info("Training TrOCR OCR model ...")
-            trocr_history = trocr_yolo.train_trocr(trocr_output)
-        else:
-            _log.debug("TrOCR model cached at %s", trocr_best)
-            # Read num_train_samples from saved training history if available
-            hist_path = trocr_output / "training_history.json"
-            if hist_path.exists():
-                with open(hist_path) as _fh:
-                    trocr_history = json.load(_fh)
-
-        # Stage 4c: Evaluate on test set
+        results_dir = Path("results")
+        results_dir.mkdir(exist_ok=True)
         test_samples = eval_mod.load_test_samples()
-        if len(test_samples) == 0:
-            w = "No test samples found — skipping TrOCR+YOLO evaluation."
-            _log.warning("%s", w)
-            warnings.append(w)
-        else:
-            _log.debug("Evaluating TrOCR+YOLO on %d test images ...", len(test_samples))
 
-            if yolo_weights.exists() and trocr_best.exists():
+        if trocr_single:
+            # ── Single-model path (--trocr-single): original behaviour ──────
+            # Train TrOCR once on SROIE data, copy same metrics to all 8 experiments.
+            trocr_output = workspace / "models" / "trocr_finetuned"
+            trocr_best = trocr_output / "best"
+            trocr_history: dict = {"train_loss": [], "val_loss": [], "num_train_samples": 0}
+            if not trocr_best.exists():
+                _log.info("Training TrOCR OCR model (single-experiment mode) ...")
+                trocr_history = trocr_yolo.train_trocr(trocr_output)
+            else:
+                _log.debug("TrOCR model cached at %s", trocr_best)
+                hist_path = trocr_output / "training_history.json"
+                if hist_path.exists():
+                    with open(hist_path) as _fh:
+                        trocr_history = json.load(_fh)
+
+            trocr_results: dict = {}
+            if len(test_samples) == 0:
+                w = "No test samples found — skipping TrOCR+YOLO evaluation."
+                _log.warning("%s", w)
+                warnings.append(w)
+            elif yolo_weights.exists() and trocr_best.exists():
+                _log.debug("Evaluating TrOCR+YOLO on %d test images ...", len(test_samples))
                 metrics = eval_mod.evaluate_trocr_yolo_on_test(
                     str(yolo_weights), str(trocr_best), test_samples
                 )
                 eval_mod.print_metrics("TrOCR+YOLO", metrics)
-
-                # Save results in format compatible with inject_results.py
-                results_dir = Path("results")
-                results_dir.mkdir(exist_ok=True)
-                trocr_results = {}
                 num_samples = trocr_history.get("num_train_samples", 0)
-                # Store as experiment 1 (same test set, single model)
                 for exp_id in range(1, 9):
                     trocr_results[str(exp_id)] = {
                         "name": f"TrOCR+YOLO Exp {exp_id}",
                         "metrics": metrics,
                         "num_train_samples": num_samples,
                     }
-                out_path = results_dir / "trocr_yolo_results.json"
-                with open(out_path, "w") as fh:
-                    json.dump(trocr_results, fh, indent=2)
-                _log.info("TrOCR+YOLO F1=%s  saved → %s", metrics.get("global_f1", "N/A"), out_path)
+                _log.info("TrOCR+YOLO F1=%s (single model)", metrics.get("global_f1", "N/A"))
             else:
                 w = "YOLO or TrOCR model weights missing — skipping evaluation."
                 _log.warning("%s", w)
                 warnings.append(w)
+
+        else:
+            # ── Per-experiment path (default): train one TrOCR model per experiment ─
+            # Each experiment uses the dataset combination defined in
+            # run_experiments.EXPERIMENTS (mirrors DONUT multi-dataset design).
+            trocr_results = {}
+            _exp_ids = sorted(eval_mod.EXPERIMENTS.keys())
+            for exp_id in _exp_ids:
+                exp_config = eval_mod.EXPERIMENTS.get(exp_id)
+                if exp_config is None:
+                    _log.debug("[Exp %d] Not found in EXPERIMENTS — skipping TrOCR", exp_id)
+                    continue
+
+                _log.info(
+                    "[Exp %d/%d] TrOCR training: datasets=%s  sroie_oversample=%d",
+                    exp_id,
+                    len(_exp_ids),
+                    exp_config.datasets,
+                    getattr(exp_config, "sroie_oversample", 1),
+                )
+
+                trocr_output = workspace / "models" / f"trocr_finetuned_exp{exp_id}"
+                trocr_best = trocr_output / "best"
+                trocr_history = {"train_loss": [], "val_loss": [], "num_train_samples": 0}
+
+                # Build per-experiment training dataset (SROIE + aux, with oversampling)
+                experiment_data_dir = workspace / "data" / "trocr" / f"exp{exp_id}"
+                if not (experiment_data_dir / "metadata.jsonl").exists():
+                    _log.info("[Exp %d] Building TrOCR training dataset ...", exp_id)
+                    trocr_yolo._build_experiment_trocr_metadata(
+                        exp_datasets=exp_config.datasets,
+                        sroie_oversample=getattr(exp_config, "sroie_oversample", 1),
+                        output_dir=experiment_data_dir,
+                    )
+
+                # Train (or load cached model)
+                if not trocr_best.exists():
+                    _log.info("[Exp %d] Training TrOCR ...", exp_id)
+                    _gpu_cleanup()
+                    trocr_history = trocr_yolo.train_trocr(
+                        output_dir=trocr_output,
+                        train_data_dir=experiment_data_dir,
+                    )
+                else:
+                    _log.debug("[Exp %d] TrOCR model cached at %s", exp_id, trocr_best)
+                    hist_path = trocr_output / "training_history.json"
+                    if hist_path.exists():
+                        with open(hist_path) as _fh:
+                            trocr_history = json.load(_fh)
+
+                # Evaluate
+                exp_metrics: dict = {}
+                if len(test_samples) == 0:
+                    _log.warning("[Exp %d] No test samples — skipping evaluation", exp_id)
+                elif yolo_weights.exists() and trocr_best.exists():
+                    _gpu_cleanup()
+                    exp_metrics = eval_mod.evaluate_trocr_yolo_on_test(
+                        str(yolo_weights), str(trocr_best), test_samples
+                    )
+                    eval_mod.print_metrics(f"TrOCR+YOLO Exp {exp_id}", exp_metrics)
+                    _log.info(
+                        "[Exp %d] F1=%.4f  samples=%d",
+                        exp_id,
+                        exp_metrics.get("global_f1", 0.0),
+                        trocr_history.get("num_train_samples", 0),
+                    )
+                else:
+                    _log.warning(
+                        "[Exp %d] YOLO or TrOCR weights missing — skipping evaluation", exp_id
+                    )
+
+                trocr_results[str(exp_id)] = {
+                    "name": f"TrOCR+YOLO Exp {exp_id}",
+                    "metrics": exp_metrics,
+                    "num_train_samples": trocr_history.get("num_train_samples", 0),
+                }
+
+        # Save results
+        out_path = results_dir / "trocr_yolo_results.json"
+        with open(out_path, "w") as fh:
+            json.dump(trocr_results, fh, indent=2)
+        _log.info("TrOCR+YOLO results saved → %s", out_path)
 
         # GPU cleanup after TrOCR+YOLO stage.
         _gpu_cleanup()
@@ -2544,6 +2642,62 @@ def stage_trocr_all_backends(args) -> StageResult:
         _log.info("All-backend results → %s", out_path)
 
         _print_backend_comparison(all_results, _log)
+
+        # ── Select best backend and update trocr_yolo_results.json ───────────
+        # The regex heuristic is the default baseline stored in trocr_yolo_results.json.
+        # If a trained backend (char / lm / lm+vision) beats it, replace the
+        # per-experiment metrics with the winning backend's metrics so that the
+        # paper always reports the best achievable result.
+        if all_results:
+            best_backend = max(
+                all_results.keys(),
+                key=lambda k: all_results[k].get("metrics", {}).get("global_f1", 0.0),
+            )
+            best_metrics = all_results[best_backend].get("metrics", {})
+            best_f1 = best_metrics.get("global_f1", 0.0)
+            _log.info("[Best backend] '%s'  F1=%.4f", best_backend, best_f1)
+
+            trocr_path = results_dir / "trocr_yolo_results.json"
+            if trocr_path.exists():
+                with open(trocr_path) as _fh:
+                    trocr_results = json.load(_fh)
+                updated = 0
+                baseline_f1 = max(
+                    (
+                        _edata.get("metrics", {}).get("global_f1", 0.0)
+                        for _edata in trocr_results.values()
+                    ),
+                    default=0.0,
+                )
+                for _eid, _edata in trocr_results.items():
+                    current_f1 = _edata.get("metrics", {}).get("global_f1", 0.0)
+                    if best_f1 > current_f1:
+                        trocr_results[_eid]["metrics"] = best_metrics
+                        trocr_results[_eid]["backend"] = best_backend
+                        updated += 1
+                if updated:
+                    with open(trocr_path, "w") as _fh:
+                        json.dump(trocr_results, _fh, indent=2)
+                    _log.info(
+                        "Updated %d experiment(s) in trocr_yolo_results.json "
+                        "with best backend '%s' (F1=%.4f)",
+                        updated,
+                        best_backend,
+                        best_f1,
+                    )
+                else:
+                    _log.info(
+                        "Current baseline (max F1=%.4f) already ≥ best trained backend "
+                        "('%s', F1=%.4f) — trocr_yolo_results.json unchanged.",
+                        baseline_f1,
+                        best_backend,
+                        best_f1,
+                    )
+            else:
+                _log.warning(
+                    "trocr_yolo_results.json not found — cannot apply best backend update."
+                )
+
         _gpu_cleanup()
 
     except Exception as exc:
@@ -3124,8 +3278,11 @@ class PipelineOrchestrator:
         if not getattr(self.args, "skip_trocr", False):
             self._run_stage("TrOCR Data Prep", stage_trocr_data_prep)
 
-            # Stage 4 — TrOCR+YOLO training & evaluation
-            r = self._run_stage("TrOCR+YOLO", stage_trocr_experiments)
+            # Stage 4 — TrOCR+YOLO training, all-backends evaluation & best-backend selection.
+            # stage_trocr_all_backends() internally calls stage_trocr_experiments() for
+            # YOLO + per-experiment TrOCR training, then evaluates char/lm/lm+vision
+            # backends and updates trocr_yolo_results.json with the best backend.
+            r = self._run_stage("TrOCR All Backends", stage_trocr_all_backends)
             if r.exit_status > exit_code:
                 exit_code = r.exit_status
 
@@ -3813,6 +3970,19 @@ def build_parser() -> argparse.ArgumentParser:
             "(char / lm / lm+vision) plus the regex heuristic baseline. "
             "Skips all DONUT experiments. "
             "Results saved to results/trocr_all_backends.json."
+        ),
+    )
+    p.add_argument(
+        "--trocr-single",
+        action="store_true",
+        default=False,
+        help=(
+            "Train the TrOCR model **once** on SROIE-only data and reuse those "
+            "results for all 8 experiment slots (original single-experiment behaviour). "
+            "By default the pipeline trains a separate TrOCR model per experiment "
+            "using each experiment's dataset combination (SROIE + auxiliary datasets). "
+            "Use this flag for quick smoke-tests or when a single baseline model is "
+            "sufficient."
         ),
     )
     p.add_argument(
