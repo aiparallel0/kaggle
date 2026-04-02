@@ -1825,6 +1825,40 @@ except ImportError:
                     unexpected[:5],
                 )
 
+            # Fix: issue_report_summary critical #1 — verify lm_head.weight is present
+            # after load_state_dict(strict=False). The guard above only pre-patches the
+            # state_dict when embed_key is present; if both keys were deduplicated by
+            # safetensors (i.e. embed_key was also absent), lm_head.weight is silently
+            # missing and the model trains with F1 ≈ 0.42 with no error message.
+            _lm_head = getattr(getattr(model, "decoder", None), "lm_head", None)
+            if _lm_head is not None and hasattr(_lm_head, "weight"):
+                _lm_weight = _lm_head.weight
+                if _lm_weight is None or (
+                    hasattr(_lm_weight, "device") and str(_lm_weight.device) == "meta"
+                ):
+                    # Check if tie_word_embeddings is disabled (our pipeline sets it to False).
+                    _dec_cfg = getattr(getattr(model, "decoder", None), "config", None)
+                    if _dec_cfg is not None and not getattr(_dec_cfg, "tie_word_embeddings", True):
+                        raise RuntimeError(
+                            f"CRITICAL: decoder.lm_head.weight is missing from the loaded "
+                            f"checkpoint at {model_path!r}. This is caused by safetensors "
+                            "deduplication dropping lm_head.weight when it shares storage with "
+                            "embed_tokens.weight. Fix: ensure LmHeadCloneCallback is registered "
+                            "during training (calls .data.clone() before every checkpoint save) "
+                            "and that model.decoder.config.tie_word_embeddings=False. "
+                            "See CLAUDE.md §16 Pattern 6."
+                        )
+            # Also verify via missing_keys that lm_head.weight is not in the filtered list
+            if lm_head_key in truly_missing:
+                raise RuntimeError(
+                    f"CRITICAL: {lm_head_key!r} was not loaded from checkpoint at "
+                    f"{model_path!r} (present in missing_keys after load_state_dict). "
+                    "This indicates safetensors deduplicated lm_head.weight along with "
+                    "embed_tokens.weight. Register LmHeadCloneCallback during training to "
+                    "break the shared-storage aliasing before each checkpoint save. "
+                    "See CLAUDE.md §16 Pattern 6."
+                )
+
             return model
 
         @staticmethod
@@ -3670,8 +3704,15 @@ class DonutTrainer:
 
                 _ai_diag = os.environ.get("AI_DIAGNOSE", "0") == "1"
                 _ai_prov = os.environ.get("AI_DIAGNOSE_PROVIDER", "auto")
+                # Fix: issue_report_summary invariant #16 — use None as default, warn if unset.
+                _diag_exp_id = getattr(self.config, "experiment_id", None)
+                if _diag_exp_id is None:
+                    logger.warning(
+                        "[Diagnostics] config.experiment_id is None — diagnostics file will "
+                        "be named 'diagnostics_expNone.json'. Set experiment_id in ExperimentConfig."
+                    )
                 _diag_cb = _DiagCB(
-                    experiment_id=getattr(self.config, "experiment_id", 0),
+                    experiment_id=_diag_exp_id if _diag_exp_id is not None else 0,
                     output_dir=Path(str(getattr(self.config, "output_dir", "results"))),
                     ai_diagnose=_ai_diag,
                     ai_provider=_ai_prov,
@@ -3692,12 +3733,22 @@ class DonutTrainer:
         # Disabled by setting env var DISABLE_LIVE_DASHBOARD=1.
         if os.environ.get("DISABLE_LIVE_DASHBOARD", "0") != "1":
             try:
-                exp_id = getattr(self.config, "experiment_id", 0)
+                # Fix: issue_report_summary invariant #16 — default to None, warn if missing.
+                exp_id = getattr(self.config, "experiment_id", None)
+                if exp_id is None:
+                    logger.warning(
+                        "[LiveDashboard] config.experiment_id is None (not set). "
+                        "CSV will be written to 'convergence_expUNKNOWN.csv' to make "
+                        "the missing ID obvious. Set experiment_id in ExperimentConfig."
+                    )
+                    exp_id_label = "UNKNOWN"
+                else:
+                    exp_id_label = str(exp_id)
                 _out_dir_str = getattr(self.config, "output_dir", "results")
-                _csv_path = Path(str(_out_dir_str)) / f"convergence_exp{exp_id}.csv"
+                _csv_path = Path(str(_out_dir_str)) / f"convergence_exp{exp_id_label}.csv"
                 _live_cb = LiveDashboardCallback(
                     csv_path=_csv_path,
-                    experiment_id=exp_id,
+                    experiment_id=exp_id if exp_id is not None else 0,
                     total_epochs=self.config.max_epochs,
                     total_experiments=getattr(self.config, "total_experiments", 0),
                     dataset_names=getattr(self.config, "datasets", []),
@@ -3736,15 +3787,30 @@ class DonutTrainer:
                 except AttributeError:
                     # Last resort: stub class so isinstance() returns False
                     # for our torch Dataset without raising AttributeError.
+                    # Fix: issue_report_summary medium #12 — log WARNING when stub is active.
                     _hf_ds.Dataset = type("_HFDatasetStub", (), {})
+                    logger.warning(
+                        "datasets.Dataset unavailable (arrow_dataset missing). "
+                        "Injecting stub class — isinstance(x, datasets.Dataset) will always "
+                        "return False. This is expected when the 'datasets' package is absent; "
+                        "no functional impact for our torch.utils.data.Dataset subclass."
+                    )
         except ImportError:
             # datasets not installed at all — inject a stub module so that
             # Seq2SeqTrainer's isinstance check doesn't crash.
+            # Fix: issue_report_summary medium #12 — log WARNING when stub module is injected.
             import types as _types
 
             _hf_ds = _types.ModuleType("datasets")
             _hf_ds.Dataset = type("_HFDatasetStub", (), {})  # type: ignore[attr-defined]
             sys.modules["datasets"] = _hf_ds
+            logger.warning(
+                "The 'datasets' library is not installed. Injecting a stub 'datasets' module "
+                "so Seq2SeqTrainer's isinstance check does not raise AttributeError. "
+                "isinstance(x, datasets.Dataset) will always return False for any object. "
+                "Install 'datasets' (pip install datasets) if you need HuggingFace dataset "
+                "integration. No functional impact for the DONUT SROIE pipeline."
+            )
 
         # Custom data collator: stacks pixel_values and labels only, deliberately
         # omitting decoder_input_ids.  Without this, HF DataCollatorForSeq2Seq
@@ -4155,9 +4221,40 @@ def main():
     # the saved checkpoint omits lm_head (or tie_weights() overwrites the
     # learned lm_head with embed_tokens), causing F1=0 on reload.
     _ensure_dual_config(model, "tie_word_embeddings", False)
+    # Fix: issue_report_summary invariant #13 — assert tie_word_embeddings took effect.
+    assert model.config.tie_word_embeddings is False, (
+        "tie_word_embeddings was not applied to model.config after _ensure_dual_config(). "
+        "This will cause lm_head.weight to be dropped on checkpoint save, producing F1=0 "
+        "on reload. See CLAUDE.md §2."
+    )
+    if hasattr(model, "decoder") and hasattr(model.decoder, "config"):
+        assert model.decoder.config.tie_word_embeddings is False, (
+            "tie_word_embeddings was not applied to model.decoder.config after _ensure_dual_config(). "
+            "This will cause lm_head.weight to be dropped on checkpoint save, producing F1=0 "
+            "on reload. See CLAUDE.md §2."
+        )
 
     _ensure_dual_config(model, "pad_token_id", processor.tokenizer.pad_token_id)
-    _sroie_start_id = processor.tokenizer.convert_tokens_to_ids(["<s_sroie>"])[0]
+    # Fix: issue_report_summary high #4 — guard convert_tokens_to_ids for empty result / unk_token_id.
+    # The string form iterates characters; always use list form to get the full special-token ID.
+    _sroie_start_ids = processor.tokenizer.convert_tokens_to_ids(["<s_sroie>"])
+    if not _sroie_start_ids:
+        raise ValueError(
+            "convert_tokens_to_ids(['<s_sroie>']) returned an empty list. "
+            "The <s_sroie> token must be added via add_special_tokens() "
+            "before calling convert_tokens_to_ids. See CLAUDE.md §16 GP-3."
+        )
+    _sroie_start_id = _sroie_start_ids[0]
+    _unk_id_check = getattr(processor.tokenizer, "unk_token_id", None)
+    if _unk_id_check is not None and _sroie_start_id == _unk_id_check:
+        raise ValueError(
+            f"convert_tokens_to_ids(['<s_sroie>']) returned unk_token_id={_unk_id_check}. "
+            "The <s_sroie> token was not registered in the tokenizer vocabulary before "
+            "convert_tokens_to_ids was called. Call "
+            "processor.tokenizer.add_special_tokens({'additional_special_tokens': NEW_TOKENS}) "
+            "and model.decoder.resize_token_embeddings(len(processor.tokenizer)) first. "
+            "See CLAUDE.md §16 GP-3."
+        )
     _ensure_dual_config(model, "decoder_start_token_id", _sroie_start_id)
     # ── Guardrail: verify decoder_start_token_id decodes back to the task token ──
     _decoded = processor.tokenizer.decode([model.config.decoder_start_token_id])
