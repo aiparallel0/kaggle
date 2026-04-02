@@ -29,6 +29,7 @@ import tarfile
 import time
 import urllib.request
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -56,6 +57,72 @@ except Exception:
 import resource_manager as _mm  # noqa: E402
 from constants import EMPTY_GT, FIELDS, SEED, _get_sroie_dir  # noqa: E402
 from constants import IMAGE_EXTS as _IMAGE_EXTS_SET  # noqa: E402
+
+
+# ---------------------------------------------------------------------------
+# Inline cross-platform file lock — replaces the 'filelock' PyPI package.
+# Fix: issue_report_summary medium #8 — prevent TOCTOU race on .done_ markers.
+# ---------------------------------------------------------------------------
+@contextmanager
+def _file_lock(lock_path: Path, timeout: float = 60.0):
+    """Acquire an advisory exclusive lock on *lock_path*, yield, then release.
+
+    On POSIX uses ``fcntl.flock`` (non-blocking poll with backoff).
+    On Windows (and if fcntl is unavailable) falls back to a best-effort
+    polling loop using ``os.open(O_CREAT|O_EXCL)`` atomicity.
+
+    The lock is advisory only — uncooperative processes are not blocked.
+    All callers in this codebase use this helper, so it is sufficient.
+    """
+    lock_path = Path(lock_path)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.monotonic() + timeout
+
+    try:
+        import fcntl as _fcntl  # POSIX only
+
+        lock_file = open(lock_path, "a")  # noqa: SIM115, WPS515
+        try:
+            while True:
+                try:
+                    _fcntl.flock(lock_file, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+                    break  # acquired
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError(
+                            f"Could not acquire file lock on {lock_path} within {timeout}s"
+                        ) from None
+                    time.sleep(0.1)
+            try:
+                yield
+            finally:
+                _fcntl.flock(lock_file, _fcntl.LOCK_UN)
+        finally:
+            lock_file.close()
+
+    except ImportError:
+        # Windows / no fcntl: use O_CREAT|O_EXCL atomic create as lock
+        fd = None
+        try:
+            while True:
+                try:
+                    fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                    break  # created exclusively → lock acquired
+                except FileExistsError:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError(
+                            f"Could not acquire file lock on {lock_path} within {timeout}s"
+                        ) from None
+                    time.sleep(0.1)
+            yield
+        finally:
+            if fd is not None:
+                os.close(fd)
+            try:
+                lock_path.unlink()
+            except OSError:
+                pass
+
 
 __all__ = [
     "Sample",
@@ -473,92 +540,101 @@ def _hf_download_dataset_inline(
     cache_dir = dest_dir / "hf_cache_inline"
     cache_dir.mkdir(parents=True, exist_ok=True)
     marker = cache_dir / f".done_{split}"
-    if marker.exists():
-        return cache_dir
+    # Fix: issue_report_summary medium #8 — replace TOCTOU existence-check + create
+    # with an atomic file lock so two concurrent processes cannot both start downloading
+    # and corrupt the cache.
+    lock_path = cache_dir / f".lock_{split}"
+    with _file_lock(lock_path):
+        # Re-check inside the lock: another process may have completed the download
+        # while we were waiting.
+        if marker.exists():
+            return cache_dir
 
-    img_dir = cache_dir / "images"
-    img_dir.mkdir(exist_ok=True)
-    jsonl_path = cache_dir / f"data_{split}.jsonl"
+        img_dir = cache_dir / "images"
+        img_dir.mkdir(exist_ok=True)
+        jsonl_path = cache_dir / f"data_{split}.jsonl"
 
-    log = logging.getLogger(__name__)
-    log.info("[inline-hf] Downloading %s/%s from HuggingFace datasets-server …", repo_id, split)
+        log = logging.getLogger(__name__)
+        log.info("[inline-hf] Downloading %s/%s from HuggingFace datasets-server …", repo_id, split)
 
-    # ── Discover config name ──────────────────────────────────────────────────
-    try:
-        splits_info = _hf_api_get(
-            f"https://datasets-server.huggingface.co/splits?dataset={repo_id}",
-            hf_token,
-        )
-        config = (
-            splits_info["splits"][0].get("config", "default")
-            if splits_info.get("splits")
-            else "default"
-        )
-    except Exception:
-        config = "default"
-
-    # ── Get total row count ───────────────────────────────────────────────────
-    total_rows = 1000  # fallback estimate
-    try:
-        size_info = _hf_api_get(
-            f"https://datasets-server.huggingface.co/size?dataset={repo_id}",
-            hf_token,
-        )
-        for s in size_info.get("size", {}).get("splits", []):
-            if s.get("split") == split:
-                total_rows = int(s.get("num_rows", total_rows))
-                break
-    except Exception:
-        pass
-
-    # ── Download rows in batches of 100 ──────────────────────────────────────
-    batch_size = 100
-    all_rows: list[dict] = []
-    for offset in range(0, total_rows + batch_size, batch_size):
+        # ── Discover config name ──────────────────────────────────────────────────
         try:
-            resp = _hf_api_get(
-                f"https://datasets-server.huggingface.co/rows"
-                f"?dataset={repo_id}&config={config}&split={split}"
-                f"&offset={offset}&length={batch_size}",
+            splits_info = _hf_api_get(
+                f"https://datasets-server.huggingface.co/splits?dataset={repo_id}",
                 hf_token,
             )
-        except Exception as exc:
-            log.warning("[inline-hf] Batch offset=%d failed: %s — stopping early.", offset, exc)
-            break
-        rows = resp.get("rows", [])
-        if not rows:
-            break
-        all_rows.extend(rows)
-        log.info("[inline-hf] %d/%d rows fetched …", len(all_rows), total_rows)
-        if len(all_rows) >= total_rows:
-            break
+            config = (
+                splits_info["splits"][0].get("config", "default")
+                if splits_info.get("splits")
+                else "default"
+            )
+        except Exception:
+            config = "default"
 
-    # ── Process rows: save images, write JSONL ────────────────────────────────
-    with open(jsonl_path, "w", encoding="utf-8") as f_out:
-        for idx, row_wrapper in enumerate(all_rows):
-            row = row_wrapper.get("row", row_wrapper)
-            record: dict[str, Any] = {}
-            for key, val in row.items():
-                if isinstance(val, dict) and "src" in val:
-                    # Image feature — download the image URL
-                    img_path = img_dir / f"{split}_{idx:06d}.jpg"
-                    if not img_path.exists():
-                        try:
-                            img_req = urllib.request.Request(val["src"])
-                            if hf_token:
-                                img_req.add_header("Authorization", f"Bearer {hf_token}")
-                            with urllib.request.urlopen(img_req, timeout=30) as img_resp:
-                                img_path.write_bytes(img_resp.read())
-                        except Exception as img_exc:
-                            log.warning("[inline-hf] Image %d download failed: %s", idx, img_exc)
-                    record[key] = str(img_path)
-                elif isinstance(val, (str, int, float, list, dict, bool)) or val is None:
-                    record[key] = val
-            f_out.write(json.dumps(record, ensure_ascii=False) + "\n")
+        # ── Get total row count ───────────────────────────────────────────────────
+        total_rows = 1000  # fallback estimate
+        try:
+            size_info = _hf_api_get(
+                f"https://datasets-server.huggingface.co/size?dataset={repo_id}",
+                hf_token,
+            )
+            for s in size_info.get("size", {}).get("splits", []):
+                if s.get("split") == split:
+                    total_rows = int(s.get("num_rows", total_rows))
+                    break
+        except Exception:
+            pass
 
-    marker.touch()
-    log.info("[inline-hf] Download complete: %d rows saved to %s", len(all_rows), cache_dir)
-    return cache_dir
+        # ── Download rows in batches of 100 ──────────────────────────────────────
+        batch_size = 100
+        all_rows: list[dict] = []
+        for offset in range(0, total_rows + batch_size, batch_size):
+            try:
+                resp = _hf_api_get(
+                    f"https://datasets-server.huggingface.co/rows"
+                    f"?dataset={repo_id}&config={config}&split={split}"
+                    f"&offset={offset}&length={batch_size}",
+                    hf_token,
+                )
+            except Exception as exc:
+                log.warning("[inline-hf] Batch offset=%d failed: %s — stopping early.", offset, exc)
+                break
+            rows = resp.get("rows", [])
+            if not rows:
+                break
+            all_rows.extend(rows)
+            log.info("[inline-hf] %d/%d rows fetched …", len(all_rows), total_rows)
+            if len(all_rows) >= total_rows:
+                break
+
+        # ── Process rows: save images, write JSONL ────────────────────────────────
+        with open(jsonl_path, "w", encoding="utf-8") as f_out:
+            for idx, row_wrapper in enumerate(all_rows):
+                row = row_wrapper.get("row", row_wrapper)
+                record: dict[str, Any] = {}
+                for key, val in row.items():
+                    if isinstance(val, dict) and "src" in val:
+                        # Image feature — download the image URL
+                        img_path = img_dir / f"{split}_{idx:06d}.jpg"
+                        if not img_path.exists():
+                            try:
+                                img_req = urllib.request.Request(val["src"])
+                                if hf_token:
+                                    img_req.add_header("Authorization", f"Bearer {hf_token}")
+                                with urllib.request.urlopen(img_req, timeout=30) as img_resp:
+                                    img_path.write_bytes(img_resp.read())
+                            except Exception as img_exc:
+                                log.warning(
+                                    "[inline-hf] Image %d download failed: %s", idx, img_exc
+                                )
+                        record[key] = str(img_path)
+                    elif isinstance(val, (str, int, float, list, dict, bool)) or val is None:
+                        record[key] = val
+                f_out.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+        marker.touch()
+        log.info("[inline-hf] Download complete: %d rows saved to %s", len(all_rows), cache_dir)
+        return cache_dir
 
 
 def _hf_load_jsonl_rows(cache_dir: Path, split: str = "train") -> list[dict]:
@@ -875,8 +951,22 @@ class SROIELoader(BaseDatasetLoader):
             p for p in img_dir.iterdir() if p.is_file() and p.suffix.lower() in _IMAGE_EXTS
         ):
             gt = _load_key_file(key_dir, img_path.stem)
-            if gt:
+            # Fix: issue_report_summary high #5 — replace `if gt:` truthiness check with
+            # explicit validation of all required SROIE fields. A dict like {"company": ""}
+            # passes `if gt:` but causes KeyError during training on any access to a missing
+            # field. All four SROIE fields must be present (values may be empty strings).
+            if gt and all(field in gt for field in FIELDS):
                 samples.append((img_path, gt))
+            elif gt:
+                # gt is non-empty but missing one or more required fields — log and skip.
+                missing_fields = [f for f in FIELDS if f not in gt]
+                logging.getLogger(__name__).warning(
+                    "Skipping %s: ground-truth dict is missing required SROIE field(s) %s. "
+                    "Found keys: %s",
+                    img_path.name,
+                    missing_fields,
+                    list(gt.keys()),
+                )
 
         if split == "train" and not samples:
             raise self._fatal(

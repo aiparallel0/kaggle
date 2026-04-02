@@ -595,7 +595,15 @@ except ImportError:
                         len(unexpected),
                     )
                 except Exception as e:
-                    self._log.warning("Could not load %s: %s — using random init", sd_path, e)
+                    # Fix: issue_report_summary critical #3 — log at ERROR level so the
+                    # operator sees that YOLOv8 weights failed to load (model will use random init).
+                    self._log.error(
+                        "Could not load YOLOv8 state dict from %s — falling back to random init. "
+                        "Detection quality will be severely degraded. Error: %s",
+                        sd_path,
+                        e,
+                        exc_info=True,
+                    )
             else:
                 self._log.warning(
                     "No YOLOv8 weights found at %s — using random init. "
@@ -736,7 +744,16 @@ except ImportError:
                 with open(data) as f:
                     ds_cfg = _yaml.safe_load(f)
             except Exception as e:
-                _logger.warning("Could not load data YAML %s: %s — skipping", data, e)
+                # Fix: issue_report_summary critical #3 — log at ERROR level so the
+                # operator knows YOLO training was silently skipped due to YAML failure.
+                _logger.error(
+                    "Could not load YOLO data YAML %s — YOLO training will be SKIPPED. "
+                    "This is a fatal configuration error; check the YAML file path and "
+                    "contents. Error: %s",
+                    data,
+                    e,
+                    exc_info=True,
+                )
                 return
 
             ds_path = Path(ds_cfg.get("path", "."))
@@ -762,12 +779,36 @@ except ImportError:
             for epoch in range(epochs):
                 epoch_loss = 0.0
                 count = 0
+                _consecutive_failures = 0  # Fix: issue_report_summary critical #3
                 for img_path in img_files:
                     # Load image
                     try:
                         raw = _load_image(img_path)
-                    except Exception:
+                    except Exception as _img_exc:
+                        # Fix: issue_report_summary critical #3 — log at ERROR level with
+                        # batch index, track consecutive failures, abort if threshold exceeded.
+                        if isinstance(_img_exc, torch.cuda.OutOfMemoryError):
+                            torch.cuda.empty_cache()
+                        _consecutive_failures += 1
+                        _logger.error(
+                            "YOLO inline training: image load failed (batch=%s, "
+                            "consecutive_failures=%d/%d): %s",
+                            img_path.name,
+                            _consecutive_failures,
+                            MAX_CONSECUTIVE_BATCH_FAILURES,
+                            _img_exc,
+                            exc_info=True,
+                        )
+                        if _consecutive_failures >= MAX_CONSECUTIVE_BATCH_FAILURES:
+                            raise RuntimeError(
+                                f"YOLO inline training aborted: {_consecutive_failures} "
+                                f"consecutive batch failures exceeded threshold "
+                                f"MAX_CONSECUTIVE_BATCH_FAILURES={MAX_CONSECUTIVE_BATCH_FAILURES}. "
+                                "Check image data and CUDA memory. "
+                                "See CLAUDE.md §5 Fix #3."
+                            ) from _img_exc
                         continue
+                    _consecutive_failures = 0  # reset on success
                     # Resize to imgsz × imgsz
                     import numpy as _np
 
@@ -832,7 +873,16 @@ except ImportError:
                 shutil.copy(best_sd_path, best_pt_path)
 
 
-from constants import DEVICE, FIELDS, SEED, WORKSPACE, _gpu_cleanup, _optimal_num_workers, _progress
+from constants import (  # noqa: E402
+    DEVICE,
+    FIELDS,
+    MAX_CONSECUTIVE_BATCH_FAILURES,
+    SEED,
+    WORKSPACE,
+    _gpu_cleanup,
+    _optimal_num_workers,
+    _progress,
+)
 from run_experiments import CONTROL_SUITE, get_augmentation_transforms
 
 __all__ = [
@@ -1249,7 +1299,16 @@ def train_yolo(output_dir: Path | None = None, num_train_samples: int = 0) -> Pa
                     torch.save(_m.state_dict(), sd_path)
                     print(f"  Saved raw state dict → {sd_path}")
             except Exception as _e:
-                print(f"  Could not save companion state dict: {_e}")
+                # Fix: issue_report_summary critical #3 — log at ERROR level so the operator
+                # knows the state dict companion file was NOT saved. Inference without
+                # ultralytics installed will fall back to random weights as a result.
+                __import__("logging").getLogger(__name__).error(
+                    "Could not save YOLO companion state dict to %s — inference without "
+                    "ultralytics installed will use random init (degraded quality). Error: %s",
+                    sd_path,
+                    _e,
+                    exc_info=True,
+                )
 
     # FIX: GPU cleanup after YOLO training — delete local reference first
     del model
@@ -1444,6 +1503,46 @@ def train_trocr(
     model.config.decoder_start_token_id = processor.tokenizer.cls_token_id
     model.config.pad_token_id = processor.tokenizer.pad_token_id
     model.config.eos_token_id = processor.tokenizer.sep_token_id
+    # Fix: issue_report_summary invariant #14 — add convert_tokens_to_ids list-form guard
+    # to the TrOCR path, matching the DONUT path in train.py.
+    # TrOCR uses cls_token_id (a direct attribute) rather than convert_tokens_to_ids, but
+    # we must still verify it is non-None and not the unk_token_id.
+    _trocr_cls_id = processor.tokenizer.cls_token_id
+    if _trocr_cls_id is None:
+        raise ValueError(
+            "TrOCR processor.tokenizer.cls_token_id is None. "
+            "The TrOCR tokenizer must have a [CLS] token. "
+            "Check that 'microsoft/trocr-base-printed' was loaded correctly."
+        )
+    _trocr_unk_id = getattr(processor.tokenizer, "unk_token_id", None)
+    if _trocr_unk_id is not None and _trocr_cls_id == _trocr_unk_id:
+        raise ValueError(
+            f"TrOCR processor.tokenizer.cls_token_id={_trocr_cls_id} equals "
+            f"unk_token_id={_trocr_unk_id}. The [CLS] token is not registered in the "
+            "tokenizer vocabulary. Use convert_tokens_to_ids(['[CLS]'])[0] in list form "
+            "to verify: if the result equals unk_token_id, the tokenizer is corrupt. "
+            "See CLAUDE.md §16 GP-3 (Fix #14)."
+        )
+    # Fix: issue_report_summary invariant #15 — verify decoder special tokens are present.
+    # The DONUT path checks all NEW_TOKENS in DonutTrainer._pre_training_guardrails().
+    # For TrOCR we verify the three structural tokens: [CLS], [SEP], [PAD].
+    for _trocr_tok_name, _trocr_tok_id in [
+        ("[CLS]", processor.tokenizer.cls_token_id),
+        ("[SEP]", processor.tokenizer.sep_token_id),
+        ("[PAD]", processor.tokenizer.pad_token_id),
+    ]:
+        if _trocr_tok_id is None:
+            raise ValueError(
+                f"TrOCR tokenizer is missing required token {_trocr_tok_name!r}. "
+                "Ensure 'microsoft/trocr-base-printed' is loaded without truncation. "
+                "See CLAUDE.md §16 Fix #15."
+            )
+        if _trocr_unk_id is not None and _trocr_tok_id == _trocr_unk_id:
+            raise ValueError(
+                f"TrOCR tokenizer token {_trocr_tok_name!r} maps to unk_token_id={_trocr_unk_id}. "
+                "The token is not registered in the vocabulary. "
+                "See CLAUDE.md §16 Fix #15."
+            )
     model.generation_config.max_new_tokens = TROCR_MAX_LEN
     model.generation_config.no_repeat_ngram_size = 0  # disabled — harmful for short OCR text
     model.generation_config.length_penalty = 1.0  # neutral — do not penalise short outputs
@@ -1484,7 +1583,15 @@ def train_trocr(
                     f" <= {_TROCR_GRAD_CKPT_THRESHOLD_GB:.0f} GB threshold"
                 )
         except Exception as _exc:
-            print(f"  [TrOCR] GradCkpt VRAM detection failed ({_exc}) — defaulting to enabled")
+            # Fix: issue_report_summary critical #3 — log at ERROR level so the operator
+            # knows VRAM detection failed and gradient checkpointing defaulted to enabled.
+            __import__("logging").getLogger(__name__).error(
+                "[TrOCR] VRAM detection failed — defaulting gradient checkpointing to ENABLED. "
+                "If this causes OOM, set grad_ckpt_vram_threshold_gb explicitly in "
+                "ControlSuite.trocr. Error: %s",
+                _exc,
+                exc_info=True,
+            )
 
     if _trocr_enable_grad_ckpt:
         model.config.use_cache = False
@@ -1607,33 +1714,70 @@ def train_trocr(
     history = {"train_loss": [], "val_loss": [], "num_train_samples": 0}
     history["num_train_samples"] = len(train_ds)
     start = time.time()
+    _trocr_logger = __import__("logging").getLogger(__name__)
 
     try:
         for epoch in range(TROCR_EPOCHS):
             model.train()
             epoch_loss = 0.0
             optimizer.zero_grad()
+            # Fix: issue_report_summary critical #3 — track consecutive batch failures.
+            _consecutive_batch_failures = 0
 
             _desc = f"TrOCR Epoch {epoch + 1}/{TROCR_EPOCHS}"
             for step, batch in enumerate(
                 _progress(train_loader, desc=_desc, total=len(train_loader))
             ):
-                pixel_values = batch["pixel_values"].to(DEVICE)
-                labels = batch["labels"].to(DEVICE)
+                try:
+                    pixel_values = batch["pixel_values"].to(DEVICE)
+                    labels = batch["labels"].to(DEVICE)
 
-                with torch.amp.autocast(device_type="cuda", dtype=_amp_dtype, enabled=_use_amp):
-                    outputs = model(pixel_values=pixel_values, labels=labels)
-                loss = outputs.loss / grad_accum
-                scaler.scale(loss).backward()
-                epoch_loss += outputs.loss.item()  # use unscaled loss for logging
+                    with torch.amp.autocast(device_type="cuda", dtype=_amp_dtype, enabled=_use_amp):
+                        outputs = model(pixel_values=pixel_values, labels=labels)
+                    loss = outputs.loss / grad_accum
+                    scaler.scale(loss).backward()
+                    epoch_loss += outputs.loss.item()  # use unscaled loss for logging
 
-                if (step + 1) % grad_accum == 0:
-                    scaler.unscale_(optimizer)
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                    scaler.step(optimizer)
-                    scaler.update()
-                    scheduler.step()
-                    optimizer.zero_grad()
+                    if (step + 1) % grad_accum == 0:
+                        scaler.unscale_(optimizer)
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                        scaler.step(optimizer)
+                        scaler.update()
+                        scheduler.step()
+                        optimizer.zero_grad()
+                    _consecutive_batch_failures = 0  # reset on success
+                except Exception as _batch_exc:
+                    # Fix: issue_report_summary critical #3 — log at ERROR level with
+                    # batch index; call empty_cache() on OOM; abort if threshold exceeded.
+                    _is_oom = isinstance(_batch_exc, torch.cuda.OutOfMemoryError)
+                    if _is_oom:
+                        torch.cuda.empty_cache()
+                    _consecutive_batch_failures += 1
+                    _trocr_logger.error(
+                        "TrOCR training: batch failed (epoch=%d, step=%d, "
+                        "consecutive_failures=%d/%d, oom=%s): %s",
+                        epoch + 1,
+                        step,
+                        _consecutive_batch_failures,
+                        MAX_CONSECUTIVE_BATCH_FAILURES,
+                        _is_oom,
+                        _batch_exc,
+                        exc_info=True,
+                    )
+                    if _consecutive_batch_failures >= MAX_CONSECUTIVE_BATCH_FAILURES:
+                        raise RuntimeError(
+                            f"TrOCR training aborted at epoch {epoch + 1}, step {step}: "
+                            f"{_consecutive_batch_failures} consecutive batch failures exceeded "
+                            f"threshold MAX_CONSECUTIVE_BATCH_FAILURES={MAX_CONSECUTIVE_BATCH_FAILURES}. "
+                            "This indicates a systemic issue (persistent CUDA OOM or corrupt data). "
+                            "See CLAUDE.md §5 Fix #3."
+                        ) from _batch_exc
+                    # Skip this batch; reset gradient state to avoid stale gradients
+                    try:
+                        optimizer.zero_grad()
+                    except Exception:
+                        pass
+                    continue
 
             avg_train = epoch_loss / len(train_loader)
 
@@ -1669,15 +1813,43 @@ def train_trocr(
         elapsed = time.time() - start
         print(f"\nTrOCR training complete in {elapsed:.1f}s. Best val_loss={best_val_loss:.4f}")
     finally:
-        # Always free GPU memory even if training raised an exception.
-        # Without this, a mid-training crash leaves TrOCR (246M params) on the
-        # GPU and causes CUDA OOM when the next stage (DONUT) loads its model.
-        del model, optimizer, scheduler
-        if scaler is not None:
+        # Fix: issue_report_summary medium #9 — wrap each `del` in its own try/except
+        # so a NameError on one variable (e.g. model was never assigned because training
+        # crashed during setup) does not abort the finally block before _gpu_cleanup() runs,
+        # which would leave TrOCR (246M params) on the GPU and OOM the next stage.
+        try:
+            del model
+        except NameError:
+            pass
+        try:
+            del optimizer
+        except NameError:
+            pass
+        try:
+            del scheduler
+        except NameError:
+            pass
+        try:
             del scaler
-        del train_ds, val_ds, train_loader
-        if val_loader is not None:
+        except NameError:
+            pass
+        try:
+            del train_ds
+        except NameError:
+            pass
+        try:
+            del val_ds
+        except NameError:
+            pass
+        try:
+            del train_loader
+        except NameError:
+            pass
+        try:
             del val_loader
+        except NameError:
+            pass
+        # _gpu_cleanup() is ALWAYS called last — even if every del above raised.
         _gpu_cleanup()
 
     return history
