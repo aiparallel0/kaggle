@@ -178,7 +178,7 @@ The root cause is architectural: the pipeline spans 10+ Python files, LaTeX temp
 **Rule for AI agents:** Before running any experiment, always verify:
 ```bash
 python -c "from constants import FIELDS, BASE_MODEL, SEED"
-python -c "from dataset_loaders import SROIELoader"
+python -c "from data_pipeline import SROIELoader"
 ```
 Both must exit with code `0`. If either fails, fix the core import chain **before touching experiment logic**. A broken `constants.py` silently cascades into every file.
 
@@ -277,7 +277,7 @@ kaggle/
 ├── run_all.py                # MAIN ENTRY POINT: full dual-architecture pipeline
 ├── train_trocr_yolo.py       # TrOCR+YOLO training (also called by run_all.py)
 │
-├── requirements.txt          # Python dependencies with version pins (2 required: torch, transformers)
+├── requirements.txt          # Python dependencies with version pins (5 required: torch, transformers, pyyaml, accelerate, ruff)
 ├── ruff.toml                 # Linter/formatter config (moved from pyproject.toml)
 ├── lint.sh                   # Run before every commit: ruff check --fix . && ruff format .
 │
@@ -302,7 +302,8 @@ kaggle/
 - `logging_utils.py` → merged into `constants.py`
 - `pyproject.toml` project metadata → merged into `constants.py` as `PROJECT_*` constants
 - `pipeline_critic.py`, `validators.py`, `control_suite.py`, `memory_manager.py`, `resource_optimizer.py` → all were re-export shims, deleted
-- `tests/` directory, `.github/` directory, `__main__.py` → deleted
+- `tests/` directory, `__main__.py` → deleted
+- `.github/` directory — **NOT deleted**: exists and contains GitHub Actions CI workflow files
 - `live_dashboard.py` → inlined into `train.py` as `LiveDashboardCallback`
 - `paper_diff.py` → inlined into `reporting.py`
 
@@ -385,11 +386,11 @@ Delete the dataset's `.done` marker file to force re-download with the new revis
 
 ### Full Pipeline (recommended)
 
-**requirements.txt is now minimal (2 packages: torch + transformers).**
+**requirements.txt is now minimal (5 packages: torch, transformers, pyyaml, accelerate, ruff).**
 All other dependencies are inlined:
 - `datasets` → `_hf_download_dataset_inline()` in `data_pipeline.py`
-- `ultralytics` → `_YOLO_CLS` in `train_trocr_yolo.py`
-- `accelerate` → never used; `torch.cuda.amp.GradScaler` directly
+- `ultralytics` → `_YOLO_CLS` in `train_trocr_yolo.py` (proxy L2 loss fallback — not a real detector; install `ultralytics` for actual detection quality)
+- `accelerate` → declared dep (in requirements.txt); used by transformers `Seq2SeqTrainer` internals; `torch.cuda.amp.GradScaler` also used directly for custom training loops
 - `matplotlib` → `_svg_bar_chart/_svg_radar_chart/...` in `reporting.py`
 - `pytest` → `_Pytest` stub in `run_all.py` (tests/ directory removed)
 - `Pillow` → `_load_png/_load_bmp/_load_jpeg_pure` in `train.py`
@@ -417,7 +418,7 @@ python run_experiments.py --all --force      # force re-run
 ### Paper Generation
 
 ```bash
-python inject_results.py --all --paper paper/paper.tex --output paper/paper_filled.tex
+python reporting.py --all --paper paper/paper.tex --output paper/paper_filled.tex
 ```
 
 ### Paper PDF Compilation
@@ -458,11 +459,11 @@ The table updates in-place after every epoch. Disable with `DISABLE_LIVE_DASHBOA
 ### Alternative Standalone Workflow
 
 ```bash
-python dataset_preparation.py
-python train_donut.py
 python train_trocr_yolo.py
-python evaluate_models.py
+python run_experiments.py --all
 ```
+
+> **Note:** `dataset_preparation.py`, `train_donut.py`, and `evaluate_models.py` no longer exist as standalone files — functionality is integrated into `run_all.py` and `run_experiments.py`.
 
 ### Exit Codes (`run_all.py`)
 
@@ -706,14 +707,14 @@ if isinstance(result, list):
 ```python
 # ❌ BROKEN — import fires before skip guard; collection fails if torch absent
 import pytest
-from donut_evaluator import compute_metrics   # triggers `import torch` inside
+from run_experiments import compute_metrics   # triggers `import torch` inside
 torch = pytest.importorskip("torch")          # never reached
 
 # ✅ CORRECT — skip guard fires first; the import is never reached without torch
 import pytest
-torch = pytest.importorskip("torch", reason="torch required by donut_evaluator.py")
+torch = pytest.importorskip("torch", reason="torch required by run_experiments.py")
 pytest.importorskip("transformers", reason="transformers required")
-from donut_evaluator import compute_metrics   # noqa: E402, I001
+from run_experiments import compute_metrics   # noqa: E402, I001
 ```
 
 **The `# noqa: E402, I001` comment is mandatory** on any import that intentionally appears after non-import statements:
@@ -777,8 +778,8 @@ if "decoder.lm_head.weight" in missing_keys:
 | 1.5 | `stage_pretrained_baseline()` | `results/evaluation_results.json` (zero-shot F1) |
 | 2 | `run_experiments.run_experiment(N)` × 8 | `results/experiment_N.json` each |
 | 3-4 | `train_trocr_yolo.py` | `results/trocr_yolo_results.json` |
-| 5 | `benchmark_compare.main()` | `results/benchmark_results.json` + plots |
-| 6 | `inject_results.PaperInjector.fill()` | `paper/paper_filled.tex` |
+| 5 | `reporting.benchmark_compare_main()` | `results/benchmark_results.json` + plots |
+| 6 | `reporting.PaperInjector.fill()` | `paper/paper_filled.tex` |
 
 **Critical SROIE split invariant:** `val_img/` and `test_img/` are physically separate directories. `load_sroie_val()` and `load_sroie_test()` must never return overlapping images.
 
@@ -788,7 +789,7 @@ if "decoder.lm_head.weight" in missing_keys:
 
 ```bash
 python -c "from constants import FIELDS, BASE_MODEL, SEED"
-python -c "from dataset_loaders import SROIELoader; \
+python -c "from data_pipeline import SROIELoader; \
            l=SROIELoader(); \
            assert l._SPLIT_DIRS['val'] != l._SPLIT_DIRS['test'], 'val==test BUG'"
 ```

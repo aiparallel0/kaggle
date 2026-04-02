@@ -37,12 +37,12 @@ ruff>=0.4.0
 # numpy         → transitive dep of torch (always installed)
 # sentencepiece → transitive dep of transformers (always installed)
 # protobuf      → transitive dep of transformers (always installed)
-# datasets      → 100% replaced with inline _hf_download_dataset_inline() in dataset_loaders.py
+# datasets      → 100% replaced with inline _hf_download_dataset_inline() in data_pipeline.py
 #                 (urllib-only HTTP downloader + JSONL cache; no Arrow dependency)
 # ultralytics   → 100% replaced with inline _YOLO_CLS in train_trocr_yolo.py
-#                 (full YOLOv8x backbone + training loop + inference, pure PyTorch)→ never imported anywhere; torch.cuda.amp.GradScaler used directly
-    
-# matplotlib    → 100% replaced with inline SVG generators in benchmark_compare.py
+#                 (proxy L2 loss fallback: trains backbone away from random init but does NOT
+#                  produce a calibrated detector — install ultralytics for real detection quality)
+# matplotlib    → 100% replaced with inline SVG generators in reporting.py
 #                 (_svg_bar_chart, _svg_speed_chart, _svg_radar_chart, _svg_compare_bar)
 #                 Install matplotlib for PDF-quality rasterised output (optional)
 # pytest        → 100% replaced with stdlib unittest in tests/test_all.py

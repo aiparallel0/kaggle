@@ -109,10 +109,10 @@ __all__ = [
 _CRITICAL_INSTALL_PACKAGES = [
     "torch",
     "transformers",
-    # datasets   → replaced with inline _hf_download_dataset_inline() in dataset_loaders.py
-    # accelerate → never imported; torch.cuda.amp.GradScaler used directly
+    # datasets   → replaced with inline _hf_download_dataset_inline() in data_pipeline.py
+    # accelerate → declared dep; never directly imported (may be used by transformers internals)
     # ultralytics → replaced with inline _YOLO_CLS in train_trocr_yolo.py
-    # editdistance → replaced with inline _edit_distance() in donut_evaluator.py
+    # editdistance → replaced with inline _edit_distance() in constants.py
     # pandas → replaced with stdlib csv module
 ]
 _CRITICAL_VERIFY_PACKAGES = ["transformers"]
@@ -194,8 +194,7 @@ def _install_dependencies() -> None:
     in fresh environments. Uses -q flag to minimize console spam.
 
     Strategy:
-    1. Check if critical packages (torch, transformers, datasets, accelerate)
-       are all importable.
+    1. Check if critical packages (torch, transformers) are all importable.
     2. If any are missing, run ``pip install -r requirements.txt`` (with
        flash-attn filtered out — it requires a pre-installed torch and can
        take 5–25 minutes to compile from source on a GPU machine).
