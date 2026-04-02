@@ -790,9 +790,14 @@ except ImportError:
                         .unsqueeze(0)
                         .to(self._device)
                     )
-                    # Load labels
+                    # Load labels — standard YOLO layout: <root>/labels/<split>/<stem>.txt
+                    # img_path is under <root>/images/<split>/<stem>.ext, so the label
+                    # is at <root>/labels/<split>/<stem>.txt (ds_path = <root>).
                     label_path = (
-                        img_path.parent.parent / "labels" / img_path.with_suffix(".txt").name
+                        ds_path
+                        / "labels"
+                        / img_path.parent.name
+                        / img_path.with_suffix(".txt").name
                     )
                     if not label_path.exists():
                         continue
