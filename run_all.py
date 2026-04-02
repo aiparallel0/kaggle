@@ -2380,22 +2380,74 @@ def _evaluate_field_assigner(
 
 
 def _print_backend_comparison(all_results: dict, logger: "logging.Logger") -> None:
-    """Log a summary table comparing all backend F1 scores."""
-    header = f"{'Backend':<20} {'Global F1':>10} {'Company':>10} {'Date':>10} {'Address':>10} {'Total':>10}"
-    sep = "-" * len(header)
-    logger.info("\n%s\n%s\n%s", sep, header, sep)
-    for backend, data in all_results.items():
+    """Print a comparison table of all TrOCR+YOLO backend F1 scores to stdout and log."""
+    _COLS = ("Global F1", "Company", "Date", "Address", "Total", "Params")
+    _W = (12, 10, 10, 10, 10, 14)
+    _KEYS = ("global_f1", "company_f1", "date_f1", "address_f1", "total_f1")
+
+    # Find best global F1 across all backends for highlighting
+    best_f1 = max(
+        (d.get("metrics", {}).get("global_f1", 0.0) for d in all_results.values()),
+        default=0.0,
+    )
+
+    # Build rows
+    rows = []
+    for backend_key, data in all_results.items():
         m = data.get("metrics", {})
-        logger.info(
-            "%-20s %10.4f %10.4f %10.4f %10.4f %10.4f",
-            backend,
-            m.get("global_f1", 0.0),
-            m.get("company_f1", 0.0),
-            m.get("date_f1", 0.0),
-            m.get("address_f1", 0.0),
-            m.get("total_f1", 0.0),
+        params_raw = data.get("params", 0)
+        if isinstance(params_raw, int) and params_raw > 0:
+            params_str = f"{params_raw / 1e6:.2f}M" if params_raw >= 1_000_000 else f"{params_raw / 1e3:.0f}K"
+        else:
+            params_str = "0 (rules)"
+        label = data.get("backend", backend_key)
+        rows.append((label, m, params_str))
+
+    # Try rich table first; fall back to plain-text
+    try:
+        from rich.console import Console as _Console
+        from rich.table import Table as _Table
+
+        _con = _Console()
+        tbl = _Table(title="TrOCR+YOLO Backend Comparison", show_lines=True)
+        tbl.add_column("Backend / Assignment", style="bold")
+        for col in _COLS:
+            tbl.add_column(col, justify="right")
+        for label, m, params_str in rows:
+            f1 = m.get("global_f1", 0.0)
+            highlight = f1 == best_f1 and best_f1 > 0.0
+            style = "bold green" if highlight else ""
+            tbl.add_row(
+                label,
+                f"[{style}]{f1:.4f}[/]" if style else f"{f1:.4f}",
+                f"{m.get('company_f1', 0.0):.4f}",
+                f"{m.get('date_f1', 0.0):.4f}",
+                f"{m.get('address_f1', 0.0):.4f}",
+                f"{m.get('total_f1', 0.0):.4f}",
+                params_str,
+            )
+        _con.print(tbl)
+    except ImportError:
+        # Plain-text table — always visible on console
+        w_label = 24
+        header = (
+            f"{'Backend / Assignment':<{w_label}}"
+            + "".join(f"{c:>{w}}" for c, w in zip(_COLS, _W))
         )
-    logger.info("%s", sep)
+        sep = "─" * len(header)
+        lines = [sep, header, sep]
+        for label, m, params_str in rows:
+            f1 = m.get("global_f1", 0.0)
+            marker = " ◀ BEST" if f1 == best_f1 and best_f1 > 0.0 else ""
+            vals = [m.get(k, 0.0) for k in _KEYS]
+            row = f"{label:<{w_label}}" + "".join(
+                f"{v:{w}.4f}" for v, w in zip(vals, _W[:-1])
+            ) + f"{params_str:>{_W[-1]}}" + marker
+            lines.append(row)
+        lines.append(sep)
+        table_str = "\n".join(lines)
+        print(table_str)  # always visible on stdout
+        logger.info("\n%s", table_str)
 
 
 # ---------------------------------------------------------------------------
@@ -2452,9 +2504,10 @@ def stage_trocr_all_backends(args) -> StageResult:
                 _rx = json.load(_fh)
             _first = next(iter(_rx.values()), {})
             all_results["regex"] = {
-                "backend": "regex (heuristic baseline)",
+                "backend": "Regex heuristic",
                 "description": "Rule-based field assignment, no trainable parameters",
                 "params": 0,
+                "training_time_sec": 0,
                 "metrics": _first.get("metrics", {}),
             }
             _log.info(
@@ -2489,14 +2542,19 @@ def stage_trocr_all_backends(args) -> StageResult:
 
         # ── Steps 4–6: Train and evaluate each field-assigner backend ────────
         _FA_BACKENDS = [
-            ("char", "~532 K params — char embeddings, no pretrained weights"),
-            ("lm", "~4.9 M params — frozen BERT-tiny text encoder"),
-            ("lm+vision", "~5.1 M params — LM + TrOCR vision features + consistency loss"),
+            ("char",      532_000,   "Char embeddings — 532K params, no pretrained weights"),
+            ("lm",      4_900_000,   "Frozen BERT-tiny — 4.9M params"),
+            ("lm+vision", 5_100_000, "BERT-tiny + TrOCR vision features + consistency loss — 5.1M params"),
         ]
 
-        for step, (backend, description) in enumerate(_FA_BACKENDS, 4):
+        results_dir = Path("results")
+        results_dir.mkdir(exist_ok=True)
+        out_path = results_dir / "trocr_all_backends.json"
+
+        for step, (backend, param_count, description) in enumerate(_FA_BACKENDS, 4):
             _log.info("[%d/6] Training FieldAttentionAssigner backend='%s'…", step, backend)
             _gpu_cleanup()
+            t0 = time.time()
             try:
                 assigner = trocr_yolo.train_field_assigner(
                     sroie_dir=sroie_dir,
@@ -2521,11 +2579,19 @@ def stage_trocr_all_backends(args) -> StageResult:
                 else:
                     metrics = {}
 
+                training_time = round(time.time() - t0, 1)
                 all_results[backend] = {
                     "backend": backend,
                     "description": description,
+                    "params": param_count,
+                    "training_time_sec": training_time,
                     "metrics": metrics,
                 }
+                _log.info(
+                    "[%d/6] Backend '%s' done in %.1fs  F1=%.4f",
+                    step, backend, training_time,
+                    metrics.get("global_f1", 0.0),
+                )
 
             except Exception as _exc:
                 import traceback as _tb
@@ -2534,15 +2600,21 @@ def stage_trocr_all_backends(args) -> StageResult:
                 w = f"Backend '{backend}' failed: {type(_exc).__name__}: {_exc}"
                 _log.warning("%s", w)
                 warnings.append(w)
+                all_results[backend] = {
+                    "backend": backend,
+                    "description": description,
+                    "params": param_count,
+                    "training_time_sec": round(time.time() - t0, 1),
+                    "metrics": {},
+                    "error": str(_exc),
+                }
 
-        # ── Save all-backend results ──────────────────────────────────────────
-        results_dir = Path("results")
-        results_dir.mkdir(exist_ok=True)
-        out_path = results_dir / "trocr_all_backends.json"
-        with open(out_path, "w") as _fh:
-            json.dump(all_results, _fh, indent=2)
+            # Incremental save after every backend so partial results survive crashes
+            with open(out_path, "w") as _fh:
+                json.dump(all_results, _fh, indent=2)
+
+        # ── Save final all-backend results + comparison table ─────────────────
         _log.info("All-backend results → %s", out_path)
-
         _print_backend_comparison(all_results, _log)
         _gpu_cleanup()
 
