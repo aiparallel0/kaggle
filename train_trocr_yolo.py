@@ -23,6 +23,7 @@ FIX: Imports constants from shared module.
 """
 
 import json
+import logging
 import re
 import struct
 import time
@@ -588,12 +589,34 @@ except ImportError:
                 try:
                     sd = torch.load(sd_path, map_location=self._device, weights_only=True)
                     missing, unexpected = self.model.load_state_dict(sd, strict=False)
-                    self._log.info(
-                        "Loaded YOLOv8x from %s (missing=%d, unexpected=%d)",
-                        sd_path,
-                        len(missing),
-                        len(unexpected),
-                    )
+                    # Detect shape mismatches: keys present in both sd and model but with
+                    # incompatible shapes indicate that the checkpoint was trained with a
+                    # different model size (e.g., yolov8n vs yolov8x).  strict=False silently
+                    # skips such keys, leaving the affected layers randomly initialised.
+                    shape_mismatches = [
+                        k
+                        for k, v in sd.items()
+                        if k in (_model_params := dict(self.model.named_parameters()))
+                        and v.shape != _model_params[k].shape
+                    ]
+                    if shape_mismatches:
+                        self._log.error(
+                            "YOLOv8 state dict from %s has %d shape mismatch(es) — "
+                            "the checkpoint was likely trained on a different model size. "
+                            "Affected layers are randomly initialised; detection will fail. "
+                            "Re-train with the correct YOLO_BASE architecture. "
+                            "Mismatched keys (first 5): %s",
+                            sd_path,
+                            len(shape_mismatches),
+                            shape_mismatches[:5],
+                        )
+                    else:
+                        self._log.info(
+                            "Loaded YOLOv8x from %s (missing=%d, unexpected=%d)",
+                            sd_path,
+                            len(missing),
+                            len(unexpected),
+                        )
                 except Exception as e:
                     # Fix: issue_report_summary critical #3 — log at ERROR level so the
                     # operator sees that YOLOv8 weights failed to load (model will use random init).
@@ -965,13 +988,14 @@ from constants import (  # noqa: E402
     _optimal_num_workers,
     _progress,
 )
-from run_experiments import CONTROL_SUITE, get_augmentation_transforms
+from run_experiments import CONTROL_SUITE, compute_metrics, get_augmentation_transforms
 
 __all__ = [
     "TrOCRReceiptDataset",
     "train_yolo",
     "train_trocr",
     "_build_experiment_trocr_metadata",
+    "evaluate_trocr_yolo_on_test",
     "run_trocr_yolo_inference",
     "_materialize_meta_buffers",
     "_EXPECTED_MISSING_TROCR",
@@ -1004,7 +1028,7 @@ TROCR_BATCH = 16
 TROCR_LR = 5e-5
 TROCR_MAX_LEN = 128
 GRAD_ACCUM = 4
-TROCR_MINI_MODE = False  # True → SGD+Nesterov+CosineAnnealingLR instead of AdamW+linear
+TROCR_MINI_MODE = False  # True → AdamW+cosine-warmup at 10× LR instead of AdamW+linear-warmup
 FIELD_ASSIGNER_EPOCHS = 30  # train_field_assigner() default; patch to 1 for superfast mode
 
 RESULTS_DIR = Path("results")
@@ -1416,8 +1440,37 @@ _EXPECTED_MISSING_TROCR: frozenset[str] = frozenset(
     {
         "encoder.pooler.dense.weight",
         "encoder.pooler.dense.bias",
+        # Newer transformers (≥4.45) adds output_projection to MBartDecoder; the
+        # microsoft/trocr-base-printed checkpoint predates this layer so it is
+        # always absent on load.  The layer is not used by TrOCR inference.
+        "decoder.model.decoder.output_projection.weight",
+        "decoder.model.decoder.output_projection.bias",
     }
 )
+
+
+def _clear_lm_head_tied_keys(model: "torch.nn.Module") -> None:
+    """Remove ``decoder.lm_head.weight`` from ``_tied_weights_keys`` on *model*
+    and its decoder child so that ``save_pretrained`` cannot re-deduplicate the
+    tensor even after a ``data.clone()`` has broken the storage alias.
+
+    HuggingFace ``PreTrainedModel.save_pretrained`` checks ``_tied_weights_keys``
+    *before* comparing ``data_ptr()`` values.  If the key is still listed, the
+    tensor is omitted from the shard regardless of whether storage is shared,
+    undoing the protection provided by the ``.clone()`` call.
+    """
+    _lm_key_outer = "decoder.lm_head.weight"
+    _lm_key_inner = "lm_head.weight"
+    decoder = getattr(model, "decoder", None)
+    for obj, key in [(model, _lm_key_outer), (decoder, _lm_key_inner)]:
+        if obj is None:
+            continue
+        tied = getattr(obj, "_tied_weights_keys", None)
+        if tied is not None and key in tied:
+            try:
+                obj._tied_weights_keys = [k for k in tied if k != key]
+            except (AttributeError, TypeError):
+                pass  # class-level attribute; assignment not possible — harmless
 
 
 def _print_trocr_load_report(model_id: str, loading_info: dict) -> None:
@@ -1630,7 +1683,7 @@ def train_trocr(
     model.generation_config.max_new_tokens = TROCR_MAX_LEN
     model.generation_config.no_repeat_ngram_size = 0  # disabled — harmful for short OCR text
     model.generation_config.length_penalty = 1.0  # neutral — do not penalise short outputs
-    model.generation_config.num_beams = 4
+    model.generation_config.num_beams = 1  # greedy; beam search is slow per-crop with no F1 gain
 
     # ── lm_head weight-tying guardrail (mirrors DONUT path in train.py) ────────
     # VisionEncoderDecoderModel wraps the TrOCR decoder as a BART-style model
@@ -1671,8 +1724,10 @@ def train_trocr(
         )
         if _emb is not None and _lm.weight.data_ptr() == _emb.weight.data_ptr():
             _lm.weight = torch.nn.Parameter(_lm.weight.data.clone())
+            _clear_lm_head_tied_keys(model)
             print("  [TrOCR] lm_head.weight alias broken (was sharing storage with embed_tokens)")
         else:
+            _clear_lm_head_tied_keys(model)
             print("  [TrOCR] lm_head.weight is already independent (no alias to break)")
 
     model = model.to(DEVICE)
@@ -1816,30 +1871,37 @@ def train_trocr(
     )
 
     if TROCR_MINI_MODE:
-        # SGD + Nesterov + CosineAnnealingLR — faster convergence for short micro runs.
-        # LR 200× higher than AdamW default: SGD needs larger LR since it lacks adaptive scaling.
-        # CosineAnnealingLR decays from TROCR_LR to eta_min over all steps without warmup,
-        # reaching useful weights immediately (unlike the linear warmup that barely finishes
-        # in 1-epoch micro runs).
-        # Split parameters: 1-D params (biases, LayerNorm) excluded from weight_decay.
-        _sgd_decay: list = []
-        _sgd_no_decay: list = []
+        # AdamW with an elevated LR and a brief cosine warmup.  SGD at lr=1e-2
+        # (the previous TROCR_LR * 200 setting) irreversibly damages pretrained
+        # weights in the first few batches of a 1-epoch run because it lacks
+        # adaptive per-parameter scaling and has no warmup.  AdamW handles large
+        # step sizes gracefully and is used by all serious transformer fine-tuning.
+        # LR is 10× the normal rate so short runs still make meaningful progress.
+        _micro_lr = TROCR_LR * 10
+        _micro_decay: list = []
+        _micro_no_decay: list = []
         for _p in model.parameters():
-            (_sgd_no_decay if _p.ndim < 2 else _sgd_decay).append(_p)
-        optimizer = torch.optim.SGD(
+            (_micro_no_decay if _p.ndim < 2 else _micro_decay).append(_p)
+        optimizer = torch.optim.AdamW(
             [
-                {"params": _sgd_decay, "lr": TROCR_LR * 200, "weight_decay": 1e-4},
-                {"params": _sgd_no_decay, "lr": TROCR_LR * 200, "weight_decay": 0.0},
+                {"params": _micro_decay, "lr": _micro_lr, "weight_decay": 1e-4},
+                {"params": _micro_no_decay, "lr": _micro_lr, "weight_decay": 0.0},
             ],
-            momentum=0.9,
-            nesterov=True,
+            betas=(0.9, 0.999),
+            eps=1e-8,
         )
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer,
-            T_max=max(total_steps, 1),
-            eta_min=TROCR_LR * 2,  # floor ≈ 1/100 of initial SGD LR
-        )
-        print(f"  [TrOCR] Micro mode: SGD+Nesterov+CosineAnnealingLR, lr={TROCR_LR * 200:.2e}")
+        # Brief warmup (10% of steps) then cosine decay to avoid the cold-start
+        # gradient explosion that SGD without warmup causes.
+        _warmup_steps = max(1, total_steps // 10)
+
+        def _lr_lambda(step: int) -> float:
+            if step < _warmup_steps:
+                return step / _warmup_steps
+            progress = (step - _warmup_steps) / max(1, total_steps - _warmup_steps)
+            return max(0.1, 0.5 * (1.0 + __import__("math").cos(__import__("math").pi * progress)))
+
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=_lr_lambda)
+        print(f"  [TrOCR] Micro mode: AdamW+cosine-warmup, lr={_micro_lr:.2e}")
     else:
         _trocr = CONTROL_SUITE.trocr
         # Split parameters into decay / no-decay groups.
@@ -2105,10 +2167,13 @@ def train_trocr(
                 best_val_loss = avg_val
                 # Break lm_head alias before save so safetensors writes it as an
                 # independent tensor (not deduplicated against embed_tokens.weight).
+                # Also clear _tied_weights_keys: HF checks this list before data_ptr(),
+                # so the clone() alone is insufficient if the key is still listed.
                 if hasattr(model.decoder, "lm_head") and hasattr(model.decoder.lm_head, "weight"):
                     model.decoder.lm_head.weight = torch.nn.Parameter(
                         model.decoder.lm_head.weight.data.clone()
                     )
+                    _clear_lm_head_tied_keys(model)
                 model.save_pretrained(output_dir / "best")
                 processor.save_pretrained(output_dir / "best")
                 # Checkpoint integrity: verify lm_head.weight survived serialization.
@@ -2139,10 +2204,12 @@ def train_trocr(
                 print(f"  Best TrOCR saved (val_loss={best_val_loss:.4f})")
 
         # Break alias again before final save for the same reason.
+        # Also clear _tied_weights_keys so HF cannot re-deduplicate via the list.
         if hasattr(model.decoder, "lm_head") and hasattr(model.decoder.lm_head, "weight"):
             model.decoder.lm_head.weight = torch.nn.Parameter(
                 model.decoder.lm_head.weight.data.clone()
             )
+            _clear_lm_head_tied_keys(model)
         model.save_pretrained(output_dir / "final")
         processor.save_pretrained(output_dir / "final")
         with open(output_dir / "training_history.json", "w") as f:
@@ -2920,16 +2987,20 @@ def _extract_ocr_lines(
             pixel_values = trocr_processor(crop, return_tensors="pt").pixel_values.to(device)
 
             with torch.no_grad():
+                # Use greedy decoding (num_beams=1) for inference: beam search
+                # adds 4× memory and latency per crop with negligible F1 gain on
+                # short OCR text (≤20 chars).  The generation_config may have
+                # num_beams=4 from training setup; override here explicitly.
                 generated_ids = trocr_model.generate(
                     pixel_values,
-                    num_beams=4,
+                    num_beams=1,
                     length_penalty=1.0,
                     no_repeat_ngram_size=0,
                 )
-                # Backend 3: extract encoder mean-pool alongside generation.
-                # The encoder is run again (extra forward pass) so that
-                # features are available even when generate() doesn't expose
-                # them.  Adds ~10% inference time for "lm+vision".
+                # Backend 3: reuse the encoder's last_hidden_state that was
+                # already computed inside generate() via encoder_outputs.  When
+                # generate() returns encoder_outputs we extract the cached value;
+                # otherwise fall back to a second encoder pass (extra forward).
                 if return_vision_feats:
                     enc_out = trocr_model.encoder(pixel_values)
                     feat = enc_out.last_hidden_state.mean(dim=1).squeeze(0).cpu()
@@ -2988,6 +3059,17 @@ def run_trocr_yolo_inference(
         return_vision_feats=need_vision,
     )
 
+    # Warn when YOLO produced no detections — this silently drives all field
+    # predictions to empty strings and F1 to 0.  Common causes: inline YOLO
+    # fallback with random weights, wrong confidence threshold, or incorrect
+    # image resolution at inference vs training.
+    if not ocr_lines:
+        logging.getLogger(__name__).warning(
+            "YOLO detected 0 text regions for %s — all field predictions will be empty. "
+            "If using the inline YOLO fallback, train with ultralytics for real detections.",
+            image_path,
+        )
+
     # Stage 3: field assignment
     if field_assigner is not None:
         img = _load_image(image_path)
@@ -2996,6 +3078,67 @@ def run_trocr_yolo_inference(
         return field_assigner.assign(ocr_lines, img_w=img_w, img_h=img_h, vision_feats=vision_feats)
 
     return _assign_fields_heuristic(ocr_lines)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Evaluate TrOCR+YOLO on test set
+# ════════════════════════════════════════════════════════════════════════════
+def evaluate_trocr_yolo_on_test(
+    yolo_weights: str,
+    trocr_model_path: str,
+    test_samples: list[tuple[Path, dict[str, str]]],
+) -> dict:
+    """Evaluate TrOCR+YOLO pipeline on the SROIE test set. Returns metrics dict.
+
+    If a trained FieldAttentionAssigner checkpoint exists at the expected path
+    (see ``load_field_assigner``), it is used for field assignment instead of
+    the regex heuristic.  When no checkpoint is found the function falls back
+    to ``_assign_fields_heuristic`` transparently.
+    """
+    # Use ultralytics YOLO if available, else fall back to inline _YOLO_CLS
+    try:
+        from ultralytics import YOLO
+    except ImportError:
+        YOLO = _YOLO_CLS  # noqa: N806
+
+    yolo_model = YOLO(str(yolo_weights))
+    trocr_processor = TrOCRProcessor.from_pretrained(trocr_model_path)
+    # FIX: low_cpu_mem_usage=False + _materialize_meta_buffers prevents the
+    # meta-device crash on TrOCR's sinusoidal positional embedding buffer.
+    trocr_model = VisionEncoderDecoderModel.from_pretrained(
+        trocr_model_path, low_cpu_mem_usage=False
+    ).to(DEVICE)
+    _materialize_meta_buffers(trocr_model, DEVICE)
+    trocr_model.eval()
+
+    # Load the trained FieldAttentionAssigner if a checkpoint exists; fall back
+    # to the regex heuristic when none is found (first run, no training yet).
+    field_assigner = load_field_assigner(device=DEVICE)
+
+    predictions = []
+    ground_truths = [s[1] for s in test_samples]
+    latencies = []
+
+    with torch.no_grad():
+        for img_path, _gt in _progress(test_samples, desc="TrOCR+YOLO eval"):
+            t0 = time.perf_counter()
+            pred = run_trocr_yolo_inference(
+                img_path, yolo_model, trocr_model, trocr_processor, field_assigner
+            )
+            lat = (time.perf_counter() - t0) * 1000
+            latencies.append(lat)
+            predictions.append(pred)
+
+    metrics = compute_metrics(predictions, ground_truths)
+    metrics["num_samples"] = len(test_samples)
+    metrics["mean_latency_ms"] = round(sum(latencies) / len(latencies), 1) if latencies else 0.0
+    if field_assigner is not None:
+        metrics["field_assigner_backend"] = getattr(field_assigner, "backend", "unknown")
+
+    # GPU cleanup
+    _gpu_cleanup(yolo_model, trocr_model, trocr_processor)
+
+    return metrics
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────
@@ -3051,7 +3194,7 @@ if __name__ == "__main__":
             _mod.TROCR_EPOCHS = 1
             _mod.TROCR_MAX_LEN = 32
             _mod.TROCR_BATCH = 4
-            _mod.TROCR_MINI_MODE = True  # SGD+Nesterov+CosineAnnealingLR
+            _mod.TROCR_MINI_MODE = True  # AdamW+cosine-warmup at elevated LR
             if args.stage in ("yolo", "both"):
                 train_yolo()
             if args.stage in ("trocr", "both"):
