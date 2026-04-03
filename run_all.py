@@ -317,7 +317,6 @@ def _install_dependencies() -> None:
                 "Run manually: pip install -r requirements.txt"
             )
         finally:
-            if tmp_path is not None:
             # Fix: issue_report_summary high #6 — guard the unlink so NameError in the
             # finally block never masks the original install error.
             if tmp_path is not None and os.path.exists(tmp_path):
