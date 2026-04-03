@@ -1573,6 +1573,41 @@ def _verify_yolo_detection_rate(
         )
 
 
+def _save_model_safetensors_direct(
+    model: "torch.nn.Module",
+    save_dir: "Path",
+    lm_head_key: str = "decoder.lm_head.weight",
+) -> None:
+    """Save *model* weights directly via ``safetensors.torch.save_file``.
+
+    This bypasses ``model.save_pretrained()`` entirely, which avoids the HF
+    internal deduplication logic that drops ``lm_head.weight`` from the shard
+    when it detects content-hash equality with ``embed_tokens.weight`` (a known
+    regression in transformers ≥5.x even after ``data.clone()`` and
+    ``_clear_lm_head_tied_keys()``).
+
+    Steps:
+    1. Get ``model.state_dict()``.
+    2. For *lm_head_key*, call ``.clone().contiguous()`` to guarantee a unique
+       data pointer AND a unique content hash (contiguous() forces a new
+       physical buffer).
+    3. Write the state dict with ``safetensors.torch.save_file()``.
+    4. Save the config via ``model.config.save_pretrained()`` so that
+       ``from_pretrained()`` can reconstruct the model at load time.
+
+    The caller is responsible for saving the processor separately.
+    """
+    from safetensors.torch import save_file as _st_save_file  # noqa: PLC0415
+
+    save_dir = Path(save_dir)
+    save_dir.mkdir(parents=True, exist_ok=True)
+    sd = model.state_dict()
+    if lm_head_key in sd:
+        sd[lm_head_key] = sd[lm_head_key].clone().contiguous()
+    _st_save_file(sd, save_dir / "model.safetensors")
+    model.config.save_pretrained(str(save_dir))
+
+
 def _clear_lm_head_tied_keys(model: "torch.nn.Module") -> None:
     """Remove ``decoder.lm_head.weight`` from ``_tied_weights_keys`` on *model*
     and its decoder child so that ``save_pretrained`` cannot re-deduplicate the
@@ -2289,58 +2324,18 @@ def train_trocr(
 
             if avg_val < best_val_loss:
                 best_val_loss = avg_val
-                # Break lm_head alias before save so safetensors writes it as an
-                # independent tensor (not deduplicated against embed_tokens.weight).
-                # Also clear _tied_weights_keys: HF checks this list before data_ptr(),
-                # so the clone() alone is insufficient if the key is still listed.
-                if hasattr(model.decoder, "lm_head") and hasattr(model.decoder.lm_head, "weight"):
-                    model.decoder.lm_head.weight = torch.nn.Parameter(
-                        model.decoder.lm_head.weight.data.clone()
-                    )
-                    _clear_lm_head_tied_keys(model)
-                model.save_pretrained(output_dir / "best")
+                # Bypass HF save_pretrained entirely to prevent lm_head deduplication.
+                # transformers ≥5.x recomputes tied-weight lists before serialization
+                # and may use content-hash equality (not just data_ptr()) to deduplicate,
+                # so clone() + _clear_lm_head_tied_keys() is no longer sufficient.
+                _save_model_safetensors_direct(model, output_dir / "best", _trocr_lm_head_key)
                 processor.save_pretrained(output_dir / "best")
-                # Checkpoint integrity: verify lm_head.weight survived serialization.
-                _trocr_best_st = output_dir / "best" / "model.safetensors"
-                if _trocr_best_st.exists():
-                    try:
-                        import json as _json  # noqa: PLC0415
-
-                        # safetensors header is a JSON block at the start of the file.
-                        # Read enough bytes to get the header size (first 8 bytes = uint64 LE).
-                        import struct as _struct  # noqa: PLC0415
-
-                        with open(_trocr_best_st, "rb") as _sf:
-                            _hdr_len = _struct.unpack("<Q", _sf.read(8))[0]
-                            _hdr = _json.loads(_sf.read(_hdr_len))
-                        if _trocr_lm_head_key not in _hdr:
-                            raise RuntimeError(
-                                f"CRITICAL: {_trocr_lm_head_key} is missing from "
-                                f"{_trocr_best_st.name} — lm_head deduplication bug! "
-                                "safetensors dropped the tensor because lm_head and "
-                                "embed_tokens still shared a data pointer at save time. "
-                                "Ensure data.clone() and _clear_lm_head_tied_keys() are "
-                                "called before save_pretrained(). "
-                                "See CLAUDE.md §16 Pattern 6."
-                            )
-                        else:
-                            print(
-                                f"  [TrOCR] Checkpoint OK: {_trocr_lm_head_key} present in shard."
-                            )
-                    except RuntimeError:
-                        raise  # re-raise our own CRITICAL errors
-                    except Exception as _cke:
-                        print(f"  [TrOCR] Checkpoint integrity check skipped: {_cke}")
+                # Post-save integrity check using the shared helper.
+                _verify_lm_head_in_checkpoint(output_dir / "best")
                 print(f"  Best TrOCR saved (val_loss={best_val_loss:.4f})")
 
-        # Break alias again before final save for the same reason.
-        # Also clear _tied_weights_keys so HF cannot re-deduplicate via the list.
-        if hasattr(model.decoder, "lm_head") and hasattr(model.decoder.lm_head, "weight"):
-            model.decoder.lm_head.weight = torch.nn.Parameter(
-                model.decoder.lm_head.weight.data.clone()
-            )
-            _clear_lm_head_tied_keys(model)
-        model.save_pretrained(output_dir / "final")
+        # Final checkpoint: same direct-save approach.
+        _save_model_safetensors_direct(model, output_dir / "final", _trocr_lm_head_key)
         processor.save_pretrained(output_dir / "final")
         with open(output_dir / "training_history.json", "w") as f:
             json.dump(history, f, indent=2)
