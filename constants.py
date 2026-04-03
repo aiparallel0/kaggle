@@ -288,7 +288,7 @@ class DeduplicatingHandler(logging.Handler):
         if self._last_record is None:
             return
         if self._count > 1:
-            self._last_record.msg = f"{self._last_record.getMessage()}  [\\u00d7{self._count}]"
+            self._last_record.msg = f"{self._last_record.getMessage()}  [\u00d7{self._count}]"
             self._last_record.args = ()
         try:
             self._target.emit(self._last_record)

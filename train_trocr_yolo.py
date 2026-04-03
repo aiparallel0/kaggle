@@ -769,9 +769,17 @@ except ImportError:
             best_sd_path = out_dir / "best_sd.pt"
 
             self.model.train()
-            optimizer = torch.optim.AdamW(self.model.parameters(), lr=1e-3, weight_decay=5e-4)
+            # lr=1e-4 instead of 1e-3: the L2 proxy loss has a degenerate global
+            # minimum at weights=0.  At lr=1e-3 the first AdamW step pushes all
+            # feature maps to near-zero in a single epoch, reporting 0 loss for
+            # all subsequent epochs (weight collapse).  Gradient clipping below
+            # is the primary safeguard; the lower LR provides a second layer.
+            optimizer = torch.optim.AdamW(self.model.parameters(), lr=1e-4, weight_decay=5e-4)
             scaler = torch.cuda.amp.GradScaler(enabled=amp and torch.cuda.is_available())
             best_loss = float("inf")
+            _skipped_steps_total = 0  # track GradScaler overflows across all epochs
+
+            import math as _yolo_math  # noqa: PLC0415
 
             _logger.info(
                 "Starting inline YOLO training: %d images × %d epochs", len(img_files), epochs
@@ -779,12 +787,16 @@ except ImportError:
             for epoch in range(epochs):
                 epoch_loss = 0.0
                 count = 0
+                skipped_steps = 0
                 _consecutive_failures = 0  # Fix: issue_report_summary critical #3
                 for img_path in img_files:
                     # Load image
                     try:
                         raw = _load_image(img_path)
                     except Exception as _img_exc:
+                        _logger.debug(
+                            "[inline-YOLO] Could not load %s: %s — skipping", img_path, _img_exc
+                        )
                         # Fix: issue_report_summary critical #3 — log at ERROR level with
                         # batch index, track consecutive failures, abort if threshold exceeded.
                         if isinstance(_img_exc, torch.cuda.OutOfMemoryError):
@@ -842,7 +854,7 @@ except ImportError:
                     )
                     if not label_path.exists():
                         continue
-                    optimizer.zero_grad()
+                    optimizer.zero_grad(set_to_none=True)
                     with torch.cuda.amp.autocast(enabled=amp and torch.cuda.is_available()):
                         # NOTE: Full YOLO detection loss (box regression + DFL +
                         # classification) requires the ultralytics TaskAlignedAssigner
@@ -853,16 +865,76 @@ except ImportError:
                         raw_feats = self.model(t)  # train mode → list of [B, no, H, W]
                         loss = sum(f.float().pow(2).mean() for f in raw_feats)
                     scaler.scale(loss).backward()
+                    # Gradient clipping: MUST unscale before clip so clip sees
+                    # true gradient magnitudes, not GradScaler-inflated ones.
+                    # max_norm=1.0 prevents the first-step weight collapse that
+                    # drives feature maps to zero (L2 proxy loss degenerate min).
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                    _scale_before = scaler.get_scale()
                     scaler.step(optimizer)
                     scaler.update()
-                    epoch_loss += loss.item()
+                    # Detect GradScaler-skipped steps (inf/nan gradients).
+                    if scaler.get_scale() < _scale_before:
+                        skipped_steps += 1
+                    _step_loss_val = loss.item()
+                    if _yolo_math.isnan(_step_loss_val) or _yolo_math.isinf(_step_loss_val):
+                        _logger.warning(
+                            "[inline-YOLO] Epoch %d: NaN/Inf loss at image %s — "
+                            "stopping epoch early.",
+                            epoch + 1,
+                            img_path.name,
+                        )
+                        break
+                    epoch_loss += _step_loss_val
                     count += 1
 
-                avg_loss = epoch_loss / max(count, 1)
+                if count == 0:
+                    _logger.warning(
+                        "[inline-YOLO] Epoch %d/%d: 0 images processed "
+                        "(no label files found or all images failed to load). "
+                        "Check that label files exist at <root>/labels/<split>/<stem>.txt",
+                        epoch + 1,
+                        epochs,
+                    )
+                    continue
+
+                avg_loss = epoch_loss / count
+                _skipped_steps_total += skipped_steps
+                if skipped_steps > 0:
+                    _logger.warning(
+                        "[inline-YOLO] Epoch %d/%d: GradScaler skipped %d/%d steps "
+                        "(inf/nan gradients under AMP fp16). "
+                        "Weights were NOT updated for those steps.",
+                        epoch + 1,
+                        epochs,
+                        skipped_steps,
+                        count,
+                    )
                 _logger.info("Epoch %d/%d — loss=%.4f", epoch + 1, epochs, avg_loss)
+                # Detect weight collapse: L2 proxy loss reaching near-zero means all
+                # feature maps are near-zero (degenerate solution).  The model will
+                # produce no detections.  This is a known limitation of the proxy loss.
+                if epoch > 0 and avg_loss < 1e-6:
+                    _logger.warning(
+                        "[inline-YOLO] Epoch %d/%d: avg_loss=%.2e — feature maps have "
+                        "collapsed to near-zero (degenerate proxy-loss minimum). "
+                        "This model will not produce useful detections. "
+                        "Install ultralytics for real YOLO training: pip install ultralytics",
+                        epoch + 1,
+                        epochs,
+                        avg_loss,
+                    )
                 if avg_loss < best_loss:
                     best_loss = avg_loss
                     torch.save(self.model.state_dict(), best_sd_path)
+
+            if _skipped_steps_total > 0:
+                _logger.warning(
+                    "[inline-YOLO] Training complete: %d total GradScaler-skipped steps. "
+                    "Consider switching to bf16 or fp32 to avoid AMP overflow.",
+                    _skipped_steps_total,
+                )
 
             _logger.info("Inline YOLO training done. Best weights → %s", best_sd_path)
             # Also write best.pt stub so downstream code finds the expected path
@@ -1548,6 +1620,49 @@ def train_trocr(
     model.generation_config.length_penalty = 1.0  # neutral — do not penalise short outputs
     model.generation_config.num_beams = 4
 
+    # ── lm_head weight-tying guardrail (mirrors DONUT path in train.py) ────────
+    # VisionEncoderDecoderModel wraps the TrOCR decoder as a BART-style model
+    # whose lm_head.weight may share storage with decoder.model.embed_tokens.weight
+    # after from_pretrained().  safetensors deduplicates tensors sharing a data
+    # pointer, so lm_head.weight is silently dropped from per-epoch checkpoint shards.
+    # Setting tie_word_embeddings=False on BOTH configs tells HF to not re-tie them,
+    # which alone is insufficient — the alias must be actively broken (see clone below).
+    model.config.tie_word_embeddings = False
+    if hasattr(model.decoder, "config"):
+        model.decoder.config.tie_word_embeddings = False
+
+    # Post-load check: raise immediately if lm_head.weight is already missing.
+    # This can happen if the pretrained checkpoint itself was built with an older
+    # HF version that deduplicated the weight.  Better to fail loudly now than
+    # produce garbled output silently at inference time.
+    _trocr_lm_head_key = "decoder.lm_head.weight"
+    _trocr_loading_missing = loading_info.get("missing_keys", [])
+    if _trocr_lm_head_key in _trocr_loading_missing:
+        raise RuntimeError(
+            f"CRITICAL: {_trocr_lm_head_key} is missing from the {TROCR_MODEL_ID} checkpoint. "
+            "The model cannot produce valid predictions. "
+            "Check that the pretrained model is a complete, uncorrupted download. "
+            "See CLAUDE.md §16 Pattern 6."
+        )
+
+    # Break the weight alias immediately so all subsequent save_pretrained() calls
+    # write lm_head.weight as an independent tensor rather than as a deduplicated
+    # pointer to embed_tokens.weight.
+    if hasattr(model.decoder, "lm_head") and hasattr(model.decoder.lm_head, "weight"):
+        _lm = model.decoder.lm_head
+        _emb = (
+            model.decoder.model.decoder.embed_tokens
+            if hasattr(model.decoder, "model")
+            and hasattr(model.decoder.model, "decoder")
+            and hasattr(model.decoder.model.decoder, "embed_tokens")
+            else None
+        )
+        if _emb is not None and _lm.weight.data_ptr() == _emb.weight.data_ptr():
+            _lm.weight = torch.nn.Parameter(_lm.weight.data.clone())
+            print("  [TrOCR] lm_head.weight alias broken (was sharing storage with embed_tokens)")
+        else:
+            print("  [TrOCR] lm_head.weight is already independent (no alias to break)")
+
     model = model.to(DEVICE)
     # FIX: Non-persistent buffers (e.g. embed_positions._float_tensor in TrOCR's
     # sinusoidal positional embedding) are skipped by model.to() in newer versions
@@ -1674,18 +1789,38 @@ def train_trocr(
     )
 
     total_steps = (len(train_loader) // grad_accum) * TROCR_EPOCHS
+
+    # Validate that this configuration produces enough optimizer steps for convergence.
+    # TrOCR (like DONUT) requires ~200+ steps to learn field alignment; fewer steps
+    # typically produce a model that outputs structurally correct but content-empty
+    # predictions, which gives near-zero F1 without any obvious error.
+    from resource_manager import validate_training_config as _vtc  # noqa: PLC0415
+
+    _vtc(
+        batch_size=trocr_batch,
+        gradient_accumulation_steps=grad_accum,
+        num_train_samples=len(train_ds),
+        epochs=TROCR_EPOCHS,
+    )
+
     if TROCR_MINI_MODE:
         # SGD + Nesterov + CosineAnnealingLR — faster convergence for short micro runs.
         # LR 200× higher than AdamW default: SGD needs larger LR since it lacks adaptive scaling.
         # CosineAnnealingLR decays from TROCR_LR to eta_min over all steps without warmup,
         # reaching useful weights immediately (unlike the linear warmup that barely finishes
         # in 1-epoch micro runs).
+        # Split parameters: 1-D params (biases, LayerNorm) excluded from weight_decay.
+        _sgd_decay: list = []
+        _sgd_no_decay: list = []
+        for _p in model.parameters():
+            (_sgd_no_decay if _p.ndim < 2 else _sgd_decay).append(_p)
         optimizer = torch.optim.SGD(
-            model.parameters(),
-            lr=TROCR_LR * 200,  # e.g. 5e-5 * 200 = 1e-2
+            [
+                {"params": _sgd_decay, "lr": TROCR_LR * 200, "weight_decay": 1e-4},
+                {"params": _sgd_no_decay, "lr": TROCR_LR * 200, "weight_decay": 0.0},
+            ],
             momentum=0.9,
             nesterov=True,
-            weight_decay=1e-4,
         )
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer,
@@ -1695,10 +1830,29 @@ def train_trocr(
         print(f"  [TrOCR] Micro mode: SGD+Nesterov+CosineAnnealingLR, lr={TROCR_LR * 200:.2e}")
     else:
         _trocr = CONTROL_SUITE.trocr
+        # Split parameters into decay / no-decay groups.
+        # 1-D params (biases, LayerNorm γ/β) must NOT receive weight decay:
+        # applying L2 regularisation to them distorts normalisation layers and
+        # biases, yielding slower convergence and slightly lower F1.
+        # p.ndim < 2 is more robust than name-matching ("bias", "LayerNorm.weight")
+        # because it works for any architecture without enumerating names.
+        _trocr_decay: list = []
+        _trocr_no_decay: list = []
+        for _p in model.parameters():
+            (_trocr_no_decay if _p.ndim < 2 else _trocr_decay).append(_p)
         optimizer = torch.optim.AdamW(
-            model.parameters(),
-            lr=TROCR_LR,
-            weight_decay=_trocr.weight_decay,  # 1e-4 (⚠️ was missing — AdamW default is 0)
+            [
+                {
+                    "params": _trocr_decay,
+                    "lr": TROCR_LR,
+                    "weight_decay": _trocr.weight_decay,
+                },
+                {
+                    "params": _trocr_no_decay,
+                    "lr": TROCR_LR,
+                    "weight_decay": 0.0,
+                },
+            ],
             betas=(_trocr.adam_beta1, _trocr.adam_beta2),
             eps=_trocr.adam_epsilon,
         )
@@ -1710,6 +1864,42 @@ def train_trocr(
             num_training_steps=total_steps,
         )
 
+    # ── Pre-training guardrails (mirror DONUT guardrails in train.py) ──────────
+    # Guardrail A: decoder_start_token_id must be set and non-None.
+    _trocr_dst_id = getattr(model.config, "decoder_start_token_id", None)
+    if _trocr_dst_id is None:
+        raise ValueError(
+            "CRITICAL [TrOCR]: model.config.decoder_start_token_id is None. "
+            "Set it to processor.tokenizer.cls_token_id before training."
+        )
+    # Guardrail B: decoder_start_token_id must not equal unk_token_id.
+    _trocr_unk_id = getattr(processor.tokenizer, "unk_token_id", None)
+    if _trocr_unk_id is not None and _trocr_dst_id == _trocr_unk_id:
+        raise ValueError(
+            f"CRITICAL [TrOCR]: decoder_start_token_id={_trocr_dst_id} equals "
+            f"unk_token_id={_trocr_unk_id}. The model will generate garbage. "
+            "Use processor.tokenizer.cls_token_id to set decoder_start_token_id."
+        )
+    # Guardrail C: tie_word_embeddings must be False on both configs.
+    for _cfg_name, _cfg_obj in [
+        ("model.config", model.config),
+        (
+            "decoder.config",
+            getattr(model, "decoder", None) and getattr(model.decoder, "config", None),
+        ),
+    ]:
+        if _cfg_obj is not None and getattr(_cfg_obj, "tie_word_embeddings", None) is True:
+            raise ValueError(
+                f"CRITICAL [TrOCR]: {_cfg_name}.tie_word_embeddings is True. "
+                "Must be False to prevent lm_head.weight deduplication on save. "
+                "Set model.config.tie_word_embeddings = False before training."
+            )
+    print(
+        f"  [TrOCR] Pre-training guardrails PASSED: tie_word_embeddings=False, "
+        f"decoder_start_token_id={_trocr_dst_id}"
+    )
+    # ── End pre-training guardrails ──────────────────────────────────────────
+
     best_val_loss = float("inf")
     history = {"train_loss": [], "val_loss": [], "num_train_samples": 0}
     history["num_train_samples"] = len(train_ds)
@@ -1717,10 +1907,16 @@ def train_trocr(
     _trocr_logger = __import__("logging").getLogger(__name__)
 
     try:
+        _trocr_skipped_total = 0  # GradScaler overflow steps across all epochs
+        _trocr_nan_epochs = 0  # consecutive NaN-loss epochs (abort threshold = 3)
+        import math as _math  # noqa: PLC0415
+
         for epoch in range(TROCR_EPOCHS):
             model.train()
             epoch_loss = 0.0
             optimizer.zero_grad()
+            _epoch_skipped = 0
+            _nan_break = False  # tracks whether the inner loop was aborted early
             # Fix: issue_report_summary critical #3 — track consecutive batch failures.
             _consecutive_batch_failures = 0
 
@@ -1728,6 +1924,86 @@ def train_trocr(
             for step, batch in enumerate(
                 _progress(train_loader, desc=_desc, total=len(train_loader))
             ):
+                pixel_values = batch["pixel_values"].to(DEVICE)
+                labels = batch["labels"].to(DEVICE)
+
+                with torch.amp.autocast(device_type="cuda", dtype=_amp_dtype, enabled=_use_amp):
+                    outputs = model(pixel_values=pixel_values, labels=labels)
+                loss = outputs.loss / grad_accum
+                scaler.scale(loss).backward()
+                _step_loss = outputs.loss.item()  # unscaled, for logging and NaN check
+                # NaN loss detection: abort this epoch immediately rather than
+                # accumulating NaN into epoch_loss and logging a misleading average.
+                if _math.isnan(_step_loss) or _math.isinf(_step_loss):
+                    print(
+                        f"  [TrOCR] WARNING: step {step} loss={_step_loss} — "
+                        "stopping epoch early (fp16 overflow or bad batch). "
+                        "Consider switching to bf16."
+                    )
+                    # Let GradScaler detect the inf/nan and reduce its scale factor
+                    # before we zero gradients.  Calling scaler.step() here causes the
+                    # scaler to skip the optimizer update and call scaler.update() to
+                    # halve the internal scale, which prevents the same overflow in the
+                    # next epoch.  Skipping this step means the scale stays high and the
+                    # overflow typically repeats every epoch indefinitely.
+                    scaler.unscale_(optimizer)
+                    _scale_before_nan = scaler.get_scale()
+                    scaler.step(optimizer)  # skips weight update; marks _found_inf
+                    scaler.update()  # halves scale due to detected inf/nan
+                    if scaler.get_scale() < _scale_before_nan:
+                        _epoch_skipped += 1
+                    optimizer.zero_grad(set_to_none=True)
+                    _nan_break = True
+                    break
+                epoch_loss += _step_loss
+
+                if (step + 1) % grad_accum == 0:
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                    _scale_before = scaler.get_scale()
+                    scaler.step(optimizer)
+                    scaler.update()
+                    # Detect GradScaler-skipped steps (inf/nan under AMP fp16).
+                    # Only advance the LR scheduler when weights were actually updated —
+                    # stepping the scheduler on a skipped optimizer step wastes warmup
+                    # budget and shifts the LR curve without a corresponding weight change.
+                    if scaler.get_scale() < _scale_before:
+                        _epoch_skipped += 1
+                    else:
+                        scheduler.step()
+                    optimizer.zero_grad(set_to_none=True)
+
+            # Flush the incomplete accumulation window at the end of each epoch.
+            # When len(train_loader) % grad_accum != 0, the final partial window
+            # accumulates gradients that never reach the (step+1) % grad_accum == 0
+            # condition — those gradients are silently discarded, causing up to
+            # (grad_accum - 1) / grad_accum fraction of data per epoch to contribute
+            # to loss logging but NOT to weight updates.
+            # Skip the flush if the epoch was aborted early due to NaN (gradients
+            # were already zeroed in the break handler above).
+            if not _nan_break:
+                _remaining = len(train_loader) % grad_accum
+                if _remaining != 0:
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                    _scale_before_flush = scaler.get_scale()
+                    scaler.step(optimizer)
+                    scaler.update()
+                    if scaler.get_scale() < _scale_before_flush:
+                        _epoch_skipped += 1
+                    else:
+                        scheduler.step()
+                    optimizer.zero_grad(set_to_none=True)
+
+            avg_train = epoch_loss / max(len(train_loader), 1)
+
+            if _epoch_skipped > 0:
+                _trocr_skipped_total += _epoch_skipped
+                print(
+                    f"  [TrOCR] Epoch {epoch + 1}: GradScaler skipped {_epoch_skipped} "
+                    f"optimizer step(s) due to AMP fp16 overflow. "
+                    "Weights were NOT updated for those steps."
+                )
                 try:
                     pixel_values = batch["pixel_values"].to(DEVICE)
                     labels = batch["labels"].to(DEVICE)
@@ -1779,7 +2055,21 @@ def train_trocr(
                         pass
                     continue
 
-            avg_train = epoch_loss / len(train_loader)
+            # Track consecutive NaN epochs: 3 in a row → abort training entirely.
+            if _math.isnan(avg_train):
+                _trocr_nan_epochs += 1
+                print(
+                    f"  [TrOCR] Epoch {epoch + 1}: avg_train=NaN "
+                    f"({_trocr_nan_epochs}/3 consecutive NaN epochs)."
+                )
+                if _trocr_nan_epochs >= 3:
+                    raise RuntimeError(
+                        "TrOCR training aborted: 3 consecutive NaN-loss epochs. "
+                        "This indicates severe fp16 overflow or a corrupt batch pipeline. "
+                        "Switch to bf16 (Ampere+) or fp32, or lower the learning rate."
+                    )
+            else:
+                _trocr_nan_epochs = 0  # reset counter on any clean epoch
 
             # Validation
             avg_val = float("inf")
@@ -1801,10 +2091,46 @@ def train_trocr(
 
             if avg_val < best_val_loss:
                 best_val_loss = avg_val
+                # Break lm_head alias before save so safetensors writes it as an
+                # independent tensor (not deduplicated against embed_tokens.weight).
+                if hasattr(model.decoder, "lm_head") and hasattr(model.decoder.lm_head, "weight"):
+                    model.decoder.lm_head.weight = torch.nn.Parameter(
+                        model.decoder.lm_head.weight.data.clone()
+                    )
                 model.save_pretrained(output_dir / "best")
                 processor.save_pretrained(output_dir / "best")
+                # Checkpoint integrity: verify lm_head.weight survived serialization.
+                _trocr_best_st = output_dir / "best" / "model.safetensors"
+                if _trocr_best_st.exists():
+                    try:
+                        import json as _json  # noqa: PLC0415
+
+                        # safetensors header is a JSON block at the start of the file.
+                        # Read enough bytes to get the header size (first 8 bytes = uint64 LE).
+                        import struct as _struct  # noqa: PLC0415
+
+                        with open(_trocr_best_st, "rb") as _sf:
+                            _hdr_len = _struct.unpack("<Q", _sf.read(8))[0]
+                            _hdr = _json.loads(_sf.read(_hdr_len))
+                        if _trocr_lm_head_key not in _hdr:
+                            print(
+                                f"  [TrOCR] WARNING: {_trocr_lm_head_key} is missing from "
+                                f"{_trocr_best_st.name} — lm_head deduplication bug! "
+                                "The model will produce garbage predictions on reload."
+                            )
+                        else:
+                            print(
+                                f"  [TrOCR] Checkpoint OK: {_trocr_lm_head_key} present in shard."
+                            )
+                    except Exception as _cke:
+                        print(f"  [TrOCR] Checkpoint integrity check skipped: {_cke}")
                 print(f"  Best TrOCR saved (val_loss={best_val_loss:.4f})")
 
+        # Break alias again before final save for the same reason.
+        if hasattr(model.decoder, "lm_head") and hasattr(model.decoder.lm_head, "weight"):
+            model.decoder.lm_head.weight = torch.nn.Parameter(
+                model.decoder.lm_head.weight.data.clone()
+            )
         model.save_pretrained(output_dir / "final")
         processor.save_pretrained(output_dir / "final")
         with open(output_dir / "training_history.json", "w") as f:
@@ -1813,6 +2139,44 @@ def train_trocr(
         elapsed = time.time() - start
         print(f"\nTrOCR training complete in {elapsed:.1f}s. Best val_loss={best_val_loss:.4f}")
     finally:
+        # Always free GPU memory even if training raised an exception.
+        # Without this, a mid-training crash leaves TrOCR (246M params) on the
+        # GPU and causes CUDA OOM when the next stage (DONUT) loads its model.
+        # ROBUSTNESS: each variable is deleted in its own try/except so that a
+        # NameError (variable never assigned due to an earlier exception) does
+        # not abort the block and skip _gpu_cleanup().
+        try:
+            del model
+        except Exception:
+            pass
+        try:
+            del optimizer
+        except Exception:
+            pass
+        try:
+            del scheduler
+        except Exception:
+            pass
+        try:
+            del scaler
+        except Exception:
+            pass
+        try:
+            del train_ds
+        except Exception:
+            pass
+        try:
+            del val_ds
+        except Exception:
+            pass
+        try:
+            del train_loader
+        except Exception:
+            pass
+        try:
+            del val_loader
+        except Exception:
+            pass
         # Fix: issue_report_summary medium #9 — wrap each `del` in its own try/except
         # so a NameError on one variable (e.g. model was never assigned because training
         # crashed during setup) does not abort the finally block before _gpu_cleanup() runs,

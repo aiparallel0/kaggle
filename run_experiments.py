@@ -142,6 +142,7 @@ __all__ = [
     "generate_comparison_report",
     "generate_json_summary",
     # from run_experiments
+    "EvaluationUndertrainedError",
     "ExperimentConfig",
     "EXPERIMENTS",
     "TRAIN_CONFIG",
@@ -155,6 +156,23 @@ __all__ = [
 ]
 
 # ---------------------------------------------------------------------------
+# Sentinel exception for expected evaluation failures (undertrained models)
+# ---------------------------------------------------------------------------
+
+
+class EvaluationUndertrainedError(RuntimeError):
+    """Raised when a model is too undertrained to produce parseable output.
+
+    Using a dedicated class instead of RuntimeError + string matching means:
+    - Catch sites can target this exact exception, not any RuntimeError.
+    - A real RuntimeError (tensor shape mismatch, CUDA error, etc.) is never
+      silently converted to F1=0.0 just because its message happens to contain
+      one of the old sentinel substrings.
+    - Future refactoring can rename the message without breaking catch sites.
+
+    Raised by:
+    - DonutEvaluator.evaluate() when parse_failure_count > 50% threshold.
+    - DonutEvaluator._self_test() when the model produces an empty prediction.
 # Custom exception classes
 # ---------------------------------------------------------------------------
 
@@ -2422,7 +2440,7 @@ class DonutEvaluator:
                 f"The model is likely broken — check token2json compatibility."
             )
             if not allow_high_parse_failures:
-                raise RuntimeError(msg)
+                raise EvaluationUndertrainedError(msg)
             logger.warning("%s — returning zero-metric result", msg)
             return EvaluationResult(
                 global_precision=0.0,
@@ -2516,6 +2534,7 @@ class DonutEvaluator:
             try:
                 parsed = _parse_sroie_output(cleaned)
             except Exception as exc:
+                raise EvaluationUndertrainedError(
                 # Fix: issue_report_summary high #7 — raise SelfTestFailedError so callers
                 # can catch it explicitly without brittle string matching.
                 raise SelfTestFailedError(
@@ -2528,6 +2547,7 @@ class DonutEvaluator:
             try:
                 parsed = self.processor.token2json(cleaned)
             except Exception as exc:
+                raise EvaluationUndertrainedError(
                 # Fix: issue_report_summary high #7 — raise SelfTestFailedError.
                 raise SelfTestFailedError(
                     f"Self-test FAILED: token2json raised {type(exc).__name__}: {exc}\n"
@@ -3731,6 +3751,25 @@ TRAIN_CONFIG: dict[str, Any] = {
 }
 
 
+def _sanitize_metrics(metrics: dict) -> dict:
+    """Replace NaN/Inf float values with JSON-safe sentinels before serialization.
+
+    Python's json.dumps raises ValueError on math.nan/math.inf by default (they
+    are not valid JSON).  With default=str they become strings, silently breaking
+    downstream parsing.  This function converts them to None (JSON null) so the
+    output is always valid JSON while still signalling "no value".
+    """
+    import math as _m  # noqa: PLC0415
+
+    sanitized = {}
+    for k, v in metrics.items():
+        if isinstance(v, float) and (_m.isnan(v) or _m.isinf(v)):
+            sanitized[k] = None
+        else:
+            sanitized[k] = v
+    return sanitized
+
+
 def _config_to_dict(config: ExperimentConfig) -> dict:
     """Serialize an ExperimentConfig to the TRAIN_CONFIG dict format.
 
@@ -4557,6 +4596,29 @@ def run_experiment(
     try:
         metrics = evaluate_experiment(exp_id, model_dir)
         metrics["training_time_sec"] = _train_duration_sec
+    except EvaluationUndertrainedError as exc:
+        # Catch self-test failures and parse-failure-threshold errors for any
+        # run type (not just micro/mini).  An undertrained full-run model that
+        # hasn't converged to the SROIE tag format should record F1=0.0 and
+        # let the remaining experiments continue, not crash the pipeline.
+        # ROBUSTNESS: using EvaluationUndertrainedError (not bare RuntimeError +
+        # string matching) ensures only genuine undertrained-model errors are
+        # caught here.  Real RuntimeErrors (CUDA error, shape mismatch, etc.)
+        # propagate to the caller as intended.
+        print(
+            f"[Exp {exp_id}] WARNING: evaluation failed (undertrained model) — "
+            f"saving zero-metric result. Error: {exc}"
+        )
+        metrics = {f: 0.0 for f in ["global_f1", "global_precision", "global_recall"]}
+        # Include per-field zeros so downstream paper-generation code doesn't KeyError
+        from constants import FIELDS as _FIELDS
+
+        for _field in _FIELDS:
+            metrics[f"{_field}_f1"] = 0.0
+            metrics[f"{_field}_ned"] = 1.0  # NED=1.0 means maximum edit distance
+        metrics["error"] = str(exc)
+        metrics["self_test_failed"] = True
+        metrics["training_time_sec"] = _train_duration_sec
     except (SelfTestFailedError, RuntimeError) as exc:
         # Fix: issue_report_summary high #7 — catch SelfTestFailedError explicitly.
         # The old string-match "Self-test FAILED" in str(exc) was brittle; any
@@ -4663,7 +4725,7 @@ def run_experiment(
         "datasets": config.datasets,
         "config": original_config_dict,
         "num_train_samples": len(train_samples),
-        "metrics": metrics,
+        "metrics": _sanitize_metrics(metrics),
         "training_log": log_history,
     }
     result_file.write_text(json.dumps(result, indent=2))

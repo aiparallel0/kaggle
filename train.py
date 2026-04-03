@@ -369,7 +369,7 @@ except ImportError:
                         torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
                         scaler.step(optimizer)
                         scaler.update()
-                        optimizer.zero_grad()
+                        optimizer.zero_grad(set_to_none=True)
                         if scheduler is not None:
                             scheduler.step()
                         global_step += 1
@@ -384,6 +384,23 @@ except ImportError:
                     self._call_callbacks("on_step_end", control)
                     if control.should_training_stop:
                         break
+
+                # Flush the incomplete accumulation window at epoch end.
+                # When len(train_loader) % gradient_accumulation_steps != 0,
+                # the final partial window accumulates gradients that never
+                # reach the (step+1) % grad_accum == 0 condition — those
+                # gradients are silently discarded each epoch.
+                _remaining = len(train_loader) % args.gradient_accumulation_steps
+                if _remaining != 0 and not control.should_training_stop:
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+                    scaler.step(optimizer)
+                    scaler.update()
+                    optimizer.zero_grad(set_to_none=True)
+                    if scheduler is not None:
+                        scheduler.step()
+                    global_step += 1
+                    self.state.global_step = global_step
 
                 # End of epoch: evaluate + checkpoint
                 eval_loss = float("inf")
@@ -1794,10 +1811,33 @@ except ImportError:
             # Guard: detect safetensors deduplication bug (lm_head.weight missing)
             # If tie_word_embeddings is False and lm_head.weight is absent, copy
             # embed_tokens.weight as a starting point (will be overwritten by fine-tuning).
+            # ROBUSTNESS: both lm_head_key AND embed_key may be absent if the checkpoint
+            # was saved with both tensors deduplicated out (e.g. a very aggressive
+            # safetensors writer).  In that case we cannot recover silently — raise
+            # immediately so the caller knows the checkpoint is corrupt.
             lm_head_key = "decoder.lm_head.weight"
             embed_key = "decoder.model.decoder.embed_tokens.weight"
-            if lm_head_key not in state_dict and embed_key in state_dict:
-                state_dict[lm_head_key] = state_dict[embed_key].clone()
+            if lm_head_key not in state_dict:
+                if embed_key in state_dict:
+                    state_dict[lm_head_key] = state_dict[embed_key].clone()
+                    import logging as _logging_lm
+
+                    _logging_lm.getLogger(__name__).warning(
+                        "load_model_with_tied_weights: lm_head.weight missing from checkpoint "
+                        "— cloned from embed_tokens.weight as fallback. "
+                        "Ensure LmHeadCloneCallback is registered during training to prevent this."
+                    )
+                else:
+                    # Neither key present: checkpoint is corrupt and unrecoverable.
+                    _tie = getattr(getattr(model, "config", None), "tie_word_embeddings", True)
+                    if not _tie:
+                        raise RuntimeError(
+                            "CRITICAL: decoder.lm_head.weight is missing from the checkpoint "
+                            "and decoder.model.decoder.embed_tokens.weight is also absent — "
+                            "the checkpoint is corrupt and cannot be loaded safely. "
+                            "Re-train with LmHeadCloneCallback registered. "
+                            "See CLAUDE.md §16 Pattern 6."
+                        )
 
             missing, unexpected = model.load_state_dict(state_dict, strict=False)
             # Filter out expected missing keys (position_ids buffer, etc.)
@@ -1808,6 +1848,18 @@ except ImportError:
                 and not k.endswith("_attn_mask")
                 and "num_batches_tracked" not in k
             ]
+            # ROBUSTNESS: explicitly fail if lm_head.weight is still absent after load.
+            # This catches the case where our pre-load guard above was bypassed (e.g.
+            # tie_word_embeddings=True on config, so the guard's _tie check was skipped).
+            if lm_head_key in missing:
+                _tie_after = getattr(getattr(model, "config", None), "tie_word_embeddings", True)
+                if not _tie_after:
+                    raise RuntimeError(
+                        f"CRITICAL: {lm_head_key} is listed in missing_keys after "
+                        "load_state_dict(). The checkpoint is corrupt. "
+                        "Re-train with LmHeadCloneCallback registered. "
+                        "See CLAUDE.md §16 Pattern 6."
+                    )
             if truly_missing:
                 import logging as _logging_fr
 
@@ -3533,6 +3585,20 @@ class DonutTrainer:
         _grad_accum = getattr(self.config, "gradient_accumulation_steps", 2)
         _steps_epoch = math.ceil(len(self.train_dataset) / self.config.per_device_train_batch_size)
         _total_opt_steps = math.ceil(_steps_epoch / _grad_accum) * self.config.max_epochs
+
+        # Validate that this configuration produces enough optimizer steps.
+        # DONUT requires ~200+ steps to learn field content beyond XML scaffolding;
+        # fewer steps yield perfectly structured but content-empty predictions (F1≈0)
+        # with no visible error — a known silent failure documented in resource_manager.py.
+        from resource_manager import validate_training_config as _vtc  # noqa: PLC0415
+
+        _vtc(
+            batch_size=self.config.per_device_train_batch_size,
+            gradient_accumulation_steps=_grad_accum,
+            num_train_samples=len(self.train_dataset),
+            epochs=self.config.max_epochs,
+        )
+
         _cfg_warmup = getattr(self.config, "warmup_steps", 100)
         _eff_warmup = min(_cfg_warmup, max(10, _total_opt_steps // 10))
         if _eff_warmup != _cfg_warmup:
@@ -3595,42 +3661,67 @@ class DonutTrainer:
             **_dl_extra,
         )
 
-        # Build layerwise AdamW optimizer: encoder at encoder_lr, decoder at decoder_lr.
-        # Falls back to a single learning_rate if encoder_lr/decoder_lr are absent.
+        # Build layerwise optimizer: encoder at encoder_lr, decoder at decoder_lr,
+        # with weight decay EXCLUDED from 1-D parameters (biases and LayerNorm
+        # scale/shift tensors).
+        #
+        # WHY exclude 1-D params from weight decay:
+        # - Bias terms: L2 regularization on biases makes it harder for the model
+        #   to learn precise additive offsets (e.g. vocabulary token logit biases).
+        # - LayerNorm weight/bias: shrinking these destabilizes normalization —
+        #   LayerNorm scale=1 and shift=0 is only the *initial* state, not the
+        #   optimal one; regularizing toward it hurts convergence.
+        # - Industry standard: GPT-2, BERT, T5 all exclude 1-D params from decay.
+        #
+        # Detection strategy: use p.ndim < 2 (all biases and LayerNorm params are
+        # 1-D scalars; all weight matrices are ≥2-D). This is more robust than
+        # name matching because it works regardless of HF module naming conventions.
         encoder_lr = getattr(self.config, "encoder_lr", self.config.learning_rate)
         decoder_lr = getattr(self.config, "decoder_lr", self.config.learning_rate)
         _weight_decay = getattr(self.config, "weight_decay", 0.01)
-        encoder_params = [
-            p
-            for n, p in self.model.named_parameters()
-            if n.startswith("encoder.") and p.requires_grad
-        ]
-        decoder_params = [
-            p
-            for n, p in self.model.named_parameters()
-            if not n.startswith("encoder.") and p.requires_grad
-        ]
+
+        _enc_decay, _enc_no_decay, _dec_decay, _dec_no_decay = [], [], [], []
+        for _pname, _p in self.model.named_parameters():
+            if not _p.requires_grad:
+                continue
+            _is_encoder = _pname.startswith("encoder.")
+            _no_decay = _p.ndim < 2  # 1-D → bias or LayerNorm; exclude from decay
+            if _is_encoder:
+                (_enc_no_decay if _no_decay else _enc_decay).append(_p)
+            else:
+                (_dec_no_decay if _no_decay else _dec_decay).append(_p)
+
+        logger.info(
+            "Optimizer param groups: enc_decay=%d enc_nodecay=%d dec_decay=%d dec_nodecay=%d",
+            len(_enc_decay),
+            len(_enc_no_decay),
+            len(_dec_decay),
+            len(_dec_no_decay),
+        )
+
         _optimizer_type = getattr(self.config, "optimizer_type", "adamw")
         if _optimizer_type == "sgd":
             # SGD + Nesterov: faster per-step, sufficient for near-converged transformers
             # used in micro mode where adaptive moments aren't needed for short runs
             optimizer = torch.optim.SGD(
                 [
-                    {"params": encoder_params, "lr": encoder_lr},
-                    {"params": decoder_params, "lr": decoder_lr},
+                    {"params": _enc_decay, "lr": encoder_lr, "weight_decay": _weight_decay},
+                    {"params": _enc_no_decay, "lr": encoder_lr, "weight_decay": 0.0},
+                    {"params": _dec_decay, "lr": decoder_lr, "weight_decay": _weight_decay},
+                    {"params": _dec_no_decay, "lr": decoder_lr, "weight_decay": 0.0},
                 ],
                 momentum=0.9,
                 nesterov=True,
-                weight_decay=_weight_decay,
             )
             logger.info("Optimizer: SGD + Nesterov (micro/mini mode)")
         else:
             optimizer = torch.optim.AdamW(
                 [
-                    {"params": encoder_params, "lr": encoder_lr},
-                    {"params": decoder_params, "lr": decoder_lr},
+                    {"params": _enc_decay, "lr": encoder_lr, "weight_decay": _weight_decay},
+                    {"params": _enc_no_decay, "lr": encoder_lr, "weight_decay": 0.0},
+                    {"params": _dec_decay, "lr": decoder_lr, "weight_decay": _weight_decay},
+                    {"params": _dec_no_decay, "lr": decoder_lr, "weight_decay": 0.0},
                 ],
-                weight_decay=_weight_decay,
             )
 
         # OneCycleLR: aggressive warmup + cosine decay, reaches peak LR immediately
@@ -3638,9 +3729,12 @@ class DonutTrainer:
         _lr_schedule = getattr(self.config, "lr_schedule", "cosine")
         custom_scheduler = None
         if _lr_schedule == "one_cycle" and _total_opt_steps > 0:
+            # 4 param groups now (enc_decay, enc_nodecay, dec_decay, dec_nodecay).
+            # OneCycleLR requires one max_lr per param group — repeat each LR so
+            # the no-decay group mirrors its decay counterpart's schedule.
             custom_scheduler = torch.optim.lr_scheduler.OneCycleLR(
                 optimizer,
-                max_lr=[encoder_lr, decoder_lr],
+                max_lr=[encoder_lr, encoder_lr, decoder_lr, decoder_lr],
                 total_steps=_total_opt_steps,
                 pct_start=0.1,  # 10% warmup, 90% cosine decay
                 anneal_strategy="cos",
@@ -3893,9 +3987,23 @@ class DonutTrainer:
                 inputs.pop("decoder_inputs_embeds", None)
                 # Also strip loss_weight — it is only for training, not eval.
                 inputs.pop("loss_weight", None)
-                return super().prediction_step(
-                    model, inputs, prediction_loss_only, ignore_keys=ignore_keys
-                )
+                # Disable label smoothing during evaluation.
+                # With predict_with_generate=True, Seq2SeqTrainer.prediction_step()
+                # applies self.label_smoother to the eval loss when label_smoother
+                # is not None.  This biases the early-stopping metric: eval_loss
+                # would include the smoothing regularisation term and systematically
+                # penalise overconfident predictions regardless of whether they are
+                # correct — causing early stopping to favour over-smoothed models.
+                # Eval loss should be pure cross-entropy so that epoch comparison is
+                # fair; label smoothing belongs only to the training objective.
+                _saved_smoother = self.label_smoother
+                self.label_smoother = None
+                try:
+                    return super().prediction_step(
+                        model, inputs, prediction_loss_only, ignore_keys=ignore_keys
+                    )
+                finally:
+                    self.label_smoother = _saved_smoother
 
         trainer = _DonutSeq2SeqTrainer(
             model=self.model,
@@ -3911,6 +4019,35 @@ class DonutTrainer:
         # These checks catch the known silent-failure modes documented in CLAUDE.md
         # §16 BEFORE training begins, so no compute is wasted on a broken setup.
         _decoder_config = getattr(self.model, "decoder", self.model).config
+
+        # Guardrail 0: lm_head.weight must NOT share a data pointer with
+        # embed_tokens.weight.  resize_token_embeddings() should have broken the
+        # alias; if it did not (e.g. custom model wrapper or future HF regression),
+        # the first save_pretrained() will silently deduplicate them and drop
+        # lm_head.weight from the shard → F1≈0.42 on reload.
+        # Fix here rather than letting LmHeadCloneCallback fix it later so the
+        # alias never reaches the first checkpoint.
+        _g0_lm = getattr(getattr(self.model, "decoder", None), "lm_head", None)
+        _g0_emb = None
+        try:
+            _g0_emb = self.model.decoder.model.decoder.embed_tokens
+        except AttributeError:
+            pass
+        if (
+            _g0_lm is not None
+            and _g0_emb is not None
+            and hasattr(_g0_lm, "weight")
+            and hasattr(_g0_emb, "weight")
+            and _g0_lm.weight.data_ptr() == _g0_emb.weight.data_ptr()
+        ):
+            logger.warning(
+                "Guardrail 0: lm_head.weight shares storage with embed_tokens.weight "
+                "(alias not broken by resize_token_embeddings). "
+                "Cloning now to prevent safetensors deduplication on first save."
+            )
+            _g0_lm.weight = torch.nn.Parameter(_g0_lm.weight.data.clone())
+        else:
+            logger.debug("Guardrail 0: lm_head.weight is already independent (no alias).")
 
         # Guardrail 1: tie_word_embeddings MUST be False after resize_token_embeddings().
         # If True, tie_weights() on checkpoint reload overwrites the learned lm_head
