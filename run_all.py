@@ -2470,19 +2470,19 @@ def _evaluate_field_assigner(
 ) -> dict:
     """Run inference on every test sample with the given assigner and return F1 metrics.
 
-    Mirrors the scoring logic in run_experiments.py: exact string match
-    (case-insensitive, stripped) per field, aggregated into global F1.
+    Uses the canonical ``compute_metrics`` from ``run_experiments`` so scoring is
+    identical to the DONUT evaluation path (global precision/recall/F1, per-field F1,
+    NED, and overall exact-match).
     """
+    import run_experiments as _re  # noqa: I001
     import train_trocr_yolo as _tty  # noqa: I001
 
     from constants import FIELDS
 
-    tp = fp = fn = 0
-    per_tp = {f: 0 for f in FIELDS}
-    per_fp = {f: 0 for f in FIELDS}
-    per_fn = {f: 0 for f in FIELDS}
+    predictions: list[dict] = []
+    ground_truths: list[dict] = [gt for _, gt in test_samples]
 
-    for img_path, gt in test_samples:
+    for img_path, _gt in test_samples:
         try:
             pred = _tty.run_trocr_yolo_inference(
                 Path(img_path),
@@ -2494,35 +2494,9 @@ def _evaluate_field_assigner(
         except Exception as _exc:
             logger.debug("Inference failed for %s: %s", img_path, _exc)
             pred = {f: "" for f in FIELDS}
+        predictions.append(pred)
 
-        for fname in FIELDS:
-            gt_val = gt.get(fname, "").strip().lower()
-            pred_val = pred.get(fname, "").strip().lower()
-            if gt_val and pred_val == gt_val:
-                tp += 1
-                per_tp[fname] += 1
-            elif gt_val:
-                fn += 1
-                per_fn[fname] += 1
-            if pred_val and pred_val != gt_val:
-                fp += 1
-                per_fp[fname] += 1
-
-    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
-
-    metrics: dict = {
-        "global_f1": round(f1, 4),
-        "global_precision": round(precision, 4),
-        "global_recall": round(recall, 4),
-    }
-    for fname in FIELDS:
-        ftp, ffp, ffn = per_tp[fname], per_fp[fname], per_fn[fname]
-        fp_ = ftp / (ftp + ffp) if (ftp + ffp) > 0 else 0.0
-        fr_ = ftp / (ftp + ffn) if (ftp + ffn) > 0 else 0.0
-        metrics[f"{fname}_f1"] = round(2 * fp_ * fr_ / (fp_ + fr_) if (fp_ + fr_) > 0 else 0.0, 4)
-    return metrics
+    return _re.compute_metrics(predictions, ground_truths)
 
 
 def _print_backend_comparison(all_results: dict, logger: "logging.Logger") -> None:
