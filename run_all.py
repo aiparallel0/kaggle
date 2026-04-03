@@ -2629,6 +2629,8 @@ def stage_trocr_all_backends(args) -> StageResult:
             with open(regex_path) as _fh:
                 _rx = json.load(_fh)
             _first = next(iter(_rx.values()), {})
+            if not isinstance(_first, dict):
+                _first = {}
             all_results["regex"] = {
                 "backend": "Regex heuristic",
                 "description": "Rule-based field assignment, no trainable parameters",

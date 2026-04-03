@@ -4174,19 +4174,30 @@ class DonutTrainer:
         save_dir.mkdir(parents=True, exist_ok=True)
 
         # ── lm_head detach fix ─────────────────────────────────────────────
-        # load_best_model_at_end re-loads the best epoch checkpoint via
-        # from_pretrained().  Per-epoch checkpoints may not have serialized
-        # lm_head independently (even with tie_word_embeddings=False) because
-        # safetensors deduplicates tensors sharing a data pointer.  After
-        # resize_token_embeddings(), base-vocab rows can still share a pointer
-        # with embed_tokens.  We force a deep copy so save_pretrained() writes
-        # lm_head as a fully independent tensor with no shared pointer.
+        # transformers ≥5.x recomputes tied-weight lists before serialization
+        # and may use content-hash equality (not just data_ptr()) to deduplicate.
+        # Bypass save_pretrained entirely: write the state dict directly with
+        # safetensors.torch.save_file so HF's internal dedup logic is never
+        # invoked.  The lm_head weight gets .clone().contiguous() to guarantee
+        # a unique data pointer AND a unique content hash.
         decoder = self.model.decoder
-        if hasattr(decoder, "lm_head"):
-            decoder.lm_head.weight = torch.nn.Parameter(decoder.lm_head.weight.data.clone())
-        # ──────────────────────────────────────────────────────────────────
+        try:
+            from safetensors.torch import save_file as _st_save_file  # noqa: PLC0415
 
-        self.model.save_pretrained(str(save_dir))
+            _sd = self.model.state_dict()
+            _lm_key = "decoder.lm_head.weight"
+            if _lm_key in _sd:
+                _sd[_lm_key] = _sd[_lm_key].clone().contiguous()
+            _st_save_file(_sd, save_dir / "model.safetensors")
+            self.model.config.save_pretrained(str(save_dir))
+        except ImportError:
+            # safetensors not installed — fall back to save_pretrained with clone.
+            # NOTE: this path is still vulnerable to content-hash deduplication in
+            # transformers ≥5.x.  Install the safetensors package for full protection.
+            if hasattr(decoder, "lm_head"):
+                decoder.lm_head.weight = torch.nn.Parameter(decoder.lm_head.weight.data.clone())
+            self.model.save_pretrained(str(save_dir))
+        # ──────────────────────────────────────────────────────────────────
         self.processor.save_pretrained(str(save_dir))
         logger.info("Model + processor saved → %s", save_dir)
 
