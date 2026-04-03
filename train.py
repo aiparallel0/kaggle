@@ -369,7 +369,7 @@ except ImportError:
                         torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
                         scaler.step(optimizer)
                         scaler.update()
-                        optimizer.zero_grad()
+                        optimizer.zero_grad(set_to_none=True)
                         if scheduler is not None:
                             scheduler.step()
                         global_step += 1
@@ -384,6 +384,23 @@ except ImportError:
                     self._call_callbacks("on_step_end", control)
                     if control.should_training_stop:
                         break
+
+                # Flush the incomplete accumulation window at epoch end.
+                # When len(train_loader) % gradient_accumulation_steps != 0,
+                # the final partial window accumulates gradients that never
+                # reach the (step+1) % grad_accum == 0 condition — those
+                # gradients are silently discarded each epoch.
+                _remaining = len(train_loader) % args.gradient_accumulation_steps
+                if _remaining != 0 and not control.should_training_stop:
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+                    scaler.step(optimizer)
+                    scaler.update()
+                    optimizer.zero_grad(set_to_none=True)
+                    if scheduler is not None:
+                        scheduler.step()
+                    global_step += 1
+                    self.state.global_step = global_step
 
                 # End of epoch: evaluate + checkpoint
                 eval_loss = float("inf")
@@ -3534,6 +3551,20 @@ class DonutTrainer:
         _grad_accum = getattr(self.config, "gradient_accumulation_steps", 2)
         _steps_epoch = math.ceil(len(self.train_dataset) / self.config.per_device_train_batch_size)
         _total_opt_steps = math.ceil(_steps_epoch / _grad_accum) * self.config.max_epochs
+
+        # Validate that this configuration produces enough optimizer steps.
+        # DONUT requires ~200+ steps to learn field content beyond XML scaffolding;
+        # fewer steps yield perfectly structured but content-empty predictions (F1≈0)
+        # with no visible error — a known silent failure documented in resource_manager.py.
+        from resource_manager import validate_training_config as _vtc  # noqa: PLC0415
+
+        _vtc(
+            batch_size=self.config.per_device_train_batch_size,
+            gradient_accumulation_steps=_grad_accum,
+            num_train_samples=len(self.train_dataset),
+            epochs=self.config.max_epochs,
+        )
+
         _cfg_warmup = getattr(self.config, "warmup_steps", 100)
         _eff_warmup = min(_cfg_warmup, max(10, _total_opt_steps // 10))
         if _eff_warmup != _cfg_warmup:

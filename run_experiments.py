@@ -3732,6 +3732,25 @@ TRAIN_CONFIG: dict[str, Any] = {
 }
 
 
+def _sanitize_metrics(metrics: dict) -> dict:
+    """Replace NaN/Inf float values with JSON-safe sentinels before serialization.
+
+    Python's json.dumps raises ValueError on math.nan/math.inf by default (they
+    are not valid JSON).  With default=str they become strings, silently breaking
+    downstream parsing.  This function converts them to None (JSON null) so the
+    output is always valid JSON while still signalling "no value".
+    """
+    import math as _m  # noqa: PLC0415
+
+    sanitized = {}
+    for k, v in metrics.items():
+        if isinstance(v, float) and (_m.isnan(v) or _m.isinf(v)):
+            sanitized[k] = None
+        else:
+            sanitized[k] = v
+    return sanitized
+
+
 def _config_to_dict(config: ExperimentConfig) -> dict:
     """Serialize an ExperimentConfig to the TRAIN_CONFIG dict format.
 
@@ -4660,7 +4679,7 @@ def run_experiment(
         "datasets": config.datasets,
         "config": original_config_dict,
         "num_train_samples": len(train_samples),
-        "metrics": metrics,
+        "metrics": _sanitize_metrics(metrics),
         "training_log": log_history,
     }
     result_file.write_text(json.dumps(result, indent=2))
