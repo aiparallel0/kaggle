@@ -3881,6 +3881,35 @@ class DonutTrainer:
         # §16 BEFORE training begins, so no compute is wasted on a broken setup.
         _decoder_config = getattr(self.model, "decoder", self.model).config
 
+        # Guardrail 0: lm_head.weight must NOT share a data pointer with
+        # embed_tokens.weight.  resize_token_embeddings() should have broken the
+        # alias; if it did not (e.g. custom model wrapper or future HF regression),
+        # the first save_pretrained() will silently deduplicate them and drop
+        # lm_head.weight from the shard → F1≈0.42 on reload.
+        # Fix here rather than letting LmHeadCloneCallback fix it later so the
+        # alias never reaches the first checkpoint.
+        _g0_lm = getattr(getattr(self.model, "decoder", None), "lm_head", None)
+        _g0_emb = None
+        try:
+            _g0_emb = self.model.decoder.model.decoder.embed_tokens
+        except AttributeError:
+            pass
+        if (
+            _g0_lm is not None
+            and _g0_emb is not None
+            and hasattr(_g0_lm, "weight")
+            and hasattr(_g0_emb, "weight")
+            and _g0_lm.weight.data_ptr() == _g0_emb.weight.data_ptr()
+        ):
+            logger.warning(
+                "Guardrail 0: lm_head.weight shares storage with embed_tokens.weight "
+                "(alias not broken by resize_token_embeddings). "
+                "Cloning now to prevent safetensors deduplication on first save."
+            )
+            _g0_lm.weight = torch.nn.Parameter(_g0_lm.weight.data.clone())
+        else:
+            logger.debug("Guardrail 0: lm_head.weight is already independent (no alias).")
+
         # Guardrail 1: tie_word_embeddings MUST be False after resize_token_embeddings().
         # If True, tie_weights() on checkpoint reload overwrites the learned lm_head
         # with embed_tokens weights → F1 = 0.0 on every prediction (Bug B / lm_head_dedup).

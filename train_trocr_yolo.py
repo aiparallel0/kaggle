@@ -834,7 +834,18 @@ except ImportError:
                     # Detect GradScaler-skipped steps (inf/nan gradients).
                     if scaler.get_scale() < _scale_before:
                         skipped_steps += 1
-                    epoch_loss += loss.item()
+                    _step_loss_val = loss.item()
+                    import math as _yolo_math  # noqa: PLC0415
+
+                    if _yolo_math.isnan(_step_loss_val) or _yolo_math.isinf(_step_loss_val):
+                        _logger.warning(
+                            "[inline-YOLO] Epoch %d: NaN/Inf loss at image %s — "
+                            "stopping epoch early.",
+                            epoch + 1,
+                            img_path.name,
+                        )
+                        break
+                    epoch_loss += _step_loss_val
                     count += 1
 
                 if count == 0:
@@ -1510,6 +1521,49 @@ def train_trocr(
     model.generation_config.length_penalty = 1.0  # neutral — do not penalise short outputs
     model.generation_config.num_beams = 4
 
+    # ── lm_head weight-tying guardrail (mirrors DONUT path in train.py) ────────
+    # VisionEncoderDecoderModel wraps the TrOCR decoder as a BART-style model
+    # whose lm_head.weight may share storage with decoder.model.embed_tokens.weight
+    # after from_pretrained().  safetensors deduplicates tensors sharing a data
+    # pointer, so lm_head.weight is silently dropped from per-epoch checkpoint shards.
+    # Setting tie_word_embeddings=False on BOTH configs tells HF to not re-tie them,
+    # which alone is insufficient — the alias must be actively broken (see clone below).
+    model.config.tie_word_embeddings = False
+    if hasattr(model.decoder, "config"):
+        model.decoder.config.tie_word_embeddings = False
+
+    # Post-load check: raise immediately if lm_head.weight is already missing.
+    # This can happen if the pretrained checkpoint itself was built with an older
+    # HF version that deduplicated the weight.  Better to fail loudly now than
+    # produce garbled output silently at inference time.
+    _trocr_lm_head_key = "decoder.lm_head.weight"
+    _trocr_loading_missing = loading_info.get("missing_keys", [])
+    if _trocr_lm_head_key in _trocr_loading_missing:
+        raise RuntimeError(
+            f"CRITICAL: {_trocr_lm_head_key} is missing from the {TROCR_MODEL_ID} checkpoint. "
+            "The model cannot produce valid predictions. "
+            "Check that the pretrained model is a complete, uncorrupted download. "
+            "See CLAUDE.md §16 Pattern 6."
+        )
+
+    # Break the weight alias immediately so all subsequent save_pretrained() calls
+    # write lm_head.weight as an independent tensor rather than as a deduplicated
+    # pointer to embed_tokens.weight.
+    if hasattr(model.decoder, "lm_head") and hasattr(model.decoder.lm_head, "weight"):
+        _lm = model.decoder.lm_head
+        _emb = (
+            model.decoder.model.decoder.embed_tokens
+            if hasattr(model.decoder, "model")
+            and hasattr(model.decoder.model, "decoder")
+            and hasattr(model.decoder.model.decoder, "embed_tokens")
+            else None
+        )
+        if _emb is not None and _lm.weight.data_ptr() == _emb.weight.data_ptr():
+            _lm.weight = torch.nn.Parameter(_lm.weight.data.clone())
+            print("  [TrOCR] lm_head.weight alias broken (was sharing storage with embed_tokens)")
+        else:
+            print("  [TrOCR] lm_head.weight is already independent (no alias to break)")
+
     model = model.to(DEVICE)
     # FIX: Non-persistent buffers (e.g. embed_positions._float_tensor in TrOCR's
     # sinusoidal positional embedding) are skipped by model.to() in newer versions
@@ -1664,16 +1718,55 @@ def train_trocr(
             num_training_steps=total_steps,
         )
 
+    # ── Pre-training guardrails (mirror DONUT guardrails in train.py) ──────────
+    # Guardrail A: decoder_start_token_id must be set and non-None.
+    _trocr_dst_id = getattr(model.config, "decoder_start_token_id", None)
+    if _trocr_dst_id is None:
+        raise ValueError(
+            "CRITICAL [TrOCR]: model.config.decoder_start_token_id is None. "
+            "Set it to processor.tokenizer.cls_token_id before training."
+        )
+    # Guardrail B: decoder_start_token_id must not equal unk_token_id.
+    _trocr_unk_id = getattr(processor.tokenizer, "unk_token_id", None)
+    if _trocr_unk_id is not None and _trocr_dst_id == _trocr_unk_id:
+        raise ValueError(
+            f"CRITICAL [TrOCR]: decoder_start_token_id={_trocr_dst_id} equals "
+            f"unk_token_id={_trocr_unk_id}. The model will generate garbage. "
+            "Use processor.tokenizer.cls_token_id to set decoder_start_token_id."
+        )
+    # Guardrail C: tie_word_embeddings must be False on both configs.
+    for _cfg_name, _cfg_obj in [
+        ("model.config", model.config),
+        (
+            "decoder.config",
+            getattr(model, "decoder", None) and getattr(model.decoder, "config", None),
+        ),
+    ]:
+        if _cfg_obj is not None and getattr(_cfg_obj, "tie_word_embeddings", None) is True:
+            raise ValueError(
+                f"CRITICAL [TrOCR]: {_cfg_name}.tie_word_embeddings is True. "
+                "Must be False to prevent lm_head.weight deduplication on save. "
+                "Set model.config.tie_word_embeddings = False before training."
+            )
+    print(
+        f"  [TrOCR] Pre-training guardrails PASSED: tie_word_embeddings=False, "
+        f"decoder_start_token_id={_trocr_dst_id}"
+    )
+    # ── End pre-training guardrails ──────────────────────────────────────────
+
     best_val_loss = float("inf")
     history = {"train_loss": [], "val_loss": [], "num_train_samples": 0}
     history["num_train_samples"] = len(train_ds)
     start = time.time()
 
     try:
+        _trocr_skipped_total = 0  # GradScaler overflow steps across all epochs
+        _trocr_nan_epochs = 0  # consecutive NaN-loss epochs (abort threshold = 3)
         for epoch in range(TROCR_EPOCHS):
             model.train()
             epoch_loss = 0.0
             optimizer.zero_grad()
+            _epoch_skipped = 0
 
             _desc = f"TrOCR Epoch {epoch + 1}/{TROCR_EPOCHS}"
             for step, batch in enumerate(
@@ -1686,17 +1779,58 @@ def train_trocr(
                     outputs = model(pixel_values=pixel_values, labels=labels)
                 loss = outputs.loss / grad_accum
                 scaler.scale(loss).backward()
-                epoch_loss += outputs.loss.item()  # use unscaled loss for logging
+                _step_loss = outputs.loss.item()  # unscaled, for logging and NaN check
+                # NaN loss detection: abort this epoch immediately rather than
+                # accumulating NaN into epoch_loss and logging a misleading average.
+                import math as _math  # noqa: PLC0415
+
+                if _math.isnan(_step_loss) or _math.isinf(_step_loss):
+                    print(
+                        f"  [TrOCR] WARNING: step {step} loss={_step_loss} — "
+                        "stopping epoch early (fp16 overflow or bad batch). "
+                        "Consider switching to bf16."
+                    )
+                    optimizer.zero_grad()
+                    break
+                epoch_loss += _step_loss
 
                 if (step + 1) % grad_accum == 0:
                     scaler.unscale_(optimizer)
                     torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                    _scale_before = scaler.get_scale()
                     scaler.step(optimizer)
                     scaler.update()
+                    # Detect GradScaler-skipped steps (inf/nan under AMP fp16)
+                    if scaler.get_scale() < _scale_before:
+                        _epoch_skipped += 1
                     scheduler.step()
                     optimizer.zero_grad()
 
-            avg_train = epoch_loss / len(train_loader)
+            avg_train = epoch_loss / max(len(train_loader), 1)
+
+            if _epoch_skipped > 0:
+                _trocr_skipped_total += _epoch_skipped
+                print(
+                    f"  [TrOCR] Epoch {epoch + 1}: GradScaler skipped {_epoch_skipped} "
+                    f"optimizer step(s) due to AMP fp16 overflow. "
+                    "Weights were NOT updated for those steps."
+                )
+
+            # Track consecutive NaN epochs: 3 in a row → abort training entirely.
+            if _math.isnan(avg_train):
+                _trocr_nan_epochs += 1
+                print(
+                    f"  [TrOCR] Epoch {epoch + 1}: avg_train=NaN "
+                    f"({_trocr_nan_epochs}/3 consecutive NaN epochs)."
+                )
+                if _trocr_nan_epochs >= 3:
+                    raise RuntimeError(
+                        "TrOCR training aborted: 3 consecutive NaN-loss epochs. "
+                        "This indicates severe fp16 overflow or a corrupt batch pipeline. "
+                        "Switch to bf16 (Ampere+) or fp32, or lower the learning rate."
+                    )
+            else:
+                _trocr_nan_epochs = 0  # reset counter on any clean epoch
 
             # Validation
             avg_val = float("inf")
@@ -1718,10 +1852,46 @@ def train_trocr(
 
             if avg_val < best_val_loss:
                 best_val_loss = avg_val
+                # Break lm_head alias before save so safetensors writes it as an
+                # independent tensor (not deduplicated against embed_tokens.weight).
+                if hasattr(model.decoder, "lm_head") and hasattr(model.decoder.lm_head, "weight"):
+                    model.decoder.lm_head.weight = torch.nn.Parameter(
+                        model.decoder.lm_head.weight.data.clone()
+                    )
                 model.save_pretrained(output_dir / "best")
                 processor.save_pretrained(output_dir / "best")
+                # Checkpoint integrity: verify lm_head.weight survived serialization.
+                _trocr_best_st = output_dir / "best" / "model.safetensors"
+                if _trocr_best_st.exists():
+                    try:
+                        import json as _json  # noqa: PLC0415
+
+                        # safetensors header is a JSON block at the start of the file.
+                        # Read enough bytes to get the header size (first 8 bytes = uint64 LE).
+                        import struct as _struct  # noqa: PLC0415
+
+                        with open(_trocr_best_st, "rb") as _sf:
+                            _hdr_len = _struct.unpack("<Q", _sf.read(8))[0]
+                            _hdr = _json.loads(_sf.read(_hdr_len))
+                        if _trocr_lm_head_key not in _hdr:
+                            print(
+                                f"  [TrOCR] WARNING: {_trocr_lm_head_key} is missing from "
+                                f"{_trocr_best_st.name} — lm_head deduplication bug! "
+                                "The model will produce garbage predictions on reload."
+                            )
+                        else:
+                            print(
+                                f"  [TrOCR] Checkpoint OK: {_trocr_lm_head_key} present in shard."
+                            )
+                    except Exception as _cke:
+                        print(f"  [TrOCR] Checkpoint integrity check skipped: {_cke}")
                 print(f"  Best TrOCR saved (val_loss={best_val_loss:.4f})")
 
+        # Break alias again before final save for the same reason.
+        if hasattr(model.decoder, "lm_head") and hasattr(model.decoder.lm_head, "weight"):
+            model.decoder.lm_head.weight = torch.nn.Parameter(
+                model.decoder.lm_head.weight.data.clone()
+            )
         model.save_pretrained(output_dir / "final")
         processor.save_pretrained(output_dir / "final")
         with open(output_dir / "training_history.json", "w") as f:
