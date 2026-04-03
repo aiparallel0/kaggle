@@ -26,6 +26,7 @@ __all__ = [
     "SEED",
     "NEW_TOKENS",
     "EMPTY_GT",
+    "MAX_CONSECUTIVE_BATCH_FAILURES",
     "DEVICE",
     "WORKSPACE",
     # Disk utilities
@@ -88,6 +89,13 @@ NEW_TOKENS: list[str] = [
 
 # Empty ground-truth template matching the SROIE schema.
 EMPTY_GT: dict[str, str] = {"company": "", "date": "", "address": "", "total": ""}
+
+# Maximum number of consecutive batch-level failures (CUDA OOM, corrupted batch, etc.)
+# before the training loop aborts with a RuntimeError.  A training run that silently
+# skips more than this many batches in a row has almost certainly stalled — aborting
+# is safer than producing a broken model.  Used by train_trocr_yolo.py.
+# Fix: issue_report_summary critical #3.
+MAX_CONSECUTIVE_BATCH_FAILURES: int = 10
 
 # ---------------------------------------------------------------------------
 # Device — GPU if available, else CPU.

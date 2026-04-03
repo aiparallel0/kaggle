@@ -152,6 +152,7 @@ __all__ = [
     "run_custom_experiment",
     "save_summary",
     "_apply_resolution_sync",
+    "SelfTestFailedError",
 ]
 
 # ---------------------------------------------------------------------------
@@ -172,6 +173,19 @@ class EvaluationUndertrainedError(RuntimeError):
     Raised by:
     - DonutEvaluator.evaluate() when parse_failure_count > 50% threshold.
     - DonutEvaluator._self_test() when the model produces an empty prediction.
+# Custom exception classes
+# ---------------------------------------------------------------------------
+
+
+class SelfTestFailedError(RuntimeError):
+    """Raised when the DonutEvaluator self-test detects the model cannot produce
+    parseable output on a single sample.
+
+    Using a dedicated exception type (instead of substring-matching RuntimeError
+    messages) makes the catch clause in run_experiment() unambiguous and immune
+    to capitalisation changes or unrelated RuntimeErrors.
+
+    Fix: issue_report_summary high #7.
     """
 
 
@@ -2521,6 +2535,9 @@ class DonutEvaluator:
                 parsed = _parse_sroie_output(cleaned)
             except Exception as exc:
                 raise EvaluationUndertrainedError(
+                # Fix: issue_report_summary high #7 — raise SelfTestFailedError so callers
+                # can catch it explicitly without brittle string matching.
+                raise SelfTestFailedError(
                     f"Self-test FAILED: SROIE parser raised {type(exc).__name__}: {exc}\n"
                     f"  Raw tokens: {raw_tokens!r}\n"
                     f"  Cleaned:    {cleaned!r}\n"
@@ -2531,6 +2548,8 @@ class DonutEvaluator:
                 parsed = self.processor.token2json(cleaned)
             except Exception as exc:
                 raise EvaluationUndertrainedError(
+                # Fix: issue_report_summary high #7 — raise SelfTestFailedError.
+                raise SelfTestFailedError(
                     f"Self-test FAILED: token2json raised {type(exc).__name__}: {exc}\n"
                     f"  Raw tokens: {raw_tokens!r}\n"
                     f"  Cleaned:    {cleaned!r}\n"
@@ -4600,6 +4619,33 @@ def run_experiment(
         metrics["error"] = str(exc)
         metrics["self_test_failed"] = True
         metrics["training_time_sec"] = _train_duration_sec
+    except (SelfTestFailedError, RuntimeError) as exc:
+        # Fix: issue_report_summary high #7 — catch SelfTestFailedError explicitly.
+        # The old string-match "Self-test FAILED" in str(exc) was brittle; any
+        # capitalisation change or unrelated RuntimeError would silently become F1=0.0.
+        # SelfTestFailedError is caught unconditionally; other RuntimeErrors are only
+        # caught when they match the parse-failure-threshold message.
+        _is_self_test_failure = isinstance(exc, SelfTestFailedError)
+        _is_parse_failure = not _is_self_test_failure and "Parse failure threshold exceeded" in str(
+            exc
+        )
+        if _is_self_test_failure or _is_parse_failure:
+            print(
+                f"[Exp {exp_id}] WARNING: evaluation failed (undertrained model) — "
+                f"saving zero-metric result. Error: {exc}"
+            )
+            metrics = {f: 0.0 for f in ["global_f1", "global_precision", "global_recall"]}
+            # Include per-field zeros so downstream paper-generation code doesn't KeyError
+            from constants import FIELDS as _FIELDS
+
+            for _field in _FIELDS:
+                metrics[f"{_field}_f1"] = 0.0
+                metrics[f"{_field}_ned"] = 1.0  # NED=1.0 means maximum edit distance
+            metrics["error"] = str(exc)
+            metrics["self_test_failed"] = True
+            metrics["training_time_sec"] = _train_duration_sec
+        else:
+            raise
 
     # Phase 5: Log training result to audit trail
     global_f1 = metrics.get("global_f1", 0.0)

@@ -56,6 +56,17 @@ import json
 import logging
 import math
 import os
+
+# Fix: issue_report_summary medium #10 — set PYTORCH_ALLOC_CONF at the very top of
+# run_all.py, before any imports that could transitively import torch. Moving this
+# immediately after `import os` ensures the env var is visible to torch regardless of
+# whether run_all.py is executed as a script or imported as a module.
+os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
+# Suppress third-party tqdm bars (e.g. HuggingFace datasets, YOLO) before any import
+# that might initialise tqdm internally.
+os.environ.setdefault("TQDM_DISABLE", "1")
+os.environ.setdefault("TRANSFORMERS_NO_PROGRESS_BAR", "1")
+
 import platform
 import random
 import re
@@ -75,13 +86,6 @@ from pathlib import Path
 _SCRIPT_DIR = str(Path(__file__).resolve().parent)
 if _SCRIPT_DIR not in sys.path:
     sys.path.insert(0, _SCRIPT_DIR)
-
-# Set before constants.py triggers torch import to reduce GPU memory fragmentation.
-os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
-# Suppress third-party tqdm bars (e.g. HuggingFace datasets, YOLO) before any import
-# that might initialise tqdm internally.
-os.environ["TQDM_DISABLE"] = "1"
-os.environ["TRANSFORMERS_NO_PROGRESS_BAR"] = "1"
 
 from constants import BASE_MODEL, IMAGE_EXTS, SEED, _gpu_cleanup  # noqa: E402, I001
 
@@ -223,12 +227,25 @@ def _install_dependencies() -> None:
             # All critical packages present; nothing to do.
             return
 
-        # Guard against infinite restart loops in case os.execv() is invoked
-        # repeatedly (e.g. pip install keeps failing).
-        if os.environ.get("_DONUT_RESTARTED") == "1":
-            # We already restarted once; surface the remaining missing packages
-            # to the caller (_verify_critical_packages) rather than looping.
-            return
+        # Fix: issue_report_summary medium #11 — use a file-based sentinel to prevent
+        # infinite re-install + os.execv restart loops on repeated network failures.
+        # The env-var sentinel (_DONUT_RESTARTED) is inherited by os.execv children, but
+        # if os.execv is called again in a fresh shell (e.g. via subprocess), the env var
+        # may be absent.  A file-based sentinel survives across subprocess spawns.
+        _sentinel_path = Path.home() / ".donut_install_attempted"
+        if os.environ.get("_DONUT_RESTARTED") == "1" or _sentinel_path.exists():
+            # We already restarted once; raise an error rather than looping again.
+            _sentinel_path.unlink(missing_ok=True)  # clean up so next fresh run works
+            logging.getLogger(__name__).error(
+                "[setup] Install sentinel detected — packages are STILL missing after a "
+                "prior install attempt: %s. "
+                "Run manually: pip install -r requirements.txt",
+                ", ".join(missing_packages),
+            )
+            raise RuntimeError(
+                f"Dependencies {missing_packages} are still missing after an auto-install "
+                "attempt. Run manually: pip install -r requirements.txt"
+            )
 
         logging.getLogger(__name__).debug(
             "[setup] Missing packages: %s", ", ".join(missing_packages)
@@ -254,6 +271,12 @@ def _install_dependencies() -> None:
         # block can always reference it without a NameError if NamedTemporaryFile
         # raises (e.g. disk-full or permission denied on /tmp).
         tmp_path: str | None = None
+        # Fix: issue_report_summary high #6 — initialise tmp_path before the try block
+        # so the finally clause never raises NameError if NamedTemporaryFile fails.
+        tmp_path = None
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as tmp:
+            tmp.write("\n".join(req_lines))
+            tmp_path = tmp.name
         try:
             with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as tmp:
                 tmp.write("\n".join(req_lines))
@@ -270,8 +293,13 @@ def _install_dependencies() -> None:
                 logging.getLogger(__name__).debug(
                     "[setup] Dependencies installed successfully — restarting to load new packages..."
                 )
-                # os.execv replaces the current process (no fork) so terminal.txt
-                # logging is not duplicated.  The sentinel variable prevents loops.
+                # Write file-based sentinel and set env-var sentinel before os.execv so the
+                # restarted process knows not to loop again even if env inheritance fails.
+                # Fix: issue_report_summary medium #11 — write sentinel before restart.
+                try:
+                    _sentinel_path.write_text("1")
+                except OSError:
+                    pass  # non-fatal: env-var sentinel is a second line of defence
                 os.environ["_DONUT_RESTARTED"] = "1"
                 os.execv(sys.executable, [sys.executable] + sys.argv)
             else:
@@ -290,6 +318,9 @@ def _install_dependencies() -> None:
             )
         finally:
             if tmp_path is not None:
+            # Fix: issue_report_summary high #6 — guard the unlink so NameError in the
+            # finally block never masks the original install error.
+            if tmp_path is not None and os.path.exists(tmp_path):
                 try:
                     os.unlink(tmp_path)
                 except OSError:
@@ -307,6 +338,19 @@ def _install_dependencies() -> None:
             "continuing (pipeline will fail later if required packages are absent).",
             _install_exc,
         )
+    except RuntimeError:
+        raise  # re-raise sentinel / loop-guard errors from above
+    except Exception:
+        # Fix: issue_report_summary critical #2 — log at ERROR level instead of
+        # silently swallowing the exception. Disk-full, network error, and
+        # corrupt-tar failures are now visible in the log.
+        logging.getLogger(__name__).error(
+            "[setup] Auto-install failed with an unexpected error. "
+            "The pipeline may fail if required packages are absent. "
+            "Run manually: pip install -r requirements.txt",
+            exc_info=True,
+        )
+        raise
 
 
 def _verify_critical_packages() -> list:
