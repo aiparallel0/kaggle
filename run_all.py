@@ -2717,6 +2717,7 @@ def stage_trocr_all_backends(args) -> StageResult:
                     yolo_model=yolo_model,
                     trocr_model=trocr_model,
                     trocr_processor=trocr_processor,
+                    epochs=trocr_yolo.FIELD_ASSIGNER_EPOCHS,  # patchable for superfast/micro
                     backend=backend,
                     device=trocr_yolo.DEVICE,
                 )
@@ -3916,12 +3917,16 @@ def _micro_mode_handler(args, logger: logging.Logger) -> int:
 def _superfast_mode_handler(args, logger: logging.Logger) -> int:
     """Superfast mode: TrOCR+YOLO only, absolute bare minimum, target <3 min on RTX 4090.
 
-    No DONUT training at all.  A single TrOCR model is trained (``trocr_single=True``)
-    instead of 8 per-experiment models, cutting TrOCR time by 8×.
+    No DONUT training.  Runs the full TrOCR+YOLO pipeline at minimum settings,
+    including all three FieldAttentionAssigner backends so the comparison table
+    is still populated:
 
-    Optimisation levers:
       YOLO   — yolov8n (3.2 M params), 1 epoch, 160 px, SGD+Nesterov
       TrOCR  — 1 epoch, max_len=32, batch=4, SGD+Nesterov+CosineAnnealingLR
+      Regex  — rule-based baseline (0 training cost)
+      char   — character-embedding assigner, 1 epoch  (~532 K params)
+      lm     — frozen BERT-tiny assigner, 1 epoch     (~4.9 M params)
+      lm+vision — BERT-tiny + TrOCR vision feats, 1 epoch (~5.1 M params)
 
     Produces paper_superfast.tex with all \\VAR{} placeholders resolved (DONUT
     metrics filled with «N/A» since that stage is skipped).
@@ -3943,8 +3948,10 @@ def _superfast_mode_handler(args, logger: logging.Logger) -> int:
         logger.error("TrOCR data prep failed")
         return 2
 
-    # ── Stage 2: YOLO (1 ep, 160 px, yolov8n) + TrOCR (1 ep, single model) ──
-    logger.info("[Superfast Stage 2] YOLO (yolov8n 1 ep 160 px) + TrOCR (1 ep single)...")
+    # ── Stage 2: YOLO (1 ep) + TrOCR (1 ep) + all 3 field-assigner backends (1 ep each) ──
+    logger.info(
+        "[Superfast Stage 2] YOLO (yolov8n 1 ep 160 px) + TrOCR (1 ep) + 3 backends (1 ep each)..."
+    )
     _saved = {
         "YOLO_BASE": tty.YOLO_BASE,
         "YOLO_EPOCHS": tty.YOLO_EPOCHS,
@@ -3956,13 +3963,12 @@ def _superfast_mode_handler(args, logger: logging.Logger) -> int:
         "TROCR_MAX_LEN": tty.TROCR_MAX_LEN,
         "TROCR_BATCH": tty.TROCR_BATCH,
         "TROCR_MINI_MODE": tty.TROCR_MINI_MODE,
+        "FIELD_ASSIGNER_EPOCHS": tty.FIELD_ASSIGNER_EPOCHS,
     }
-    args_sf = copy.copy(args)
-    args_sf.trocr_single = True  # 1 model shared across all experiments (8× faster)
     try:
         tty.YOLO_BASE = "yolov8n.pt"  # 3.2M params — smallest available
         tty.YOLO_EPOCHS = 1  # single pass through dataset
-        tty.YOLO_IMG_SIZE = 160  # 160 px — minimum multiple of 32 that fits stride-32 head
+        tty.YOLO_IMG_SIZE = 160  # minimum multiple of 32 that fits stride-32 head
         tty.YOLO_BATCH = 32  # small images fit large batch
         tty.YOLO_OPTIMIZER = "SGD"  # SGD+Nesterov: fastest convergence per step
         tty.YOLO_MOMENTUM = 0.937
@@ -3970,7 +3976,10 @@ def _superfast_mode_handler(args, logger: logging.Logger) -> int:
         tty.TROCR_MAX_LEN = 32  # 128 → 32: 4× faster decoding per sample
         tty.TROCR_BATCH = 4  # conservative: avoids OOM after inline YOLO on same GPU
         tty.TROCR_MINI_MODE = True  # SGD+Nesterov+CosineAnnealingLR
-        r = stage_trocr_experiments(args_sf)
+        tty.FIELD_ASSIGNER_EPOCHS = 1  # 30 → 1: char / lm / lm+vision each train 1 epoch
+        # stage_trocr_all_backends runs all 3 backends (char → lm → lm+vision) so
+        # the comparison table is populated even in superfast mode.
+        r = stage_trocr_all_backends(args)
     finally:
         for k, v in _saved.items():
             setattr(tty, k, v)
@@ -4302,7 +4311,8 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Superfast mode: TrOCR+YOLO only — no DONUT training. Absolute bare minimum. "
             "YOLO: yolov8n, 1 epoch, 160 px, SGD+Nesterov. "
-            "TrOCR: 1 epoch, max_len=32, batch=4, single shared model (not 8×). "
+            "TrOCR: 1 epoch, max_len=32, batch=4. "
+            "All 3 field-assigner backends (char/lm/lm+vision), 1 epoch each. "
             "Target: <3 min on RTX 4090. Generates paper_superfast.tex."
         ),
     )

@@ -976,7 +976,7 @@ __all__ = [
     "_materialize_meta_buffers",
     "_EXPECTED_MISSING_TROCR",
     "_print_trocr_load_report",
-    # Patchable constants (micro mode sets these before calling train_yolo/train_trocr)
+    # Patchable constants (micro/superfast mode sets these before calling train functions)
     "YOLO_BASE",
     "YOLO_EPOCHS",
     "YOLO_IMG_SIZE",
@@ -987,6 +987,7 @@ __all__ = [
     "TROCR_BATCH",
     "TROCR_MAX_LEN",
     "TROCR_MINI_MODE",
+    "FIELD_ASSIGNER_EPOCHS",  # train_field_assigner() reads this as default epoch count
 ]
 
 # ── Config ──────────────────────────────────────────────────────────────────
@@ -1004,6 +1005,7 @@ TROCR_LR = 5e-5
 TROCR_MAX_LEN = 128
 GRAD_ACCUM = 4
 TROCR_MINI_MODE = False  # True → SGD+Nesterov+CosineAnnealingLR instead of AdamW+linear
+FIELD_ASSIGNER_EPOCHS = 30  # train_field_assigner() default; patch to 1 for superfast mode
 
 RESULTS_DIR = Path("results")
 YOLO_DATA_YAML = WORKSPACE / "data" / "yolo" / "dataset.yaml"
@@ -2673,7 +2675,7 @@ def train_field_assigner(
     yolo_model,
     trocr_model,
     trocr_processor: "TrOCRProcessor",
-    epochs: int = 30,
+    epochs: int | None = None,
     lr: float = 3e-4,
     ned_threshold: float = 0.45,
     device: str = DEVICE,
@@ -2711,6 +2713,7 @@ def train_field_assigner(
     -------
     Trained FieldAttentionAssigner saved to _get_field_assigner_path().
     """
+    effective_epochs = epochs if epochs is not None else FIELD_ASSIGNER_EPOCHS
     effective_backend = (backend or FIELD_ASSIGNER_BACKEND).lower()
     assigner = FieldAttentionAssigner(backend=effective_backend).to(device)
     use_vision = effective_backend == "lm+vision" and assigner._use_lm
@@ -2772,9 +2775,9 @@ def train_field_assigner(
         print("[FieldAssigner] Corpus is empty — skipping training.")
         return assigner
 
-    print(f"[FieldAssigner] Training {len(corpus)} samples × {epochs} epochs…")
+    print(f"[FieldAssigner] Training {len(corpus)} samples × {effective_epochs} epochs…")
     assigner.train()
-    for epoch in range(epochs):
+    for epoch in range(effective_epochs):
         total_loss = 0.0
         n_examples = 0
         for ocr_lines, gt, img_w, img_h, vis_feats in corpus:
@@ -2826,7 +2829,7 @@ def train_field_assigner(
 
         if (epoch + 1) % 5 == 0 or epoch == 0:
             avg = total_loss / max(n_examples, 1)
-            print(f"[FieldAssigner] Epoch {epoch + 1}/{epochs} — loss={avg:.4f}")
+            print(f"[FieldAssigner] Epoch {epoch + 1}/{effective_epochs} — loss={avg:.4f}")
 
     # ── Save checkpoint ──────────────────────────────────────────────────
     ckpt_path = _get_field_assigner_path()
