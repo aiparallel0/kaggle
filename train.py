@@ -3596,42 +3596,67 @@ class DonutTrainer:
             **_dl_extra,
         )
 
-        # Build layerwise AdamW optimizer: encoder at encoder_lr, decoder at decoder_lr.
-        # Falls back to a single learning_rate if encoder_lr/decoder_lr are absent.
+        # Build layerwise optimizer: encoder at encoder_lr, decoder at decoder_lr,
+        # with weight decay EXCLUDED from 1-D parameters (biases and LayerNorm
+        # scale/shift tensors).
+        #
+        # WHY exclude 1-D params from weight decay:
+        # - Bias terms: L2 regularization on biases makes it harder for the model
+        #   to learn precise additive offsets (e.g. vocabulary token logit biases).
+        # - LayerNorm weight/bias: shrinking these destabilizes normalization —
+        #   LayerNorm scale=1 and shift=0 is only the *initial* state, not the
+        #   optimal one; regularizing toward it hurts convergence.
+        # - Industry standard: GPT-2, BERT, T5 all exclude 1-D params from decay.
+        #
+        # Detection strategy: use p.ndim < 2 (all biases and LayerNorm params are
+        # 1-D scalars; all weight matrices are ≥2-D). This is more robust than
+        # name matching because it works regardless of HF module naming conventions.
         encoder_lr = getattr(self.config, "encoder_lr", self.config.learning_rate)
         decoder_lr = getattr(self.config, "decoder_lr", self.config.learning_rate)
         _weight_decay = getattr(self.config, "weight_decay", 0.01)
-        encoder_params = [
-            p
-            for n, p in self.model.named_parameters()
-            if n.startswith("encoder.") and p.requires_grad
-        ]
-        decoder_params = [
-            p
-            for n, p in self.model.named_parameters()
-            if not n.startswith("encoder.") and p.requires_grad
-        ]
+
+        _enc_decay, _enc_no_decay, _dec_decay, _dec_no_decay = [], [], [], []
+        for _pname, _p in self.model.named_parameters():
+            if not _p.requires_grad:
+                continue
+            _is_encoder = _pname.startswith("encoder.")
+            _no_decay = _p.ndim < 2  # 1-D → bias or LayerNorm; exclude from decay
+            if _is_encoder:
+                (_enc_no_decay if _no_decay else _enc_decay).append(_p)
+            else:
+                (_dec_no_decay if _no_decay else _dec_decay).append(_p)
+
+        logger.info(
+            "Optimizer param groups: enc_decay=%d enc_nodecay=%d dec_decay=%d dec_nodecay=%d",
+            len(_enc_decay),
+            len(_enc_no_decay),
+            len(_dec_decay),
+            len(_dec_no_decay),
+        )
+
         _optimizer_type = getattr(self.config, "optimizer_type", "adamw")
         if _optimizer_type == "sgd":
             # SGD + Nesterov: faster per-step, sufficient for near-converged transformers
             # used in micro mode where adaptive moments aren't needed for short runs
             optimizer = torch.optim.SGD(
                 [
-                    {"params": encoder_params, "lr": encoder_lr},
-                    {"params": decoder_params, "lr": decoder_lr},
+                    {"params": _enc_decay, "lr": encoder_lr, "weight_decay": _weight_decay},
+                    {"params": _enc_no_decay, "lr": encoder_lr, "weight_decay": 0.0},
+                    {"params": _dec_decay, "lr": decoder_lr, "weight_decay": _weight_decay},
+                    {"params": _dec_no_decay, "lr": decoder_lr, "weight_decay": 0.0},
                 ],
                 momentum=0.9,
                 nesterov=True,
-                weight_decay=_weight_decay,
             )
             logger.info("Optimizer: SGD + Nesterov (micro/mini mode)")
         else:
             optimizer = torch.optim.AdamW(
                 [
-                    {"params": encoder_params, "lr": encoder_lr},
-                    {"params": decoder_params, "lr": decoder_lr},
+                    {"params": _enc_decay, "lr": encoder_lr, "weight_decay": _weight_decay},
+                    {"params": _enc_no_decay, "lr": encoder_lr, "weight_decay": 0.0},
+                    {"params": _dec_decay, "lr": decoder_lr, "weight_decay": _weight_decay},
+                    {"params": _dec_no_decay, "lr": decoder_lr, "weight_decay": 0.0},
                 ],
-                weight_decay=_weight_decay,
             )
 
         # OneCycleLR: aggressive warmup + cosine decay, reaches peak LR immediately
@@ -3639,9 +3664,12 @@ class DonutTrainer:
         _lr_schedule = getattr(self.config, "lr_schedule", "cosine")
         custom_scheduler = None
         if _lr_schedule == "one_cycle" and _total_opt_steps > 0:
+            # 4 param groups now (enc_decay, enc_nodecay, dec_decay, dec_nodecay).
+            # OneCycleLR requires one max_lr per param group — repeat each LR so
+            # the no-decay group mirrors its decay counterpart's schedule.
             custom_scheduler = torch.optim.lr_scheduler.OneCycleLR(
                 optimizer,
-                max_lr=[encoder_lr, decoder_lr],
+                max_lr=[encoder_lr, encoder_lr, decoder_lr, decoder_lr],
                 total_steps=_total_opt_steps,
                 pct_start=0.1,  # 10% warmup, 90% cosine decay
                 anneal_strategy="cos",
@@ -3862,9 +3890,23 @@ class DonutTrainer:
                 inputs.pop("decoder_inputs_embeds", None)
                 # Also strip loss_weight — it is only for training, not eval.
                 inputs.pop("loss_weight", None)
-                return super().prediction_step(
-                    model, inputs, prediction_loss_only, ignore_keys=ignore_keys
-                )
+                # Disable label smoothing during evaluation.
+                # With predict_with_generate=True, Seq2SeqTrainer.prediction_step()
+                # applies self.label_smoother to the eval loss when label_smoother
+                # is not None.  This biases the early-stopping metric: eval_loss
+                # would include the smoothing regularisation term and systematically
+                # penalise overconfident predictions regardless of whether they are
+                # correct — causing early stopping to favour over-smoothed models.
+                # Eval loss should be pure cross-entropy so that epoch comparison is
+                # fair; label smoothing belongs only to the training objective.
+                _saved_smoother = self.label_smoother
+                self.label_smoother = None
+                try:
+                    return super().prediction_step(
+                        model, inputs, prediction_loss_only, ignore_keys=ignore_keys
+                    )
+                finally:
+                    self.label_smoother = _saved_smoother
 
         trainer = _DonutSeq2SeqTrainer(
             model=self.model,

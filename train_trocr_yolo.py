@@ -1762,11 +1762,14 @@ def train_trocr(
     try:
         _trocr_skipped_total = 0  # GradScaler overflow steps across all epochs
         _trocr_nan_epochs = 0  # consecutive NaN-loss epochs (abort threshold = 3)
+        import math as _math  # noqa: PLC0415
+
         for epoch in range(TROCR_EPOCHS):
             model.train()
             epoch_loss = 0.0
             optimizer.zero_grad()
             _epoch_skipped = 0
+            _nan_break = False  # tracks whether the inner loop was aborted early
 
             _desc = f"TrOCR Epoch {epoch + 1}/{TROCR_EPOCHS}"
             for step, batch in enumerate(
@@ -1782,8 +1785,6 @@ def train_trocr(
                 _step_loss = outputs.loss.item()  # unscaled, for logging and NaN check
                 # NaN loss detection: abort this epoch immediately rather than
                 # accumulating NaN into epoch_loss and logging a misleading average.
-                import math as _math  # noqa: PLC0415
-
                 if _math.isnan(_step_loss) or _math.isinf(_step_loss):
                     print(
                         f"  [TrOCR] WARNING: step {step} loss={_step_loss} — "
@@ -1791,6 +1792,7 @@ def train_trocr(
                         "Consider switching to bf16."
                     )
                     optimizer.zero_grad()
+                    _nan_break = True
                     break
                 epoch_loss += _step_loss
 
@@ -1800,11 +1802,37 @@ def train_trocr(
                     _scale_before = scaler.get_scale()
                     scaler.step(optimizer)
                     scaler.update()
-                    # Detect GradScaler-skipped steps (inf/nan under AMP fp16)
+                    # Detect GradScaler-skipped steps (inf/nan under AMP fp16).
+                    # Only advance the LR scheduler when weights were actually updated —
+                    # stepping the scheduler on a skipped optimizer step wastes warmup
+                    # budget and shifts the LR curve without a corresponding weight change.
                     if scaler.get_scale() < _scale_before:
                         _epoch_skipped += 1
-                    scheduler.step()
-                    optimizer.zero_grad()
+                    else:
+                        scheduler.step()
+                    optimizer.zero_grad(set_to_none=True)
+
+            # Flush the incomplete accumulation window at the end of each epoch.
+            # When len(train_loader) % grad_accum != 0, the final partial window
+            # accumulates gradients that never reach the (step+1) % grad_accum == 0
+            # condition — those gradients are silently discarded, causing up to
+            # (grad_accum - 1) / grad_accum fraction of data per epoch to contribute
+            # to loss logging but NOT to weight updates.
+            # Skip the flush if the epoch was aborted early due to NaN (gradients
+            # were already zeroed in the break handler above).
+            if not _nan_break:
+                _remaining = len(train_loader) % grad_accum
+                if _remaining != 0:
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                    _scale_before_flush = scaler.get_scale()
+                    scaler.step(optimizer)
+                    scaler.update()
+                    if scaler.get_scale() < _scale_before_flush:
+                        _epoch_skipped += 1
+                    else:
+                        scheduler.step()
+                    optimizer.zero_grad(set_to_none=True)
 
             avg_train = epoch_loss / max(len(train_loader), 1)
 
