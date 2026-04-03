@@ -142,6 +142,7 @@ __all__ = [
     "generate_comparison_report",
     "generate_json_summary",
     # from run_experiments
+    "EvaluationUndertrainedError",
     "ExperimentConfig",
     "EXPERIMENTS",
     "TRAIN_CONFIG",
@@ -4566,23 +4567,20 @@ def run_experiment(
         # string matching) ensures only genuine undertrained-model errors are
         # caught here.  Real RuntimeErrors (CUDA error, shape mismatch, etc.)
         # propagate to the caller as intended.
-        if True:  # kept for minimal diff; the except clause already filters precisely
-            print(
-                f"[Exp {exp_id}] WARNING: evaluation failed (undertrained model) — "
-                f"saving zero-metric result. Error: {exc}"
-            )
-            metrics = {f: 0.0 for f in ["global_f1", "global_precision", "global_recall"]}
-            # Include per-field zeros so downstream paper-generation code doesn't KeyError
-            from constants import FIELDS as _FIELDS
+        print(
+            f"[Exp {exp_id}] WARNING: evaluation failed (undertrained model) — "
+            f"saving zero-metric result. Error: {exc}"
+        )
+        metrics = {f: 0.0 for f in ["global_f1", "global_precision", "global_recall"]}
+        # Include per-field zeros so downstream paper-generation code doesn't KeyError
+        from constants import FIELDS as _FIELDS
 
-            for _field in _FIELDS:
-                metrics[f"{_field}_f1"] = 0.0
-                metrics[f"{_field}_ned"] = 1.0  # NED=1.0 means maximum edit distance
-            metrics["error"] = str(exc)
-            metrics["self_test_failed"] = True
-            metrics["training_time_sec"] = _train_duration_sec
-        else:
-            raise
+        for _field in _FIELDS:
+            metrics[f"{_field}_f1"] = 0.0
+            metrics[f"{_field}_ned"] = 1.0  # NED=1.0 means maximum edit distance
+        metrics["error"] = str(exc)
+        metrics["self_test_failed"] = True
+        metrics["training_time_sec"] = _train_duration_sec
 
     # Phase 5: Log training result to audit trail
     global_f1 = metrics.get("global_f1", 0.0)

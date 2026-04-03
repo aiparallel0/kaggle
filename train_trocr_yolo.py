@@ -762,6 +762,8 @@ except ImportError:
             best_loss = float("inf")
             _skipped_steps_total = 0  # track GradScaler overflows across all epochs
 
+            import math as _yolo_math  # noqa: PLC0415
+
             _logger.info(
                 "Starting inline YOLO training: %d images × %d epochs", len(img_files), epochs
             )
@@ -811,7 +813,7 @@ except ImportError:
                     )
                     if not label_path.exists():
                         continue
-                    optimizer.zero_grad()
+                    optimizer.zero_grad(set_to_none=True)
                     with torch.cuda.amp.autocast(enabled=amp and torch.cuda.is_available()):
                         # NOTE: Full YOLO detection loss (box regression + DFL +
                         # classification) requires the ultralytics TaskAlignedAssigner
@@ -835,8 +837,6 @@ except ImportError:
                     if scaler.get_scale() < _scale_before:
                         skipped_steps += 1
                     _step_loss_val = loss.item()
-                    import math as _yolo_math  # noqa: PLC0415
-
                     if _yolo_math.isnan(_step_loss_val) or _yolo_math.isinf(_step_loss_val):
                         _logger.warning(
                             "[inline-YOLO] Epoch %d: NaN/Inf loss at image %s — "
@@ -1682,18 +1682,38 @@ def train_trocr(
     )
 
     total_steps = (len(train_loader) // grad_accum) * TROCR_EPOCHS
+
+    # Validate that this configuration produces enough optimizer steps for convergence.
+    # TrOCR (like DONUT) requires ~200+ steps to learn field alignment; fewer steps
+    # typically produce a model that outputs structurally correct but content-empty
+    # predictions, which gives near-zero F1 without any obvious error.
+    from resource_manager import validate_training_config as _vtc  # noqa: PLC0415
+
+    _vtc(
+        batch_size=trocr_batch,
+        gradient_accumulation_steps=grad_accum,
+        num_train_samples=len(train_ds),
+        epochs=TROCR_EPOCHS,
+    )
+
     if TROCR_MINI_MODE:
         # SGD + Nesterov + CosineAnnealingLR — faster convergence for short micro runs.
         # LR 200× higher than AdamW default: SGD needs larger LR since it lacks adaptive scaling.
         # CosineAnnealingLR decays from TROCR_LR to eta_min over all steps without warmup,
         # reaching useful weights immediately (unlike the linear warmup that barely finishes
         # in 1-epoch micro runs).
+        # Split parameters: 1-D params (biases, LayerNorm) excluded from weight_decay.
+        _sgd_decay: list = []
+        _sgd_no_decay: list = []
+        for _p in model.parameters():
+            (_sgd_no_decay if _p.ndim < 2 else _sgd_decay).append(_p)
         optimizer = torch.optim.SGD(
-            model.parameters(),
-            lr=TROCR_LR * 200,  # e.g. 5e-5 * 200 = 1e-2
+            [
+                {"params": _sgd_decay, "lr": TROCR_LR * 200, "weight_decay": 1e-4},
+                {"params": _sgd_no_decay, "lr": TROCR_LR * 200, "weight_decay": 0.0},
+            ],
             momentum=0.9,
             nesterov=True,
-            weight_decay=1e-4,
         )
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer,
@@ -1703,10 +1723,29 @@ def train_trocr(
         print(f"  [TrOCR] Micro mode: SGD+Nesterov+CosineAnnealingLR, lr={TROCR_LR * 200:.2e}")
     else:
         _trocr = CONTROL_SUITE.trocr
+        # Split parameters into decay / no-decay groups.
+        # 1-D params (biases, LayerNorm γ/β) must NOT receive weight decay:
+        # applying L2 regularisation to them distorts normalisation layers and
+        # biases, yielding slower convergence and slightly lower F1.
+        # p.ndim < 2 is more robust than name-matching ("bias", "LayerNorm.weight")
+        # because it works for any architecture without enumerating names.
+        _trocr_decay: list = []
+        _trocr_no_decay: list = []
+        for _p in model.parameters():
+            (_trocr_no_decay if _p.ndim < 2 else _trocr_decay).append(_p)
         optimizer = torch.optim.AdamW(
-            model.parameters(),
-            lr=TROCR_LR,
-            weight_decay=_trocr.weight_decay,  # 1e-4 (⚠️ was missing — AdamW default is 0)
+            [
+                {
+                    "params": _trocr_decay,
+                    "lr": TROCR_LR,
+                    "weight_decay": _trocr.weight_decay,
+                },
+                {
+                    "params": _trocr_no_decay,
+                    "lr": TROCR_LR,
+                    "weight_decay": 0.0,
+                },
+            ],
             betas=(_trocr.adam_beta1, _trocr.adam_beta2),
             eps=_trocr.adam_epsilon,
         )
@@ -1791,7 +1830,19 @@ def train_trocr(
                         "stopping epoch early (fp16 overflow or bad batch). "
                         "Consider switching to bf16."
                     )
-                    optimizer.zero_grad()
+                    # Let GradScaler detect the inf/nan and reduce its scale factor
+                    # before we zero gradients.  Calling scaler.step() here causes the
+                    # scaler to skip the optimizer update and call scaler.update() to
+                    # halve the internal scale, which prevents the same overflow in the
+                    # next epoch.  Skipping this step means the scale stays high and the
+                    # overflow typically repeats every epoch indefinitely.
+                    scaler.unscale_(optimizer)
+                    _scale_before_nan = scaler.get_scale()
+                    scaler.step(optimizer)  # skips weight update; marks _found_inf
+                    scaler.update()  # halves scale due to detected inf/nan
+                    if scaler.get_scale() < _scale_before_nan:
+                        _epoch_skipped += 1
+                    optimizer.zero_grad(set_to_none=True)
                     _nan_break = True
                     break
                 epoch_loss += _step_loss
