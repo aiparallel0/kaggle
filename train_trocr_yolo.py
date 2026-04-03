@@ -1591,8 +1591,15 @@ def _save_model_safetensors_direct(
     2. For *lm_head_key*, call ``.clone().contiguous()`` to guarantee a unique
        data pointer AND a unique content hash (contiguous() forces a new
        physical buffer).
-    3. Write the state dict with ``safetensors.torch.save_file()``.
-    4. Save the config via ``model.config.save_pretrained()`` so that
+    3. Break **all** remaining shared-memory aliases generically: iterate the
+       state dict, track the first key seen for each ``data_ptr()`` value, and
+       clone every subsequent key that shares the same pointer.  This covers
+       additional tied-weight pairs introduced in transformers ≥4.45 (e.g.
+       ``decoder.output_projection.weight`` aliasing
+       ``decoder.model.decoder.embed_tokens.weight``) without requiring
+       per-version hardcoded keys.
+    4. Write the de-aliased state dict with ``safetensors.torch.save_file()``.
+    5. Save the config via ``model.config.save_pretrained()`` so that
        ``from_pretrained()`` can reconstruct the model at load time.
 
     The caller is responsible for saving the processor separately.
@@ -1602,8 +1609,25 @@ def _save_model_safetensors_direct(
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
     sd = model.state_dict()
+
+    # Primary fix: clone the known lm_head alias first.
     if lm_head_key in sd:
         sd[lm_head_key] = sd[lm_head_key].clone().contiguous()
+
+    # Generic alias-breaking loop: safetensors.torch.save_file raises
+    # RuntimeError if any two tensors share a data_ptr().  Build a map from
+    # data_ptr → first key seen; any subsequent key with the same data_ptr is
+    # an alias — clone it to give it a unique buffer.  This handles both the
+    # lm_head.weight alias above and any additional tied weights added in
+    # future transformers versions (e.g. output_projection.weight in ≥4.45).
+    seen_ptrs: dict[int, str] = {}
+    for k, v in list(sd.items()):
+        ptr = v.data_ptr()
+        if ptr in seen_ptrs:
+            sd[k] = v.clone().contiguous()
+        else:
+            seen_ptrs[ptr] = k
+
     _st_save_file(sd, save_dir / "model.safetensors")
     model.config.save_pretrained(str(save_dir))
 
