@@ -1449,6 +1449,130 @@ _EXPECTED_MISSING_TROCR: frozenset[str] = frozenset(
 )
 
 
+def _verify_lm_head_in_checkpoint(model_path: "Path") -> None:
+    """Raise ``RuntimeError`` if ``decoder.lm_head.weight`` is absent from a saved checkpoint.
+
+    Inspects the safetensors file header (single-shard) or the
+    ``model.safetensors.index.json`` weight-map (sharded) at *model_path*.
+    Raises immediately with a descriptive message so the pipeline fails fast
+    rather than silently producing F1 = 0 when a reloaded TrOCR model has a
+    randomly-re-initialised output projection.
+
+    Call this both **after** ``save_pretrained()`` (to verify the save was
+    correct) and **before** loading a checkpoint for evaluation (to verify the
+    checkpoint on disk is intact).
+
+    Parameters
+    ----------
+    model_path : Path
+        Directory produced by ``model.save_pretrained(model_path)``.
+    """
+    import json as _j
+    import struct as _s
+
+    model_path = Path(model_path)
+    _key = "decoder.lm_head.weight"
+
+    # Sharded model: check the weight-map index.
+    index_file = model_path / "model.safetensors.index.json"
+    if index_file.exists():
+        try:
+            wmap = _j.loads(index_file.read_text()).get("weight_map", {})
+            if _key not in wmap:
+                raise RuntimeError(
+                    f"CRITICAL: {_key!r} is missing from the safetensors index at "
+                    f"{index_file}.  safetensors deduplication dropped the tensor "
+                    "because lm_head and embed_tokens shared a data pointer at save "
+                    "time.  Ensure the weight alias is broken (data.clone()) and "
+                    "_tied_weights_keys is cleared before save_pretrained().  "
+                    "See CLAUDE.md §16 Pattern 6."
+                )
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            logging.getLogger(__name__).warning(
+                "_verify_lm_head_in_checkpoint: could not parse index (%s) — skipping", exc
+            )
+        return
+
+    # Single-shard model: inspect the binary safetensors header.
+    single_file = model_path / "model.safetensors"
+    if single_file.exists():
+        try:
+            with open(single_file, "rb") as fh:
+                hdr_len = _s.unpack("<Q", fh.read(8))[0]
+                hdr = _j.loads(fh.read(hdr_len))
+            if _key not in hdr:
+                raise RuntimeError(
+                    f"CRITICAL: {_key!r} is missing from the safetensors shard "
+                    f"{single_file.name}.  safetensors deduplication dropped the "
+                    "tensor because lm_head and embed_tokens shared a data pointer "
+                    "at save time.  Ensure the weight alias is broken (data.clone()) "
+                    "and _tied_weights_keys is cleared before save_pretrained().  "
+                    "See CLAUDE.md §16 Pattern 6."
+                )
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            logging.getLogger(__name__).warning(
+                "_verify_lm_head_in_checkpoint: could not read shard header (%s) — skipping", exc
+            )
+        return
+
+    # No safetensors found — may be a PyTorch bin checkpoint; skip the check.
+    logging.getLogger(__name__).debug(
+        "_verify_lm_head_in_checkpoint: no safetensors file found in %s — skipping", model_path
+    )
+
+
+def _verify_yolo_detection_rate(
+    zero_count: int,
+    total_count: int,
+    threshold: float = 0.5,
+) -> None:
+    """Raise ``RuntimeError`` (or log ``CRITICAL``) if the zero-detection rate is too high.
+
+    A zero-detection rate above *threshold* means YOLO found no text regions
+    on more than half the test images.  When using the inline ``_YOLO_CLS``
+    fallback (untrained weights) or an under-trained ultralytics model, this
+    commonly drives F1 to 0.  Failing loudly here prevents silent
+    all-zero-F1 results that are hard to diagnose downstream.
+
+    Parameters
+    ----------
+    zero_count : int
+        Number of images for which YOLO returned 0 bounding boxes.
+    total_count : int
+        Total number of images evaluated.
+    threshold : float
+        Maximum acceptable fraction of zero-detection images (default 0.50).
+    """
+    if total_count == 0:
+        return
+    rate = zero_count / total_count
+    if rate > threshold:
+        backend = "ultralytics" if _ULTRALYTICS_AVAILABLE else "inline _YOLO_CLS fallback"
+        raise RuntimeError(
+            f"CRITICAL: YOLO zero-detection rate is {rate:.1%} "
+            f"({zero_count}/{total_count} images) — exceeds threshold {threshold:.0%}.  "
+            f"Active YOLO backend: {backend}.  "
+            "Likely causes: (1) inline YOLO fallback with random/proxy weights — "
+            "install ultralytics and retrain; (2) YOLO trained for too few epochs "
+            "or at too low a resolution; (3) inference image resolution differs "
+            "from training resolution.  "
+            "All field predictions for affected images are empty strings, which "
+            "drives global F1 to 0.  Fix the YOLO model before evaluating."
+        )
+    if rate > 0:
+        logging.getLogger(__name__).warning(
+            "YOLO zero-detection rate: %.1f%% (%d/%d images).  "
+            "Some field predictions may be empty.",
+            rate * 100,
+            zero_count,
+            total_count,
+        )
+
+
 def _clear_lm_head_tied_keys(model: "torch.nn.Module") -> None:
     """Remove ``decoder.lm_head.weight`` from ``_tied_weights_keys`` on *model*
     and its decoder child so that ``save_pretrained`` cannot re-deduplicate the
@@ -2190,15 +2314,21 @@ def train_trocr(
                             _hdr_len = _struct.unpack("<Q", _sf.read(8))[0]
                             _hdr = _json.loads(_sf.read(_hdr_len))
                         if _trocr_lm_head_key not in _hdr:
-                            print(
-                                f"  [TrOCR] WARNING: {_trocr_lm_head_key} is missing from "
+                            raise RuntimeError(
+                                f"CRITICAL: {_trocr_lm_head_key} is missing from "
                                 f"{_trocr_best_st.name} — lm_head deduplication bug! "
-                                "The model will produce garbage predictions on reload."
+                                "safetensors dropped the tensor because lm_head and "
+                                "embed_tokens still shared a data pointer at save time. "
+                                "Ensure data.clone() and _clear_lm_head_tied_keys() are "
+                                "called before save_pretrained(). "
+                                "See CLAUDE.md §16 Pattern 6."
                             )
                         else:
                             print(
                                 f"  [TrOCR] Checkpoint OK: {_trocr_lm_head_key} present in shard."
                             )
+                    except RuntimeError:
+                        raise  # re-raise our own CRITICAL errors
                     except Exception as _cke:
                         print(f"  [TrOCR] Checkpoint integrity check skipped: {_cke}")
                 print(f"  Best TrOCR saved (val_loss={best_val_loss:.4f})")
@@ -3095,11 +3225,29 @@ def evaluate_trocr_yolo_on_test(
     the regex heuristic.  When no checkpoint is found the function falls back
     to ``_assign_fields_heuristic`` transparently.
     """
-    # Use ultralytics YOLO if available, else fall back to inline _YOLO_CLS
-    try:
-        from ultralytics import YOLO
-    except ImportError:
+    _eval_log = logging.getLogger(__name__)
+
+    # Log which YOLO backend is active so operators can immediately see
+    # whether a real detector or the inline proxy fallback is being used.
+    if _ULTRALYTICS_AVAILABLE:
+        _eval_log.info("evaluate_trocr_yolo_on_test: YOLO backend = ultralytics (real detector)")
+        try:
+            from ultralytics import YOLO
+        except ImportError:
+            YOLO = _YOLO_CLS  # noqa: N806 — shouldn't reach here, defensive
+    else:
+        _eval_log.warning(
+            "evaluate_trocr_yolo_on_test: YOLO backend = inline _YOLO_CLS fallback "
+            "(ultralytics not installed).  Detection quality will be poor — "
+            "install ultralytics for real text-region detection."
+        )
         YOLO = _YOLO_CLS  # noqa: N806
+
+    # Verify the TrOCR checkpoint on disk has decoder.lm_head.weight before
+    # loading it.  If the tensor was deduped out by safetensors at save time,
+    # the loaded model will have a randomly-initialized lm_head and produce
+    # garbage OCR text for every crop, driving F1 to 0 with no error raised.
+    _verify_lm_head_in_checkpoint(Path(trocr_model_path))
 
     yolo_model = YOLO(str(yolo_weights))
     trocr_processor = TrOCRProcessor.from_pretrained(trocr_model_path)
@@ -3111,6 +3259,37 @@ def evaluate_trocr_yolo_on_test(
     _materialize_meta_buffers(trocr_model, DEVICE)
     trocr_model.eval()
 
+    # Post-load self-test: run a single forward pass on a random image tensor
+    # and verify the generated token IDs are not all identical.  A broken
+    # lm_head (randomly initialised uniform logits) produces the same token
+    # repeated for every position — catch this before evaluating all 63 images.
+    # Dimensions (32 H × 128 W) are intentionally small — just enough for the
+    # ViT patch-embed stride to produce a valid feature map.  We only care that
+    # the decoder generates diverse output, not that the image is meaningful.
+    _SELF_TEST_H, _SELF_TEST_W = 32, 128
+    _self_test_pixels = torch.randn(1, 3, _SELF_TEST_H, _SELF_TEST_W, device=DEVICE)
+    with torch.no_grad():
+        try:
+            _self_test_ids = trocr_model.generate(_self_test_pixels, max_new_tokens=8)
+            _flat = _self_test_ids[0].tolist()
+            # A broken lm_head produces uniform logits → the same argmax token
+            # every step.  len(set(_flat)) == 1 means all elements are identical.
+            if len(_flat) > 1 and len(set(_flat)) == 1:
+                raise RuntimeError(
+                    "CRITICAL: TrOCR self-test FAILED — model generated the same token "
+                    f"({_flat[0]}) for every position.  This indicates a broken "
+                    "lm_head (randomly-initialised uniform logits) caused by the "
+                    "safetensors deduplication bug.  Re-train with "
+                    "LmHeadCloneCallback registered or call "
+                    "model.decoder.lm_head.weight = "
+                    "torch.nn.Parameter(model.decoder.lm_head.weight.data.clone()) "
+                    "before save_pretrained().  See CLAUDE.md §16 Pattern 6."
+                )
+        except RuntimeError:
+            raise
+        except Exception as _st_exc:
+            _eval_log.warning("TrOCR self-test skipped (non-critical): %s", _st_exc)
+
     # Load the trained FieldAttentionAssigner if a checkpoint exists; fall back
     # to the regex heuristic when none is found (first run, no training yet).
     field_assigner = load_field_assigner(device=DEVICE)
@@ -3118,16 +3297,50 @@ def evaluate_trocr_yolo_on_test(
     predictions = []
     ground_truths = [s[1] for s in test_samples]
     latencies = []
+    zero_detection_count = 0
 
     with torch.no_grad():
         for img_path, _gt in _progress(test_samples, desc="TrOCR+YOLO eval"):
             t0 = time.perf_counter()
-            pred = run_trocr_yolo_inference(
-                img_path, yolo_model, trocr_model, trocr_processor, field_assigner
+            # Run detection + OCR inline so we can track zero-detection images
+            # without calling _extract_ocr_lines() twice.
+            need_vision = (
+                field_assigner is not None
+                and getattr(field_assigner, "backend", "") == "lm+vision"
+                and getattr(field_assigner, "_use_lm", False)
             )
+            ocr_lines, vision_feats = _extract_ocr_lines(
+                img_path,
+                yolo_model,
+                trocr_model,
+                trocr_processor,
+                return_vision_feats=need_vision,
+            )
+            if not ocr_lines:
+                zero_detection_count += 1
+                _eval_log.warning(
+                    "YOLO detected 0 text regions for %s — all field predictions will "
+                    "be empty.  YOLO backend: %s.",
+                    img_path,
+                    "ultralytics" if _ULTRALYTICS_AVAILABLE else "inline _YOLO_CLS fallback",
+                )
+            # Field assignment
+            if field_assigner is not None:
+                img = _load_image(img_path)
+                img_w = float(img.size[0]) if _PIL_AVAILABLE else float(img.shape[1])  # type: ignore[union-attr]
+                img_h = float(img.size[1]) if _PIL_AVAILABLE else float(img.shape[0])  # type: ignore[union-attr]
+                pred = field_assigner.assign(
+                    ocr_lines, img_w=img_w, img_h=img_h, vision_feats=vision_feats
+                )
+            else:
+                pred = _assign_fields_heuristic(ocr_lines)
             lat = (time.perf_counter() - t0) * 1000
             latencies.append(lat)
             predictions.append(pred)
+
+    # Check aggregate zero-detection rate.  Raises RuntimeError if > 50% of
+    # images had no YOLO detections, which would silently drive F1 to 0.
+    _verify_yolo_detection_rate(zero_detection_count, len(test_samples))
 
     metrics = compute_metrics(predictions, ground_truths)
     metrics["num_samples"] = len(test_samples)
