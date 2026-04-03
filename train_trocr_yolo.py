@@ -3186,8 +3186,8 @@ if __name__ == "__main__":
         _mod = _sys.modules[__name__]
         try:
             _mod.YOLO_BASE = "yolov8n.pt"
-            _mod.YOLO_EPOCHS = 1
-            _mod.YOLO_IMG_SIZE = 160  # minimum multiple of 32 for stride-32 head
+            _mod.YOLO_EPOCHS = 5
+            _mod.YOLO_IMG_SIZE = 320  # minimum multiple of 32 for stride-32 head
             _mod.YOLO_BATCH = 32
             _mod.YOLO_OPTIMIZER = "SGD"
             _mod.YOLO_MOMENTUM = 0.937
