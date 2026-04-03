@@ -173,6 +173,9 @@ class EvaluationUndertrainedError(RuntimeError):
     Raised by:
     - DonutEvaluator.evaluate() when parse_failure_count > 50% threshold.
     - DonutEvaluator._self_test() when the model produces an empty prediction.
+    """
+
+
 # Custom exception classes
 # ---------------------------------------------------------------------------
 
@@ -2534,9 +2537,6 @@ class DonutEvaluator:
             try:
                 parsed = _parse_sroie_output(cleaned)
             except Exception as exc:
-                raise EvaluationUndertrainedError(
-                # Fix: issue_report_summary high #7 — raise SelfTestFailedError so callers
-                # can catch it explicitly without brittle string matching.
                 raise SelfTestFailedError(
                     f"Self-test FAILED: SROIE parser raised {type(exc).__name__}: {exc}\n"
                     f"  Raw tokens: {raw_tokens!r}\n"
@@ -2547,8 +2547,6 @@ class DonutEvaluator:
             try:
                 parsed = self.processor.token2json(cleaned)
             except Exception as exc:
-                raise EvaluationUndertrainedError(
-                # Fix: issue_report_summary high #7 — raise SelfTestFailedError.
                 raise SelfTestFailedError(
                     f"Self-test FAILED: token2json raised {type(exc).__name__}: {exc}\n"
                     f"  Raw tokens: {raw_tokens!r}\n"
