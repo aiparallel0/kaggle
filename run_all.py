@@ -327,6 +327,8 @@ def _install_dependencies() -> None:
         # flash-attn is NOT auto-installed here.  To install it manually:
         #   pip install flash-attn --no-build-isolation
         # or use a prebuilt wheel: https://flashattn.dev/wheel-finder/
+    except RuntimeError:
+        raise  # re-raise sentinel / loop-guard errors from above
     except Exception as _install_exc:
         # Non-fatal: if pip install itself errors (e.g. requirements.txt unreadable,
         # disk full, unexpected OSError), log the cause at WARNING level so it is
@@ -337,19 +339,6 @@ def _install_dependencies() -> None:
             "continuing (pipeline will fail later if required packages are absent).",
             _install_exc,
         )
-    except RuntimeError:
-        raise  # re-raise sentinel / loop-guard errors from above
-    except Exception:
-        # Fix: issue_report_summary critical #2 — log at ERROR level instead of
-        # silently swallowing the exception. Disk-full, network error, and
-        # corrupt-tar failures are now visible in the log.
-        logging.getLogger(__name__).error(
-            "[setup] Auto-install failed with an unexpected error. "
-            "The pipeline may fail if required packages are absent. "
-            "Run manually: pip install -r requirements.txt",
-            exc_info=True,
-        )
-        raise
 
 
 def _verify_critical_packages() -> list:
