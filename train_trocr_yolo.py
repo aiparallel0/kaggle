@@ -23,6 +23,7 @@ FIX: Imports constants from shared module.
 """
 
 import json
+import logging
 import re
 import struct
 import time
@@ -595,8 +596,8 @@ except ImportError:
                     shape_mismatches = [
                         k
                         for k, v in sd.items()
-                        if k in dict(self.model.named_parameters())
-                        and v.shape != dict(self.model.named_parameters())[k].shape
+                        if k in (_model_params := dict(self.model.named_parameters()))
+                        and v.shape != _model_params[k].shape
                     ]
                     if shape_mismatches:
                         self._log.error(
@@ -1460,7 +1461,8 @@ def _clear_lm_head_tied_keys(model: "torch.nn.Module") -> None:
     """
     _lm_key_outer = "decoder.lm_head.weight"
     _lm_key_inner = "lm_head.weight"
-    for obj, key in [(model, _lm_key_outer), (getattr(model, "decoder", None), _lm_key_inner)]:
+    decoder = getattr(model, "decoder", None)
+    for obj, key in [(model, _lm_key_outer), (decoder, _lm_key_inner)]:
         if obj is None:
             continue
         tied = getattr(obj, "_tied_weights_keys", None)
@@ -1875,7 +1877,7 @@ def train_trocr(
         # adaptive per-parameter scaling and has no warmup.  AdamW handles large
         # step sizes gracefully and is used by all serious transformer fine-tuning.
         # LR is 10× the normal rate so short runs still make meaningful progress.
-        _micro_lr = TROCR_LR * 10  # 5e-4 — aggressive but not catastrophic
+        _micro_lr = TROCR_LR * 10
         _micro_decay: list = []
         _micro_no_decay: list = []
         for _p in model.parameters():
@@ -3062,9 +3064,7 @@ def run_trocr_yolo_inference(
     # fallback with random weights, wrong confidence threshold, or incorrect
     # image resolution at inference vs training.
     if not ocr_lines:
-        import logging as _log_mod  # noqa: PLC0415
-
-        _log_mod.getLogger(__name__).warning(
+        logging.getLogger(__name__).warning(
             "YOLO detected 0 text regions for %s — all field predictions will be empty. "
             "If using the inline YOLO fallback, train with ultralytics for real detections.",
             image_path,
