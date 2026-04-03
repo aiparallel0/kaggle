@@ -6,52 +6,24 @@ ruff>=0.4.0
 protobuf>=3.20.0
 sentencepiece
 datasets>=2.0.0
-
-# --- Optional: uncomment if needed ---
-
-# torchvision>=0.15.0
-# Used ONLY for data augmentation presets DA1/DA2 in control_suite.get_augmentation_transforms().
-# The pipeline works without it — that function returns None gracefully when torchvision is absent.
-# flash-attn is OPTIONAL — the pipeline runs correctly without it (PyTorch 2.x
-# built-in SDPA is used as fallback).  Install separately after torch if desired:
-#   pip install flash-attn --no-build-isolation
-# KNOWN ISSUE: flash-attn 2.x fails to build from source on torch>=2.9+cu126
-# due to an nvcc segfault.  Use a prebuilt wheel finder:
-#   https://flashattn.dev/wheel-finder/
-# Select: Python 3.12 / CUDA 12.6 / your PyTorch version → copy the pip command.
-
-# optuna>=3.0.0          # Hyperparameter search (hparam_search.py)
-# textual>=0.40.0        # Interactive TUI (run_all.py --interactive)
-# rich>=13.0.0           # Coloured output (optional)
-# detect-secrets         # Pre-commit secret detection
-
-# --- Packages removed from this file (see README.md § Dependency Reference) ---
-# editdistance  → replaced with inline _edit_distance() (Wagner-Fischer, 14 lines)
-# tqdm          → replaced with inline _progress() logger (16 lines)
-# scipy         → replaced with inline _smooth() moving-average (15 lines)
-# psutil        → replaced with inline _get_total_ram_bytes() via /proc/meminfo (18 lines)
-# opencv-python → soft dep for train_trocr_yolo.py image resizing (inline import at training time only)
-#                 Install with: pip install opencv-python-headless
-# pandas        → never imported; stdlib csv module used instead
-# scikit-learn  → never imported
-# seaborn       → never imported; matplotlib used directly
-# jiwer         → never imported; F1 + NED metrics used (not WER/CER)
-# timm          → never imported; TrOCR uses ViT natively in transformers
-# numpy         → transitive dep of torch (always installed)
-# sentencepiece → transitive dep of transformers (always installed)
-# protobuf      → transitive dep of transformers (always installed)
-# datasets      → 100% replaced with inline _hf_download_dataset_inline() in data_pipeline.py
-#                 (urllib-only HTTP downloader + JSONL cache; no Arrow dependency)
-# ultralytics   → 100% replaced with inline _YOLO_CLS in train_trocr_yolo.py
-#                 (proxy L2 loss fallback: trains backbone away from random init but does NOT
-#                  produce a calibrated detector — install ultralytics for real detection quality)
-# matplotlib    → 100% replaced with inline SVG generators in reporting.py
-#                 (_svg_bar_chart, _svg_speed_chart, _svg_radar_chart, _svg_compare_bar)
-#                 Install matplotlib for PDF-quality rasterised output (optional)
-# pytest        → 100% replaced with stdlib unittest in tests/test_all.py
-#                 (full _Pytest stub with .raises(), .mark.skipif(), .importorskip())
-#                 Run with: python -m pytest tests/  OR  python -m unittest discover tests/
-# Pillow        → 100% replaced with inline image decoders in train.py
-#                 PNG: full (8-bit RGB/RGBA, all filter types), BMP: 24-bit uncompressed
-#                 JPEG: pure-Python baseline DCT decoder (Huffman + IDCT + YCbCr→RGB)
-#                 Install Pillow for faster JPEG loading (optional)
+torchvision>=0.15.0
+flash-attn
+optuna>=3.0.0
+textual>=0.40.0
+rich>=13.0.0
+detect-secrets
+editdistance
+tqdm
+scipy
+psutil
+opencv-python-headless
+pandas
+scikit-learn
+seaborn
+jiwer
+timm
+numpy
+ultralytics
+matplotlib
+pytest
+Pillow
