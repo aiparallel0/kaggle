@@ -769,11 +769,10 @@ except ImportError:
             best_sd_path = out_dir / "best_sd.pt"
 
             self.model.train()
-            # lr=1e-4 instead of 1e-3: the L2 proxy loss has a degenerate global
-            # minimum at weights=0.  At lr=1e-3 the first AdamW step pushes all
-            # feature maps to near-zero in a single epoch, reporting 0 loss for
-            # all subsequent epochs (weight collapse).  Gradient clipping below
-            # is the primary safeguard; the lower LR provides a second layer.
+            # lr=1e-4: conservative LR for the unit-energy proxy loss.  The loss
+            # is (mean(f^2)-1)^2 — no degenerate zero, but can still overshoot
+            # the unit-energy basin at high LR.  Gradient clipping (max_norm=1.0)
+            # below is the primary safeguard; the lower LR provides a second layer.
             optimizer = torch.optim.AdamW(self.model.parameters(), lr=1e-4, weight_decay=5e-4)
             scaler = torch.cuda.amp.GradScaler(enabled=amp and torch.cuda.is_available())
             best_loss = float("inf")
@@ -858,12 +857,16 @@ except ImportError:
                     with torch.cuda.amp.autocast(enabled=amp and torch.cuda.is_available()):
                         # NOTE: Full YOLO detection loss (box regression + DFL +
                         # classification) requires the ultralytics TaskAlignedAssigner
-                        # and is not inlined here.  As a proxy, minimize the L2 norm of
-                        # all detection-head feature maps so the backbone converges away
-                        # from random initialisation.  For real detection quality install
-                        # ultralytics: pip install ultralytics
+                        # and is not inlined here.  As a proxy, use a unit-energy loss:
+                        # (mean(f^2) - 1)^2 per detection head.  The minimum is reached
+                        # when each feature map has unit mean energy — impossible to
+                        # satisfy by collapsing weights to zero (where mean(f^2)→0 gives
+                        # loss→1, not 0).  The old L2 loss `sum(f^2)` had a degenerate
+                        # global minimum at weights=0, causing loss→0 by epoch 3.
+                        # For real detection quality install ultralytics:
+                        #   pip install ultralytics
                         raw_feats = self.model(t)  # train mode → list of [B, no, H, W]
-                        loss = sum(f.float().pow(2).mean() for f in raw_feats)
+                        loss = sum((f.float().pow(2).mean() - 1.0).pow(2) for f in raw_feats)
                     scaler.scale(loss).backward()
                     # Gradient clipping: MUST unscale before clip so clip sees
                     # true gradient magnitudes, not GradScaler-inflated ones.
@@ -912,19 +915,26 @@ except ImportError:
                         count,
                     )
                 _logger.info("Epoch %d/%d — loss=%.4f", epoch + 1, epochs, avg_loss)
-                # Detect weight collapse: L2 proxy loss reaching near-zero means all
-                # feature maps are near-zero (degenerate solution).  The model will
-                # produce no detections.  This is a known limitation of the proxy loss.
-                if epoch > 0 and avg_loss < 1e-6:
+                # Detect weight collapse: with the unit-energy proxy loss, avg_loss
+                # near 1.0 per head means feature maps are near-zero (energy→0 ⟹
+                # (0-1)^2=1).  This can still happen if gradient clipping is
+                # insufficient.  Stop early — further training is useless.
+                # (With the old L2 loss the collapse threshold was 1e-6; that loss
+                # is no longer used but the guard remains for robustness.)
+                num_heads = len(raw_feats) if "raw_feats" in dir() else 1
+                _collapse_threshold = 0.95 * num_heads  # ≈1.0 per head → all near-zero
+                if epoch > 0 and avg_loss > _collapse_threshold:
                     _logger.warning(
-                        "[inline-YOLO] Epoch %d/%d: avg_loss=%.2e — feature maps have "
-                        "collapsed to near-zero (degenerate proxy-loss minimum). "
-                        "This model will not produce useful detections. "
+                        "[inline-YOLO] Epoch %d/%d: avg_loss=%.4f ≥ %.2f — feature maps "
+                        "have collapsed to near-zero (unit-energy loss at minimum means "
+                        "energy≈0).  Stopping early; further epochs will not recover. "
                         "Install ultralytics for real YOLO training: pip install ultralytics",
                         epoch + 1,
                         epochs,
                         avg_loss,
+                        _collapse_threshold,
                     )
+                    break
                 if avg_loss < best_loss:
                     best_loss = avg_loss
                     torch.save(self.model.state_dict(), best_sd_path)
@@ -966,7 +976,7 @@ __all__ = [
     "_materialize_meta_buffers",
     "_EXPECTED_MISSING_TROCR",
     "_print_trocr_load_report",
-    # Patchable constants (micro mode sets these before calling train_yolo/train_trocr)
+    # Patchable constants (micro/superfast mode sets these before calling train functions)
     "YOLO_BASE",
     "YOLO_EPOCHS",
     "YOLO_IMG_SIZE",
@@ -977,6 +987,7 @@ __all__ = [
     "TROCR_BATCH",
     "TROCR_MAX_LEN",
     "TROCR_MINI_MODE",
+    "FIELD_ASSIGNER_EPOCHS",  # train_field_assigner() reads this as default epoch count
 ]
 
 # ── Config ──────────────────────────────────────────────────────────────────
@@ -994,6 +1005,7 @@ TROCR_LR = 5e-5
 TROCR_MAX_LEN = 128
 GRAD_ACCUM = 4
 TROCR_MINI_MODE = False  # True → SGD+Nesterov+CosineAnnealingLR instead of AdamW+linear
+FIELD_ASSIGNER_EPOCHS = 30  # train_field_assigner() default; patch to 1 for superfast mode
 
 RESULTS_DIR = Path("results")
 YOLO_DATA_YAML = WORKSPACE / "data" / "yolo" / "dataset.yaml"
@@ -2663,7 +2675,7 @@ def train_field_assigner(
     yolo_model,
     trocr_model,
     trocr_processor: "TrOCRProcessor",
-    epochs: int = 30,
+    epochs: int | None = None,
     lr: float = 3e-4,
     ned_threshold: float = 0.45,
     device: str = DEVICE,
@@ -2701,6 +2713,7 @@ def train_field_assigner(
     -------
     Trained FieldAttentionAssigner saved to _get_field_assigner_path().
     """
+    effective_epochs = epochs if epochs is not None else FIELD_ASSIGNER_EPOCHS
     effective_backend = (backend or FIELD_ASSIGNER_BACKEND).lower()
     assigner = FieldAttentionAssigner(backend=effective_backend).to(device)
     use_vision = effective_backend == "lm+vision" and assigner._use_lm
@@ -2762,9 +2775,9 @@ def train_field_assigner(
         print("[FieldAssigner] Corpus is empty — skipping training.")
         return assigner
 
-    print(f"[FieldAssigner] Training {len(corpus)} samples × {epochs} epochs…")
+    print(f"[FieldAssigner] Training {len(corpus)} samples × {effective_epochs} epochs…")
     assigner.train()
-    for epoch in range(epochs):
+    for epoch in range(effective_epochs):
         total_loss = 0.0
         n_examples = 0
         for ocr_lines, gt, img_w, img_h, vis_feats in corpus:
@@ -2816,7 +2829,7 @@ def train_field_assigner(
 
         if (epoch + 1) % 5 == 0 or epoch == 0:
             avg = total_loss / max(n_examples, 1)
-            print(f"[FieldAssigner] Epoch {epoch + 1}/{epochs} — loss={avg:.4f}")
+            print(f"[FieldAssigner] Epoch {epoch + 1}/{effective_epochs} — loss={avg:.4f}")
 
     # ── Save checkpoint ──────────────────────────────────────────────────
     ckpt_path = _get_field_assigner_path()
@@ -2989,12 +3002,66 @@ def run_trocr_yolo_inference(
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description="TrOCR+YOLO training pipeline",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Examples:\n"
+            "  python train_trocr_yolo.py                # full pipeline\n"
+            "  python train_trocr_yolo.py --stage yolo   # YOLO only\n"
+            "  python train_trocr_yolo.py --superfast    # bare minimum, <3 min\n"
+        ),
+    )
     parser.add_argument("--stage", choices=["yolo", "trocr", "both"], default="both")
+    parser.add_argument(
+        "--superfast",
+        action="store_true",
+        help=(
+            "Bare minimum mode: yolov8n 1 epoch 160px SGD + TrOCR 1 epoch max_len=32. "
+            "Target: <3 min on RTX 4090."
+        ),
+    )
     args = parser.parse_args()
 
-    if args.stage in ("yolo", "both"):
-        train_yolo()
+    if args.superfast:
+        # Patch module-level constants before calling train functions.
+        # All originals are restored in the finally block.
+        _sf_saved = {
+            "YOLO_BASE": YOLO_BASE,
+            "YOLO_EPOCHS": YOLO_EPOCHS,
+            "YOLO_IMG_SIZE": YOLO_IMG_SIZE,
+            "YOLO_BATCH": YOLO_BATCH,
+            "YOLO_OPTIMIZER": YOLO_OPTIMIZER,
+            "YOLO_MOMENTUM": YOLO_MOMENTUM,
+            "TROCR_EPOCHS": TROCR_EPOCHS,
+            "TROCR_MAX_LEN": TROCR_MAX_LEN,
+            "TROCR_BATCH": TROCR_BATCH,
+            "TROCR_MINI_MODE": TROCR_MINI_MODE,
+        }
+        import sys as _sys
 
-    if args.stage in ("trocr", "both"):
-        train_trocr()
+        _mod = _sys.modules[__name__]
+        try:
+            _mod.YOLO_BASE = "yolov8n.pt"
+            _mod.YOLO_EPOCHS = 1
+            _mod.YOLO_IMG_SIZE = 160  # minimum multiple of 32 for stride-32 head
+            _mod.YOLO_BATCH = 32
+            _mod.YOLO_OPTIMIZER = "SGD"
+            _mod.YOLO_MOMENTUM = 0.937
+            _mod.TROCR_EPOCHS = 1
+            _mod.TROCR_MAX_LEN = 32
+            _mod.TROCR_BATCH = 4
+            _mod.TROCR_MINI_MODE = True  # SGD+Nesterov+CosineAnnealingLR
+            if args.stage in ("yolo", "both"):
+                train_yolo()
+            if args.stage in ("trocr", "both"):
+                train_trocr()
+        finally:
+            for _k, _v in _sf_saved.items():
+                setattr(_mod, _k, _v)
+    else:
+        if args.stage in ("yolo", "both"):
+            train_yolo()
+
+        if args.stage in ("trocr", "both"):
+            train_trocr()
