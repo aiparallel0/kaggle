@@ -3941,8 +3941,8 @@ def _superfast_mode_handler(args, logger: logging.Logger) -> int:
     }
     try:
         tty.YOLO_BASE = "yolov8n.pt"  # 3.2M params — smallest available
-        tty.YOLO_EPOCHS = 1  # single pass through dataset
-        tty.YOLO_IMG_SIZE = 160  # minimum multiple of 32 that fits stride-32 head
+        tty.YOLO_EPOCHS = 5  # single pass through dataset
+        tty.YOLO_IMG_SIZE = 320  # minimum multiple of 32 that fits stride-32 head
         tty.YOLO_BATCH = 32  # small images fit large batch
         tty.YOLO_OPTIMIZER = "SGD"  # SGD+Nesterov: fastest convergence per step
         tty.YOLO_MOMENTUM = 0.937
