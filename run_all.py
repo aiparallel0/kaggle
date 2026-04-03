@@ -2341,7 +2341,7 @@ def stage_trocr_experiments(args) -> StageResult:
                 warnings.append(w)
             elif yolo_weights.exists() and trocr_best.exists():
                 _log.debug("Evaluating TrOCR+YOLO on %d test images ...", len(test_samples))
-                metrics = eval_mod.evaluate_trocr_yolo_on_test(
+                metrics = trocr_yolo.evaluate_trocr_yolo_on_test(
                     str(yolo_weights), str(trocr_best), test_samples
                 )
                 eval_mod.print_metrics("TrOCR+YOLO", metrics)
@@ -2413,7 +2413,7 @@ def stage_trocr_experiments(args) -> StageResult:
                     _log.warning("[Exp %d] No test samples — skipping evaluation", exp_id)
                 elif yolo_weights.exists() and trocr_best.exists():
                     _gpu_cleanup()
-                    exp_metrics = eval_mod.evaluate_trocr_yolo_on_test(
+                    exp_metrics = trocr_yolo.evaluate_trocr_yolo_on_test(
                         str(yolo_weights), str(trocr_best), test_samples
                     )
                     eval_mod.print_metrics(f"TrOCR+YOLO Exp {exp_id}", exp_metrics)

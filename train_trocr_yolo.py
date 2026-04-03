@@ -965,13 +965,14 @@ from constants import (  # noqa: E402
     _optimal_num_workers,
     _progress,
 )
-from run_experiments import CONTROL_SUITE, get_augmentation_transforms
+from run_experiments import CONTROL_SUITE, compute_metrics, get_augmentation_transforms
 
 __all__ = [
     "TrOCRReceiptDataset",
     "train_yolo",
     "train_trocr",
     "_build_experiment_trocr_metadata",
+    "evaluate_trocr_yolo_on_test",
     "run_trocr_yolo_inference",
     "_materialize_meta_buffers",
     "_EXPECTED_MISSING_TROCR",
@@ -2996,6 +2997,67 @@ def run_trocr_yolo_inference(
         return field_assigner.assign(ocr_lines, img_w=img_w, img_h=img_h, vision_feats=vision_feats)
 
     return _assign_fields_heuristic(ocr_lines)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Evaluate TrOCR+YOLO on test set
+# ════════════════════════════════════════════════════════════════════════════
+def evaluate_trocr_yolo_on_test(
+    yolo_weights: str,
+    trocr_model_path: str,
+    test_samples: list[tuple[Path, dict[str, str]]],
+) -> dict:
+    """Evaluate TrOCR+YOLO pipeline on the SROIE test set. Returns metrics dict.
+
+    If a trained FieldAttentionAssigner checkpoint exists at the expected path
+    (see ``load_field_assigner``), it is used for field assignment instead of
+    the regex heuristic.  When no checkpoint is found the function falls back
+    to ``_assign_fields_heuristic`` transparently.
+    """
+    # Use ultralytics YOLO if available, else fall back to inline _YOLO_CLS
+    try:
+        from ultralytics import YOLO
+    except ImportError:
+        YOLO = _YOLO_CLS  # noqa: N806
+
+    yolo_model = YOLO(str(yolo_weights))
+    trocr_processor = TrOCRProcessor.from_pretrained(trocr_model_path)
+    # FIX: low_cpu_mem_usage=False + _materialize_meta_buffers prevents the
+    # meta-device crash on TrOCR's sinusoidal positional embedding buffer.
+    trocr_model = VisionEncoderDecoderModel.from_pretrained(
+        trocr_model_path, low_cpu_mem_usage=False
+    ).to(DEVICE)
+    _materialize_meta_buffers(trocr_model, DEVICE)
+    trocr_model.eval()
+
+    # Load the trained FieldAttentionAssigner if a checkpoint exists; fall back
+    # to the regex heuristic when none is found (first run, no training yet).
+    field_assigner = load_field_assigner(device=DEVICE)
+
+    predictions = []
+    ground_truths = [s[1] for s in test_samples]
+    latencies = []
+
+    with torch.no_grad():
+        for img_path, _gt in _progress(test_samples, desc="TrOCR+YOLO eval"):
+            t0 = time.perf_counter()
+            pred = run_trocr_yolo_inference(
+                img_path, yolo_model, trocr_model, trocr_processor, field_assigner
+            )
+            lat = (time.perf_counter() - t0) * 1000
+            latencies.append(lat)
+            predictions.append(pred)
+
+    metrics = compute_metrics(predictions, ground_truths)
+    metrics["num_samples"] = len(test_samples)
+    metrics["mean_latency_ms"] = round(sum(latencies) / len(latencies), 1) if latencies else 0.0
+    if field_assigner is not None:
+        metrics["field_assigner_backend"] = getattr(field_assigner, "backend", "unknown")
+
+    # GPU cleanup
+    _gpu_cleanup(yolo_model, trocr_model, trocr_processor)
+
+    return metrics
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────

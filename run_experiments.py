@@ -137,7 +137,6 @@ __all__ = [
     "DEVICE",
     "load_test_samples",
     "evaluate_donut_on_test",
-    "evaluate_trocr_yolo_on_test",
     "print_metrics",
     "generate_comparison_report",
     "generate_json_summary",
@@ -3278,62 +3277,6 @@ def evaluate_donut_on_test(
 
     # GPU cleanup
     _gpu_cleanup(model, processor)
-
-    return metrics
-
-
-# ════════════════════════════════════════════════════════════════════════════
-# Evaluate TrOCR+YOLO on test set
-# ════════════════════════════════════════════════════════════════════════════
-def evaluate_trocr_yolo_on_test(
-    yolo_weights: str,
-    trocr_model_path: str,
-    test_samples: list[tuple[Path, dict[str, str]]],
-) -> dict:
-    """Evaluate TrOCR+YOLO pipeline on the SROIE test set. Returns metrics dict."""
-    from importlib import import_module
-
-    from transformers import TrOCRProcessor, VisionEncoderDecoderModel
-
-    # Import the inference function and meta-buffer fix from train_trocr_yolo.py
-    trocr_yolo_module = import_module("train_trocr_yolo")
-    run_pipeline = trocr_yolo_module.run_trocr_yolo_inference
-    _materialize_meta_buffers = trocr_yolo_module._materialize_meta_buffers
-
-    # Use ultralytics YOLO if available, else fall back to inline _YOLO_CLS
-    try:
-        from ultralytics import YOLO
-    except ImportError:
-        YOLO = trocr_yolo_module._YOLO_CLS  # noqa: N806
-
-    yolo_model = YOLO(str(yolo_weights))
-    trocr_processor = TrOCRProcessor.from_pretrained(trocr_model_path)
-    # FIX: low_cpu_mem_usage=False + _materialize_meta_buffers prevents the
-    # meta-device crash on TrOCR's sinusoidal positional embedding buffer.
-    trocr_model = VisionEncoderDecoderModel.from_pretrained(
-        trocr_model_path, low_cpu_mem_usage=False
-    ).to(DEVICE)
-    _materialize_meta_buffers(trocr_model, DEVICE)
-    trocr_model.eval()
-
-    predictions = []
-    ground_truths = [s[1] for s in test_samples]
-    latencies = []
-
-    with torch.no_grad():
-        for img_path, _gt in _progress(test_samples, desc="TrOCR+YOLO eval"):
-            t0 = time.perf_counter()
-            pred = run_pipeline(img_path, yolo_model, trocr_model, trocr_processor)
-            lat = (time.perf_counter() - t0) * 1000
-            latencies.append(lat)
-            predictions.append(pred)
-
-    metrics = compute_sroie_metrics(predictions, ground_truths)
-    metrics["num_samples"] = len(test_samples)
-    metrics["mean_latency_ms"] = round(float(np.mean(latencies)), 1) if latencies else 0.0
-
-    # GPU cleanup
-    _gpu_cleanup(yolo_model, trocr_model, trocr_processor)
 
     return metrics
 
