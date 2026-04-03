@@ -33,6 +33,8 @@ Usage
   python run_all.py -quick                    # Quick test: Exp 1 + TrOCR+YOLO, gen results.tex
   python run_all.py -quick -all               # Hyperparameter sweep (batch_size, epochs, etc.)
   python run_all.py --mini                    # ~20-min smoke test, generates paper_mini.tex
+  python run_all.py --micro                   # <10-min smoke test (DONUT+TrOCR+YOLO)
+  python run_all.py --superfast               # <3-min TrOCR+YOLO only (no DONUT), bare minimum
   python run_all.py --skip-trocr              # Skip TrOCR+YOLO stages
   python run_all.py --yolo                    # Start from TrOCR+YOLO only (skip DONUT stages)
   python run_all.py --force                   # Force re-run (delete cached results)
@@ -3911,6 +3913,79 @@ def _micro_mode_handler(args, logger: logging.Logger) -> int:
     return _generate_mini_paper(args_paper, logger)
 
 
+def _superfast_mode_handler(args, logger: logging.Logger) -> int:
+    """Superfast mode: TrOCR+YOLO only, absolute bare minimum, target <3 min on RTX 4090.
+
+    No DONUT training at all.  A single TrOCR model is trained (``trocr_single=True``)
+    instead of 8 per-experiment models, cutting TrOCR time by 8×.
+
+    Optimisation levers:
+      YOLO   — yolov8n (3.2 M params), 1 epoch, 160 px, SGD+Nesterov
+      TrOCR  — 1 epoch, max_len=32, batch=4, SGD+Nesterov+CosineAnnealingLR
+
+    Produces paper_superfast.tex with all \\VAR{} placeholders resolved (DONUT
+    metrics filled with «N/A» since that stage is skipped).
+    """
+    import train_trocr_yolo as tty
+
+    # ── Stage 0: SROIE install ────────────────────────────────────────────
+    if not args.skip_install:
+        logger.info("[Superfast Stage 0] SROIE data install...")
+        r = stage_install(args)
+        if r.exit_status > 1:
+            logger.error("SROIE install failed")
+            return 2
+
+    # ── Stage 1: TrOCR+YOLO data prep ────────────────────────────────────
+    logger.info("[Superfast Stage 1] TrOCR+YOLO data prep...")
+    r = stage_trocr_data_prep(args)
+    if r.exit_status > 1:
+        logger.error("TrOCR data prep failed")
+        return 2
+
+    # ── Stage 2: YOLO (1 ep, 160 px, yolov8n) + TrOCR (1 ep, single model) ──
+    logger.info("[Superfast Stage 2] YOLO (yolov8n 1 ep 160 px) + TrOCR (1 ep single)...")
+    _saved = {
+        "YOLO_BASE": tty.YOLO_BASE,
+        "YOLO_EPOCHS": tty.YOLO_EPOCHS,
+        "YOLO_IMG_SIZE": tty.YOLO_IMG_SIZE,
+        "YOLO_BATCH": tty.YOLO_BATCH,
+        "YOLO_OPTIMIZER": tty.YOLO_OPTIMIZER,
+        "YOLO_MOMENTUM": tty.YOLO_MOMENTUM,
+        "TROCR_EPOCHS": tty.TROCR_EPOCHS,
+        "TROCR_MAX_LEN": tty.TROCR_MAX_LEN,
+        "TROCR_BATCH": tty.TROCR_BATCH,
+        "TROCR_MINI_MODE": tty.TROCR_MINI_MODE,
+    }
+    args_sf = copy.copy(args)
+    args_sf.trocr_single = True  # 1 model shared across all experiments (8× faster)
+    try:
+        tty.YOLO_BASE = "yolov8n.pt"  # 3.2M params — smallest available
+        tty.YOLO_EPOCHS = 1  # single pass through dataset
+        tty.YOLO_IMG_SIZE = 160  # 160 px — minimum multiple of 32 that fits stride-32 head
+        tty.YOLO_BATCH = 32  # small images fit large batch
+        tty.YOLO_OPTIMIZER = "SGD"  # SGD+Nesterov: fastest convergence per step
+        tty.YOLO_MOMENTUM = 0.937
+        tty.TROCR_EPOCHS = 1
+        tty.TROCR_MAX_LEN = 32  # 128 → 32: 4× faster decoding per sample
+        tty.TROCR_BATCH = 4  # conservative: avoids OOM after inline YOLO on same GPU
+        tty.TROCR_MINI_MODE = True  # SGD+Nesterov+CosineAnnealingLR
+        r = stage_trocr_experiments(args_sf)
+    finally:
+        for k, v in _saved.items():
+            setattr(tty, k, v)
+
+    if r.exit_status > 1:
+        logger.warning("TrOCR+YOLO superfast training failed (continuing to paper gen)")
+
+    # ── Stage 3: Paper generation → paper_superfast.tex ──────────────────
+    logger.info("[Superfast Stage 3] Generating paper/paper_superfast.tex...")
+    args_paper = copy.copy(args)
+    args_paper.paper_template = "paper/paper.tex"
+    args_paper.output = "paper/paper_superfast.tex"
+    return _generate_mini_paper(args_paper, logger)
+
+
 def _generate_mini_paper(args, logger: logging.Logger) -> int:
     """Generate paper_mini.tex, guaranteed to have zero unresolved \\VAR{} placeholders.
 
@@ -4222,6 +4297,16 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--superfast",
+        action="store_true",
+        help=(
+            "Superfast mode: TrOCR+YOLO only — no DONUT training. Absolute bare minimum. "
+            "YOLO: yolov8n, 1 epoch, 160 px, SGD+Nesterov. "
+            "TrOCR: 1 epoch, max_len=32, batch=4, single shared model (not 8×). "
+            "Target: <3 min on RTX 4090. Generates paper_superfast.tex."
+        ),
+    )
+    p.add_argument(
         "--startup-log",
         default="startup.log",
         metavar="FILE",
@@ -4460,6 +4545,15 @@ def main() -> None:
         exit_code = _micro_mode_handler(args, logger)
         total_elapsed = time.monotonic() - t_start
         logger.info(f"Micro mode complete in {total_elapsed / 60:.1f} min (exit code {exit_code})")
+        sys.exit(exit_code)
+
+    if getattr(args, "superfast", False):
+        logger.info("Superfast mode detected (--superfast flag)")
+        exit_code = _superfast_mode_handler(args, logger)
+        total_elapsed = time.monotonic() - t_start
+        logger.info(
+            f"Superfast mode complete in {total_elapsed / 60:.1f} min (exit code {exit_code})"
+        )
         sys.exit(exit_code)
 
     # ── Optuna hyperparameter search (--hparam-search) ──────────────────
