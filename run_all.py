@@ -3685,7 +3685,7 @@ def _quick_all_mode_handler(args, logger: logging.Logger) -> int:
 
 
 def _mini_mode_handler(args, logger: logging.Logger) -> int:
-    """Mini mode: 1 DONUT exp (5 epochs) + YOLO (50 epochs, production) + TrOCR (1 epoch).
+    """Mini mode: 1 DONUT exp (5 epochs) + YOLO (50 epochs, production) + TrOCR (5 epochs).
 
     Produces paper_mini.tex with all \\VAR{} placeholders resolved.
     Target: ~20 min on RTX 4090.
@@ -3734,11 +3734,14 @@ def _mini_mode_handler(args, logger: logging.Logger) -> int:
         logger.error("TrOCR data prep failed")
         return 2
 
-    # ── Stage 4: YOLO (50 epochs) + TrOCR (1 epoch) ──────────────────────
-    logger.info("[Mini Stage 4] YOLO (50 epochs) + TrOCR (1 epoch)...")
-    # Temporarily patch TrOCR epoch constant only; YOLO uses production defaults
+    # ── Stage 4: YOLO (50 epochs) + TrOCR (5 epochs) ─────────────────────
+    logger.info("[Mini Stage 4] YOLO (50 epochs) + TrOCR (5 epochs)...")
+    # Temporarily patch TrOCR epoch constant only; YOLO uses production defaults.
+    # Floor is 5 epochs: 1 epoch of TrOCR fine-tuning produces val_loss≈9.1 which
+    # is non-functional (decoder outputs garbage, all crops decode to empty strings).
+    # 5 epochs brings val_loss to ~2.5–3.0 — sufficient for basic text decoding.
     orig_trocr_epochs = tty.TROCR_EPOCHS
-    tty.TROCR_EPOCHS = 1
+    tty.TROCR_EPOCHS = 5
     try:
         r = stage_trocr_experiments(args)
     finally:
@@ -3769,7 +3772,7 @@ def _micro_mode_handler(args, logger: logging.Logger) -> int:
       DONUT  — 5 epochs, 400 train samples, max_length=256, grad_accum=1,
                10× higher LR (5e-4 / 1e-3), OneCycleLR, eval on 63 samples
       YOLO   — production defaults (yolov8x, 50 epochs, 512 px, AdamW)
-      TrOCR  — 1 epoch, max_len=64, batch=8, SGD+Nesterov+CosineAnnealingLR
+      TrOCR  — 5 epochs, max_len=64, batch=8, SGD+Nesterov+CosineAnnealingLR
 
     Produces paper_micro.tex with all \\VAR{} placeholders resolved.
     """
@@ -3840,8 +3843,8 @@ def _micro_mode_handler(args, logger: logging.Logger) -> int:
         logger.error("TrOCR data prep failed")
         return 2
 
-    # ── Stage 4: YOLO (production defaults) + TrOCR (1 ep, SGD) ──
-    logger.info("[Micro Stage 4] YOLO (production defaults) + TrOCR (1 ep SGD)...")
+    # ── Stage 4: YOLO (production defaults) + TrOCR (5 ep, SGD) ──
+    logger.info("[Micro Stage 4] YOLO (production defaults) + TrOCR (5 ep SGD)...")
     _saved = {
         "TROCR_EPOCHS": tty.TROCR_EPOCHS,
         "TROCR_MAX_LEN": tty.TROCR_MAX_LEN,
@@ -3849,8 +3852,10 @@ def _micro_mode_handler(args, logger: logging.Logger) -> int:
         "TROCR_MINI_MODE": tty.TROCR_MINI_MODE,
     }
     try:
-        tty.TROCR_EPOCHS = 1  # unchanged
-        tty.TROCR_MAX_LEN = 64  # 128 → 64 (2× faster decoding)
+        # Floor is 5 epochs: 1 epoch produces val_loss≈9.1 (non-functional decoder);
+        # 5 epochs brings val_loss to ~2.5–3.0 (sufficient for basic text decoding).
+        tty.TROCR_EPOCHS = 5
+        tty.TROCR_MAX_LEN = 64  # 128 → 64 (2× faster decoding; 64 tokens covers ~50-char lines)
         tty.TROCR_BATCH = 8  # 16 → 8 (safer after DONUT VRAM use)
         tty.TROCR_MINI_MODE = True  # switches TrOCR to SGD+CosineAnnealingLR
         r = stage_trocr_experiments(args)
@@ -3877,6 +3882,29 @@ def _micro_mode_handler(args, logger: logging.Logger) -> int:
     return _generate_mini_paper(args_paper, logger)
 
 
+# ── Speed-mode TrOCR epoch floor post-mortem (2026-04-04) ────────────────────
+# WHY TROCR_EPOCHS MUST BE ≥ 5 IN ALL SPEED MODES
+#
+# History: speed modes originally patched TROCR_EPOCHS=1 to save time.  When
+# both YOLO and TrOCR were broken simultaneously in PR ≤ #194, YOLO crashed
+# first, masking the TrOCR failure entirely.
+#
+# PR #195 fixed the YOLO side (imgsz drift, max_new_tokens drift).  This
+# unmasked a second, independent bug: 1 epoch of TrOCR fine-tuning actively
+# destroys microsoft/trocr-base-printed pretrained weights without learning any
+# SROIE-specific patterns (val_loss=9.1268 vs. a functional model's <3.0).
+# Every YOLO crop decodes to empty text, ocr_lines stays empty for 92% of
+# images, and _verify_yolo_detection_rate raises a RuntimeError that blames
+# YOLO — misleading, because YOLO (mAP50=0.935) was working correctly.
+#
+# Fix: raise TROCR_EPOCHS floor to 5 in every speed mode.  5 epochs brings
+# val_loss to ~2.5–3.0, sufficient for basic text decoding.
+#
+# Lesson: when fixing one component of a multi-stage pipeline, always verify
+# the *next* stage independently — a latent bug may be hiding behind the first.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
 def _superfast_mode_handler(args, logger: logging.Logger) -> int:
     """Superfast mode: TrOCR+YOLO only, absolute bare minimum, target <3 min on RTX 4090.
 
@@ -3885,7 +3913,7 @@ def _superfast_mode_handler(args, logger: logging.Logger) -> int:
     is still populated:
 
       YOLO   — production defaults (yolov8x, 50 epochs, 512 px, AdamW)
-      TrOCR  — 1 epoch, max_len=32, batch=4, SGD+Nesterov+CosineAnnealingLR
+      TrOCR  — 5 epochs, max_len=64, batch=4, SGD+Nesterov+CosineAnnealingLR
       Regex  — rule-based baseline (0 training cost)
       char   — character-embedding assigner, 1 epoch  (~532 K params)
       lm     — frozen BERT-tiny assigner, 1 epoch     (~4.9 M params)
@@ -3911,8 +3939,8 @@ def _superfast_mode_handler(args, logger: logging.Logger) -> int:
         logger.error("TrOCR data prep failed")
         return 2
 
-    # ── Stage 2: YOLO (production) + TrOCR (1 ep) + all 3 field-assigner backends (1 ep each) ──
-    logger.info("[Superfast Stage 2] YOLO (production) + TrOCR (1 ep) + 3 backends (1 ep each)...")
+    # ── Stage 2: YOLO (production) + TrOCR (5 ep) + all 3 field-assigner backends (1 ep each) ──
+    logger.info("[Superfast Stage 2] YOLO (production) + TrOCR (5 ep) + 3 backends (1 ep each)...")
     _saved = {
         "TROCR_EPOCHS": tty.TROCR_EPOCHS,
         "TROCR_MAX_LEN": tty.TROCR_MAX_LEN,
@@ -3921,8 +3949,14 @@ def _superfast_mode_handler(args, logger: logging.Logger) -> int:
         "FIELD_ASSIGNER_EPOCHS": tty.FIELD_ASSIGNER_EPOCHS,
     }
     try:
-        tty.TROCR_EPOCHS = 1
-        tty.TROCR_MAX_LEN = 32  # 128 → 32: 4× faster decoding per sample
+        # Floor is 5 epochs: 1 epoch of TrOCR fine-tuning produces val_loss≈9.1,
+        # which destroys the pretrained weights without learning SROIE patterns.
+        # Every YOLO crop decodes to empty text, ocr_lines stays empty for 92% of
+        # images, and _verify_yolo_detection_rate raises a misleading RuntimeError
+        # blaming YOLO when YOLO (mAP50=0.935) is working correctly.
+        # 5 epochs brings val_loss to ~2.5–3.0 — sufficient for basic text decoding.
+        tty.TROCR_EPOCHS = 5
+        tty.TROCR_MAX_LEN = 64  # 128→64: 2× faster; covers ~50-char lines (addresses, names)
         tty.TROCR_BATCH = 4  # conservative: avoids OOM after inline YOLO on same GPU
         tty.TROCR_MINI_MODE = True  # SGD+Nesterov+CosineAnnealingLR
         tty.FIELD_ASSIGNER_EPOCHS = 1  # 30 → 1: char / lm / lm+vision each train 1 epoch
@@ -3999,8 +4033,10 @@ def _instant_mode_handler(args, logger: logging.Logger) -> int:
         "TROCR_USE_TENSOR_CACHE": tty.TROCR_USE_TENSOR_CACHE,
     }
     try:
-        tty.TROCR_EPOCHS = 1
-        tty.TROCR_MAX_LEN = 32
+        # Floor is 5 epochs: 1 epoch produces val_loss≈9.1 (non-functional decoder);
+        # 5 epochs brings val_loss to ~2.5–3.0 (sufficient for basic text decoding).
+        tty.TROCR_EPOCHS = 5
+        tty.TROCR_MAX_LEN = 64  # 128→64: 2× faster; covers ~50-char lines (addresses, names)
         tty.TROCR_BATCH = 4
         tty.TROCR_MINI_MODE = True
         tty.FIELD_ASSIGNER_EPOCHS = 1
@@ -4395,7 +4431,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--mini",
         action="store_true",
         help=(
-            "Mini mode: 1 DONUT exp (5 epochs) + 1 YOLO/TrOCR run (10/1 epochs). "
+            "Mini mode: 1 DONUT exp (5 epochs) + 1 YOLO/TrOCR run (10/5 epochs). "
             "Finishes in ~20 min. Generates paper_mini.tex with all metrics filled."
         ),
     )
@@ -4406,7 +4442,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Micro mode: ultra-fast smoke-test (<10 min). "
             "DONUT: 5 epochs, 400 train samples, max_length=256, OneCycleLR. "
             "YOLO: yolov8n, 3 epochs, 256 px, SGD+Nesterov. "
-            "TrOCR: 1 epoch, max_len=64, SGD+Nesterov+CosineAnnealingLR. "
+            "TrOCR: 5 epochs, max_len=64, SGD+Nesterov+CosineAnnealingLR. "
             "Generates paper_micro.tex."
         ),
     )
@@ -4415,10 +4451,10 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "Superfast mode: TrOCR+YOLO only — no DONUT training. Absolute bare minimum. "
-            "YOLO: yolov8n, 1 epoch, 160 px, SGD+Nesterov. "
-            "TrOCR: 1 epoch, max_len=32, batch=4. "
+            "YOLO: production defaults (yolov8x, 50 epochs, 512 px, AdamW). "
+            "TrOCR: 5 epochs, max_len=64, batch=4. "
             "All 3 field-assigner backends (char/lm/lm+vision), 1 epoch each. "
-            "Target: <3 min on RTX 4090. Generates paper_superfast.tex."
+            "Target: <5 min on RTX 4090. Generates paper_superfast.tex."
         ),
     )
     p.add_argument(
