@@ -428,7 +428,7 @@ def _progress(iterable, desc: str = "", total: int | None = None):
                 yield item
                 progress.advance(task)
         return
-    except Exception:
+    except (ImportError, RuntimeError):
         pass  # rich not available or failed — fall through to plain \r
 
     for idx, item in enumerate(items):

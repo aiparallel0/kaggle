@@ -210,7 +210,7 @@ except ImportError:
                     arr = _np_img.frombuffer(pixel_data, dtype=_np_img.uint8)
                     if len(arr) >= h * w * 3:
                         return arr[: h * w * 3].reshape(h, w, 3)
-        except Exception:
+        except (ValueError, IndexError, MemoryError):
             pass
         return None
 
@@ -1301,7 +1301,7 @@ class TrOCRReceiptDataset(Dataset):
                         _h = _w = _img_size
                     else:
                         _h = _w = 384
-                except Exception:
+                except (TypeError, ValueError, AttributeError):
                     _h = _w = 384
                 _bytes_per_sample = 3 * _h * _w * 4  # float32 = 4 bytes
                 _required_bytes = n_total * _bytes_per_sample
@@ -1314,14 +1314,14 @@ class TrOCRReceiptDataset(Dataset):
                     import psutil  # noqa: E402
 
                     _available_bytes = psutil.virtual_memory().available
-                except Exception:
+                except (ImportError, RuntimeError):
                     try:
                         with open("/proc/meminfo") as _mf:
                             for _line in _mf:
                                 if _line.startswith("MemAvailable:"):
                                     _available_bytes = int(_line.split()[1]) * 1024
                                     break
-                    except Exception:
+                    except (FileNotFoundError, ValueError, OSError):
                         pass  # Unknown available RAM — proceed optimistically
 
                 _bytes_per_gb = 1024**3

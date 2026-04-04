@@ -341,7 +341,7 @@ def print_multi_seed_table(results_dir: str | Path = "results/multi_seed") -> No
         try:
             with open(f) as fh:
                 data = json.load(fh)
-        except Exception:
+        except (json.JSONDecodeError, FileNotFoundError, ValueError):
             continue
         exp_id = data.get("experiment_id", "?")
         name = data.get("name", "")[:38]

@@ -27,6 +27,7 @@ import re
 import sys
 import tarfile
 import time
+import urllib.error
 import urllib.request
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
@@ -51,7 +52,7 @@ try:
         from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 
         transformers.PreTrainedTokenizerBase = PreTrainedTokenizerBase
-except Exception:
+except (ImportError, AttributeError):
     pass
 
 import resource_manager as _mm  # noqa: E402
@@ -504,7 +505,7 @@ def _read_hf_token() -> str | None:
         token_path = Path(__file__).parent / "hf_token.txt"
         if token_path.exists():
             return token_path.read_text().strip() or None
-    except Exception:
+    except OSError:
         pass
     return os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN") or None
 
@@ -588,7 +589,7 @@ def _hf_download_dataset_inline(
                 if splits_info.get("splits")
                 else "default"
             )
-        except Exception:
+        except (KeyError, IndexError, TypeError):
             config = "default"
 
         # ── Get total row count ───────────────────────────────────────────────────
@@ -602,7 +603,7 @@ def _hf_download_dataset_inline(
                 if s.get("split") == split:
                     total_rows = int(s.get("num_rows", total_rows))
                     break
-        except Exception:
+        except (urllib.error.URLError, KeyError, ValueError, json.JSONDecodeError):
             pass
 
         # ── Download rows in batches of 100 ──────────────────────────────────────
@@ -1362,8 +1363,8 @@ class FUNSDLoader(BaseDatasetLoader):
                     gt["total"] = ans
                 elif not gt["address"] and len(ans) > 5:
                     gt["address"] = ans
-        except Exception:
-            pass
+        except (KeyError, IndexError, TypeError, ValueError) as exc:
+            logger.warning("FUNSD remap failed for sample: %s", exc)
         return gt
 
     # ── public interface ──────────────────────────────────────────────
@@ -2259,16 +2260,8 @@ CACHE_PATH = REPO_ROOT / "seller_split_cache.json"
 # ---------------------------------------------------------------------------
 # Compiled heuristics (fallback when NER confidence is low)
 # ---------------------------------------------------------------------------
-
-_STREET_NUMBER_RE = re.compile(r"\b\d+\s+[A-Za-z]")
-_PO_BOX_RE = re.compile(r"\bP\.?\s*O\.?\s*Box\b", re.IGNORECASE)
-_STATE_ZIP_RE = re.compile(r"\b[A-Z]{2}\s+\d{5}(?:-\d{4})?\b")
-_STREET_SUFFIX_RE = re.compile(
-    r"\b(?:Street|St|Avenue|Ave|Boulevard|Blvd|Road|Rd|Drive|Dr|"
-    r"Way|Lane|Ln|Court|Ct|Place|Pl|Terrace|Ter|Circle|Cir|"
-    r"Highway|Hwy|Parkway|Pkwy|Trail|Trl|Run|Loop|Row)\b",
-    re.IGNORECASE,
-)
+# NOTE: _STREET_NUMBER_RE, _PO_BOX_RE, _STATE_ZIP_RE, _STREET_SUFFIX_RE
+# are already defined at module level (lines ~318-332). Reuse those definitions.
 
 
 def _heuristic_split(seller: str) -> tuple[str, str]:
