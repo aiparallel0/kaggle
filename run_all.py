@@ -2345,6 +2345,7 @@ def stage_trocr_experiments(args) -> StageResult:
                     str(yolo_weights), str(trocr_best), test_samples
                 )
                 eval_mod.print_metrics("TrOCR+YOLO", metrics)
+                trocr_yolo._save_trocr_eval_plots(metrics, results_dir)
                 num_samples = trocr_history.get("num_train_samples", 0)
                 for exp_id in range(1, 9):
                     trocr_results[str(exp_id)] = {
@@ -2417,6 +2418,7 @@ def stage_trocr_experiments(args) -> StageResult:
                         str(yolo_weights), str(trocr_best), test_samples
                     )
                     eval_mod.print_metrics(f"TrOCR+YOLO Exp {exp_id}", exp_metrics)
+                    trocr_yolo._save_trocr_eval_plots(exp_metrics, results_dir)
                     _log.info(
                         "[Exp %d] F1=%.4f  samples=%d",
                         exp_id,
@@ -3772,7 +3774,7 @@ def _micro_mode_handler(args, logger: logging.Logger) -> int:
       DONUT  — 5 epochs, 400 train samples, max_length=256, grad_accum=1,
                10× higher LR (5e-4 / 1e-3), OneCycleLR, eval on 63 samples
       YOLO   — production defaults (yolov8x, 50 epochs, 512 px, AdamW)
-      TrOCR  — 5 epochs, max_len=64, batch=8, SGD+Nesterov+CosineAnnealingLR
+      TrOCR  — 5 epochs, max_len=64, batch=8, AdamW+linear-warmup
 
     Produces paper_micro.tex with all \\VAR{} placeholders resolved.
     """
@@ -3843,13 +3845,12 @@ def _micro_mode_handler(args, logger: logging.Logger) -> int:
         logger.error("TrOCR data prep failed")
         return 2
 
-    # ── Stage 4: YOLO (production defaults) + TrOCR (5 ep, SGD) ──
-    logger.info("[Micro Stage 4] YOLO (production defaults) + TrOCR (5 ep SGD)...")
+    # ── Stage 4: YOLO (production defaults) + TrOCR (5 ep) ──
+    logger.info("[Micro Stage 4] YOLO (production defaults) + TrOCR (5 ep)...")
     _saved = {
         "TROCR_EPOCHS": tty.TROCR_EPOCHS,
         "TROCR_MAX_LEN": tty.TROCR_MAX_LEN,
         "TROCR_BATCH": tty.TROCR_BATCH,
-        "TROCR_MINI_MODE": tty.TROCR_MINI_MODE,
     }
     try:
         # Floor is 5 epochs: 1 epoch produces val_loss≈9.1 (non-functional decoder);
@@ -3857,7 +3858,6 @@ def _micro_mode_handler(args, logger: logging.Logger) -> int:
         tty.TROCR_EPOCHS = 5
         tty.TROCR_MAX_LEN = 64  # 128 → 64 (2× faster decoding; 64 tokens covers ~50-char lines)
         tty.TROCR_BATCH = 8  # 16 → 8 (safer after DONUT VRAM use)
-        tty.TROCR_MINI_MODE = True  # switches TrOCR to SGD+CosineAnnealingLR
         r = stage_trocr_experiments(args)
     finally:
         for k, v in _saved.items():
@@ -3913,7 +3913,7 @@ def _superfast_mode_handler(args, logger: logging.Logger) -> int:
     is still populated:
 
       YOLO   — production defaults (yolov8x, 50 epochs, 512 px, AdamW)
-      TrOCR  — 5 epochs, max_len=64, batch=4, SGD+Nesterov+CosineAnnealingLR
+      TrOCR  — 5 epochs, max_len=64, batch=4, AdamW+linear-warmup
       Regex  — rule-based baseline (0 training cost)
       char   — character-embedding assigner, 1 epoch  (~532 K params)
       lm     — frozen BERT-tiny assigner, 1 epoch     (~4.9 M params)
@@ -3945,7 +3945,6 @@ def _superfast_mode_handler(args, logger: logging.Logger) -> int:
         "TROCR_EPOCHS": tty.TROCR_EPOCHS,
         "TROCR_MAX_LEN": tty.TROCR_MAX_LEN,
         "TROCR_BATCH": tty.TROCR_BATCH,
-        "TROCR_MINI_MODE": tty.TROCR_MINI_MODE,
         "FIELD_ASSIGNER_EPOCHS": tty.FIELD_ASSIGNER_EPOCHS,
     }
     try:
@@ -3958,7 +3957,6 @@ def _superfast_mode_handler(args, logger: logging.Logger) -> int:
         tty.TROCR_EPOCHS = 5
         tty.TROCR_MAX_LEN = 64  # 128→64: 2× faster; covers ~50-char lines (addresses, names)
         tty.TROCR_BATCH = 4  # conservative: avoids OOM after inline YOLO on same GPU
-        tty.TROCR_MINI_MODE = True  # SGD+Nesterov+CosineAnnealingLR
         tty.FIELD_ASSIGNER_EPOCHS = 1  # 30 → 1: char / lm / lm+vision each train 1 epoch
         # stage_trocr_all_backends runs all 3 backends (char → lm → lm+vision) so
         # the comparison table is populated even in superfast mode.
@@ -4028,7 +4026,6 @@ def _instant_mode_handler(args, logger: logging.Logger) -> int:
         "TROCR_EPOCHS": tty.TROCR_EPOCHS,
         "TROCR_MAX_LEN": tty.TROCR_MAX_LEN,
         "TROCR_BATCH": tty.TROCR_BATCH,
-        "TROCR_MINI_MODE": tty.TROCR_MINI_MODE,
         "FIELD_ASSIGNER_EPOCHS": tty.FIELD_ASSIGNER_EPOCHS,
         "TROCR_USE_TENSOR_CACHE": tty.TROCR_USE_TENSOR_CACHE,
     }
@@ -4038,7 +4035,6 @@ def _instant_mode_handler(args, logger: logging.Logger) -> int:
         tty.TROCR_EPOCHS = 5
         tty.TROCR_MAX_LEN = 64  # 128→64: 2× faster; covers ~50-char lines (addresses, names)
         tty.TROCR_BATCH = 4
-        tty.TROCR_MINI_MODE = True
         tty.FIELD_ASSIGNER_EPOCHS = 1
         tty.TROCR_USE_TENSOR_CACHE = True  # build/load tensor cache
         r = stage_trocr_all_backends(args)
@@ -4441,8 +4437,8 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Micro mode: ultra-fast smoke-test (<10 min). "
             "DONUT: 5 epochs, 400 train samples, max_length=256, OneCycleLR. "
-            "YOLO: yolov8n, 3 epochs, 256 px, SGD+Nesterov. "
-            "TrOCR: 5 epochs, max_len=64, SGD+Nesterov+CosineAnnealingLR. "
+            "YOLO: production defaults (yolov8x, 50 epochs, 512 px, AdamW). "
+            "TrOCR: 5 epochs, max_len=64, AdamW+linear-warmup. "
             "Generates paper_micro.tex."
         ),
     )
