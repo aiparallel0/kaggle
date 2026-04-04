@@ -1741,11 +1741,21 @@ def _save_model_safetensors_direct(
     # Force content-hash divergence for lm_head: safetensors ≥0.4 deduplicates
     # by byte-content hash, not just data_ptr().  After only 1 epoch (micro/
     # superfast mode), lm_head.weight and embed_tokens.weight are still bitwise
-    # identical — clone() alone is not enough.  Adding the smallest representable
-    # normal float ensures the byte content differs without affecting predictions.
+    # identical — clone() alone is not enough.
+    #
+    # WHY NOT smallest_normal:  torch.finfo(dtype).smallest_normal ≈ 1.2e-38
+    # for float32.  Typical pretrained weight values are ~0.01–0.05.  The ULP
+    # (unit in last place) at 0.02 is ~2.4e-9, so anything smaller than that is
+    # rounded away — the addition is a no-op and the bytes remain identical.
+    #
+    # WHY RELATIVE (eps) WORKS:  torch.finfo(dtype).eps is the machine epsilon
+    # (~1.19e-7 for fp32, ~7.8e-3 for bf16).  Multiplying by (1 + eps) flips at
+    # least the least-significant mantissa bit of every element, guaranteeing the
+    # tensor is bytewise distinct from embed_tokens.weight regardless of the
+    # magnitude of the weights.
     if lm_head_key in sd:
         _lm = sd[lm_head_key]
-        sd[lm_head_key] = _lm + torch.finfo(_lm.dtype).smallest_normal
+        sd[lm_head_key] = _lm * (1.0 + torch.finfo(_lm.dtype).eps)
 
     _st_save_file(sd, save_dir / "model.safetensors")
     model.config.save_pretrained(str(save_dir))
