@@ -3279,14 +3279,14 @@ def evaluate_trocr_yolo_on_test(
     # output_loading_info=True lets us fail fast if decoder.lm_head.weight is
     # absent from the checkpoint (belt-and-suspenders alongside the header
     # check above and the self-test below).
-    trocr_model, _eval_loading_info = VisionEncoderDecoderModel.from_pretrained(
+    trocr_model, loading_info = VisionEncoderDecoderModel.from_pretrained(
         trocr_model_path, low_cpu_mem_usage=False, output_loading_info=True
     )
-    _eval_lm_key = "decoder.lm_head.weight"
-    _eval_missing = _eval_loading_info.get("missing_keys", [])
-    if _eval_lm_key in _eval_missing:
+    lm_head_key = "decoder.lm_head.weight"
+    missing_keys = loading_info.get("missing_keys", [])
+    if lm_head_key in missing_keys:
         raise RuntimeError(
-            f"CRITICAL: {_eval_lm_key!r} is missing from the loaded checkpoint at "
+            f"CRITICAL: {lm_head_key!r} is missing from the loaded checkpoint at "
             f"{trocr_model_path!r}.  safetensors deduplicated it at save time.  "
             "Re-train with _save_model_safetensors_direct() to prevent this.  "
             "See CLAUDE.md §16 Pattern 6."
