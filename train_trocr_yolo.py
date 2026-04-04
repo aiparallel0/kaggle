@@ -3492,6 +3492,7 @@ def _extract_ocr_lines(
                 # num_beams=4 from training setup; override here explicitly.
                 generated_ids = trocr_model.generate(
                     pixel_values,
+                    max_new_tokens=TROCR_MAX_LEN,
                     num_beams=1,
                     length_penalty=1.0,
                     no_repeat_ngram_size=0,
