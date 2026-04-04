@@ -1760,50 +1760,80 @@ def _verify_lm_head_in_checkpoint(model_path: "Path") -> None:
 
 
 def _verify_yolo_detection_rate(
-    zero_count: int,
+    yolo_zero_count: int,
+    trocr_empty_count: int,
     total_count: int,
     threshold: float = 0.5,
 ) -> None:
-    """Raise ``RuntimeError`` (or log ``CRITICAL``) if the zero-detection rate is too high.
+    """Raise ``RuntimeError`` (or log ``CRITICAL``) if the empty-ocr-lines rate is too high.
 
-    A zero-detection rate above *threshold* means YOLO found no text regions
-    on more than half the test images.  When using the inline ``_YOLO_CLS``
-    fallback (untrained weights) or an under-trained ultralytics model, this
-    commonly drives F1 to 0.  Failing loudly here prevents silent
-    all-zero-F1 results that are hard to diagnose downstream.
+    An empty-ocr-lines rate above *threshold* means the pipeline produced no text
+    for more than half the test images, silently driving F1 to 0.  There are two
+    independent causes, now tracked separately:
+
+    * ``yolo_zero_count`` — YOLO found 0 bounding boxes (genuine detection failure:
+      wrong model, wrong ``imgsz``, undertrained YOLO, inline proxy fallback).
+    * ``trocr_empty_count`` — YOLO found boxes but TrOCR decoded every crop to
+      empty text (undertrained TrOCR: 1-epoch fine-tuning leaves ``val_loss≈9``,
+      the decoder outputs garbage, ``batch_decode`` returns only whitespace).
+
+    Both failure modes produce the same downstream symptom (``ocr_lines == []``),
+    but they require completely different fixes.
 
     Parameters
     ----------
-    zero_count : int
-        Number of images for which YOLO returned 0 bounding boxes.
+    yolo_zero_count : int
+        Images where YOLO returned 0 bounding boxes.
+    trocr_empty_count : int
+        Images where YOLO found boxes but TrOCR decoded all crops to empty text.
     total_count : int
         Total number of images evaluated.
     threshold : float
-        Maximum acceptable fraction of zero-detection images (default 0.50).
+        Maximum acceptable fraction of images with empty ocr_lines (default 0.50).
     """
     if total_count == 0:
         return
-    rate = zero_count / total_count
+    combined_empty = yolo_zero_count + trocr_empty_count
+    rate = combined_empty / total_count
     if rate > threshold:
         backend = "ultralytics" if _ULTRALYTICS_AVAILABLE else "inline _YOLO_CLS fallback"
+        # Determine which failure mode dominates to give the most actionable message
+        if trocr_empty_count > yolo_zero_count:
+            trocr_msg = (
+                f"Dominant cause: TrOCR decoded all crops to empty text on "
+                f"{trocr_empty_count}/{total_count} images — TrOCR model is undertrained.  "
+                "Fix: raise TROCR_EPOCHS to ≥ 5 in speed modes (1 epoch produces "
+                "val_loss≈9.1 which destroys pretrained weights); also ensure "
+                "TROCR_MAX_LEN ≥ 64 so receipt text lines are not truncated."
+            )
+        else:
+            trocr_msg = (
+                f"Dominant cause: YOLO found 0 boxes on {yolo_zero_count}/{total_count} "
+                f"images (YOLO backend: {backend}).  "
+                "Likely causes: (1) inline YOLO fallback with random/proxy weights — "
+                "install ultralytics and retrain; (2) YOLO trained for too few epochs "
+                "or at too low a resolution; (3) inference image resolution differs "
+                "from training resolution."
+            )
         raise RuntimeError(
-            f"CRITICAL: YOLO zero-detection rate is {rate:.1%} "
-            f"({zero_count}/{total_count} images) — exceeds threshold {threshold:.0%}.  "
-            f"Active YOLO backend: {backend}.  "
-            "Likely causes: (1) inline YOLO fallback with random/proxy weights — "
-            "install ultralytics and retrain; (2) YOLO trained for too few epochs "
-            "or at too low a resolution; (3) inference image resolution differs "
-            "from training resolution.  "
-            "All field predictions for affected images are empty strings, which "
-            "drives global F1 to 0.  Fix the YOLO model before evaluating."
+            f"CRITICAL: empty-ocr-lines rate is {rate:.1%} "
+            f"({combined_empty}/{total_count} images) — exceeds threshold {threshold:.0%}.  "
+            f"YOLO-zero-box images: {yolo_zero_count}.  "
+            f"TrOCR-all-empty images: {trocr_empty_count}.  "
+            f"{trocr_msg}  "
+            "All field predictions for affected images are empty strings, "
+            "which drives global F1 to 0."
         )
     if rate > 0:
         logging.getLogger(__name__).warning(
-            "YOLO zero-detection rate: %.1f%% (%d/%d images).  "
+            "Empty ocr_lines rate: %.1f%% (%d/%d images) — "
+            "YOLO-zero-box: %d, TrOCR-all-empty: %d.  "
             "Some field predictions may be empty.",
             rate * 100,
-            zero_count,
+            combined_empty,
             total_count,
+            yolo_zero_count,
+            trocr_empty_count,
         )
 
 
@@ -3319,7 +3349,7 @@ def train_field_assigner(
         gt = {k.lower(): str(v).strip() for k, v in gt.items()}
 
         try:
-            ocr_lines, vis_feats = _extract_ocr_lines(
+            ocr_lines, vis_feats, _ = _extract_ocr_lines(
                 img_path,
                 yolo_model,
                 trocr_model,
@@ -3446,7 +3476,7 @@ def _extract_ocr_lines(
     trocr_processor: "TrOCRProcessor",
     device: str = DEVICE,
     return_vision_feats: bool = False,
-) -> "tuple[list[dict], list[torch.Tensor] | None]":
+) -> "tuple[list[dict], list[torch.Tensor] | None, int]":
     """Run YOLO detection + TrOCR reading on one image.
 
     Returns
@@ -3456,6 +3486,10 @@ def _extract_ocr_lines(
                       when return_vision_feats=True; otherwise None.
                       Used by Backend 3 to bypass OCR decoding errors on
                       blurry crops by passing raw pixel features to the assigner.
+    yolo_box_count  : int — number of bounding boxes YOLO found before TrOCR
+                      decoding.  0 means YOLO detected nothing; a positive value
+                      with len(ocr_lines)==0 means YOLO found boxes but TrOCR
+                      decoded every crop to empty text (undertrained model).
     """
     img = _load_image(image_path)
     W = float(img.size[0]) if _PIL_AVAILABLE else float(img.shape[1])  # type: ignore[union-attr]
@@ -3464,9 +3498,11 @@ def _extract_ocr_lines(
     yolo_results = yolo_model(img, verbose=False, imgsz=YOLO_IMG_SIZE)
     ocr_lines: list[dict] = []
     vision_feats: list[torch.Tensor] = []
+    yolo_box_count: int = 0  # boxes found by YOLO before TrOCR decoding
 
     if yolo_results and len(yolo_results[0].boxes) > 0:
         boxes = yolo_results[0].boxes
+        yolo_box_count = len(boxes)
         for box in boxes:
             x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
             pad = 4
@@ -3523,7 +3559,7 @@ def _extract_ocr_lines(
                 # the two lists stay aligned.
                 vision_feats.pop()
 
-    return ocr_lines, (vision_feats if return_vision_feats else None)
+    return ocr_lines, (vision_feats if return_vision_feats else None), yolo_box_count
 
 
 def run_trocr_yolo_inference(
@@ -3551,7 +3587,7 @@ def run_trocr_yolo_inference(
         and getattr(field_assigner, "backend", "") == "lm+vision"
         and getattr(field_assigner, "_use_lm", False)
     )
-    ocr_lines, vision_feats = _extract_ocr_lines(
+    ocr_lines, vision_feats, yolo_box_count = _extract_ocr_lines(
         image_path,
         yolo_model,
         trocr_model,
@@ -3559,16 +3595,28 @@ def run_trocr_yolo_inference(
         return_vision_feats=need_vision,
     )
 
-    # Warn when YOLO produced no detections — this silently drives all field
-    # predictions to empty strings and F1 to 0.  Common causes: inline YOLO
-    # fallback with random weights, wrong confidence threshold, or incorrect
-    # image resolution at inference vs training.
+    # Warn when ocr_lines is empty — distinguishing the two possible causes:
+    # (A) YOLO found 0 boxes: genuine detection failure (wrong model, wrong imgsz, etc.)
+    # (B) YOLO found boxes but TrOCR decoded every crop to empty text: undertrained TrOCR
+    #     (1-epoch fine-tuning destroys pretrained weights, val_loss stays ≈9; raise
+    #     TROCR_EPOCHS floor to ≥5 to reach val_loss ~2.5–3.0 for basic text decoding)
     if not ocr_lines:
-        logging.getLogger(__name__).warning(
-            "YOLO detected 0 text regions for %s — all field predictions will be empty. "
-            "If using the inline YOLO fallback, train with ultralytics for real detections.",
-            image_path,
-        )
+        _log = logging.getLogger(__name__)
+        if yolo_box_count == 0:
+            _log.warning(
+                "YOLO detected 0 text regions for %s — all field predictions will be empty. "
+                "If using the inline YOLO fallback, train with ultralytics for real detections.",
+                image_path,
+            )
+        else:
+            _log.warning(
+                "YOLO detected %d text region(s) for %s but TrOCR decoded all %d crop(s) to "
+                "empty text — likely TrOCR model is undertrained (val_loss too high) or "
+                "TROCR_MAX_LEN too short. Check that TROCR_EPOCHS ≥ 5 in speed modes.",
+                yolo_box_count,
+                image_path,
+                yolo_box_count,
+            )
 
     # Stage 3: field assignment
     if field_assigner is not None:
@@ -3687,7 +3735,8 @@ def evaluate_trocr_yolo_on_test(
     predictions = []
     ground_truths = [s[1] for s in test_samples]
     latencies = []
-    zero_detection_count = 0
+    yolo_zero_count = 0  # images where YOLO found 0 bounding boxes
+    trocr_empty_count = 0  # images where YOLO found boxes but TrOCR decoded all to empty
 
     with torch.no_grad():
         for img_path, _gt in _progress(test_samples, desc="TrOCR+YOLO eval"):
@@ -3699,7 +3748,7 @@ def evaluate_trocr_yolo_on_test(
                 and getattr(field_assigner, "backend", "") == "lm+vision"
                 and getattr(field_assigner, "_use_lm", False)
             )
-            ocr_lines, vision_feats = _extract_ocr_lines(
+            ocr_lines, vision_feats, yolo_box_count = _extract_ocr_lines(
                 img_path,
                 yolo_model,
                 trocr_model,
@@ -3707,13 +3756,27 @@ def evaluate_trocr_yolo_on_test(
                 return_vision_feats=need_vision,
             )
             if not ocr_lines:
-                zero_detection_count += 1
-                _eval_log.warning(
-                    "YOLO detected 0 text regions for %s — all field predictions will "
-                    "be empty.  YOLO backend: %s.",
-                    img_path,
-                    "ultralytics" if _ULTRALYTICS_AVAILABLE else "inline _YOLO_CLS fallback",
-                )
+                if yolo_box_count == 0:
+                    # YOLO found no boxes — genuine detection failure
+                    yolo_zero_count += 1
+                    _eval_log.warning(
+                        "YOLO detected 0 text regions for %s — all field predictions will "
+                        "be empty.  YOLO backend: %s.",
+                        img_path,
+                        "ultralytics" if _ULTRALYTICS_AVAILABLE else "inline _YOLO_CLS fallback",
+                    )
+                else:
+                    # YOLO found boxes but TrOCR decoded every crop to empty text
+                    trocr_empty_count += 1
+                    _eval_log.warning(
+                        "YOLO detected %d text region(s) for %s but TrOCR decoded all %d "
+                        "crop(s) to empty text — likely TrOCR model is undertrained "
+                        "(val_loss too high) or TROCR_MAX_LEN too short. "
+                        "Check that TROCR_EPOCHS ≥ 5 in speed modes.",
+                        yolo_box_count,
+                        img_path,
+                        yolo_box_count,
+                    )
             # Field assignment
             if field_assigner is not None:
                 img = _load_image(img_path)
@@ -3729,8 +3792,8 @@ def evaluate_trocr_yolo_on_test(
             predictions.append(pred)
 
     # Check aggregate zero-detection rate.  Raises RuntimeError if > 50% of
-    # images had no YOLO detections, which would silently drive F1 to 0.
-    _verify_yolo_detection_rate(zero_detection_count, len(test_samples))
+    # images had empty ocr_lines, which would silently drive F1 to 0.
+    _verify_yolo_detection_rate(yolo_zero_count, trocr_empty_count, len(test_samples))
 
     metrics = compute_metrics(predictions, ground_truths)
     metrics["num_samples"] = len(test_samples)

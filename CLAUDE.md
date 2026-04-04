@@ -208,7 +208,8 @@ Both must exit with code `0`. If either fails, fix the core import chain **befor
 | **`FATAL: The following packages could not be installed: transformers`** on fresh env | `requirements.txt` line 42 was missing `#` prefix: `ultralytics   → 100%...` was passed literally to pip, aborting the entire `pip install -r requirements.txt` before `transformers` was reached | Added `#` to `requirements.txt` line 42 (2026-04-02). Always pre-install: `pip install -r requirements.txt` before `run_all.py` |
 | **`transformers 5.x` compatibility** | `pip install transformers` now resolves to 5.5.0+. No breaking changes for `DonutProcessor`, `VisionEncoderDecoderModel`, `Seq2SeqTrainer`. The `PreTrainedTokenizerBase` compat shim handles the ≥4.47 import relocation. | No code change needed. Do NOT delete the compat shim in `data_pipeline.py`. |
 | **TrOCR address F1 = 0.000 with inline YOLO fallback** | `ultralytics` not installed → `_YOLOv8Inline` runs proxy L2 loss (no anchor boxes, no NMS) → bounding box quality insufficient to reliably crop multi-line address regions | Install real YOLO: `pip install ultralytics`. Inline fallback is a smoke-test stand-in only. |
-| **YOLO detects 0 regions on 100% of test images** | Training `imgsz` ≠ inference `imgsz` — ultralytics defaults to 640; anchor grid scale mismatch causes all confidence scores to drop below 0.25 threshold | Pass `imgsz=YOLO_IMG_SIZE` at every YOLO inference call site (Pattern 8 below) |
+| **YOLO detects 0 regions on 100% of test images** | Training `imgsz` ≠ inference `imgsz` — ultralytics defaults to 640; anchor grid scale mismatch causes all confidence scores to drop below 0.25 threshold. **NOTE: this symptom also occurs when TrOCR is undertrained — see the row below. Log messages now distinguish the two causes.** | Pass `imgsz=YOLO_IMG_SIZE` at every YOLO inference call site (Pattern 8 below) |
+| **"YOLO detected N text regions but TrOCR decoded all N crops to empty text"** | TrOCR trained for only 1 epoch in speed modes (`_superfast_mode_handler`, `_micro_mode_handler`, `_instant_mode_handler`) produces `val_loss≈9.1` — non-functional decoder. Every crop decodes to empty text; `ocr_lines` stays empty; 92% of images report zero text; `_verify_yolo_detection_rate` crashes with a misleading message blaming YOLO (which was working fine, mAP50=0.935). | Raise `TROCR_EPOCHS` floor to ≥5 in all speed modes. 5 epochs brings `val_loss` to ~2.5–3.0, sufficient for basic text decoding. Also raise `TROCR_MAX_LEN` to ≥64 so ~50-char address/name lines are not truncated. |
 
 ### Pattern 1: Bracket & Comma Errors
 
@@ -649,6 +650,7 @@ Two-stage pipeline in `train_trocr_yolo.py` (called by `run_all.py`):
 | **`FATAL: transformers could not be installed`** on fresh env (2026-04-02) | `requirements.txt` line 42 missing `#` — `ultralytics   → 100% replaced...` was a live package specifier; pip aborted the entire install on parse error, never reaching `transformers` | Added `#` to `requirements.txt` line 42. Always `pip install -r requirements.txt` before `run_all.py`. | `requirements.txt` |
 | **TrOCR address F1 = 0.000 with inline YOLO fallback** | `ultralytics` not installed → `_YOLOv8Inline` runs proxy L2 loss; no anchor boxes, no NMS; bounding boxes too imprecise to crop multi-line addresses | `pip install ultralytics` for real detection quality. Inline fallback is smoke-test only. | `train_trocr_yolo.py` |
 | **YOLO 0% detection despite 0.28 mAP during training** | `_extract_ocr_lines()` and `reporting.py::_detect_boxes()` called YOLO without `imgsz=YOLO_IMG_SIZE` — ultralytics defaulted to 640px while model was trained at 320px (superfast) or 256px (micro). `_YOLO_CLS.__call__()` didn't accept `imgsz` kwarg so it was silently dropped. `_YOLO_CLS.__init__` hardcoded `self._imgsz = 512` instead of reading the constant. | Pass `imgsz=YOLO_IMG_SIZE` at all 3 YOLO inference sites; accept `imgsz` kwarg in inline `_YOLO_CLS.__call__()`; fix `self._imgsz = YOLO_IMG_SIZE` in `_YOLO_CLS.__init__()` (Pattern 8 below) | `train_trocr_yolo.py`, `reporting.py` |
+| **"YOLO detected 0 text regions" (92%) but YOLO mAP50=0.935** | PR #195 fixed the YOLO parameter drift. This unmasked a second, independent TrOCR bug that was previously hidden: `TROCR_EPOCHS=1` in speed modes produces `val_loss=9.1268`, destroying pretrained weights. Every crop decodes to empty text → `if text:` guard filters all → `ocr_lines=[]` → misleading "YOLO detected 0 regions" warning → `_verify_yolo_detection_rate` RuntimeError blaming YOLO. The two failure modes (YOLO-zero-boxes vs TrOCR-all-empty) are now tracked and logged separately. | Raised `TROCR_EPOCHS` floor to 5 and `TROCR_MAX_LEN` to 64 in all speed modes. Updated `_extract_ocr_lines()` to return `yolo_box_count`; updated warning messages to distinguish YOLO vs TrOCR failure. (Pattern 9 below) | `run_all.py`, `train_trocr_yolo.py` |
 
 ### The F1 Collapse Chain (root-cause map for the three worst bugs)
 
@@ -792,6 +794,40 @@ def __call__(self, img, verbose: bool = False, imgsz: int | None = None, **kwarg
 2. Is there a module-level constant for each such parameter (`YOLO_IMG_SIZE`, `TROCR_MAX_LEN`, …)?
 3. If yes: pass the constant explicitly — never omit it or hardcode a literal.
 4. If the call goes through a wrapper/fallback class: make sure the wrapper's `__call__` accepts and forwards the parameter.
+
+**Subtler form — training parameter drift:** The same anti-pattern applies to training parameters, not just inference. `TROCR_EPOCHS=1` in speed modes is a *training* parameter mismatch: the model trains for 1 epoch (producing `val_loss≈9.1`, non-functional), but inference assumes a working model. Setting training hyperparameters too low is as dangerous as setting inference parameters wrong — both produce silent all-zero F1 with misleading error messages. Minimum floors must be enforced: `TROCR_EPOCHS ≥ 5`, `TROCR_MAX_LEN ≥ 64`.
+
+### Pattern 9: Masked Cascading Failures in Multi-Component Pipelines
+
+**What it is:** When two sequential pipeline components are *both* broken simultaneously, fixing one component unmasks the second. The downstream symptom stays identical (e.g., "YOLO detected 0 text regions" → RuntimeError), but the root cause has shifted to the newly-exposed component.
+
+**The concrete example:**
+- **Before PR #195:** Both YOLO (wrong `imgsz`) and TrOCR (1-epoch, `val_loss=9.1`) were broken in speed modes. YOLO crashed first → zero detections → RuntimeError. TrOCR's failure was invisible.
+- **PR #195** fixed YOLO parameter drift. YOLO now works (mAP50=0.935). But TrOCR at 1 epoch still produces garbage for every crop → `ocr_lines=[]` → same "YOLO detected 0 text regions" warning → same RuntimeError. The symptom was identical but the root cause had shifted entirely.
+- **The misleading log message** ("YOLO detected 0 text regions") sent investigation down the wrong path because YOLO was working fine. The new log messages now distinguish: "YOLO detected 0 text regions" (YOLO failure) vs "YOLO detected N regions but TrOCR decoded all N crops to empty text" (TrOCR failure).
+
+**The lesson: always test the *full* pipeline end-to-end after fixing one component**, because a second latent bug may be hiding behind the first. Specifically:
+1. After fixing a component, verify not just that the fixed component passes, but that the *next* stage in the pipeline also produces valid output independently.
+2. When two components share the same failure symptom (zero-detection → RuntimeError), add distinguishing instrumentation *before* the fix, so the second failure is immediately visible when the first is cleared.
+3. Misleading error messages that name the wrong component ("YOLO detected 0 regions" when TrOCR is the culprit) waste investigation time — instrument at the right granularity.
+
+```python
+# ❌ BEFORE — one counter for both failure modes; message blames YOLO regardless
+zero_detection_count += 1
+log.warning("YOLO detected 0 text regions for %s", img_path)
+
+# ✅ AFTER — separate counters; message names the actual culprit
+if yolo_box_count == 0:
+    yolo_zero_count += 1
+    log.warning("YOLO detected 0 text regions for %s", img_path)
+else:
+    trocr_empty_count += 1
+    log.warning(
+        "YOLO detected %d region(s) for %s but TrOCR decoded all to empty text — "
+        "likely TrOCR undertrained (val_loss too high) or TROCR_MAX_LEN too short",
+        yolo_box_count, img_path,
+    )
+```
 
 ### Pattern 6: safetensors lm_head Deduplication
 

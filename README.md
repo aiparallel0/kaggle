@@ -592,6 +592,25 @@ If `ultralytics` is **not** installed, the pipeline uses an inline fallback (`_Y
 
 **Fixed in:** All YOLO inference sites now pass `imgsz=YOLO_IMG_SIZE`; all TrOCR generation sites now use `TROCR_MAX_LEN`; `reporting.py` imports constants from `train_trocr_yolo.py` instead of hardcoding values. See Pattern 8 in `CLAUDE.md` §16.
 
+### "YOLO detected 0 text regions" but YOLO mAP is high (> 0.9)
+
+**Root cause:** Despite the warning message, YOLO is not the culprit. The log message "YOLO detected 0 text regions" is misleading — it fires whenever `ocr_lines` is empty, which can happen for two independent reasons:
+
+1. **YOLO found 0 boxes** (genuine YOLO failure) — fix by checking `imgsz`, model quality, or installing ultralytics
+2. **YOLO found boxes but TrOCR decoded every crop to empty text** (TrOCR failure) — YOLO is working, but the TrOCR model is undertrained
+
+If YOLO mAP is high (e.g., mAP50 = 0.935) and the log now says **"YOLO detected N text region(s) but TrOCR decoded all N crop(s) to empty text"**, the fix is TrOCR-specific:
+
+**Fix:** Check that `TROCR_EPOCHS ≥ 5` in speed modes. One epoch of TrOCR fine-tuning produces `val_loss ≈ 9.1` — the decoder is non-functional and outputs garbage for every crop. Five epochs brings `val_loss` to ~2.5–3.0, sufficient for basic text decoding. Also verify `TROCR_MAX_LEN ≥ 64` so ~50-character address and name lines are not truncated.
+
+```bash
+# Verify the TROCR_EPOCHS floor in your speed-mode handler:
+grep -n "TROCR_EPOCHS" run_all.py
+# All speed-mode assignments should be 5, not 1
+```
+
+This bug was masked before PR #195 because YOLO was also broken (0 detections). Fixing YOLO exposed the TrOCR failure. See Pattern 9 in `CLAUDE.md` §16 for the general lesson about masked cascading failures in multi-component pipelines.
+
 ### `FATAL: The following packages could not be installed: editdistance`
 
 If you see this error, you are running an older version of `run_all.py` where `editdistance`
@@ -715,6 +734,7 @@ Six critical bugs that previously caused catastrophic failures. All are fixed.
 | **Terminal freeze after "Dependencies installed successfully"** | Auto-installer built `flash-attn` from source via `subprocess.run(..., capture_output=True)` — CUDA kernel compilation takes 5–25 min on GPU, invisible to user; `Ctrl+C` didn't reach the nvcc child. After install, `os.execv()` restart was missing, causing `sys.exit(2)` due to `sys.modules` isolation. | Removed flash-attn auto-build entirely. Added `os.execv()` restart after successful pip install. Added `_InstallWatchdog` for elapsed-time progress dots. Added `timeout=300` to main pip subprocess. |
 | **`FATAL: transformers could not be installed`** on fresh environment | `requirements.txt` line 42 was missing the `#` prefix on the `ultralytics` comment, so `pip install -r requirements.txt` tried to parse `ultralytics   → 100% replaced...` as a package name and aborted the entire install. | Added `#` to line 42. `pip install -r requirements.txt` now completes cleanly. (Fixed 2026-04-02) |
 | **YOLO detects 0 text regions (100%) despite training mAP > 0** | YOLO inference used library default `imgsz=640` instead of the training resolution (`YOLO_IMG_SIZE=320` in superfast, `256` in micro). Anchor grid scale mismatch caused all confidence scores to drop below threshold. Same anti-pattern affected `max_new_tokens` (hardcoded `128` vs patchable `TROCR_MAX_LEN`) and model path defaults in `reporting.py`. | Pass module-level constants (`YOLO_IMG_SIZE`, `TROCR_MAX_LEN`, `YOLO_BASE`, `TROCR_MODEL_ID`) explicitly at every inference call site. Added Pattern 8 to CLAUDE.md §16. |
+| **"YOLO detected 0 text regions" (92% of images) despite YOLO mAP50 = 0.935** | PR #195 fixed YOLO parameter drift, unmasking a second independent bug: `TROCR_EPOCHS=1` in speed modes produces `val_loss=9.1268` — the decoder outputs garbage/empty strings for every crop. `ocr_lines` stays empty on 92% of images; `_verify_yolo_detection_rate` crashes with a RuntimeError that incorrectly blames YOLO. The two failure modes (YOLO found 0 boxes vs TrOCR decoded all crops to empty) now produce distinct log messages. | Raised `TROCR_EPOCHS` floor to 5 (brings `val_loss` from ~9.1 to ~2.5–3.0) and `TROCR_MAX_LEN` to 64 in all speed modes. `_extract_ocr_lines()` now returns `yolo_box_count`; warning messages distinguish YOLO vs TrOCR failure. Added Pattern 9 (masked cascading failures) to CLAUDE.md §16. |
 
 ---
 
