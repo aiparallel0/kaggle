@@ -1800,7 +1800,7 @@ def _verify_yolo_detection_rate(
         # Determine which failure mode dominates to give the most actionable message
         if trocr_empty_count > yolo_zero_count:
             trocr_msg = (
-                f"  Dominant cause: TrOCR decoded all crops to empty text on "
+                f"Dominant cause: TrOCR decoded all crops to empty text on "
                 f"{trocr_empty_count}/{total_count} images — TrOCR model is undertrained.  "
                 "Fix: raise TROCR_EPOCHS to ≥ 5 in speed modes (1 epoch produces "
                 "val_loss≈9.1 which destroys pretrained weights); also ensure "
@@ -1808,7 +1808,7 @@ def _verify_yolo_detection_rate(
             )
         else:
             trocr_msg = (
-                f"  Dominant cause: YOLO found 0 boxes on {yolo_zero_count}/{total_count} "
+                f"Dominant cause: YOLO found 0 boxes on {yolo_zero_count}/{total_count} "
                 f"images (YOLO backend: {backend}).  "
                 "Likely causes: (1) inline YOLO fallback with random/proxy weights — "
                 "install ultralytics and retrain; (2) YOLO trained for too few epochs "
@@ -1820,8 +1820,8 @@ def _verify_yolo_detection_rate(
             f"({combined_empty}/{total_count} images) — exceeds threshold {threshold:.0%}.  "
             f"YOLO-zero-box images: {yolo_zero_count}.  "
             f"TrOCR-all-empty images: {trocr_empty_count}.  "
-            + trocr_msg
-            + "  All field predictions for affected images are empty strings, "
+            f"{trocr_msg}  "
+            "All field predictions for affected images are empty strings, "
             "which drives global F1 to 0."
         )
     if rate > 0:
