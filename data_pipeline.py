@@ -2261,7 +2261,8 @@ CACHE_PATH = REPO_ROOT / "seller_split_cache.json"
 # Compiled heuristics (fallback when NER confidence is low)
 # ---------------------------------------------------------------------------
 # NOTE: _STREET_NUMBER_RE, _PO_BOX_RE, _STATE_ZIP_RE, _STREET_SUFFIX_RE
-# are already defined at module level (lines ~318-332). Reuse those definitions.
+# are already defined at module level above (in the address-parsing regex
+# section). Reuse those definitions — do not redefine here.
 
 
 def _heuristic_split(seller: str) -> tuple[str, str]:

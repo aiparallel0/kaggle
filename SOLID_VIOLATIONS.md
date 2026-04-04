@@ -555,4 +555,4 @@ All instances in train.py (23), run_all.py (22), train_trocr_yolo.py (19+), repo
 
 ---
 
-*This document is a living inventory. Update it as issues are resolved.*
+*This document is a living inventory. When resolving an issue, change its 🔲 to ✅, add the PR number and date (e.g., `✅ Fixed in PR #200 (2026-04-05)`), and move it to section 2 ("Fixed Issues"). Do not delete entries — they serve as an audit trail.*
