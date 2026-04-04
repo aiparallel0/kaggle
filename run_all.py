@@ -4191,6 +4191,7 @@ def _generate_mini_paper(args, logger: logging.Logger) -> int:
         logger.error(f"BUG: still {len(remaining)} unresolved after fill: {remaining}")
         return _write_mini_paper_stub(args.output, logger)
 
+    Path(args.output).parent.mkdir(parents=True, exist_ok=True)
     Path(args.output).write_text(filled, encoding="utf-8")
     print(f"\n  Mini paper written -> {args.output}  (0 unresolved placeholders)")
     return 0
@@ -4231,6 +4232,7 @@ Benchmark        & See results/benchmark\_results.json \\
 
 \end{{document}}
 """
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     Path(output_path).write_text(stub, encoding="utf-8")
     logger.info(f"Wrote stub paper -> {output_path}")
     return 0
