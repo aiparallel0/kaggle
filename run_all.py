@@ -3685,7 +3685,7 @@ def _quick_all_mode_handler(args, logger: logging.Logger) -> int:
 
 
 def _mini_mode_handler(args, logger: logging.Logger) -> int:
-    """Mini mode: 1 DONUT exp (5 epochs) + YOLO (10 epochs) + TrOCR (1 epoch).
+    """Mini mode: 1 DONUT exp (5 epochs) + YOLO (50 epochs, production) + TrOCR (1 epoch).
 
     Produces paper_mini.tex with all \\VAR{} placeholders resolved.
     Target: ~20 min on RTX 4090.
@@ -3734,17 +3734,14 @@ def _mini_mode_handler(args, logger: logging.Logger) -> int:
         logger.error("TrOCR data prep failed")
         return 2
 
-    # ── Stage 4: YOLO (10 epochs) + TrOCR (1 epoch) ──────────────────────
-    logger.info("[Mini Stage 4] YOLO (10 epochs) + TrOCR (1 epoch)...")
-    # Temporarily patch module-level epoch constants
-    orig_yolo_epochs = tty.YOLO_EPOCHS
+    # ── Stage 4: YOLO (50 epochs) + TrOCR (1 epoch) ──────────────────────
+    logger.info("[Mini Stage 4] YOLO (50 epochs) + TrOCR (1 epoch)...")
+    # Temporarily patch TrOCR epoch constant only; YOLO uses production defaults
     orig_trocr_epochs = tty.TROCR_EPOCHS
-    tty.YOLO_EPOCHS = 10
     tty.TROCR_EPOCHS = 1
     try:
         r = stage_trocr_experiments(args)
     finally:
-        tty.YOLO_EPOCHS = orig_yolo_epochs
         tty.TROCR_EPOCHS = orig_trocr_epochs
     if r.exit_status > 1:
         logger.warning("TrOCR+YOLO mini training failed (continuing to paper gen)")
@@ -3771,7 +3768,7 @@ def _micro_mode_handler(args, logger: logging.Logger) -> int:
     Optimisation levers vs mini mode:
       DONUT  — 5 epochs, 400 train samples, max_length=256, grad_accum=1,
                10× higher LR (5e-4 / 1e-3), OneCycleLR, eval on 63 samples
-      YOLO   — yolov8n (3.2M params), 3 epochs, 256 px, SGD+Nesterov
+      YOLO   — production defaults (yolov8x, 50 epochs, 512 px, AdamW)
       TrOCR  — 1 epoch, max_len=64, batch=8, SGD+Nesterov+CosineAnnealingLR
 
     Produces paper_micro.tex with all \\VAR{} placeholders resolved.
@@ -3843,25 +3840,15 @@ def _micro_mode_handler(args, logger: logging.Logger) -> int:
         logger.error("TrOCR data prep failed")
         return 2
 
-    # ── Stage 4: YOLO (yolov8n, 3 ep, 256 px, SGD) + TrOCR (1 ep, SGD) ──
-    logger.info("[Micro Stage 4] YOLO (yolov8n 3 ep 256px SGD) + TrOCR (1 ep SGD)...")
+    # ── Stage 4: YOLO (production defaults) + TrOCR (1 ep, SGD) ──
+    logger.info("[Micro Stage 4] YOLO (production defaults) + TrOCR (1 ep SGD)...")
     _saved = {
-        "YOLO_BASE": tty.YOLO_BASE,
-        "YOLO_EPOCHS": tty.YOLO_EPOCHS,
-        "YOLO_IMG_SIZE": tty.YOLO_IMG_SIZE,
-        "YOLO_OPTIMIZER": tty.YOLO_OPTIMIZER,
-        "YOLO_MOMENTUM": tty.YOLO_MOMENTUM,
         "TROCR_EPOCHS": tty.TROCR_EPOCHS,
         "TROCR_MAX_LEN": tty.TROCR_MAX_LEN,
         "TROCR_BATCH": tty.TROCR_BATCH,
         "TROCR_MINI_MODE": tty.TROCR_MINI_MODE,
     }
     try:
-        tty.YOLO_BASE = "yolov8n.pt"  # 3.2M vs 68M params → 3–5× speedup
-        tty.YOLO_EPOCHS = 3  # 50 → 3
-        tty.YOLO_IMG_SIZE = 256  # 512 → 256 (4× fewer pixels)
-        tty.YOLO_OPTIMIZER = "SGD"  # SGD+Nesterov: faster convergence for detection
-        tty.YOLO_MOMENTUM = 0.937  # standard Ultralytics default for SGD
         tty.TROCR_EPOCHS = 1  # unchanged
         tty.TROCR_MAX_LEN = 64  # 128 → 64 (2× faster decoding)
         tty.TROCR_BATCH = 8  # 16 → 8 (safer after DONUT VRAM use)
@@ -3897,7 +3884,7 @@ def _superfast_mode_handler(args, logger: logging.Logger) -> int:
     including all three FieldAttentionAssigner backends so the comparison table
     is still populated:
 
-      YOLO   — yolov8n (3.2 M params), 1 epoch, 160 px, SGD+Nesterov
+      YOLO   — production defaults (yolov8x, 50 epochs, 512 px, AdamW)
       TrOCR  — 1 epoch, max_len=32, batch=4, SGD+Nesterov+CosineAnnealingLR
       Regex  — rule-based baseline (0 training cost)
       char   — character-embedding assigner, 1 epoch  (~532 K params)
@@ -3924,17 +3911,9 @@ def _superfast_mode_handler(args, logger: logging.Logger) -> int:
         logger.error("TrOCR data prep failed")
         return 2
 
-    # ── Stage 2: YOLO (1 ep) + TrOCR (1 ep) + all 3 field-assigner backends (1 ep each) ──
-    logger.info(
-        "[Superfast Stage 2] YOLO (yolov8n 1 ep 160 px) + TrOCR (1 ep) + 3 backends (1 ep each)..."
-    )
+    # ── Stage 2: YOLO (production) + TrOCR (1 ep) + all 3 field-assigner backends (1 ep each) ──
+    logger.info("[Superfast Stage 2] YOLO (production) + TrOCR (1 ep) + 3 backends (1 ep each)...")
     _saved = {
-        "YOLO_BASE": tty.YOLO_BASE,
-        "YOLO_EPOCHS": tty.YOLO_EPOCHS,
-        "YOLO_IMG_SIZE": tty.YOLO_IMG_SIZE,
-        "YOLO_BATCH": tty.YOLO_BATCH,
-        "YOLO_OPTIMIZER": tty.YOLO_OPTIMIZER,
-        "YOLO_MOMENTUM": tty.YOLO_MOMENTUM,
         "TROCR_EPOCHS": tty.TROCR_EPOCHS,
         "TROCR_MAX_LEN": tty.TROCR_MAX_LEN,
         "TROCR_BATCH": tty.TROCR_BATCH,
@@ -3942,12 +3921,6 @@ def _superfast_mode_handler(args, logger: logging.Logger) -> int:
         "FIELD_ASSIGNER_EPOCHS": tty.FIELD_ASSIGNER_EPOCHS,
     }
     try:
-        tty.YOLO_BASE = "yolov8n.pt"  # 3.2M params — smallest available
-        tty.YOLO_EPOCHS = 5  # single pass through dataset
-        tty.YOLO_IMG_SIZE = 320  # minimum multiple of 32 that fits stride-32 head
-        tty.YOLO_BATCH = 32  # small images fit large batch
-        tty.YOLO_OPTIMIZER = "SGD"  # SGD+Nesterov: fastest convergence per step
-        tty.YOLO_MOMENTUM = 0.937
         tty.TROCR_EPOCHS = 1
         tty.TROCR_MAX_LEN = 32  # 128 → 32: 4× faster decoding per sample
         tty.TROCR_BATCH = 4  # conservative: avoids OOM after inline YOLO on same GPU
@@ -4018,12 +3991,6 @@ def _instant_mode_handler(args, logger: logging.Logger) -> int:
         logger.info("[Instant Stage 2] No cached weights — running full training (first run).")
 
     _saved = {
-        "YOLO_BASE": tty.YOLO_BASE,
-        "YOLO_EPOCHS": tty.YOLO_EPOCHS,
-        "YOLO_IMG_SIZE": tty.YOLO_IMG_SIZE,
-        "YOLO_BATCH": tty.YOLO_BATCH,
-        "YOLO_OPTIMIZER": tty.YOLO_OPTIMIZER,
-        "YOLO_MOMENTUM": tty.YOLO_MOMENTUM,
         "TROCR_EPOCHS": tty.TROCR_EPOCHS,
         "TROCR_MAX_LEN": tty.TROCR_MAX_LEN,
         "TROCR_BATCH": tty.TROCR_BATCH,
@@ -4032,12 +3999,6 @@ def _instant_mode_handler(args, logger: logging.Logger) -> int:
         "TROCR_USE_TENSOR_CACHE": tty.TROCR_USE_TENSOR_CACHE,
     }
     try:
-        tty.YOLO_BASE = "yolov8n.pt"  # 3.2M params — smallest available
-        tty.YOLO_EPOCHS = 5
-        tty.YOLO_IMG_SIZE = 320
-        tty.YOLO_BATCH = 32
-        tty.YOLO_OPTIMIZER = "SGD"
-        tty.YOLO_MOMENTUM = 0.937
         tty.TROCR_EPOCHS = 1
         tty.TROCR_MAX_LEN = 32
         tty.TROCR_BATCH = 4
