@@ -630,6 +630,12 @@ def _call_mistral_httpx(
 # GitHub API integration — create issues / post comments on failures
 # ---------------------------------------------------------------------------
 
+# Module-level dedup set: tracks issue titles already reported in this process.
+# Persists across multiple PipelineDiagnostics / DiagnosticCallback instances
+# so that repeated smoke-test runs within the same process never flood GitHub
+# with duplicate issues (root cause of #150–#154 duplicate issue spam).
+_REPORTED_ISSUES: set[str] = set()
+
 
 def _get_github_token() -> str:
     """Read GitHub token from env var or file. Returns empty string if absent."""
@@ -874,6 +880,7 @@ def github_report_failure(
     ai_diagnosis: str | None = None,
     repo: str | None = None,
     issue_number: int | None = None,
+    deduplicate: bool = True,
 ) -> dict | None:
     """Create a GitHub issue (or comment on an existing one) for a pipeline failure.
 
@@ -896,12 +903,26 @@ def github_report_failure(
         ``owner/repo`` slug; defaults to ``GITHUB_REPO`` env var.
     issue_number : int or None
         If set, post as a comment on this issue instead of creating a new one.
+    deduplicate : bool
+        When True (default), suppress duplicate issues both via the module-level
+        ``_REPORTED_ISSUES`` in-process set and by passing ``deduplicate=True``
+        to ``github_create_issue()``.  Set to False only in tests.
 
     Returns
     -------
     dict or None
         GitHub API response dict on success, or None on failure.
     """
+    title = f"{stage}: {error_type}"
+
+    # Fast in-process dedup: if this exact failure title was already reported
+    # during this process invocation, skip the GitHub API call entirely.
+    # This prevents issue floods when run_all.py calls `python diagnostics.py
+    # --smoke-test` multiple times in the same process (root cause of #150–#154).
+    if deduplicate and title in _REPORTED_ISSUES:
+        logger.debug("Skipping duplicate GitHub report for %r (already reported this run)", title)
+        return None
+
     # Build Markdown body
     lines: list[str] = [
         f"## Pipeline Failure: {stage}",
@@ -937,11 +958,19 @@ def github_report_failure(
     ]
 
     body = "\n".join(lines)
-    title = f"{stage}: {error_type}"
 
     if issue_number is not None:
-        return github_post_comment(issue_number, body, repo=repo)
-    return github_create_issue(title, body, labels=["bug", "pipeline-failure"], repo=repo)
+        result = github_post_comment(issue_number, body, repo=repo)
+    else:
+        result = github_create_issue(
+            title, body, labels=["bug", "pipeline-failure"], repo=repo, deduplicate=deduplicate
+        )
+
+    # Record in module-level set so subsequent calls in this process are suppressed.
+    if deduplicate and result is not None:
+        _REPORTED_ISSUES.add(title)
+
+    return result
 
 
 def ai_diagnose(

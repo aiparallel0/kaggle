@@ -1,4 +1,5 @@
 torch>=2.0.0
+torchvision>=0.15.0
 transformers>=4.37.0
 pyyaml>=6.0
 accelerate
@@ -6,8 +7,6 @@ ruff>=0.4.0
 protobuf>=3.20.0
 sentencepiece
 datasets>=2.0.0
-torchvision>=0.15.0
-flash-attn
 optuna>=3.0.0
 textual>=0.40.0
 rich>=13.0.0
@@ -27,3 +26,8 @@ ultralytics
 matplotlib
 pytest
 Pillow
+tensorboard>=2.14.0
+safetensors
+# flash-attn must be installed AFTER torch (its setup.py imports torch to detect CUDA version)
+# In Docker: install torch first, then: pip install flash-attn --no-build-isolation
+flash-attn>=2.0.0
