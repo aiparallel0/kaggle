@@ -4231,6 +4231,7 @@ Benchmark        & See results/benchmark\_results.json \\
 
 \end{{document}}
 """
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     Path(output_path).write_text(stub, encoding="utf-8")
     logger.info(f"Wrote stub paper -> {output_path}")
     return 0
