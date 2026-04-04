@@ -1,0 +1,31 @@
+# Build artefacts
+*.pyc
+__pycache__/
+*.egg-info/
+dist/
+build/
+
+# Runtime outputs (large; not needed in the image)
+results/
+data/
+models/
+
+# Git history (not needed in image; saves significant layer size)
+.git/
+
+# Logs
+*.log
+
+# Secret files — NEVER bake tokens into the Docker image.
+# Pass them at runtime via env vars:
+#   docker run -e GITHUB_TOKEN=... -e HF_TOKEN=... donut-sroie
+github_token.txt
+hf_token.txt
+anthropic_api_key.txt
+mistral_api_key.txt
+*.key
+
+# Generated paper output (regenerated at runtime)
+paper/paper_filled.tex
+paper/presentation_filled.tex
+paper_filled.tex

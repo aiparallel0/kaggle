@@ -83,6 +83,10 @@ exp-%:
 paper:
 	$(PYTHON) run_all.py --paper-only
 
+## tensorboard: launch TensorBoard on port 6006 (run after training)
+tensorboard:
+	tensorboard --logdir results/tb_logs --host 0.0.0.0 --port 6006
+
 # ── Help ───────────────────────────────────────────────────────────────────
 help:
 	@echo ""

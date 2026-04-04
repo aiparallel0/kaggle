@@ -3653,6 +3653,12 @@ class DonutTrainer:
             bf16=use_bf16,
             fp16=use_fp16,
             logging_steps=20,
+            report_to=["tensorboard"],
+            logging_dir=str(
+                Path(str(getattr(self.config, "output_dir", "results")))
+                / "tb_logs"
+                / f"exp_{getattr(self.config, 'experiment_id', 0)}"
+            ),
             # PERFORMANCE: Optimized DataLoader settings
             dataloader_num_workers=optimal_workers,
             dataloader_pin_memory=optimal_workers > 0,
