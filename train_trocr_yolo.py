@@ -1520,8 +1520,10 @@ def _verify_lm_head_in_checkpoint(model_path: "Path") -> None:
         return
 
     # No safetensors found — may be a PyTorch bin checkpoint; skip the check.
-    logging.getLogger(__name__).debug(
-        "_verify_lm_head_in_checkpoint: no safetensors file found in %s — skipping", model_path
+    logging.getLogger(__name__).warning(
+        "_verify_lm_head_in_checkpoint: no safetensors file found in %s — "
+        "skipping lm_head integrity check (PyTorch .bin format is unverified)",
+        model_path,
     )
 
 
@@ -2361,6 +2363,8 @@ def train_trocr(
         # Final checkpoint: same direct-save approach.
         _save_model_safetensors_direct(model, output_dir / "final", _trocr_lm_head_key)
         processor.save_pretrained(output_dir / "final")
+        # Post-save integrity check — mirrors the guard on the best checkpoint.
+        _verify_lm_head_in_checkpoint(output_dir / "final")
         with open(output_dir / "training_history.json", "w") as f:
             json.dump(history, f, indent=2)
 
@@ -3272,9 +3276,22 @@ def evaluate_trocr_yolo_on_test(
     trocr_processor = TrOCRProcessor.from_pretrained(trocr_model_path)
     # FIX: low_cpu_mem_usage=False + _materialize_meta_buffers prevents the
     # meta-device crash on TrOCR's sinusoidal positional embedding buffer.
-    trocr_model = VisionEncoderDecoderModel.from_pretrained(
-        trocr_model_path, low_cpu_mem_usage=False
-    ).to(DEVICE)
+    # output_loading_info=True lets us fail fast if decoder.lm_head.weight is
+    # absent from the checkpoint (belt-and-suspenders alongside the header
+    # check above and the self-test below).
+    trocr_model, loading_info = VisionEncoderDecoderModel.from_pretrained(
+        trocr_model_path, low_cpu_mem_usage=False, output_loading_info=True
+    )
+    lm_head_key = "decoder.lm_head.weight"
+    missing_keys = loading_info.get("missing_keys", [])
+    if lm_head_key in missing_keys:
+        raise RuntimeError(
+            f"CRITICAL: {lm_head_key!r} is missing from the loaded checkpoint at "
+            f"{trocr_model_path!r}.  safetensors deduplicated it at save time.  "
+            "Re-train with _save_model_safetensors_direct() to prevent this.  "
+            "See CLAUDE.md §16 Pattern 6."
+        )
+    trocr_model = trocr_model.to(DEVICE)
     _materialize_meta_buffers(trocr_model, DEVICE)
     trocr_model.eval()
 
