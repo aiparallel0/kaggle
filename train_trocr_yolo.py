@@ -1586,12 +1586,24 @@ def _verify_lm_head_in_checkpoint(model_path: "Path") -> None:
     if index_file.exists():
         try:
             wmap = _j.loads(index_file.read_text()).get("weight_map", {})
-            if _key not in wmap:
+            # Accept any key ending with ".lm_head.weight" as a valid match.
+            # Different transformers versions may emit different key names
+            # (e.g. "decoder.lm_head.weight", "decoder.model.lm_head.weight").
+            _keys_set = set(wmap.keys())
+            _has_lm_head = _key in _keys_set or any(
+                k.endswith(".lm_head.weight") for k in _keys_set
+            )
+            if not _has_lm_head:
+                logging.getLogger(__name__).error(
+                    "DIAGNOSTIC: 'decoder.lm_head.weight' NOT FOUND in weight_map index. "
+                    "Keys present: %s",
+                    sorted(_keys_set),
+                )
                 raise RuntimeError(
                     f"CRITICAL: {_key!r} is missing from the safetensors index at "
-                    f"{index_file}.  safetensors deduplication dropped the tensor "
-                    "because lm_head and embed_tokens shared a data pointer at save "
-                    "time.  Ensure the weight alias is broken (data.clone()) and "
+                    f"{index_file}.  The tensor key name may differ between "
+                    "transformers versions (see DIAGNOSTIC log above for actual keys).  "
+                    "Ensure the weight alias is broken (data.clone()) and "
                     "_tied_weights_keys is cleared before save_pretrained().  "
                     "See CLAUDE.md §16 Pattern 6."
                 )
@@ -1610,12 +1622,24 @@ def _verify_lm_head_in_checkpoint(model_path: "Path") -> None:
             with open(single_file, "rb") as fh:
                 hdr_len = _s.unpack("<Q", fh.read(8))[0]
                 hdr = _j.loads(fh.read(hdr_len))
-            if _key not in hdr:
+            # Accept any key ending with ".lm_head.weight" as a valid match.
+            # Different transformers versions may emit different key names
+            # (e.g. "decoder.lm_head.weight", "decoder.model.lm_head.weight").
+            _keys_set = set(hdr.keys())
+            _has_lm_head = _key in _keys_set or any(
+                k.endswith(".lm_head.weight") for k in _keys_set
+            )
+            if not _has_lm_head:
+                logging.getLogger(__name__).error(
+                    "DIAGNOSTIC: 'decoder.lm_head.weight' NOT FOUND in safetensors header. "
+                    "Keys present (excluding __metadata__): %s",
+                    sorted(k for k in hdr if k != "__metadata__"),
+                )
                 raise RuntimeError(
                     f"CRITICAL: {_key!r} is missing from the safetensors shard "
-                    f"{single_file.name}.  safetensors deduplication dropped the "
-                    "tensor because lm_head and embed_tokens shared a data pointer "
-                    "at save time.  Ensure the weight alias is broken (data.clone()) "
+                    f"{single_file.name}.  The tensor key name may differ between "
+                    "transformers versions (see DIAGNOSTIC log above for actual keys).  "
+                    "Ensure the weight alias is broken (data.clone()) "
                     "and _tied_weights_keys is cleared before save_pretrained().  "
                     "See CLAUDE.md §16 Pattern 6."
                 )
@@ -1738,10 +1762,11 @@ def _save_model_safetensors_direct(
         else:
             seen_ptrs[ptr] = k
 
-    # Force content-hash divergence for lm_head: safetensors ≥0.4 deduplicates
-    # by byte-content hash, not just data_ptr().  After only 1 epoch (micro/
-    # superfast mode), lm_head.weight and embed_tokens.weight are still bitwise
-    # identical — clone() alone is not enough.
+    # Defensive perturbation for lm_head: even though safetensors.torch.save_file()
+    # does NOT deduplicate by content hash (only HuggingFace's save_pretrained() does),
+    # we apply a small relative perturbation as a belt-and-suspenders measure.  This
+    # ensures the tensor bytes differ from embed_tokens.weight in case the caller
+    # ever switches to save_pretrained() in the future.
     #
     # WHY NOT smallest_normal:  torch.finfo(dtype).smallest_normal ≈ 1.2e-38
     # for float32.  Typical pretrained weight values are ~0.01–0.05.  The ULP
