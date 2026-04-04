@@ -1557,6 +1557,31 @@ _EXPECTED_MISSING_TROCR: frozenset[str] = frozenset(
 )
 
 
+def _check_config_tie_word_embeddings(model_path: "Path", json_module) -> None:  # noqa: ANN001
+    """Read config.json in *model_path* and warn if ``tie_word_embeddings`` is ``true``.
+
+    When ``tie_word_embeddings=true`` is written to config.json, HuggingFace's
+    ``from_pretrained()`` will expect ``lm_head.weight`` to be absent from the
+    safetensors file (treating it as a tied weight).  Even if the weight was
+    physically written to disk, the load machinery may report it as "missing"
+    or silently re-tie it to ``embed_tokens.weight``, causing F1 = 0.
+    """
+    config_file = model_path / "config.json"
+    if config_file.exists():
+        try:
+            _cfg = json_module.loads(config_file.read_text())
+            _twe_on_disk = _cfg.get("tie_word_embeddings", "UNSET")
+            print(f"  [TrOCR-verify] config.json tie_word_embeddings={_twe_on_disk}")
+            if _twe_on_disk is True:
+                logging.getLogger(__name__).warning(
+                    "config.json has tie_word_embeddings=true — "
+                    "from_pretrained() will expect lm_head.weight to be tied and "
+                    "may report it as 'missing' even if it exists in the safetensors file."
+                )
+        except Exception:
+            pass
+
+
 def _verify_lm_head_in_checkpoint(model_path: "Path") -> None:
     """Raise ``RuntimeError`` if ``decoder.lm_head.weight`` is absent from a saved checkpoint.
 
@@ -1590,6 +1615,11 @@ def _verify_lm_head_in_checkpoint(model_path: "Path") -> None:
             # Different transformers versions may emit different key names
             # (e.g. "decoder.lm_head.weight", "decoder.model.lm_head.weight").
             _keys_set = set(wmap.keys())
+            _all_lm_keys = [k for k in _keys_set if "lm_head" in k or "output_projection" in k]
+            print(
+                f"  [TrOCR-verify] safetensors index: {len(_keys_set)} keys, "
+                f"lm-related: {_all_lm_keys}"
+            )
             _has_lm_head = _key in _keys_set or any(
                 k.endswith(".lm_head.weight") for k in _keys_set
             )
@@ -1613,6 +1643,8 @@ def _verify_lm_head_in_checkpoint(model_path: "Path") -> None:
             logging.getLogger(__name__).warning(
                 "_verify_lm_head_in_checkpoint: could not parse index (%s) — skipping", exc
             )
+        # Also check config.json tie_word_embeddings for the sharded case.
+        _check_config_tie_word_embeddings(model_path, _j)
         return
 
     # Single-shard model: inspect the binary safetensors header.
@@ -1626,6 +1658,11 @@ def _verify_lm_head_in_checkpoint(model_path: "Path") -> None:
             # Different transformers versions may emit different key names
             # (e.g. "decoder.lm_head.weight", "decoder.model.lm_head.weight").
             _keys_set = set(hdr.keys())
+            _all_lm_keys = [k for k in _keys_set if "lm_head" in k or "output_projection" in k]
+            print(
+                f"  [TrOCR-verify] safetensors header: {len(_keys_set) - 1} keys "
+                f"(excl __metadata__), lm-related: {_all_lm_keys}"
+            )
             _has_lm_head = _key in _keys_set or any(
                 k.endswith(".lm_head.weight") for k in _keys_set
             )
@@ -1649,6 +1686,8 @@ def _verify_lm_head_in_checkpoint(model_path: "Path") -> None:
             logging.getLogger(__name__).warning(
                 "_verify_lm_head_in_checkpoint: could not read shard header (%s) — skipping", exc
             )
+        # Also check config.json tie_word_embeddings for the single-shard case.
+        _check_config_tie_word_embeddings(model_path, _j)
         return
 
     # No safetensors found — may be a PyTorch bin checkpoint; skip the check.
@@ -1748,6 +1787,48 @@ def _save_model_safetensors_direct(
 
     sd = model.state_dict()
 
+    # DIAGNOSTIC: Log whether lm_head_key is present in the raw state_dict
+    # and what keys contain "lm_head" or "output_projection" or "embed_tokens"
+    _lm_related_keys = sorted(
+        k for k in sd if "lm_head" in k or "output_projection" in k or "embed_tokens" in k
+    )
+    print(f"  [TrOCR-save] state_dict has {len(sd)} keys")
+    print(f"  [TrOCR-save] lm_head/output_projection/embed_tokens keys: {_lm_related_keys}")
+    print(f"  [TrOCR-save] '{lm_head_key}' in sd: {lm_head_key in sd}")
+
+    # If the expected lm_head key is absent, attempt to find an alternative or
+    # inject directly from the model — HF's state_dict() may have filtered it
+    # via _tied_weights_keys that were re-populated after our _clear call.
+    if lm_head_key not in sd:
+        _alt_keys = [k for k in sd if "lm_head" in k and "weight" in k]
+        if _alt_keys:
+            logging.getLogger(__name__).warning(
+                "lm_head_key %r not in state_dict, but found alternative(s): %s — using %s",
+                lm_head_key,
+                _alt_keys,
+                _alt_keys[0],
+            )
+            lm_head_key = _alt_keys[0]
+        else:
+            logging.getLogger(__name__).error(
+                "CRITICAL: No lm_head key found in state_dict at all! "
+                "state_dict has %d keys. Keys containing 'lm_head': %s. "
+                "This means model.state_dict() is filtering out the lm_head weight, "
+                "likely because _tied_weights_keys was re-populated after our clear. "
+                "Attempting to extract lm_head.weight directly from model parameters.",
+                len(sd),
+                [k for k in sd if "lm_head" in k],
+            )
+            # Last resort: extract lm_head.weight directly from the model
+            _decoder = getattr(model, "decoder", None)
+            _lm_head = getattr(_decoder, "lm_head", None) if _decoder else None
+            if _lm_head is not None and hasattr(_lm_head, "weight"):
+                sd[lm_head_key] = _lm_head.weight.data.clone()
+                print(
+                    f"  [TrOCR-save] Manually injected {lm_head_key} "
+                    "from model.decoder.lm_head.weight"
+                )
+
     # Generic alias-breaking loop: safetensors.torch.save_file raises
     # RuntimeError if any two tensors share a data_ptr().  Build a map from
     # data_ptr → first key seen; any subsequent key with the same data_ptr is
@@ -1781,6 +1862,30 @@ def _save_model_safetensors_direct(
     if lm_head_key in sd:
         _lm = sd[lm_head_key]
         sd[lm_head_key] = _lm * (1.0 + torch.finfo(_lm.dtype).eps)
+
+    # DIAGNOSTIC: Verify lm_head_key survived alias-breaking
+    print(f"  [TrOCR-save] After alias-break: '{lm_head_key}' in sd: {lm_head_key in sd}")
+    # DIAGNOSTIC: Check config tie_word_embeddings before writing
+    _twe = getattr(model.config, "tie_word_embeddings", "UNSET")
+    _dec_cfg = getattr(getattr(model, "decoder", None), "config", None)
+    _twe_dec_val = getattr(_dec_cfg, "tie_word_embeddings", "UNSET") if _dec_cfg else "N/A"
+    print(
+        f"  [TrOCR-save] config.tie_word_embeddings={_twe}, "
+        f"decoder.config.tie_word_embeddings={_twe_dec_val}"
+    )
+    if _twe is True:
+        logging.getLogger(__name__).error(
+            "CRITICAL: model.config.tie_word_embeddings is True at save time! "
+            "This will cause from_pretrained() to expect lm_head.weight to be tied and "
+            "report it as 'missing'. Forcing to False."
+        )
+
+    # Belt-and-suspenders: force tie_word_embeddings=False on both configs
+    # unconditionally before saving config.json, in case something reset it
+    # during training (e.g., gradient_checkpointing_enable()).
+    model.config.tie_word_embeddings = False
+    if _dec_cfg is not None:
+        _dec_cfg.tie_word_embeddings = False
 
     _st_save_file(sd, save_dir / "model.safetensors")
     model.config.save_pretrained(str(save_dir))
