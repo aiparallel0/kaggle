@@ -582,7 +582,7 @@ except ImportError:
             self._model_path = Path(model_path)
             # Default inference size; must be a multiple of 32.  Matches YOLO_IMG_SIZE
             # used during training so anchor grids align with trained coordinates.
-            self._imgsz = 512
+            self._imgsz = YOLO_IMG_SIZE
 
             # Try to load raw state dict companion file
             sd_path = self._model_path.with_stem(self._model_path.stem + "_sd")
@@ -637,7 +637,7 @@ except ImportError:
                     sd_path,
                 )
 
-        def __call__(self, img, verbose: bool = False) -> list:
+        def __call__(self, img, verbose: bool = False, imgsz: int | None = None, **kwargs) -> list:
             """Run inference on a single image. Returns list[_BoxResult]."""
             import numpy as _np
 
@@ -668,9 +668,9 @@ except ImportError:
             else:
                 arr = _np.array(img)
 
-            # ── 2. Letterbox-resize: fit in self._imgsz, pad to multiple of 32 ──
+            # ── 2. Letterbox-resize: fit in target, pad to multiple of 32 ──
             orig_h, orig_w = arr.shape[:2]
-            target = self._imgsz
+            target = imgsz if imgsz is not None else self._imgsz
             scale = min(target / orig_h, target / orig_w)
             nh, nw = int(orig_h * scale), int(orig_w * scale)
             # Align canvas dimensions to the nearest multiple of 32 (required by the
@@ -3461,7 +3461,7 @@ def _extract_ocr_lines(
     W = float(img.size[0]) if _PIL_AVAILABLE else float(img.shape[1])  # type: ignore[union-attr]
     H = float(img.size[1]) if _PIL_AVAILABLE else float(img.shape[0])  # type: ignore[union-attr]
 
-    yolo_results = yolo_model(img, verbose=False)
+    yolo_results = yolo_model(img, verbose=False, imgsz=YOLO_IMG_SIZE)
     ocr_lines: list[dict] = []
     vision_feats: list[torch.Tensor] = []
 

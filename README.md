@@ -584,6 +584,14 @@ If `ultralytics` is **not** installed, the pipeline uses an inline fallback (`_Y
 
 **Fix:** `pip install ultralytics` for real YOLOv8x detection quality. The pipeline then automatically uses the real YOLO trainer instead of the inline fallback.
 
+### YOLO detects 0 text regions despite training showing mAP > 0
+
+**Root cause:** Train/inference parameter drift. The YOLO model was trained at resolution X (e.g., 320px in superfast mode) but inference used ultralytics' default of 640px. The anchor grid scale mismatch causes all detection confidence scores to drop below the 0.25 threshold, producing zero detections.
+
+**General principle:** Every inference call must pass the same configuration constants used during training. Never rely on library defaults — they may differ from training settings, especially in micro/superfast modes where constants are patched to smaller values.
+
+**Fixed in:** All YOLO inference sites now pass `imgsz=YOLO_IMG_SIZE`; all TrOCR generation sites now use `TROCR_MAX_LEN`; `reporting.py` imports constants from `train_trocr_yolo.py` instead of hardcoding values. See Pattern 8 in `CLAUDE.md` §16.
+
 ### `FATAL: The following packages could not be installed: editdistance`
 
 If you see this error, you are running an older version of `run_all.py` where `editdistance`
@@ -697,7 +705,7 @@ python run_all.py --skip-pretrained --experiment 1  # dry run with just Exp 1
 
 ## 🐛 Known Issues Fixed
 
-Five critical bugs that previously caused catastrophic failures. All are fixed.
+Six critical bugs that previously caused catastrophic failures. All are fixed.
 
 | Symptom | Root Cause | Fix |
 |---------|-----------|-----|
@@ -706,6 +714,7 @@ Five critical bugs that previously caused catastrophic failures. All are fixed.
 | **F1 unreliable / overfitted** | `val_img/` directory not created; `load_sroie_val()` returned `[]`; `do_eval=False`; no early stopping; model evaluated on test data indirectly. | `stage_install()` explicitly moves 63 images into `val_img/` and 63 into `test_img/` — physically distinct directories checked by tests. |
 | **Terminal freeze after "Dependencies installed successfully"** | Auto-installer built `flash-attn` from source via `subprocess.run(..., capture_output=True)` — CUDA kernel compilation takes 5–25 min on GPU, invisible to user; `Ctrl+C` didn't reach the nvcc child. After install, `os.execv()` restart was missing, causing `sys.exit(2)` due to `sys.modules` isolation. | Removed flash-attn auto-build entirely. Added `os.execv()` restart after successful pip install. Added `_InstallWatchdog` for elapsed-time progress dots. Added `timeout=300` to main pip subprocess. |
 | **`FATAL: transformers could not be installed`** on fresh environment | `requirements.txt` line 42 was missing the `#` prefix on the `ultralytics` comment, so `pip install -r requirements.txt` tried to parse `ultralytics   → 100% replaced...` as a package name and aborted the entire install. | Added `#` to line 42. `pip install -r requirements.txt` now completes cleanly. (Fixed 2026-04-02) |
+| **YOLO detects 0 text regions (100%) despite training mAP > 0** | YOLO inference used library default `imgsz=640` instead of the training resolution (`YOLO_IMG_SIZE=320` in superfast, `256` in micro). Anchor grid scale mismatch caused all confidence scores to drop below threshold. Same anti-pattern affected `max_new_tokens` (hardcoded `128` vs patchable `TROCR_MAX_LEN`) and model path defaults in `reporting.py`. | Pass module-level constants (`YOLO_IMG_SIZE`, `TROCR_MAX_LEN`, `YOLO_BASE`, `TROCR_MODEL_ID`) explicitly at every inference call site. Added Pattern 8 to CLAUDE.md §16. |
 
 ---
 

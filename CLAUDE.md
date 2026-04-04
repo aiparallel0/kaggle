@@ -208,6 +208,7 @@ Both must exit with code `0`. If either fails, fix the core import chain **befor
 | **`FATAL: The following packages could not be installed: transformers`** on fresh env | `requirements.txt` line 42 was missing `#` prefix: `ultralytics   → 100%...` was passed literally to pip, aborting the entire `pip install -r requirements.txt` before `transformers` was reached | Added `#` to `requirements.txt` line 42 (2026-04-02). Always pre-install: `pip install -r requirements.txt` before `run_all.py` |
 | **`transformers 5.x` compatibility** | `pip install transformers` now resolves to 5.5.0+. No breaking changes for `DonutProcessor`, `VisionEncoderDecoderModel`, `Seq2SeqTrainer`. The `PreTrainedTokenizerBase` compat shim handles the ≥4.47 import relocation. | No code change needed. Do NOT delete the compat shim in `data_pipeline.py`. |
 | **TrOCR address F1 = 0.000 with inline YOLO fallback** | `ultralytics` not installed → `_YOLOv8Inline` runs proxy L2 loss (no anchor boxes, no NMS) → bounding box quality insufficient to reliably crop multi-line address regions | Install real YOLO: `pip install ultralytics`. Inline fallback is a smoke-test stand-in only. |
+| **YOLO detects 0 regions on 100% of test images** | Training `imgsz` ≠ inference `imgsz` — ultralytics defaults to 640; anchor grid scale mismatch causes all confidence scores to drop below 0.25 threshold | Pass `imgsz=YOLO_IMG_SIZE` at every YOLO inference call site (Pattern 8 below) |
 
 ### Pattern 1: Bracket & Comma Errors
 
@@ -647,6 +648,7 @@ Two-stage pipeline in `train_trocr_yolo.py` (called by `run_all.py`):
 | **`FATAL: editdistance could not be installed` after dependency auto-install** | `editdistance` and `pandas` still in `_CRITICAL_INSTALL_PACKAGES`/`_CRITICAL_VERIFY_PACKAGES` after being removed from `requirements.txt` (both replaced with inline implementations) | Removed both from `_CRITICAL_INSTALL_PACKAGES` and `_CRITICAL_VERIFY_PACKAGES` in `run_all.py` | `run_all.py` |
 | **`FATAL: transformers could not be installed`** on fresh env (2026-04-02) | `requirements.txt` line 42 missing `#` — `ultralytics   → 100% replaced...` was a live package specifier; pip aborted the entire install on parse error, never reaching `transformers` | Added `#` to `requirements.txt` line 42. Always `pip install -r requirements.txt` before `run_all.py`. | `requirements.txt` |
 | **TrOCR address F1 = 0.000 with inline YOLO fallback** | `ultralytics` not installed → `_YOLOv8Inline` runs proxy L2 loss; no anchor boxes, no NMS; bounding boxes too imprecise to crop multi-line addresses | `pip install ultralytics` for real detection quality. Inline fallback is smoke-test only. | `train_trocr_yolo.py` |
+| **YOLO 0% detection despite 0.28 mAP during training** | `_extract_ocr_lines()` and `reporting.py::_detect_boxes()` called YOLO without `imgsz=YOLO_IMG_SIZE` — ultralytics defaulted to 640px while model was trained at 320px (superfast) or 256px (micro). `_YOLO_CLS.__call__()` didn't accept `imgsz` kwarg so it was silently dropped. `_YOLO_CLS.__init__` hardcoded `self._imgsz = 512` instead of reading the constant. | Pass `imgsz=YOLO_IMG_SIZE` at all 3 YOLO inference sites; accept `imgsz` kwarg in inline `_YOLO_CLS.__call__()`; fix `self._imgsz = YOLO_IMG_SIZE` in `_YOLO_CLS.__init__()` (Pattern 8 below) | `train_trocr_yolo.py`, `reporting.py` |
 
 ### The F1 Collapse Chain (root-cause map for the three worst bugs)
 
@@ -754,6 +756,42 @@ Both errors are reported on the same line, so a single `# noqa: E402, I001` inli
 2. The guarded `import` line ends with `# noqa: E402, I001`.
 3. `ruff check .` exits with code 0.
 4. `pytest tests/ --collect-only` exits with 0 errors (1 skipped per guarded file is fine).
+
+### Pattern 8: Train/Inference Parameter Drift
+
+**What it is:** Configuration values defined as patchable module-level constants (`YOLO_IMG_SIZE`, `TROCR_MAX_LEN`, `YOLO_BASE`, `TROCR_MODEL_ID`) are correctly used during training but inference call sites use hardcoded literals or library defaults instead.
+
+**Why it's dangerous:** When micro/superfast mode patches the module-level constants, training obeys the new values but inference silently uses the old ones. No error is raised — the result is just silently wrong. Example: YOLO trains at `YOLO_IMG_SIZE=320` but inference uses ultralytics' default of 640. The anchor grid scale mismatch causes all confidence scores to drop below the 0.25 threshold — 0% detection rate despite 28% mAP during training.
+
+**The rule:** Every inference call that accepts a parameter which has a module-level constant MUST pass that constant explicitly. Never rely on library defaults — they may differ from training settings, especially in micro/superfast modes where constants are patched to smaller values.
+
+```python
+# ❌ BROKEN — ultralytics defaults to imgsz=640; model was trained at 320 (superfast)
+yolo_results = yolo_model(img, verbose=False)
+
+# ❌ BROKEN — hardcoded 128 ignores TROCR_MAX_LEN (patched to 32 in superfast)
+generated = trocr_model.generate(pixel_values, max_new_tokens=128)
+
+# ❌ BROKEN — inline fallback drops imgsz kwarg silently
+def __call__(self, img, verbose: bool = False) -> list:  # no imgsz param
+    target = self._imgsz  # never updated from call site
+
+# ✅ CORRECT — pass the same constant used during training
+yolo_results = yolo_model(img, verbose=False, imgsz=YOLO_IMG_SIZE)
+
+# ✅ CORRECT — read TROCR_MAX_LEN, not a hardcoded literal
+generated = trocr_model.generate(pixel_values, max_new_tokens=TROCR_MAX_LEN)
+
+# ✅ CORRECT — accept and forward the imgsz kwarg
+def __call__(self, img, verbose: bool = False, imgsz: int | None = None, **kwargs) -> list:
+    target = imgsz if imgsz is not None else self._imgsz
+```
+
+**Checklist for new inference code:** Before adding any model inference call:
+1. Does the function accept `imgsz`, `max_new_tokens`, or similar parameters?
+2. Is there a module-level constant for each such parameter (`YOLO_IMG_SIZE`, `TROCR_MAX_LEN`, …)?
+3. If yes: pass the constant explicitly — never omit it or hardcode a literal.
+4. If the call goes through a wrapper/fallback class: make sure the wrapper's `__call__` accepts and forwards the parameter.
 
 ### Pattern 6: safetensors lm_head Deduplication
 
