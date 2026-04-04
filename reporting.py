@@ -773,8 +773,8 @@ class TrOCRYOLOPipeline:
 
     def __init__(
         self,
-        yolo_model_path: str = "yolov8n.pt",
-        trocr_model_id: str = "microsoft/trocr-base-printed",
+        yolo_model_path: str | None = None,
+        trocr_model_id: str | None = None,
         device: str = "auto",
         conf_threshold: float = 0.25,
         iou_threshold: float = 0.45,
@@ -782,7 +782,21 @@ class TrOCRYOLOPipeline:
         from transformers import TrOCRProcessor, VisionEncoderDecoderModel
 
         from train_trocr_yolo import _YOLO_CLS as YOLO
-        from train_trocr_yolo import _materialize_meta_buffers
+        from train_trocr_yolo import (
+            TROCR_MAX_LEN,
+            TROCR_MODEL_ID,
+            YOLO_BASE,
+            YOLO_IMG_SIZE,
+            _materialize_meta_buffers,
+        )
+
+        # Store inference-time constants so all call sites read them consistently.
+        self._yolo_img_size = YOLO_IMG_SIZE
+        self._trocr_max_len = TROCR_MAX_LEN
+
+        # Fall back to the module-level constants when no override is supplied.
+        yolo_model_path = yolo_model_path if yolo_model_path is not None else YOLO_BASE
+        trocr_model_id = trocr_model_id if trocr_model_id is not None else TROCR_MODEL_ID
 
         self.device = (
             ("cuda" if torch.cuda.is_available() else "cpu") if device == "auto" else device
@@ -814,6 +828,7 @@ class TrOCRYOLOPipeline:
             image,
             conf=self.conf_threshold,
             iou=self.iou_threshold,
+            imgsz=self._yolo_img_size,
             verbose=False,
         )
         boxes = []
@@ -847,7 +862,7 @@ class TrOCRYOLOPipeline:
         with torch.no_grad():
             generated = self.trocr_model.generate(
                 pixel_values,
-                max_new_tokens=128,
+                max_new_tokens=self._trocr_max_len,
             )
 
         text = self.trocr_processor.batch_decode(generated, skip_special_tokens=True)[0]
@@ -868,7 +883,7 @@ class TrOCRYOLOPipeline:
         with torch.no_grad():
             generated = self.trocr_model.generate(
                 pixel_values,
-                max_new_tokens=128,
+                max_new_tokens=self._trocr_max_len,
             )
         return [
             t.strip()
