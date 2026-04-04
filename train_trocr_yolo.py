@@ -1680,7 +1680,8 @@ def _verify_lm_head_in_checkpoint(model_path: "Path") -> None:
                 f"lm-related: {_all_lm_keys}"
             )
             _has_lm_head = _key in _keys_set or any(
-                k.endswith(".lm_head.weight") for k in _keys_set
+                k.endswith(".lm_head.weight") or k.endswith(".output_projection.weight")
+                for k in _keys_set
             )
             if not _has_lm_head:
                 logging.getLogger(__name__).error(
@@ -1723,7 +1724,8 @@ def _verify_lm_head_in_checkpoint(model_path: "Path") -> None:
                 f"(excl __metadata__), lm-related: {_all_lm_keys}"
             )
             _has_lm_head = _key in _keys_set or any(
-                k.endswith(".lm_head.weight") for k in _keys_set
+                k.endswith(".lm_head.weight") or k.endswith(".output_projection.weight")
+                for k in _keys_set
             )
             if not _has_lm_head:
                 logging.getLogger(__name__).error(
@@ -1859,7 +1861,11 @@ def _save_model_safetensors_direct(
     # inject directly from the model — HF's state_dict() may have filtered it
     # via _tied_weights_keys that were re-populated after our _clear call.
     if lm_head_key not in sd:
-        _alt_keys = [k for k in sd if "lm_head" in k and "weight" in k]
+        # Also search for output_projection.weight — used in transformers ≥4.45
+        # where the layer was renamed from lm_head to output_projection.
+        _alt_keys = [
+            k for k in sd if ("lm_head" in k or "output_projection" in k) and "weight" in k
+        ]
         if _alt_keys:
             logging.getLogger(__name__).warning(
                 "lm_head_key %r not in state_dict, but found alternative(s): %s — using %s",
@@ -1878,14 +1884,17 @@ def _save_model_safetensors_direct(
                 len(sd),
                 [k for k in sd if "lm_head" in k],
             )
-            # Last resort: extract lm_head.weight directly from the model
+            # Last resort: extract lm_head.weight directly from the model.
+            # Also check output_projection for transformers ≥4.45.
             _decoder = getattr(model, "decoder", None)
             _lm_head = getattr(_decoder, "lm_head", None) if _decoder else None
+            if _lm_head is None or not hasattr(_lm_head, "weight"):
+                _lm_head = getattr(_decoder, "output_projection", None) if _decoder else None
             if _lm_head is not None and hasattr(_lm_head, "weight"):
                 sd[lm_head_key] = _lm_head.weight.data.clone()
                 print(
                     f"  [TrOCR-save] Manually injected {lm_head_key} "
-                    "from model.decoder.lm_head.weight"
+                    "from model.decoder lm_head/output_projection"
                 )
 
     # Generic alias-breaking loop: safetensors.torch.save_file raises
@@ -2201,21 +2210,41 @@ def train_trocr(
     # This can happen if the pretrained checkpoint itself was built with an older
     # HF version that deduplicated the weight.  Better to fail loudly now than
     # produce garbled output silently at inference time.
+    # In transformers ≥4.45, the output projection was renamed from lm_head to
+    # output_projection — accept either key name as a valid equivalent.
     _trocr_lm_head_key = "decoder.lm_head.weight"
+    _trocr_output_proj_key = "decoder.output_projection.weight"
+    # Auto-detect actual key name from model state dict for later saves.
+    if hasattr(model.decoder, "output_projection") and not hasattr(model.decoder, "lm_head"):
+        _trocr_lm_head_key = _trocr_output_proj_key
     _trocr_loading_missing = loading_info.get("missing_keys", [])
     if _trocr_lm_head_key in _trocr_loading_missing:
-        raise RuntimeError(
-            f"CRITICAL: {_trocr_lm_head_key} is missing from the {TROCR_MODEL_ID} checkpoint. "
-            "The model cannot produce valid predictions. "
-            "Check that the pretrained model is a complete, uncorrupted download. "
-            "See CLAUDE.md §16 Pattern 6."
+        # Before raising, verify the output_projection variant is not present either.
+        _has_any_output_proj = any(
+            k.endswith(".lm_head.weight") or k.endswith(".output_projection.weight")
+            for k in model.state_dict()
         )
+        if not _has_any_output_proj:
+            raise RuntimeError(
+                f"CRITICAL: {_trocr_lm_head_key} is missing from the {TROCR_MODEL_ID} checkpoint. "
+                "The model cannot produce valid predictions. "
+                "Check that the pretrained model is a complete, uncorrupted download. "
+                "See CLAUDE.md §16 Pattern 6."
+            )
 
     # Break the weight alias immediately so all subsequent save_pretrained() calls
     # write lm_head.weight as an independent tensor rather than as a deduplicated
     # pointer to embed_tokens.weight.
+    # In transformers ≥4.45 the layer was renamed to output_projection; check both.
+    _lm_attr = None
     if hasattr(model.decoder, "lm_head") and hasattr(model.decoder.lm_head, "weight"):
-        _lm = model.decoder.lm_head
+        _lm_attr = model.decoder.lm_head
+    elif hasattr(model.decoder, "output_projection") and hasattr(
+        model.decoder.output_projection, "weight"
+    ):
+        _lm_attr = model.decoder.output_projection
+    if _lm_attr is not None:
+        _lm = _lm_attr
         _emb = (
             model.decoder.model.decoder.embed_tokens
             if hasattr(model.decoder, "model")
@@ -3602,12 +3631,19 @@ def evaluate_trocr_yolo_on_test(
     lm_head_key = "decoder.lm_head.weight"
     missing_keys = loading_info.get("missing_keys", [])
     if lm_head_key in missing_keys:
-        raise RuntimeError(
-            f"CRITICAL: {lm_head_key!r} is missing from the loaded checkpoint at "
-            f"{trocr_model_path!r}.  safetensors deduplicated it at save time.  "
-            "Re-train with _save_model_safetensors_direct() to prevent this.  "
-            "See CLAUDE.md §16 Pattern 6."
+        # Before raising, check if the output_projection variant (transformers ≥4.45)
+        # is present in the loaded model — if so, the checkpoint is valid.
+        _has_output_proj = any(
+            k.endswith(".lm_head.weight") or k.endswith(".output_projection.weight")
+            for k in trocr_model.state_dict()
         )
+        if not _has_output_proj:
+            raise RuntimeError(
+                f"CRITICAL: {lm_head_key!r} is missing from the loaded checkpoint at "
+                f"{trocr_model_path!r}.  safetensors deduplicated it at save time.  "
+                "Re-train with _save_model_safetensors_direct() to prevent this.  "
+                "See CLAUDE.md §16 Pattern 6."
+            )
     trocr_model = trocr_model.to(DEVICE)
     _materialize_meta_buffers(trocr_model, DEVICE)
     trocr_model.eval()
