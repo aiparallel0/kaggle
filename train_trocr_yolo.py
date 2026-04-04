@@ -1040,7 +1040,14 @@ _PROCESSOR_CACHE: dict = {}  # model_id → TrOCRProcessor singleton
 
 
 def _get_trocr_processor(model_id: str | None = None) -> "TrOCRProcessor":
-    """Return a cached TrOCRProcessor, loading from HuggingFace exactly once per process."""
+    """Return a cached TrOCRProcessor, loading from HuggingFace exactly once per process.
+
+    Parameters
+    ----------
+    model_id:
+        HuggingFace model identifier.  Defaults to ``TROCR_MODEL_ID``
+        (``"microsoft/trocr-base-printed"``) when ``None``.
+    """
     _id = model_id or TROCR_MODEL_ID
     if _id not in _PROCESSOR_CACHE:
         _PROCESSOR_CACHE[_id] = TrOCRProcessor.from_pretrained(_id)
@@ -1232,9 +1239,15 @@ class TrOCRReceiptDataset(Dataset):
 
         # ── Tensor cache ─────────────────────────────────────────────────────
         # When use_tensor_cache=True: process all samples once, save to a .pt
-        # file keyed by (dir, max_length, processor).  Subsequent runs load all
-        # pixel_values + labels tensors in a single torch.load() call, bypassing
-        # per-sample Pillow + TrOCRProcessor overhead entirely.
+        # file keyed by (dir, max_length, processor, augmentation).  Subsequent
+        # runs load all pixel_values + labels tensors in a single torch.load()
+        # call, bypassing per-sample Pillow + TrOCRProcessor overhead entirely.
+        #
+        # Note: cached pixel_values are built WITHOUT augmentation (augmentation
+        # is stochastic so baking it into the cache would freeze the random state).
+        # When use_tensor_cache=True, augmentation is effectively disabled — this
+        # is intentional for instant-mode speed runs where training quality is
+        # secondary to wall-clock time.
         self._pixel_values_cache: list | None = None
         self._labels_cache: list | None = None
 
@@ -1242,14 +1255,23 @@ class TrOCRReceiptDataset(Dataset):
             import hashlib
 
             proc_name = getattr(processor, "name_or_path", TROCR_MODEL_ID)
-            cache_key = hashlib.sha256(f"{data_dir}:{max_length}:{proc_name}".encode()).hexdigest()[
-                :16
-            ]
+            # Include augmentation repr in the key so cache is invalidated if
+            # augmentation settings change between runs.
+            aug_repr = repr(augmentation)
+            cache_key = hashlib.sha256(
+                f"{data_dir}:{max_length}:{proc_name}:{aug_repr}".encode()
+            ).hexdigest()[:16]
             cache_file = data_dir / f".tensor_cache_{cache_key}.pt"
 
             if cache_file.exists():
                 try:
                     cached = torch.load(cache_file, map_location="cpu", weights_only=True)
+                    if (
+                        not isinstance(cached, dict)
+                        or "pixel_values" not in cached
+                        or "labels" not in cached
+                    ):
+                        raise ValueError("Cache file missing required keys 'pixel_values'/'labels'")
                     self._pixel_values_cache = cached["pixel_values"]
                     self._labels_cache = cached["labels"]
                     print(
