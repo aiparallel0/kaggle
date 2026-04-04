@@ -1040,3 +1040,40 @@ This project has undergone significant architectural refinement since its incept
 | `protobuf` | Serialization | Guaranteed transitive dep of transformers | — |
 
 **Total install savings vs original: ~345 MB**
+
+---
+
+## Code Quality & SOLID Analysis
+
+A comprehensive SOLID principles audit was performed on 2026-04-04 across all 14 Python files (34,213 LOC). See [`SOLID_VIOLATIONS.md`](SOLID_VIOLATIONS.md) for the complete inventory.
+
+### Summary
+
+| Category | Status |
+|----------|--------|
+| Linting (ruff) | ✅ All checks pass |
+| Formatting (ruff format) | ✅ All files formatted |
+| Import chain integrity | ✅ Verified |
+| Broad exception catches narrowed | ✅ 13 instances fixed |
+| Duplicate code removed | ✅ 5 instances fixed |
+| Silent failures → logged warnings | ✅ 1 instance fixed |
+| Remaining SOLID violations | 🔲 Documented in SOLID_VIOLATIONS.md |
+
+### Key Findings
+
+- **22 SRP violations** — god classes/functions that handle too many concerns
+- **8 OCP violations** — code requiring modification instead of extension
+- **4 LSP violations** — inconsistent subclass/callback contracts
+- **9 DIP violations** — concrete dependencies where abstractions are needed
+- **35+ functions exceeding 50 lines** (largest: `DonutTrainer.train()` at 617 lines)
+- **58+ public functions missing return type hints**
+
+### Priority Refactoring
+
+See `SOLID_VIOLATIONS.md` § 18 for the full roadmap. Top 5:
+
+1. Split `DonutTrainer.train()` (617 lines → 5+ methods)
+2. Split `train_experiment()` (402 lines) and `run_experiment()` (378 lines)
+3. Extract god classes: `TrOCRReceiptDataset`, `TrOCRYOLOPipeline`, `PaperInjector`
+4. Template method for dataset loader boilerplate (4 classes × 3 methods)
+5. Strategy pattern for task prompt parsers (5+ hardcoded locations)
