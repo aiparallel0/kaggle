@@ -22,6 +22,7 @@ FIX: Added GPU cleanup between experiments.
 FIX: Imports constants from shared module.
 """
 
+import gc
 import json
 import logging
 import re
@@ -1285,34 +1286,92 @@ class TrOCRReceiptDataset(Dataset):
 
             if self._pixel_values_cache is None:
                 n_total = len(self.samples)
-                print(f"  [TrOCR] Building tensor cache for {n_total} samples -> {cache_file.name}")
-                pixel_values_list: list = []
-                labels_list: list = []
-                for _i, _sample in enumerate(self.samples):
-                    _img = _load_image(self.data_dir / _sample["file_name"])
-                    _pv = processor(_img, return_tensors="pt").pixel_values.squeeze(0)
-                    _lbl = processor.tokenizer(
-                        _sample["text"],
-                        padding="max_length",
-                        max_length=max_length,
-                        truncation=True,
-                        return_tensors="pt",
-                    ).input_ids.squeeze(0)
-                    _lbl[_lbl == processor.tokenizer.pad_token_id] = -100
-                    pixel_values_list.append(_pv)
-                    labels_list.append(_lbl)
-                    if (_i + 1) % 100 == 0 or (_i + 1) == n_total:
-                        print(f"  [TrOCR]   cached {_i + 1}/{n_total} samples...")
-                self._pixel_values_cache = pixel_values_list
-                self._labels_cache = labels_list
+                # Estimate bytes per sample: pixel_values is (C, H, W) float32.
+                # Try to get actual dimensions from the processor config; fall back
+                # to TrOCR-base defaults (3 × 384 × 384) if unavailable.
                 try:
-                    torch.save(
-                        {"pixel_values": pixel_values_list, "labels": labels_list},
-                        cache_file,
+                    _feat_ext = getattr(processor, "image_processor", None) or getattr(
+                        processor, "feature_extractor", None
                     )
-                    print(f"  [TrOCR] Tensor cache saved -> {cache_file.name}")
-                except Exception as _se:
-                    print(f"  [TrOCR] Failed to save tensor cache: {_se}")
+                    _img_size = getattr(_feat_ext, "size", None)
+                    if isinstance(_img_size, dict):
+                        _h = _img_size.get("height", 384)
+                        _w = _img_size.get("width", 384)
+                    elif isinstance(_img_size, int):
+                        _h = _w = _img_size
+                    else:
+                        _h = _w = 384
+                except Exception:
+                    _h = _w = 384
+                _bytes_per_sample = 3 * _h * _w * 4  # float32 = 4 bytes
+                _required_bytes = n_total * _bytes_per_sample
+
+                # ── RAM availability check ────────────────────────────────────
+                # Use psutil if available; fall back to a conservative estimate
+                # via /proc/meminfo on Linux or skip the check entirely.
+                _available_bytes: int | None = None
+                try:
+                    import psutil  # noqa: E402
+
+                    _available_bytes = psutil.virtual_memory().available
+                except Exception:
+                    try:
+                        with open("/proc/meminfo") as _mf:
+                            for _line in _mf:
+                                if _line.startswith("MemAvailable:"):
+                                    _available_bytes = int(_line.split()[1]) * 1024
+                                    break
+                    except Exception:
+                        pass  # Unknown available RAM — proceed optimistically
+
+                _bytes_per_gb = 1024**3
+                if _available_bytes is not None and _required_bytes > _available_bytes:
+                    _req_gb = _required_bytes / _bytes_per_gb
+                    _avail_gb = _available_bytes / _bytes_per_gb
+                    print(
+                        f"  [TrOCR] Tensor cache requires ~{_req_gb:.1f} GB RAM for"
+                        f" {n_total} samples, but only {_avail_gb:.1f} GB available."
+                    )
+                    print(
+                        "  [TrOCR] Falling back to lazy per-sample loading"
+                        " (slower but memory-safe)."
+                    )
+                    # Leave self._pixel_values_cache = None so __getitem__ uses
+                    # the lazy-loading fallback path automatically.
+                else:
+                    print(
+                        f"  [TrOCR] Building tensor cache for {n_total} samples"
+                        f" -> {cache_file.name}"
+                    )
+                    pixel_values_list: list = []
+                    labels_list: list = []
+                    for _i, _sample in enumerate(self.samples):
+                        _img = _load_image(self.data_dir / _sample["file_name"])
+                        _pv = processor(_img, return_tensors="pt").pixel_values.squeeze(0)
+                        _lbl = processor.tokenizer(
+                            _sample["text"],
+                            padding="max_length",
+                            max_length=max_length,
+                            truncation=True,
+                            return_tensors="pt",
+                        ).input_ids.squeeze(0)
+                        _lbl[_lbl == processor.tokenizer.pad_token_id] = -100
+                        pixel_values_list.append(_pv)
+                        labels_list.append(_lbl)
+                        if (_i + 1) % 100 == 0 or (_i + 1) == n_total:
+                            print(f"  [TrOCR]   cached {_i + 1}/{n_total} samples...")
+                        if (_i + 1) % 1000 == 0:
+                            gc.collect()
+                    self._pixel_values_cache = pixel_values_list
+                    self._labels_cache = labels_list
+                    try:
+                        torch.save(
+                            {"pixel_values": pixel_values_list, "labels": labels_list},
+                            cache_file,
+                        )
+                        print(f"  [TrOCR] Tensor cache saved -> {cache_file.name}")
+                    except Exception as _se:
+                        print(f"  [TrOCR] Failed to save tensor cache: {_se}")
 
     def __len__(self):
         return len(self.samples)
