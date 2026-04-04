@@ -2131,6 +2131,259 @@ def _build_experiment_trocr_metadata(
     return output_dir
 
 
+def _save_trocr_training_plots(history: dict, output_dir: Path) -> None:
+    """Save TrOCR training loss curves and CSV after training completes.
+
+    Creates:
+    - ``results/figures/trocr_loss.png`` (300 DPI) — train vs val loss curve
+    - ``results/figures/trocr_loss.svg`` — same chart as SVG fallback
+    - ``results/trocr_training_history.csv`` — epoch, train_loss, val_loss
+
+    Falls back to an inline SVG if matplotlib is not installed.
+    """
+    train_losses = history.get("train_loss", [])
+    val_losses = history.get("val_loss", [])
+    if not train_losses and not val_losses:
+        return
+
+    # ── CSV ──────────────────────────────────────────────────────────────────
+    results_dir = Path("results")
+    results_dir.mkdir(exist_ok=True)
+    csv_path = results_dir / "trocr_training_history.csv"
+    try:
+        with open(csv_path, "w") as _csv:
+            _csv.write("epoch,train_loss,val_loss\n")
+            for i, tl in enumerate(train_losses, start=1):
+                vl = val_losses[i - 1] if i - 1 < len(val_losses) else None
+                vl_str = f"{vl:.6f}" if vl is not None and vl != float("inf") else ""
+                _csv.write(f"{i},{tl:.6f},{vl_str}\n")
+    except OSError:
+        pass
+
+    # ── Figures directory ─────────────────────────────────────────────────────
+    figures_dir = results_dir / "figures"
+    figures_dir.mkdir(exist_ok=True)
+
+    epochs = list(range(1, len(train_losses) + 1))
+
+    # ── Attempt matplotlib plot ───────────────────────────────────────────────
+    try:
+        import matplotlib  # noqa: PLC0415
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt  # noqa: PLC0415
+
+        fig, ax = plt.subplots(figsize=(8, 5))
+        ax.plot(epochs, train_losses, marker="o", label="Train Loss", linewidth=1.5)
+        if val_losses:
+            _v_epochs = list(range(1, len(val_losses) + 1))
+            ax.plot(_v_epochs, val_losses, marker="s", label="Val Loss", linewidth=1.5)
+        ax.set_title("TrOCR Training Loss")
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel("Loss")
+        ax.grid(True, linestyle="--", alpha=0.5)
+        ax.legend()
+        fig.tight_layout()
+        png_path = figures_dir / "trocr_loss.png"
+        fig.savefig(png_path, dpi=300)
+        try:
+            pdf_path = figures_dir / "trocr_loss.pdf"
+            fig.savefig(pdf_path)
+        except Exception:
+            pass
+        plt.close(fig)
+        print(f"  [TrOCR] Training loss plot saved → {png_path}")
+        return
+    except Exception:
+        pass
+
+    # ── SVG fallback (zero dependencies) ─────────────────────────────────────
+    W, H = 560, 320
+    ML, MR, MT, MB = 58, 20, 40, 55
+    PW, PH = W - ML - MR, H - MT - MB
+    all_vals = [v for v in train_losses + val_losses if v != float("inf")]
+    ymax = max(all_vals, default=1.0) * 1.1 or 1.0
+    ymin = 0.0
+
+    def _ty(v: float) -> int:
+        return MT + PH - int((v - ymin) / (ymax - ymin) * PH)
+
+    def _tx(i: int) -> float:
+        n = max(len(epochs) - 1, 1)
+        return ML + (i / n) * PW
+
+    lines_svg = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}"'
+        f' font-family="sans-serif" font-size="10">',
+        f'<text x="{W // 2}" y="22" text-anchor="middle" font-size="11"'
+        f' font-weight="bold">TrOCR Training Loss</text>',
+        f'<line x1="{ML}" y1="{MT}" x2="{ML}" y2="{MT + PH}" stroke="#333" stroke-width="1"/>',
+        f'<line x1="{ML}" y1="{MT + PH}" x2="{ML + PW}" y2="{MT + PH}"'
+        f' stroke="#333" stroke-width="1"/>',
+        f'<text x="14" y="{MT + PH // 2}" text-anchor="middle" font-size="9"'
+        f' transform="rotate(-90 14 {MT + PH // 2})">Loss</text>',
+        f'<text x="{ML + PW // 2}" y="{H - 8}" text-anchor="middle" font-size="9">Epoch</text>',
+    ]
+    # Grid lines + Y tick labels
+    for _tick in [0.0, 0.25, 0.5, 0.75, 1.0]:
+        _yv = ymin + _tick * (ymax - ymin)
+        _yp = _ty(_yv)
+        lines_svg += [
+            f'<line x1="{ML}" y1="{_yp}" x2="{ML + PW}" y2="{_yp}"'
+            f' stroke="#ccc" stroke-width="0.5" stroke-dasharray="4,3"/>',
+            f'<text x="{ML - 4}" y="{_yp + 3}" text-anchor="end" font-size="8">{_yv:.2f}</text>',
+        ]
+    # Train loss polyline
+    if len(epochs) > 1:
+        pts = " ".join(f"{_tx(i):.1f},{_ty(v)}" for i, v in enumerate(train_losses))
+        lines_svg.append(
+            f'<polyline points="{pts}" fill="none" stroke="#1f77b4" stroke-width="1.8"/>'
+        )
+    for i, v in enumerate(train_losses):
+        lines_svg.append(f'<circle cx="{_tx(i):.1f}" cy="{_ty(v)}" r="3" fill="#1f77b4"/>')
+    # Val loss polyline
+    if val_losses:
+        v_epochs_idx = list(range(len(val_losses)))
+        if len(v_epochs_idx) > 1:
+            vpts = " ".join(
+                f"{_tx(i):.1f},{_ty(v)}" for i, v in enumerate(val_losses) if v != float("inf")
+            )
+            if vpts:
+                lines_svg.append(
+                    f'<polyline points="{vpts}" fill="none"'
+                    f' stroke="#ff7f0e" stroke-width="1.8" stroke-dasharray="6,3"/>'
+                )
+        for i, v in enumerate(val_losses):
+            if v != float("inf"):
+                lines_svg.append(f'<circle cx="{_tx(i):.1f}" cy="{_ty(v)}" r="3" fill="#ff7f0e"/>')
+    # Legend
+    lines_svg += [
+        f'<rect x="{ML + PW - 110}" y="{MT + 6}" width="10" height="8" fill="#1f77b4"/>',
+        f'<text x="{ML + PW - 97}" y="{MT + 14}" font-size="9">Train Loss</text>',
+        f'<rect x="{ML + PW - 110}" y="{MT + 20}" width="10" height="8" fill="#ff7f0e"/>',
+        f'<text x="{ML + PW - 97}" y="{MT + 28}" font-size="9">Val Loss</text>',
+        "</svg>",
+    ]
+    svg_content = "\n".join(lines_svg)
+    svg_path = figures_dir / "trocr_loss.svg"
+    try:
+        svg_path.write_text(svg_content, encoding="utf-8")
+        print(f"  [TrOCR] Training loss SVG saved → {svg_path}")
+    except OSError:
+        pass
+
+
+def _save_trocr_eval_plots(exp_metrics: dict, results_dir: Path) -> None:
+    """Save per-field F1 bar chart for TrOCR+YOLO evaluation results.
+
+    Creates:
+    - ``results/figures/trocr_field_f1.png`` (300 DPI) — per-field F1 bar chart
+    - ``results/figures/trocr_field_f1.svg`` — same chart as SVG fallback
+
+    Falls back to an inline SVG if matplotlib is not installed.
+    """
+    from constants import FIELDS  # noqa: PLC0415
+
+    if not exp_metrics:
+        return
+
+    fields = FIELDS  # ["company", "date", "address", "total"]
+    f1_values = [exp_metrics.get(f"{f}_f1", 0.0) for f in fields]
+    global_f1 = exp_metrics.get("global_f1", 0.0)
+
+    figures_dir = results_dir / "figures"
+    figures_dir.mkdir(parents=True, exist_ok=True)
+
+    # ── Attempt matplotlib plot ───────────────────────────────────────────────
+    try:
+        import matplotlib  # noqa: PLC0415
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt  # noqa: PLC0415
+
+        fig, ax = plt.subplots(figsize=(7, 4))
+        x = list(range(len(fields)))
+        colors = ["#4C72B0", "#DD8452", "#55A868", "#C44E52"]
+        bars = ax.bar(x, f1_values, color=colors, alpha=0.85, edgecolor="white")
+        ax.set_xticks(x)
+        ax.set_xticklabels([f.capitalize() for f in fields])
+        ax.set_ylim(0, 1.05)
+        ax.set_ylabel("F1 Score")
+        ax.set_title(f"TrOCR+YOLO Per-Field F1  (Global F1 = {global_f1:.4f})")
+        ax.grid(axis="y", linestyle="--", alpha=0.4)
+        for bar, val in zip(bars, f1_values):
+            ax.text(
+                bar.get_x() + bar.get_width() / 2,
+                bar.get_height() + 0.01,
+                f"{val:.3f}",
+                ha="center",
+                va="bottom",
+                fontsize=9,
+            )
+        fig.tight_layout()
+        png_path = figures_dir / "trocr_field_f1.png"
+        fig.savefig(png_path, dpi=300)
+        plt.close(fig)
+        print(f"  [TrOCR] Per-field F1 chart saved → {png_path}")
+        return
+    except Exception:
+        pass
+
+    # ── SVG fallback ──────────────────────────────────────────────────────────
+    W, H = 420, 280
+    ML, MR, MT, MB = 55, 20, 50, 45
+    PW, PH = W - ML - MR, H - MT - MB
+    n = len(fields)
+    bar_w = PW / n * 0.6
+    colors_svg = ["#4C72B0", "#DD8452", "#55A868", "#C44E52"]
+    ymax_svg = 1.0
+
+    def _ty2(v: float) -> int:
+        return MT + PH - int(v / ymax_svg * PH)
+
+    lines_svg2 = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}"'
+        f' font-family="sans-serif" font-size="10">',
+        f'<text x="{W // 2}" y="18" text-anchor="middle" font-size="10" font-weight="bold">'
+        f"TrOCR+YOLO Per-Field F1</text>",
+        f'<text x="{W // 2}" y="32" text-anchor="middle" font-size="8">'
+        f"Global F1 = {global_f1:.4f}</text>",
+        f'<line x1="{ML}" y1="{MT}" x2="{ML}" y2="{MT + PH}" stroke="#333" stroke-width="1"/>',
+        f'<line x1="{ML}" y1="{MT + PH}" x2="{ML + PW}" y2="{MT + PH}"'
+        f' stroke="#333" stroke-width="1"/>',
+        f'<text x="14" y="{MT + PH // 2}" text-anchor="middle" font-size="9"'
+        f' transform="rotate(-90 14 {MT + PH // 2})">F1</text>',
+    ]
+    for _tick in [0.0, 0.25, 0.5, 0.75, 1.0]:
+        _yp2 = _ty2(_tick)
+        lines_svg2 += [
+            f'<line x1="{ML}" y1="{_yp2}" x2="{ML + PW}" y2="{_yp2}"'
+            f' stroke="#ccc" stroke-width="0.5" stroke-dasharray="4,3"/>',
+            f'<text x="{ML - 4}" y="{_yp2 + 3}" text-anchor="end" font-size="8">{_tick:.2f}</text>',
+        ]
+    for fi, (fname, fval) in enumerate(zip(fields, f1_values)):
+        gx = ML + fi * (PW / n) + (PW / n - bar_w) / 2
+        bh = int(fval / ymax_svg * PH)
+        by = MT + PH - bh
+        color = colors_svg[fi % len(colors_svg)]
+        lines_svg2 += [
+            f'<rect x="{gx:.1f}" y="{by}" width="{bar_w:.1f}" height="{bh}"'
+            f' fill="{color}" opacity="0.85" stroke="white" stroke-width="0.6"/>',
+            f'<text x="{gx + bar_w / 2:.1f}" y="{by - 3}" text-anchor="middle" font-size="8">'
+            f"{fval:.3f}</text>",
+            f'<text x="{gx + bar_w / 2:.1f}" y="{MT + PH + 14}" text-anchor="middle"'
+            f' font-size="9">{fname.capitalize()}</text>',
+        ]
+    lines_svg2.append("</svg>")
+    svg_content2 = "\n".join(lines_svg2)
+    svg_path2 = figures_dir / "trocr_field_f1.svg"
+    try:
+        svg_path2.write_text(svg_content2, encoding="utf-8")
+        print(f"  [TrOCR] Per-field F1 SVG saved → {svg_path2}")
+    except OSError:
+        pass
+
+
 def train_trocr(
     output_dir: Path | None = None,
     train_data_dir: Path | None = None,
@@ -2724,6 +2977,31 @@ def train_trocr(
             history["val_loss"].append(avg_val)
             print(f"Epoch {epoch + 1}: train={avg_train:.4f}  val={avg_val:.4f}")
 
+            # ── Val-loss divergence detection ────────────────────────────────
+            # The DiagnosticCallback catches this for DONUT (Seq2SeqTrainer),
+            # but this custom loop needs its own check.  LR overshoot (e.g.
+            # TROCR_MINI_MODE at 10× LR) causes val_loss to double every epoch
+            # while train_loss oscillates — the decoder's pretrained weights
+            # are irreversibly destroyed.
+            _val_hist = history["val_loss"]
+            if len(_val_hist) >= 3:
+                _recent = _val_hist[-3:]
+                if _recent[-1] > _recent[-2] > _recent[-3]:
+                    print(
+                        f"  [TrOCR] WARNING: val_loss rising 3 consecutive epochs: "
+                        f"{[f'{v:.4f}' for v in _recent]} — possible LR overshoot. "
+                        f"Current lr={optimizer.param_groups[0]['lr']:.2e}"
+                    )
+            if len(_val_hist) >= 5:
+                _recent5 = _val_hist[-5:]
+                if all(_recent5[i + 1] > _recent5[i] for i in range(4)):
+                    raise RuntimeError(
+                        f"TrOCR training aborted: val_loss increased 5 consecutive epochs "
+                        f"({[f'{v:.4f}' for v in _recent5]}). The decoder's pretrained "
+                        f"weights are destroyed. Current lr={optimizer.param_groups[0]['lr']:.2e}. "
+                        f"Fix: set TROCR_MINI_MODE=False (uses lr=5e-5 instead of 5e-4)."
+                    )
+
             if avg_val < best_val_loss:
                 best_val_loss = avg_val
                 # Bypass HF save_pretrained entirely to prevent lm_head deduplication.
@@ -2743,6 +3021,7 @@ def train_trocr(
         _verify_lm_head_in_checkpoint(output_dir / "final")
         with open(output_dir / "training_history.json", "w") as f:
             json.dump(history, f, indent=2)
+        _save_trocr_training_plots(history, output_dir)
 
         elapsed = time.time() - start
         print(f"\nTrOCR training complete in {elapsed:.1f}s. Best val_loss={best_val_loss:.4f}")
@@ -3836,7 +4115,6 @@ if __name__ == "__main__":
             "TROCR_EPOCHS": TROCR_EPOCHS,
             "TROCR_MAX_LEN": TROCR_MAX_LEN,
             "TROCR_BATCH": TROCR_BATCH,
-            "TROCR_MINI_MODE": TROCR_MINI_MODE,
         }
         import sys as _sys
 
@@ -3845,7 +4123,6 @@ if __name__ == "__main__":
             _mod.TROCR_EPOCHS = 1
             _mod.TROCR_MAX_LEN = 32
             _mod.TROCR_BATCH = 4
-            _mod.TROCR_MINI_MODE = True  # AdamW+cosine-warmup at elevated LR
             if args.stage in ("yolo", "both"):
                 train_yolo()
             if args.stage in ("trocr", "both"):
