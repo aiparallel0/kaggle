@@ -1242,7 +1242,7 @@ class TrOCRReceiptDataset(Dataset):
             import hashlib
 
             proc_name = getattr(processor, "name_or_path", TROCR_MODEL_ID)
-            cache_key = hashlib.md5(f"{data_dir}:{max_length}:{proc_name}".encode()).hexdigest()[
+            cache_key = hashlib.sha256(f"{data_dir}:{max_length}:{proc_name}".encode()).hexdigest()[
                 :16
             ]
             cache_file = data_dir / f".tensor_cache_{cache_key}.pt"
@@ -1262,13 +1262,11 @@ class TrOCRReceiptDataset(Dataset):
                     self._labels_cache = None
 
             if self._pixel_values_cache is None:
-                print(
-                    f"  [TrOCR] Building tensor cache for {len(self.samples)} samples"
-                    f" -> {cache_file.name}"
-                )
+                n_total = len(self.samples)
+                print(f"  [TrOCR] Building tensor cache for {n_total} samples -> {cache_file.name}")
                 pixel_values_list: list = []
                 labels_list: list = []
-                for _sample in self.samples:
+                for _i, _sample in enumerate(self.samples):
                     _img = _load_image(self.data_dir / _sample["file_name"])
                     _pv = processor(_img, return_tensors="pt").pixel_values.squeeze(0)
                     _lbl = processor.tokenizer(
@@ -1281,6 +1279,8 @@ class TrOCRReceiptDataset(Dataset):
                     _lbl[_lbl == processor.tokenizer.pad_token_id] = -100
                     pixel_values_list.append(_pv)
                     labels_list.append(_lbl)
+                    if (_i + 1) % 100 == 0 or (_i + 1) == n_total:
+                        print(f"  [TrOCR]   cached {_i + 1}/{n_total} samples...")
                 self._pixel_values_cache = pixel_values_list
                 self._labels_cache = labels_list
                 try:

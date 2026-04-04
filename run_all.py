@@ -4001,12 +4001,19 @@ def _instant_mode_handler(args, logger: logging.Logger) -> int:
         return 2
 
     # ── Stage 2: YOLO+TrOCR training (skipped when cached weights exist) ─
+    # stage_trocr_all_backends → stage_trocr_experiments internally checks whether
+    # YOLO and TrOCR weights already exist and skips those training runs if so.
+    # We always call stage_trocr_all_backends here because even on repeat runs we
+    # still need to train+evaluate the field-assigner backends (the cheapest stage).
     workspace = Path(args.workspace)
     yolo_weights = workspace / "models" / "yolo_finetuned" / "run" / "weights" / "best.pt"
     trocr_best = workspace / "models" / "trocr_finetuned" / "best"
 
     if yolo_weights.exists() and trocr_best.exists():
-        logger.info("[Instant Stage 2] Cached YOLO+TrOCR weights found — skipping model training.")
+        logger.info(
+            "[Instant Stage 2] Cached YOLO+TrOCR weights found — "
+            "YOLO+TrOCR training will be skipped inside stage_trocr_all_backends."
+        )
     else:
         logger.info("[Instant Stage 2] No cached weights — running full training (first run).")
 
@@ -4085,7 +4092,7 @@ def _stage_trocr_data_prep_cached(args, logger: logging.Logger) -> "StageResult"
             n_images = 0
             dir_mtime = 0.0
         raw = f"{sroie_dir}:{dir_mtime:.0f}:{n_images}".encode()
-        prep_hash = hashlib.md5(raw).hexdigest()[:16]
+        prep_hash = hashlib.sha256(raw).hexdigest()[:16]
         marker_file = data_dir / f".prep_complete_{prep_hash}.marker"
 
         if marker_file.exists():
