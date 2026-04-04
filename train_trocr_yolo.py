@@ -3492,6 +3492,7 @@ def _extract_ocr_lines(
                 # num_beams=4 from training setup; override here explicitly.
                 generated_ids = trocr_model.generate(
                     pixel_values,
+                    max_new_tokens=TROCR_MAX_LEN,
                     num_beams=1,
                     length_penalty=1.0,
                     no_repeat_ngram_size=0,
@@ -3761,10 +3762,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--superfast",
         action="store_true",
-        help=(
-            "Bare minimum mode: yolov8n 1 epoch 160px SGD + TrOCR 1 epoch max_len=32. "
-            "Target: <3 min on RTX 4090."
-        ),
+        help=("Bare minimum mode: YOLO production defaults + TrOCR 1 epoch max_len=32."),
     )
     args = parser.parse_args()
 
@@ -3772,12 +3770,6 @@ if __name__ == "__main__":
         # Patch module-level constants before calling train functions.
         # All originals are restored in the finally block.
         _sf_saved = {
-            "YOLO_BASE": YOLO_BASE,
-            "YOLO_EPOCHS": YOLO_EPOCHS,
-            "YOLO_IMG_SIZE": YOLO_IMG_SIZE,
-            "YOLO_BATCH": YOLO_BATCH,
-            "YOLO_OPTIMIZER": YOLO_OPTIMIZER,
-            "YOLO_MOMENTUM": YOLO_MOMENTUM,
             "TROCR_EPOCHS": TROCR_EPOCHS,
             "TROCR_MAX_LEN": TROCR_MAX_LEN,
             "TROCR_BATCH": TROCR_BATCH,
@@ -3787,12 +3779,6 @@ if __name__ == "__main__":
 
         _mod = _sys.modules[__name__]
         try:
-            _mod.YOLO_BASE = "yolov8n.pt"
-            _mod.YOLO_EPOCHS = 5
-            _mod.YOLO_IMG_SIZE = 320  # minimum multiple of 32 for stride-32 head
-            _mod.YOLO_BATCH = 32
-            _mod.YOLO_OPTIMIZER = "SGD"
-            _mod.YOLO_MOMENTUM = 0.937
             _mod.TROCR_EPOCHS = 1
             _mod.TROCR_MAX_LEN = 32
             _mod.TROCR_BATCH = 4
