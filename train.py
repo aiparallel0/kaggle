@@ -625,6 +625,7 @@ except ImportError:
         Returns:
             Path to *dest_dir*
         """
+        import urllib.error as _urlerr
         import urllib.request as _urlreq
 
         dest = Path(dest_dir)
@@ -654,7 +655,7 @@ except ImportError:
             try:
                 with _urlreq.urlopen(req, timeout=120) as resp:
                     out_path.write_bytes(resp.read())
-            except Exception:
+            except (_urlerr.URLError, OSError):
                 # Non-fatal: some files (e.g. tokenizer.model) may not exist for
                 # every checkpoint; skip silently and continue.
                 pass
@@ -666,7 +667,7 @@ except ImportError:
             try:
                 with _urlreq.urlopen(req, timeout=300) as resp:
                     (dest / "pytorch_model.bin").write_bytes(resp.read())
-            except Exception:
+            except (_urlerr.URLError, OSError):
                 pass
 
         return dest
@@ -2210,7 +2211,7 @@ except ImportError:
 
         try:
             data = Path(path).read_bytes()
-        except Exception:
+        except OSError:
             return None
 
         if len(data) < 4 or data[0] != 0xFF or data[1] != 0xD8:
@@ -2265,7 +2266,7 @@ except ImportError:
                             if tag == 0x0112:  # Orientation
                                 exif_orientation = struct.unpack_from(bo + "H", tiff, eoff + 8)[0]
                                 break
-                except Exception:
+                except (struct.error, ValueError, IndexError):
                     pass
 
             elif 0xE0 <= marker <= 0xEF:  # other APP markers — skip
@@ -2437,7 +2438,7 @@ except ImportError:
                                 pc = mcu_col * h_blocks * 8 + hb * 8
                                 planes[ci][pr : pr + 8, pc : pc + 8] = spatial
 
-        except Exception:
+        except Exception:  # intentional broad catch: partial JPEG decode recovery
             # On bitstream error: return whatever we have (partial decode)
             pass
 
@@ -2800,10 +2801,10 @@ class SROIEOnlyValCallback(TrainerCallback):
                             total += 1
                             if pred_val == gt_val:
                                 correct += 1
-                    except Exception:
+                    except Exception:  # intentional broad catch: OOM recovery in callback
                         total += len(FIELDS)  # count as all wrong on error
             f1 = correct / total if total > 0 else 0.0
-        except Exception as exc:
+        except Exception as exc:  # intentional broad catch: OOM recovery boundary
             logger.warning("SROIEOnlyValCallback: failed to compute F1: %s", exc)
             model.train()
             return control
@@ -2823,7 +2824,7 @@ class SROIEOnlyValCallback(TrainerCallback):
                 if write_header:
                     writer.writeheader()
                 writer.writerow(self._rows[-1])
-        except Exception as exc:
+        except OSError as exc:
             logger.warning("SROIEOnlyValCallback: could not write CSV: %s", exc)
         return control
 
@@ -2984,7 +2985,7 @@ class MultiDataset(Dataset):
                 from resource_manager import get_image_size_from_processor_config
 
                 _img_h, _img_w = get_image_size_from_processor_config()
-            except Exception:
+            except (ImportError, RuntimeError):
                 _img_h, _img_w = DONUT_IMAGE_SIZE  # safe fallback to DONUT native resolution
             if _mm.ram_cache_is_safe(len(samples), _img_h, _img_w):
                 import concurrent.futures
@@ -2993,7 +2994,7 @@ class MultiDataset(Dataset):
                     idx, path = idx_path
                     try:
                         return idx, _load_image(path)
-                    except Exception:
+                    except (OSError, ValueError):
                         return idx, None
 
                 with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
@@ -3047,7 +3048,7 @@ class MultiDataset(Dataset):
                                 self._pixel_cache[_idx] = processor(
                                     _img, return_tensors="pt"
                                 ).pixel_values.squeeze()
-                            except Exception:
+                            except (RuntimeError, ValueError):
                                 pass
                         _log.info(
                             "[Tensor Cache] Precomputed %d/%d pixel_values tensors",
@@ -3248,7 +3249,7 @@ class LiveDashboardCallback(_TrainerCallbackBase):
 
             self._live = Live(self._build_table(), refresh_per_second=4, transient=True)
             self._live.start()
-        except Exception as exc:
+        except Exception as exc:  # intentional broad catch: third-party rich library
             logger.debug("[LiveDashboard] Could not start rich.live.Live: %s", exc)
             self._live = None
 
@@ -3326,14 +3327,14 @@ class LiveDashboardCallback(_TrainerCallbackBase):
                         footer_parts.append(
                             f"VRAM: {format_bytes(vram_used)}/{format_bytes(vram_total)}"
                         )
-                except Exception:
+                except (RuntimeError, AttributeError):
                     pass
                 table.caption = Text(" · ".join(footer_parts), style="dim")
-            except Exception:
+            except Exception:  # intentional broad catch: third-party rich library
                 pass
 
             return table
-        except Exception:
+        except Exception:  # intentional broad catch: third-party rich library
             return ""
 
     def on_log(
@@ -3394,7 +3395,7 @@ class LiveDashboardCallback(_TrainerCallbackBase):
         if self._rich_enabled and self._live is not None:
             try:
                 self._live.update(self._build_table())
-            except Exception as exc:
+            except Exception as exc:  # intentional broad catch: third-party rich library
                 logger.debug("[LiveDashboard] live.update failed: %s", exc)
 
     def update_best_f1(self, f1: float) -> None:
@@ -3405,7 +3406,7 @@ class LiveDashboardCallback(_TrainerCallbackBase):
             if self._live is not None:
                 try:
                     self._live.update(self._build_table())
-                except Exception:
+                except Exception:  # intentional broad catch: third-party rich library
                     pass
 
     def close(self, metrics: "dict[str, float] | None" = None) -> None:
@@ -3413,7 +3414,7 @@ class LiveDashboardCallback(_TrainerCallbackBase):
         if self._live is not None:
             try:
                 self._live.stop()
-            except Exception:
+            except Exception:  # intentional broad catch: third-party rich library
                 pass
             self._live = None
 
@@ -3455,7 +3456,7 @@ class LiveDashboardCallback(_TrainerCallbackBase):
 
                     _, _, disk_free = get_disk_usage()
                     summary_table.add_row("Disk free", format_bytes(disk_free))
-                except Exception:
+                except (ImportError, OSError):
                     pass
                 console.print(
                     Panel(
@@ -3465,7 +3466,7 @@ class LiveDashboardCallback(_TrainerCallbackBase):
                         padding=(0, 1),
                     )
                 )
-            except Exception:
+            except Exception:  # intentional broad catch: third-party rich library
                 pass
 
 
@@ -3832,7 +3833,7 @@ class DonutTrainer:
                 )
             except ImportError:
                 pass  # diagnostics.py not present — skip
-            except Exception as _diag_exc:
+            except Exception as _diag_exc:  # intentional broad catch: third-party diagnostics
                 logger.debug("[Diagnostics] Registration failed: %s", _diag_exc)
 
         # LiveDashboardCallback — auto-registered when rich is installed.
@@ -3865,7 +3866,7 @@ class DonutTrainer:
                 logger.debug("[LiveDashboard] Callback registered for experiment %d", exp_id)
             except ImportError:
                 pass  # live_dashboard.py not found — skip silently
-            except Exception as _ld_exc:
+            except Exception as _ld_exc:  # intentional broad catch: third-party registration
                 logger.debug("[LiveDashboard] Registration failed: %s", _ld_exc)
 
         # Gradient checkpointing: trades compute for VRAM — ~halves activation
@@ -4278,7 +4279,7 @@ class DonutTrainer:
                 logger.debug("safetensors not importable — skipping lm_head shard check")
             except RuntimeError:
                 raise  # re-raise our own CRITICAL errors
-            except Exception as _sf_exc:
+            except (OSError, KeyError, ValueError) as _sf_exc:
                 logger.warning("lm_head shard check failed (non-critical): %s", _sf_exc)
 
     # ------------------------------------------------------------------
