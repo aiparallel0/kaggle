@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import concurrent.futures
+import dataclasses
 import json
 import logging
 import math
@@ -52,6 +53,7 @@ class DatasetLoadError(Exception):
 
 __all__ = [
     # pipeline_types
+    "SerializableDataclass",
     "SeverityLevel",
     "CheckStatus",
     "RecoveryAction",
@@ -136,6 +138,48 @@ class RecoveryAction(str, Enum):
 
 
 # ============================================================================
+# Serializable Dataclass Mixin (DRY helper for to_dict)
+# ============================================================================
+
+
+def _serialize_value(val: Any) -> Any:
+    """Recursively convert a value to a JSON-safe primitive.
+
+    Handles datetime → isoformat, Enum → value, Path → str,
+    dataclasses → recursive field serialization, and nested dicts/lists.
+    """
+    if isinstance(val, datetime):
+        return val.isoformat()
+    if isinstance(val, Enum):
+        return val.value
+    if isinstance(val, Path):
+        return str(val)
+    if hasattr(val, "to_dict") and callable(val.to_dict):
+        return val.to_dict()
+    if dataclasses.is_dataclass(val) and not isinstance(val, type):
+        return {f.name: _serialize_value(getattr(val, f.name)) for f in dataclasses.fields(val)}
+    if isinstance(val, dict):
+        return {k: _serialize_value(v) for k, v in val.items()}
+    if isinstance(val, list):
+        return [_serialize_value(item) for item in val]
+    return val
+
+
+class SerializableDataclass:
+    """Mixin providing a generic ``to_dict()`` for dataclasses.
+
+    Uses :func:`_serialize_value` to recursively convert field values
+    to JSON-safe Python primitives.
+    """
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            f.name: _serialize_value(getattr(self, f.name))
+            for f in dataclasses.fields(self)  # type: ignore[arg-type]
+        }
+
+
+# ============================================================================
 # Preflight & Validation Results
 # ============================================================================
 
@@ -152,7 +196,7 @@ class CheckResult:
 
 
 @dataclass
-class PreflightReport:
+class PreflightReport(SerializableDataclass):
     """Comprehensive preflight validation report."""
 
     passed: bool
@@ -160,15 +204,6 @@ class PreflightReport:
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     timestamp: datetime = field(default_factory=datetime.utcnow)
-
-    def to_dict(self) -> dict:
-        return {
-            "passed": self.passed,
-            "checks": {k: v.__dict__ for k, v in self.checks.items()},
-            "errors": self.errors,
-            "warnings": self.warnings,
-            "timestamp": self.timestamp.isoformat(),
-        }
 
 
 # ============================================================================
@@ -191,33 +226,13 @@ class BugPattern:
 
 
 @dataclass
-class BugReport:
+class BugReport(SerializableDataclass):
     """Report of all detected bugs in codebase."""
 
     bugs: list[BugPattern] = field(default_factory=list)
     total_critical: int = 0
     total_warnings: int = 0
     timestamp: datetime = field(default_factory=datetime.utcnow)
-
-    def to_dict(self) -> dict:
-        return {
-            "bugs": [
-                {
-                    "severity": b.severity.value,
-                    "category": b.category,
-                    "file": str(b.file),
-                    "line": b.line,
-                    "column": b.column,
-                    "description": b.description,
-                    "code_snippet": b.code_snippet,
-                    "fix_suggestion": b.fix_suggestion,
-                }
-                for b in self.bugs
-            ],
-            "total_critical": self.total_critical,
-            "total_warnings": self.total_warnings,
-            "timestamp": self.timestamp.isoformat(),
-        }
 
 
 # ============================================================================
@@ -309,7 +324,7 @@ class ExperimentMetrics:
 
 
 @dataclass
-class ExperimentResult:
+class ExperimentResult(SerializableDataclass):
     """Result of a single training experiment."""
 
     experiment_id: int
@@ -320,17 +335,6 @@ class ExperimentResult:
     checkpoint_path: Path | None = None
     duration_sec: float = 0.0
     timestamp: datetime = field(default_factory=datetime.utcnow)
-
-    def to_dict(self) -> dict:
-        return {
-            "experiment_id": self.experiment_id,
-            "name": self.name,
-            "datasets": self.datasets,
-            "num_train_samples": self.num_train_samples,
-            "metrics": self.metrics.__dict__,
-            "duration_sec": self.duration_sec,
-            "timestamp": self.timestamp.isoformat(),
-        }
 
 
 @dataclass
@@ -461,7 +465,7 @@ class FindingSeverity(str, Enum):
 
 
 @dataclass
-class CritiqueFinding:
+class CritiqueFinding(SerializableDataclass):
     """A single research-validity critique finding."""
 
     severity: FindingSeverity
@@ -471,19 +475,9 @@ class CritiqueFinding:
     evidence: str
     recommendation: str
 
-    def to_dict(self) -> dict:
-        return {
-            "severity": self.severity.value,
-            "category": self.category,
-            "title": self.title,
-            "description": self.description,
-            "evidence": self.evidence,
-            "recommendation": self.recommendation,
-        }
-
 
 @dataclass
-class CritiqueReport:
+class CritiqueReport(SerializableDataclass):
     """Complete critical audit of the ML pipeline."""
 
     findings: list[CritiqueFinding] = field(default_factory=list)
@@ -505,14 +499,14 @@ class CritiqueReport:
         """True only when there are no FATAL findings."""
         return self.fatal_count == 0
 
-    def to_dict(self) -> dict:
-        return {
-            "passed": self.passed,
-            "fatal_count": self.fatal_count,
-            "critical_count": self.critical_count,
-            "warning_count": self.warning_count,
-            "findings": [f.to_dict() for f in self.findings],
-        }
+    def to_dict(self) -> dict[str, Any]:
+        """Override to include computed properties alongside serialized fields."""
+        d = super().to_dict()
+        d["passed"] = self.passed
+        d["fatal_count"] = self.fatal_count
+        d["critical_count"] = self.critical_count
+        d["warning_count"] = self.warning_count
+        return d
 
     def print_loud(self, exit_on_fatal: bool = True) -> None:
         """Print all findings to stdout; call sys.exit(1) on FATAL when exit_on_fatal=True."""
