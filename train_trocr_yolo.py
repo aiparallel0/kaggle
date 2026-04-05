@@ -802,7 +802,7 @@ except ImportError:
             # the unit-energy basin at high LR.  Gradient clipping (max_norm=1.0)
             # below is the primary safeguard; the lower LR provides a second layer.
             optimizer = torch.optim.AdamW(self.model.parameters(), lr=1e-4, weight_decay=5e-4)
-            scaler = torch.cuda.amp.GradScaler(enabled=amp and torch.cuda.is_available())
+            scaler = torch.amp.GradScaler("cuda", enabled=amp and torch.cuda.is_available())
             best_loss = float("inf")
             _skipped_steps_total = 0  # track GradScaler overflows across all epochs
 
@@ -2627,7 +2627,7 @@ def train_trocr(
         if (torch.cuda.is_available() and torch.cuda.is_bf16_supported())
         else torch.float16
     )
-    scaler = torch.cuda.amp.GradScaler(enabled=(_use_amp and _amp_dtype == torch.float16))
+    scaler = torch.amp.GradScaler("cuda", enabled=(_use_amp and _amp_dtype == torch.float16))
     print(
         f"  [TrOCR] AMP enabled: dtype={_amp_dtype}, gradient_checkpointing={_trocr_enable_grad_ckpt}"
         if _use_amp

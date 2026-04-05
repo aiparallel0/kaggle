@@ -416,7 +416,7 @@ Delete the dataset's `.done` marker file to force re-download with the new revis
 All other dependencies are inlined:
 - `datasets` → `_hf_download_dataset_inline()` in `data_pipeline.py`
 - `ultralytics` → `_YOLO_CLS` in `train_trocr_yolo.py` (proxy L2 loss fallback — not a real detector; install `ultralytics` for actual detection quality)
-- `accelerate` → declared dep (in requirements.txt); used by transformers `Seq2SeqTrainer` internals; `torch.cuda.amp.GradScaler` also used directly for custom training loops
+- `accelerate` → declared dep (in requirements.txt); used by transformers `Seq2SeqTrainer` internals; `torch.amp.GradScaler` also used directly for custom training loops
 - `matplotlib` → `_svg_bar_chart/_svg_radar_chart/...` in `reporting.py`
 - `pytest` → `_Pytest` stub in `run_all.py` (tests/ directory removed)
 - `Pillow` → `_load_png/_load_bmp/_load_jpeg_pure` in `train.py`
