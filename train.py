@@ -450,7 +450,7 @@ except ImportError:
 
             self._np = _np
             self._model_dir = Path(pretrained_model_name_or_path)
-            self._size = {"height": 1280, "width": 960}
+            self._size = {"height": DONUT_IMAGE_SIZE[0], "width": DONUT_IMAGE_SIZE[1]}
             self._sp = None
             self._vocab: dict = {}
             self._id2tok: dict = {}
@@ -1650,7 +1650,9 @@ except ImportError:
             # be replaced with a real token ID before embedding lookup.
             bos = labels.new_full((labels.shape[0], 1), start_id)
             _labels_clean = labels.clone()
-            _labels_clean[_labels_clean == -100] = pad_id  # replace ignore-index with pad
+            _labels_clean[_labels_clean == LABEL_IGNORE_INDEX] = (
+                pad_id  # replace ignore-index with pad
+            )
             decoder_input_ids = torch.cat([bos, _labels_clean[:, :-1]], dim=1)  # shift right
 
             # Encode image
@@ -2591,7 +2593,9 @@ import resource_manager as _mm  # noqa: E402
 # drift if any file was updated without updating the others.
 from constants import (  # noqa: E402
     BASE_MODEL,
+    DONUT_IMAGE_SIZE,
     FIELDS,
+    LABEL_IGNORE_INDEX,
     MAX_LENGTH,
     NEW_TOKENS,
     SEED,
@@ -2646,9 +2650,11 @@ class LmHeadCloneCallback(TrainerCallback):
 
     def on_save(self, args, state, control, model=None, **kwargs):
         if model is None:
+            logger.debug("LmHeadCloneCallback.on_save: model is None — skipping clone")
             return control
         decoder = getattr(model, "decoder", None)
         if decoder is None:
+            logger.debug("LmHeadCloneCallback.on_save: model has no decoder attr — skipping clone")
             return control
         lm_head = getattr(decoder, "lm_head", None)
         if lm_head is not None and hasattr(lm_head, "weight"):
@@ -2657,6 +2663,8 @@ class LmHeadCloneCallback(TrainerCallback):
                 "LmHeadCloneCallback.on_save: cloned lm_head.weight (epoch %s)",
                 state.epoch,
             )
+        else:
+            logger.debug("LmHeadCloneCallback.on_save: no lm_head.weight found — skipping clone")
         return control
 
 
@@ -2735,7 +2743,7 @@ class SROIEOnlyValCallback(TrainerCallback):
         Where to write the per-epoch ``sroie_only_val_f1.csv`` log.
     """
 
-    def __init__(self, sroie_val_samples, processor, output_dir: Path):
+    def __init__(self, sroie_val_samples, processor, output_dir: Path) -> None:
         super().__init__()
         self._samples = sroie_val_samples
         self._processor = processor
@@ -2859,7 +2867,7 @@ class SROIEDataset(Dataset):
         processor: DonutProcessor,
         samples: list[tuple[Path, dict[str, str]]],
         max_length: int = MAX_LENGTH,
-    ):
+    ) -> None:
         super().__init__()
         self.processor = processor
         self.max_length = max_length
@@ -2919,7 +2927,7 @@ class SROIEDataset(Dataset):
             truncation=True,
             return_tensors="pt",
         ).input_ids.squeeze()
-        labels[labels == self.processor.tokenizer.pad_token_id] = -100
+        labels[labels == self.processor.tokenizer.pad_token_id] = LABEL_IGNORE_INDEX
         # Mask empty-field spans so they contribute no gradient to the loss.
         labels = _mask_empty_field_labels(labels, gt, self.processor.tokenizer)
         return {"pixel_values": pixel_values, "labels": labels}
@@ -2948,7 +2956,7 @@ class MultiDataset(Dataset):
         precompute_tensors: bool = True,
         sample_sources: list[str] | None = None,
         aux_loss_weight: float = 1.0,
-    ):
+    ) -> None:
         self.samples = samples
         self.processor = processor
         self.max_length = max_length
@@ -2977,7 +2985,7 @@ class MultiDataset(Dataset):
 
                 _img_h, _img_w = get_image_size_from_processor_config()
             except Exception:
-                _img_h, _img_w = 1280, 960  # safe fallback to DONUT native resolution
+                _img_h, _img_w = DONUT_IMAGE_SIZE  # safe fallback to DONUT native resolution
             if _mm.ram_cache_is_safe(len(samples), _img_h, _img_w):
                 import concurrent.futures
 
@@ -3068,7 +3076,7 @@ class MultiDataset(Dataset):
                         truncation=True,
                         return_tensors="pt",
                     ).input_ids.squeeze()
-                    _lbl[_lbl == processor.tokenizer.pad_token_id] = -100
+                    _lbl[_lbl == processor.tokenizer.pad_token_id] = LABEL_IGNORE_INDEX
                     _lbl = _mask_empty_field_labels(_lbl, _gt, processor.tokenizer)
                     self._label_cache[_idx] = _lbl
                 _log.info("[Label Cache] Precomputed %d label tensors", len(self._label_cache))
@@ -3137,7 +3145,7 @@ class MultiDataset(Dataset):
                 truncation=True,
                 return_tensors="pt",
             ).input_ids.squeeze()
-            labels[labels == self.processor.tokenizer.pad_token_id] = -100
+            labels[labels == self.processor.tokenizer.pad_token_id] = LABEL_IGNORE_INDEX
             labels = _mask_empty_field_labels(labels, gt, self.processor.tokenizer)
 
         item = {"pixel_values": pixel_values, "labels": labels}
@@ -3508,7 +3516,7 @@ class DonutTrainer:
         model: VisionEncoderDecoderModel,
         train_dataset: Dataset,
         val_dataset: Dataset | None = None,
-    ):
+    ) -> None:
         if len(train_dataset) == 0:
             raise ValueError(
                 "Training dataset is empty (0 samples). Cannot train on an "
@@ -3969,7 +3977,7 @@ class DonutTrainer:
                         reduction="none",
                         ignore_index=-100,
                     ).view(_labels.size())  # (B, T)
-                    _valid = (_labels != -100).float()
+                    _valid = (_labels != LABEL_IGNORE_INDEX).float()
                     _per_sample = (_per_tok * _valid).sum(dim=1) / _valid.sum(dim=1).clamp(
                         min=1
                     )  # (B,)

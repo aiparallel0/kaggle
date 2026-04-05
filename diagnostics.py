@@ -180,7 +180,7 @@ class DiagnosticCallback:
         github_notify: bool = False,
         github_repo: str | None = None,
         github_issue_number: int | None = None,
-    ):
+    ) -> None:
         self.experiment_id = experiment_id
         self.output_dir = Path(output_dir or "results")
         self.ai_diagnose = ai_diagnose
@@ -1060,7 +1060,7 @@ class PipelineDiagnostics:
         github_notify: bool = False,
         github_repo: str | None = None,
         github_issue_number: int | None = None,
-    ):
+    ) -> None:
         self.ai_diagnose = ai_diagnose
         self.ai_provider = ai_provider
         self.output_dir = Path(output_dir or "results")

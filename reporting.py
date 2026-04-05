@@ -585,7 +585,7 @@ class DonutPipeline:
     fine-tuned checkpoint that was saved with this flag.
     """
 
-    def __init__(self, model_id_or_path: str, device: str = "auto"):
+    def __init__(self, model_id_or_path: str, device: str = "auto") -> None:
         from transformers import DonutProcessor, VisionEncoderDecoderModel
 
         self.device = (
@@ -778,7 +778,7 @@ class TrOCRYOLOPipeline:
         device: str = "auto",
         conf_threshold: float = 0.25,
         iou_threshold: float = 0.45,
-    ):
+    ) -> None:
         from transformers import TrOCRProcessor, VisionEncoderDecoderModel
 
         from train_trocr_yolo import _YOLO_CLS as YOLO
@@ -3315,7 +3315,7 @@ class ResultsAggregator:
 
     _logger = _logging.getLogger(__name__)
 
-    def __init__(self, results_dir: Path = Path("results")):
+    def __init__(self, results_dir: Path = Path("results")) -> None:
         self.results_dir = results_dir
         self.results_dir.mkdir(parents=True, exist_ok=True)
 

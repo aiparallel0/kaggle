@@ -783,7 +783,7 @@ class TrainingAuditLogger:
         - vs_baseline: <+/- percent>% F1
     """
 
-    def __init__(self, append_to_file: str = "terminal.txt"):
+    def __init__(self, append_to_file: str = "terminal.txt") -> None:
         """Initialize audit logger.
 
         Args:

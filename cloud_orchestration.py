@@ -1760,7 +1760,7 @@ class GitController:
 class StorageManager:
     """Store experiment results locally, ready to commit to GitHub."""
 
-    def __init__(self, results_dir: Path = Path("results")):
+    def __init__(self, results_dir: Path = Path("results")) -> None:
         self.results_dir = results_dir
         self.results_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2119,7 +2119,7 @@ class CodeRepairOrchestrator:
     Ollama integration is currently a stub awaiting full implementation.
     """
 
-    def __init__(self, config: CloudConfig):
+    def __init__(self, config: CloudConfig) -> None:
         self.config = config
         self.logger = logging.getLogger(__name__)
 
@@ -2217,7 +2217,7 @@ class MLTrainingOrchestrator:
     generates the paper, syncs to storage, and optionally commits everything.
     """
 
-    def __init__(self, config: CloudConfig):
+    def __init__(self, config: CloudConfig) -> None:
         self.config = config
         self.logger = logging.getLogger(__name__)
         self.storage_manager = StorageManager(config.results_dir)
@@ -2400,7 +2400,7 @@ class MLTrainingOrchestrator:
 class CloudPipelineOrchestrator:
     """Main pipeline orchestrator — routes between Code Repair and ML Training."""
 
-    def __init__(self, config: CloudConfig):
+    def __init__(self, config: CloudConfig) -> None:
         self.config = config
         self.logger = logging.getLogger(__name__)
 

@@ -25,6 +25,7 @@ FIX: Imports constants from shared module.
 import gc
 import json
 import logging
+import math
 import re
 import struct
 import time
@@ -1577,7 +1578,7 @@ def train_yolo(output_dir: Path | None = None, num_train_samples: int = 0) -> Pa
                 # Fix: issue_report_summary critical #3 — log at ERROR level so the operator
                 # knows the state dict companion file was NOT saved. Inference without
                 # ultralytics installed will fall back to random weights as a result.
-                __import__("logging").getLogger(__name__).error(
+                logging.getLogger(__name__).error(
                     "Could not save YOLO companion state dict to %s — inference without "
                     "ultralytics installed will use random init (degraded quality). Error: %s",
                     sd_path,
@@ -2580,7 +2581,7 @@ def train_trocr(
         except Exception as _exc:
             # Fix: issue_report_summary critical #3 — log at ERROR level so the operator
             # knows VRAM detection failed and gradient checkpointing defaulted to enabled.
-            __import__("logging").getLogger(__name__).error(
+            logging.getLogger(__name__).error(
                 "[TrOCR] VRAM detection failed — defaulting gradient checkpointing to ENABLED. "
                 "If this causes OOM, set grad_ckpt_vram_threshold_gb explicitly in "
                 "ControlSuite.trocr. Error: %s",
@@ -2712,7 +2713,7 @@ def train_trocr(
             if step < _warmup_steps:
                 return step / _warmup_steps
             progress = (step - _warmup_steps) / max(1, total_steps - _warmup_steps)
-            return max(0.1, 0.5 * (1.0 + __import__("math").cos(__import__("math").pi * progress)))
+            return max(0.1, 0.5 * (1.0 + math.cos(math.pi * progress)))
 
         scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=_lr_lambda)
         print(f"  [TrOCR] Micro mode: AdamW+cosine-warmup, lr={_micro_lr:.2e}")
@@ -2792,7 +2793,7 @@ def train_trocr(
     history = {"train_loss": [], "val_loss": [], "num_train_samples": 0}
     history["num_train_samples"] = len(train_ds)
     start = time.time()
-    _trocr_logger = __import__("logging").getLogger(__name__)
+    _trocr_logger = logging.getLogger(__name__)
 
     try:
         _trocr_skipped_total = 0  # GradScaler overflow steps across all epochs

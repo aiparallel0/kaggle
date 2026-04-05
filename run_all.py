@@ -89,7 +89,7 @@ _SCRIPT_DIR = str(Path(__file__).resolve().parent)
 if _SCRIPT_DIR not in sys.path:
     sys.path.insert(0, _SCRIPT_DIR)
 
-from constants import BASE_MODEL, IMAGE_EXTS, SEED, _gpu_cleanup  # noqa: E402, I001
+from constants import BASE_MODEL, DONUT_IMAGE_SIZE, IMAGE_EXTS, SEED, _gpu_cleanup  # noqa: E402, I001
 
 __all__ = [
     "PipelineOrchestrator",
@@ -491,7 +491,7 @@ class _DualStreamHandler(logging.Handler):
         "- epochs:",
     )
 
-    def __init__(self, file_path: Path, collapse_after: int = 3):
+    def __init__(self, file_path: Path, collapse_after: int = 3) -> None:
         super().__init__()
         self.file_path = file_path
         self.file_handle = open(str(file_path), "a", encoding="utf-8")  # noqa: SIM115
@@ -1627,10 +1627,14 @@ def _ensure_processor_config(path: str = "processor_config.json") -> None:
     p = Path(path)
     if p.exists():
         return
-    cfg = {"image_processor": {"size": {"height": 1280, "width": 960}}}
+    cfg = {
+        "image_processor": {"size": {"height": DONUT_IMAGE_SIZE[0], "width": DONUT_IMAGE_SIZE[1]}}
+    }
     try:
         p.write_text(json.dumps(cfg, indent=2) + "\n")
-        logging.getLogger(__name__).debug("[env] Generated %s (height=1280, width=960)", p)
+        logging.getLogger(__name__).debug(
+            "[env] Generated %s (height=%d, width=%d)", p, *DONUT_IMAGE_SIZE
+        )
     except OSError as exc:
         logging.getLogger(__name__).debug(
             "[env] Could not write %s: %s — continuing without it", p, exc
@@ -3247,7 +3251,7 @@ def stage_push_results(args) -> StageResult:
 class PipelineOrchestrator:
     """Orchestrates all pipeline stages SEQUENTIALLY with timing and status tracking."""
 
-    def __init__(self, args):
+    def __init__(self, args) -> None:
         self.args = args
         self.stages: list[StageResult] = []
 
