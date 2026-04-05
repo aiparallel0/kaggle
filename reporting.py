@@ -24,8 +24,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 # Ensure sibling modules are importable regardless of CWD.
+# Uses __file__ to locate the package root so that ``python reporting.py``
+# works even when CWD is elsewhere.
 _SCRIPT_DIR = str(Path(__file__).resolve().parent)
-if _SCRIPT_DIR not in sys.path:
+if _SCRIPT_DIR not in sys.path:  # pragma: no branch
     sys.path.insert(0, _SCRIPT_DIR)
 
 from constants import FIELDS, WORKSPACE, _edit_distance, _progress  # noqa: E402

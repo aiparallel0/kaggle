@@ -37,17 +37,17 @@
 | Duplicate code (regex, imports, to_dict) | 5+5 | ✅ 8 | 🔲 2 |
 | SRP violations (classes/functions) | 22 | ✅ 7 | 🔲 15 |
 | OCP violations | 8 | ✅ 6 | 🔲 2 |
-| LSP violations | 4 | ✅ 3 | 🔲 1 |
+| LSP violations | 4 | ✅ 4 | 0 |
 | ISP violations | 3 | ✅ 1 | 🔲 2 |
-| DIP violations | 9 | ✅ 4 | 🔲 5 |
+| DIP violations | 9 | ✅ 5 | 🔲 4 |
 | Functions >50 lines | 35+ | ✅ 1 | 🔲 34+ |
 | Missing return type hints (public) | 58+ | ✅ 8 | 🔲 50+ |
 | Missing `-> None` on `__init__` | 15+ | ✅ 15 | 0 |
 | Bare `list`/`dict` type hints | 146+ | 0 | 🔲 146+ |
 | Hardcoded magic numbers | 30+ | ✅ 6 | 🔲 24+ |
 | Missing docstrings | 3 | ✅ 3 | 0 |
-| Code smells (`__import__()`, `sys.path`, global) | 4+2 | ✅ 6 | 0 |
-| Incomplete type hints (TYPE-1, TYPE-2/3/4) | 3+30 | ✅ 33 | 0 |
+| Code smells (`__import__()`, `sys.path`, global) | 4+3 | ✅ 7 | 0 |
+| Incomplete type hints (TYPE-1, TYPE-2/3/4) | 3+30+25 | ✅ 58 | 0 |
 
 ---
 
@@ -205,12 +205,12 @@ Added `labels: "torch.Tensor"`, `tokenizer: "PreTrainedTokenizerBase"`, real typ
 **Severity:** MEDIUM
 **Description:** Orchestrates dataset loading, SROIE oversampling, 70/15/15 splitting, shuffling, and optional source tracking.
 
-### 🔲 LSP-1: `SROIELoader.clear_cache()` is a no-op
+### ✅ LSP-1: `SROIELoader.clear_cache()` is a no-op — Fixed (2026-04-05)
 **Lines:** 1010–1012
 **Severity:** MEDIUM
 **Description:** Base class contract expects `clear_cache()` to clear data, but SROIE returns immediately with a log message. Either make `clear_cache()` non-abstract or document SROIE immutable cache.
 
-### 🔲 DIP-2: `normalise_samples()` instantiates concrete `DatasetNormalizer`
+### ✅ DIP-2: `normalise_samples()` accepts optional normalizer param — Fixed (2026-04-05)
 **Lines:** 294–305
 **Severity:** MEDIUM
 **Description:** Should accept normalizer as optional parameter with default factory.
@@ -377,7 +377,7 @@ Added `labels: "torch.Tensor"`, `tokenizer: "PreTrainedTokenizerBase"`, real typ
 **Severity:** MEDIUM
 **Description:** Direct `import run_experiments as re_mod`, `DonutProcessor.from_pretrained()` inside function.
 
-### 🔲 TYPE-4: Untyped `args` parameter across 10+ functions
+### ✅ TYPE-4: `args` parameter typed as `argparse.Namespace` in 25 functions — Fixed (2026-04-05)
 **Lines:** 1024, 1528, 2105, 2138, 2191, 3250, 4056
 **Severity:** MEDIUM
 **Description:** `args` parameter has no type hint in many functions. Should be `argparse.Namespace` or a dataclass.
@@ -398,7 +398,7 @@ Added `labels: "torch.Tensor"`, `tokenizer: "PreTrainedTokenizerBase"`, real typ
 **Lines:** 4587–4824
 **Severity:** MEDIUM
 
-### 🔲 GLOBAL-1: Mutable global `_FANCY_OUTPUT`
+### ✅ GLOBAL-1: `_FANCY_OUTPUT` replaced with `_OutputConfig` class — Fixed (2026-04-05)
 **Lines:** 667
 **Severity:** MEDIUM
 **Description:** Modified at runtime based on `--fancy` flag, accessed in multiple functions. Tests or concurrent runs will interfere.
@@ -457,7 +457,7 @@ Added `labels: "torch.Tensor"`, `tokenizer: "PreTrainedTokenizerBase"`, real typ
 **Lines:** ~784
 **Severity:** LOW
 
-### 🔲 SMELL-2: Hardcoded `sys.path` manipulation
+### ✅ SMELL-2: `sys.path` manipulation documented — Fixed (2026-04-05)
 **Lines:** 27–29
 **Severity:** MEDIUM
 **Description:** Fragile assumption about module location.

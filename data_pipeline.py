@@ -297,13 +297,24 @@ def normalise_samples(
     source_name: str = "unknown",
     coverage_threshold: float = 0.30,
     strip_currency: bool = False,
+    normalizer: DatasetNormalizer | None = None,
 ) -> list[Sample]:
-    """Convenience wrapper around DatasetNormalizer.normalise()."""
-    return DatasetNormalizer(
-        coverage_threshold=coverage_threshold,
-        strip_currency=strip_currency,
-        source_name=source_name,
-    ).normalise(samples)
+    """Convenience wrapper around DatasetNormalizer.normalise().
+
+    Parameters
+    ----------
+    normalizer : DatasetNormalizer | None
+        Optional pre-configured normalizer instance.  When *None*
+        (default), a new ``DatasetNormalizer`` is constructed from the
+        remaining keyword arguments.
+    """
+    if normalizer is None:
+        normalizer = DatasetNormalizer(
+            coverage_threshold=coverage_threshold,
+            strip_currency=strip_currency,
+            source_name=source_name,
+        )
+    return normalizer.normalise(samples)
 
 
 # ---------------------------------------------------------------------------
@@ -873,10 +884,13 @@ class BaseDatasetLoader(ABC):
         """
         ...
 
-    @abstractmethod
-    def clear_cache(self) -> None:
-        """Delete any local cached data for this dataset."""
-        ...
+    def clear_cache(self) -> None:  # noqa: B027
+        """Delete any local cached data for this dataset.
+
+        Subclasses that download data should override this to remove
+        their local cache directory.  The default is a no-op, which is
+        correct for datasets whose data is user-provided (e.g. SROIE).
+        """
 
     @abstractmethod
     def sample_count(self, split: str = "train") -> int:
