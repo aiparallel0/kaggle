@@ -3164,6 +3164,15 @@ class MultiDataset(Dataset):
 # LiveDashboardCallback (inlined from live_dashboard.py)
 # ---------------------------------------------------------------------------
 
+# Resolve TrainerCallback at class-definition time (not at __init__ time) to
+# avoid monkey-patching self.__class__ — a proper mixin/composition pattern.
+try:
+    from transformers import TrainerCallback as _TrainerCallbackBase
+except ImportError:
+
+    class _TrainerCallbackBase:  # type: ignore[no-redef]
+        """Stub when transformers is not installed."""
+
 
 @dataclass
 class _EpochRow:
@@ -3173,7 +3182,7 @@ class _EpochRow:
     best_f1: float = float("nan")
 
 
-class LiveDashboardCallback:
+class LiveDashboardCallback(_TrainerCallbackBase):
     """Trainer callback — per-epoch CSV + rich.live.Live table for a lab-style console.
 
     When ``rich`` is installed the table is rendered in-place (overwriting previous
@@ -3181,8 +3190,8 @@ class LiveDashboardCallback:
     entire experiment run.  Falls back silently to plain logging when rich is absent
     or when DISABLE_LIVE_DASHBOARD=1 is set.
 
-    Compatible with HuggingFace ``TrainerCallback`` — class is patched at __init__
-    time to inherit TrainerCallback without a top-level transformers import.
+    Inherits from ``TrainerCallback`` when transformers is installed, or from a
+    no-op stub otherwise.
     """
 
     def __init__(
@@ -3195,16 +3204,6 @@ class LiveDashboardCallback:
         dataset_names: "list[str] | None" = None,
         num_samples: int = 0,
     ) -> None:
-        try:
-            from transformers import TrainerCallback
-
-            self.__class__ = type(
-                "LiveDashboardCallback",
-                (self.__class__, TrainerCallback),
-                {},
-            )
-        except ImportError:
-            pass
 
         if csv_path is None:
             csv_path = f"convergence_exp{experiment_id}.csv"
@@ -4178,22 +4177,27 @@ class DonutTrainer:
     # ------------------------------------------------------------------
 
     def save(self, path: Path | None = None) -> None:
-        """Save the fine-tuned model and processor to disk.
-
-        INDENTATION FIX: this method was previously indented with 1 space
-        instead of 4, making Python treat it as module-level code and raising
-        an IndentationError on import — which crashed all 8 DONUT experiments.
-        """
+        """Save the fine-tuned model and processor to disk."""
         save_dir = Path(path) if path is not None else self._output_dir
         save_dir.mkdir(parents=True, exist_ok=True)
 
-        # ── lm_head detach fix ─────────────────────────────────────────────
-        # transformers ≥5.x recomputes tied-weight lists before serialization
-        # and may use content-hash equality (not just data_ptr()) to deduplicate.
-        # Bypass save_pretrained entirely: write the state dict directly with
-        # safetensors.torch.save_file so HF's internal dedup logic is never
-        # invoked.  The lm_head weight gets .clone().contiguous() to guarantee
-        # a unique data pointer AND a unique content hash.
+        self._save_model_weights(save_dir)
+        self.processor.save_pretrained(str(save_dir))
+        logger.info("Model + processor saved → %s", save_dir)
+
+        self._verify_sroie_tokens(save_dir)
+        self._verify_lm_head_shard(save_dir)
+
+    def _save_model_weights(self, save_dir: Path) -> None:
+        """Save model weights with lm_head detach fix.
+
+        transformers ≥5.x recomputes tied-weight lists before serialization
+        and may use content-hash equality (not just data_ptr()) to deduplicate.
+        Bypass save_pretrained entirely: write the state dict directly with
+        safetensors.torch.save_file so HF's internal dedup logic is never
+        invoked.  The lm_head weight gets .clone().contiguous() to guarantee
+        a unique data pointer AND a unique content hash.
+        """
         decoder = self.model.decoder
         try:
             from safetensors.torch import save_file as _st_save_file  # noqa: PLC0415
@@ -4211,11 +4215,9 @@ class DonutTrainer:
             if hasattr(decoder, "lm_head"):
                 decoder.lm_head.weight = torch.nn.Parameter(decoder.lm_head.weight.data.clone())
             self.model.save_pretrained(str(save_dir))
-        # ──────────────────────────────────────────────────────────────────
-        self.processor.save_pretrained(str(save_dir))
-        logger.info("Model + processor saved → %s", save_dir)
 
-        # ── Post-save verification: confirm all SROIE tokens survived serialization ──
+    def _verify_sroie_tokens(self, save_dir: Path) -> None:
+        """Post-save verification: confirm all SROIE tokens survived serialization."""
         _verify_proc = DonutProcessor.from_pretrained(str(save_dir))
         _unk_id = _verify_proc.tokenizer.unk_token_id
         _missing = [
@@ -4236,12 +4238,15 @@ class DonutTrainer:
             save_dir,
         )
 
-        # ── Post-save lm_head.weight verification ────────────────────────────
-        # Verify that lm_head.weight was not deduped out of the safetensors shard.
-        # If safetensors sees embed_tokens.weight and lm_head.weight sharing the
-        # same data pointer, it silently omits lm_head from the shard — producing
-        # F1~0.42 on reload (Bug B / lm_head_dedup, CLAUDE.md §16).
-        # The clone() above should prevent this; this check confirms it.
+    def _verify_lm_head_shard(self, save_dir: Path) -> None:
+        """Post-save lm_head.weight verification.
+
+        Verify that lm_head.weight was not deduped out of the safetensors shard.
+        If safetensors sees embed_tokens.weight and lm_head.weight sharing the
+        same data pointer, it silently omits lm_head from the shard — producing
+        F1~0.42 on reload (Bug B / lm_head_dedup, CLAUDE.md §16).
+        The clone() in _save_model_weights should prevent this; this check confirms it.
+        """
         _shard_file = save_dir / "model.safetensors"
         if not _shard_file.exists():
             # Multi-shard save: find the index

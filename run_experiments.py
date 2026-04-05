@@ -2480,6 +2480,8 @@ class DonutEvaluator:
     def _self_test(self) -> None:
         """Run inference on one sample and verify the model produces output.
 
+        Raises SelfTestFailedError on failure, returns None on success.
+
         The self-test asserts that the result is a dict with at least one
         non-empty field value. If it fails, raises with diagnostic info
         including the raw token sequence.
@@ -2489,7 +2491,7 @@ class DonutEvaluator:
         the model can produce *any* parseable output (non-empty dict).
         """
         if not self.test_dataset:
-            raise RuntimeError("Self-test failed: test_dataset is empty")
+            raise SelfTestFailedError("Self-test failed: test_dataset is empty")
 
         img_path, gt = self.test_dataset[0]
         logger.debug("Self-test: running inference on %s", img_path)
