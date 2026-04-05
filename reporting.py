@@ -148,10 +148,10 @@ def _svg_save(svg_content: str, stem: Path) -> None:
 
 
 def _svg_bar_chart(
-    fields: list,
-    methods: list,
-    values_per_method: list,
-    colors: list,
+    fields: list[str],
+    methods: list[str],
+    values_per_method: list[list[float]],
+    colors: list[str],
     title: str,
     ylabel: str,
 ) -> str:
@@ -1824,7 +1824,7 @@ def generate_combined_slides(
 
 
 def _single_axis_block(
-    ed: dict,
+    ed: dict[str, Any],
     width: str = "0.48\\textwidth",
     height: str = "3.5cm",
 ) -> str:
@@ -3015,7 +3015,7 @@ def generate_f1_barchart_tex(
 
 
 def generate_experiment_table_slides(
-    all_exp: dict,
+    all_exp: dict[str, Any],
     output_dir: str | Path = "results",
 ) -> None:
     """Generate results/experiment_table_slides.tex — tabular for Beamer slide.

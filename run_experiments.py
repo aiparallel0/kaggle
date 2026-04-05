@@ -4886,7 +4886,7 @@ def run_experiment_from_config(
 
 
 def _print_experiment_summary(
-    exp_id: int, config: ExperimentConfig, metrics: dict, elapsed_sec: float = 0.0
+    exp_id: int, config: ExperimentConfig, metrics: dict[str, Any], elapsed_sec: float = 0.0
 ) -> None:
     """Print a rich Panel summary for the experiment result (plain text fallback).
 

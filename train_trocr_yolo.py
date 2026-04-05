@@ -2046,7 +2046,7 @@ def _print_trocr_load_report(model_id: str, loading_info: dict[str, Any]) -> Non
 
 
 def _build_experiment_trocr_metadata(
-    exp_datasets: list,
+    exp_datasets: list[str],
     sroie_oversample: int,
     output_dir: Path,
 ) -> Path:

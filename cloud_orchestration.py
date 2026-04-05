@@ -1211,7 +1211,7 @@ class DAGScheduler:
 
     def __init__(
         self,
-        configs: list,
+        configs: list[Any],
         run_fn: Callable[[Any], Any],
         max_workers: int | None = None,
         check_vram: bool = True,

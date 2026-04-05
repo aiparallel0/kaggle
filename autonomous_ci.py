@@ -404,10 +404,10 @@ def get_pr_number_for_branch(branch: str, repo: str | None = None) -> int | None
 
 def post_ci_results_comment(
     test_result: TestSuiteResult,
-    evaluation: dict,
+    evaluation: dict[str, Any],
     issue_number: int,
     repo: str | None = None,
-    fix_attempts: list | None = None,
+    fix_attempts: list[AutoFixAttempt] | None = None,
 ) -> dict | None:
     """Post CI test results as a GitHub comment on a PR."""
     from diagnostics import github_post_comment

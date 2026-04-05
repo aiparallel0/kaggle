@@ -503,7 +503,7 @@ Keep response under 300 words."""
 
 
 def _call_claude(
-    context: dict,
+    context: dict[str, Any],
     model: str = "claude-sonnet-4-5-20251001",
     system_prompt: str | None = None,
     max_tokens: int = 500,
@@ -548,7 +548,7 @@ def _call_claude(
 
 
 def _call_mistral(
-    context: dict,
+    context: dict[str, Any],
     model: str = "mistral-small-latest",
     system_prompt: str | None = None,
     max_tokens: int = 500,
@@ -592,7 +592,7 @@ def _call_mistral(
 
 
 def _call_mistral_httpx(
-    context: dict,
+    context: dict[str, Any],
     model: str = "mistral-small-latest",
     system_prompt: str | None = None,
     max_tokens: int = 500,
@@ -993,7 +993,7 @@ def github_report_failure(
 
 
 def ai_diagnose(
-    context: dict,
+    context: dict[str, Any],
     provider: str = "auto",
     claude_model: str = "claude-sonnet-4-5-20251001",
     mistral_model: str = "mistral-small-latest",
