@@ -82,6 +82,7 @@ import traceback
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 # Ensure the script's own directory is on sys.path so sibling modules
 # (constants, reporting, data_pipeline, …) are importable regardless of CWD.
@@ -343,7 +344,7 @@ def _install_dependencies() -> None:
         )
 
 
-def _verify_critical_packages() -> list:
+def _verify_critical_packages() -> list[str]:
     """Return list of still-missing critical packages after install attempt."""
     return [pkg for pkg in _CRITICAL_VERIFY_PACKAGES if _is_package_missing(pkg)]
 
@@ -710,7 +711,7 @@ def _step(n: int, total: int, desc: str) -> None:
         print(f"\n[{n}/{total}] {desc}")
 
 
-def _load_summary_rows(results_dir: Path) -> list[dict]:
+def _load_summary_rows(results_dir: Path) -> list[dict[str, Any]]:
     """Load experiment result rows from JSON files for summary display."""
     rows = []
     for rf in sorted(results_dir.glob("experiment_*.json")):
@@ -911,7 +912,7 @@ def _print_final_summary(results_dir: Path, pdf_compiled: bool | None = None) ->
 # ---------------------------------------------------------------------------
 
 
-def _parse_param_overrides(params: list[str]) -> dict:
+def _parse_param_overrides(params: list[str]) -> dict[str, Any]:
     """Parse a list of 'KEY=VALUE' strings into a dict with auto-cast values.
 
     Numeric values are auto-cast to int or float where possible; all others
@@ -1073,7 +1074,7 @@ def _apply_params_override(args: argparse.Namespace) -> None:
     # Gather valid field names from ExperimentConfig
     valid_fields = {f.name for f in dataclasses.fields(re_mod.ExperimentConfig)}
 
-    def _warn_unknown(keys: dict, scope: str) -> dict:
+    def _warn_unknown(keys: dict[str, Any], scope: str) -> dict[str, Any]:
         clean = {}
         for k, v in keys.items():
             if k in valid_fields:
@@ -1488,8 +1489,8 @@ def stage_pretrained_baseline(args: argparse.Namespace) -> StageResult:
 
 
 def _interactive_experiment_selection(
-    all_configs: "list",
-) -> "list":
+    all_configs: "list[Any]",
+) -> "list[Any]":
     """
     Prompt the user at the terminal to select which experiments to run.
 
@@ -1534,7 +1535,7 @@ def _interactive_experiment_selection(
     return selected
 
 
-def _load_experiment_configs_for_run(args: argparse.Namespace) -> "list":
+def _load_experiment_configs_for_run(args: argparse.Namespace) -> "list[Any]":
     """
     Load the experiment configs to run, respecting the following priority:
 
@@ -1690,12 +1691,12 @@ def _incremental_push_result(exp_id: int) -> None:
 
 
 def _autonomous_feedback_loop(
-    failed_ids: list,
+    failed_ids: list[int],
     *,
     args,
-    yaml_cfg_map: dict,
+    yaml_cfg_map: dict[int, Any],
     use_yaml_dispatch: bool,
-) -> list:
+) -> list[int]:
     """Run CI auto-fix and retry any experiments that failed with code errors.
 
     This is the "stop being the glue" feedback loop:
@@ -2115,7 +2116,7 @@ def stage_experiments(args: argparse.Namespace) -> StageResult:
     )
 
 
-def _run_trocr_yolo_experiment(args: argparse.Namespace, cfg) -> dict:
+def _run_trocr_yolo_experiment(args: argparse.Namespace, cfg) -> dict[str, Any]:
     """
     Dispatch Experiment 12 (arch_type=trocr_yolo) to the TrOCR+YOLO training path.
     Returns a result dict compatible with the stage_experiments summary logic.
@@ -2148,7 +2149,7 @@ def _run_trocr_yolo_experiment(args: argparse.Namespace, cfg) -> dict:
     }
 
 
-def _run_zero_shot_experiment(args: argparse.Namespace, cfg) -> dict:
+def _run_zero_shot_experiment(args: argparse.Namespace, cfg) -> dict[str, Any]:
     """
     Run a zero-shot evaluation (no training).  Loads the base checkpoint,
     runs inference on the SROIE test set, and saves results.
@@ -2203,7 +2204,7 @@ def _run_zero_shot_experiment(args: argparse.Namespace, cfg) -> dict:
 
 def _run_yaml_donut_experiment(
     args: argparse.Namespace, cfg, base_processor=None, base_model=None
-) -> dict:
+) -> dict[str, Any]:
     """
     Run a DONUT experiment defined purely in YAML (IDs 9+ not in legacy EXPERIMENTS dict).
     Delegates to run_experiments.run_experiment_from_config().
@@ -2478,13 +2479,13 @@ def stage_trocr_experiments(args: argparse.Namespace) -> StageResult:
 
 
 def _evaluate_field_assigner(
-    test_samples: list,
+    test_samples: list[Any],
     yolo_model,
     trocr_model,
     trocr_processor,
     assigner,
     logger: "logging.Logger",
-) -> dict:
+) -> dict[str, Any]:
     """Run inference on every test sample with the given assigner and return F1 metrics.
 
     Uses the canonical ``compute_metrics`` from ``run_experiments`` so scoring is
@@ -2516,7 +2517,7 @@ def _evaluate_field_assigner(
     return _re.compute_metrics(predictions, ground_truths)
 
 
-def _print_backend_comparison(all_results: dict, logger: "logging.Logger") -> None:
+def _print_backend_comparison(all_results: dict[str, Any], logger: "logging.Logger") -> None:
     """Print a comparison table of all TrOCR+YOLO backend F1 scores to stdout and log."""
     _COLS = ("Global F1", "Company", "Date", "Address", "Total", "Params")
     _W = (12, 10, 10, 10, 10, 14)

@@ -53,10 +53,10 @@ class RuntimeCheckpoint:
     gpu_mem_allocated_mb: float | None = None
     gpu_mem_reserved_mb: float | None = None
     ram_used_mb: float | None = None
-    issues: list[dict] = field(default_factory=list)
-    metrics: dict = field(default_factory=dict)
+    issues: list[dict[str, Any]] = field(default_factory=list)
+    metrics: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {k: v for k, v in self.__dict__.items() if v is not None and v != [] and v != {}}
 
 
@@ -351,7 +351,7 @@ class DiagnosticCallback:
 
         return cp
 
-    def _detect_patterns(self, cp: RuntimeCheckpoint) -> list[dict]:
+    def _detect_patterns(self, cp: RuntimeCheckpoint) -> list[dict[str, Any]]:
         """Check checkpoint against known bug pattern signatures."""
         issues = []
         for pattern in _BUG_PATTERNS:
@@ -387,7 +387,7 @@ class DiagnosticCallback:
             parts.append(f"gpu_mem={cp.gpu_mem_allocated_mb:.0f}MB")
         return ", ".join(parts)
 
-    def _log_issues(self, cp: RuntimeCheckpoint, issues: list[dict]) -> None:
+    def _log_issues(self, cp: RuntimeCheckpoint, issues: list[dict[str, Any]]) -> None:
         """Log detected issues with appropriate severity."""
         for issue in issues:
             severity = issue.get("severity", "warning")
@@ -403,7 +403,7 @@ class DiagnosticCallback:
             else:
                 logger.warning(msg)
 
-    def _run_ai_diagnosis(self, cp: RuntimeCheckpoint, issues: list[dict]) -> None:
+    def _run_ai_diagnosis(self, cp: RuntimeCheckpoint, issues: list[dict[str, Any]]) -> None:
         """Call AI API (Claude or Mistral) for deeper diagnosis of critical issues."""
         context = {
             "experiment_id": self.experiment_id,
@@ -734,7 +734,7 @@ def _github_request(
         return None
 
 
-def github_search_open_issues(title_prefix: str, repo: str | None = None) -> list[dict]:
+def github_search_open_issues(title_prefix: str, repo: str | None = None) -> list[dict[str, Any]]:
     """Search for open GitHub issues whose title contains ``title_prefix``.
 
     Used by :func:`github_create_issue` to avoid creating duplicate issues
@@ -1195,7 +1195,7 @@ class PipelineDiagnostics:
         return report_path
 
     @staticmethod
-    def _gpu_snapshot() -> dict | None:
+    def _gpu_snapshot() -> dict[str, float] | None:
         """Capture current GPU memory state."""
         try:
             import torch

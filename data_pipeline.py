@@ -237,7 +237,7 @@ class DatasetNormalizer:
         self._assert_coverage(normalised)
         return normalised
 
-    def _normalise_dict(self, raw: dict) -> dict[str, str]:
+    def _normalise_dict(self, raw: dict[str, Any]) -> dict[str, str]:
         """Normalise a single ground-truth dict to the canonical schema."""
         # Step 1: resolve aliases
         resolved: dict[str, str] = {}
@@ -559,7 +559,7 @@ def _hf_fetch_rows_batch(
     offset: int,
     length: int,
     hf_token: str | None = None,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Fetch a single batch of rows from the HuggingFace datasets-server API.
 
     Returns the list of row dicts from the ``rows`` key, or an empty list
@@ -581,7 +581,7 @@ def _hf_fetch_rows_batch(
 
 
 def _hf_write_and_mark(
-    all_rows: list[dict],
+    all_rows: list[dict[str, Any]],
     img_dir: Path,
     jsonl_path: Path,
     split: str,
@@ -726,7 +726,7 @@ def _hf_download_dataset_inline(
         return cache_dir
 
 
-def _hf_load_jsonl_rows(cache_dir: Path, split: str = "train") -> list[dict]:
+def _hf_load_jsonl_rows(cache_dir: Path, split: str = "train") -> list[dict[str, Any]]:
     """Load the inline-downloaded JSONL cache produced by _hf_download_dataset_inline().
 
     Each returned dict has the same keys as the original HF dataset row, except:
@@ -779,7 +779,7 @@ def _validate_samples_nonempty(samples: list[Sample], dataset_name: str) -> list
     return samples
 
 
-def _log_field_coverage(samples: list, dataset_name: str) -> None:
+def _log_field_coverage(samples: list[tuple[Path, dict[str, str]]], dataset_name: str) -> None:
     """Log per-field fill rates for a loaded dataset.
 
     Parameters
@@ -1892,7 +1892,7 @@ class CORDv2Loader(BaseDatasetLoader):
     # ── CORD-v2 → SROIE remapping ─────────────────────────────────────
 
     @staticmethod
-    def _cord_extract_company(gt_parsed: dict) -> str:
+    def _cord_extract_company(gt_parsed: dict[str, Any]) -> str:
         """Extract company name from CORD-v2 parsed ground truth.
 
         Looks in ``store_info.store_name`` first, then falls back to the
@@ -1913,7 +1913,7 @@ class CORDv2Loader(BaseDatasetLoader):
         return ""
 
     @staticmethod
-    def _cord_extract_date(gt_parsed: dict) -> str:
+    def _cord_extract_date(gt_parsed: dict[str, Any]) -> str:
         """Extract date from CORD-v2 parsed ground truth.
 
         Searches nested paths for a date pattern, then falls back to
@@ -1948,7 +1948,7 @@ class CORDv2Loader(BaseDatasetLoader):
         return ""
 
     @staticmethod
-    def _cord_extract_address(gt_parsed: dict, company: str) -> tuple[str, str]:
+    def _cord_extract_address(gt_parsed: dict[str, Any], company: str) -> tuple[str, str]:
         """Extract address from CORD-v2 parsed ground truth.
 
         Returns ``(company_override, address)`` — when the store address
@@ -1965,7 +1965,7 @@ class CORDv2Loader(BaseDatasetLoader):
         return "", ""
 
     @staticmethod
-    def _cord_extract_total(gt_parsed: dict) -> str:
+    def _cord_extract_total(gt_parsed: dict[str, Any]) -> str:
         """Extract total from CORD-v2 parsed ground truth.
 
         Checks ``total.total_price`` and related keys first, then falls

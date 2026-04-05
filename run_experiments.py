@@ -1780,7 +1780,7 @@ try:
 except ImportError:
     _PIL_AVAILABLE = False
 
-    def _png_unfilter(scanlines: list, width: int, bpp: int) -> bytes:
+    def _png_unfilter(scanlines: list[tuple[int, bytes]], width: int, bpp: int) -> bytes:
         """Apply PNG row de-filtering (Sub/Up/Average/Paeth)."""
         out = []
         prev = bytes(width * bpp)
@@ -2033,7 +2033,7 @@ def _initialize_new_token_embeddings(model: VisionEncoderDecoderModel, tokenizer
     )
 
 
-def _parse_sroie_output(tokens: str) -> dict:
+def _parse_sroie_output(tokens: str) -> dict[str, str]:
     """Parse SROIE XML-like output format into a dict.
 
     SROIE format: <s_sroie><s_company>VALUE</s_company><s_date>VALUE</s_date>...
@@ -2096,7 +2096,7 @@ def _parse_sroie_output(tokens: str) -> dict:
     return result
 
 
-def _merge_token2json_pages(result: Any) -> dict:
+def _merge_token2json_pages(result: Any) -> dict[str, Any]:
     """Merge multi-page CORD output (list) into single dict (Phase 0b).
 
     The base checkpoint (donut-base-finetuned-cord-v2) knows about <sep/>
@@ -2129,7 +2129,7 @@ def _merge_token2json_pages(result: Any) -> dict:
     return {}
 
 
-def _select_parser(task_prompt: str, processor: ProcessorType) -> Callable[[str], dict]:
+def _select_parser(task_prompt: str, processor: ProcessorType) -> Callable[[str], dict[str, str]]:
     """Return the parser function appropriate for the given task prompt format.
 
     OCP-4 fix: centralises the SROIE-vs-token2json dispatch so that callers
@@ -2176,7 +2176,7 @@ class EvaluationResult:
     per_field: dict[str, dict[str, float]] = field(default_factory=dict)
     num_samples: int = 0
     parse_failures: int = 0
-    raw_predictions: list[dict] | None = None
+    raw_predictions: list[dict[str, str]] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to a flat dict compatible with legacy compute_metrics output."""
@@ -2648,7 +2648,7 @@ class DonutEvaluator:
         image_path: Path,
         task_prompt: str,
         preloaded_image: Any | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         """Run inference on a single image and return parsed dict.
 
         Handles:
@@ -2698,7 +2698,7 @@ class DonutEvaluator:
     # Parsing
     # ------------------------------------------------------------------
 
-    def _parse_prediction(self, tokens: str) -> dict:
+    def _parse_prediction(self, tokens: str) -> dict[str, str]:
         """Parse prediction using appropriate parser for the task format.
 
         For SROIE task prompts (<s_sroie>), uses the custom _parse_sroie_output()
@@ -2760,7 +2760,7 @@ class DonutEvaluator:
     # Metrics
     # ------------------------------------------------------------------
 
-    def _compute_f1(self, preds: list[dict], labels: list[dict]) -> float:
+    def _compute_f1(self, preds: list[dict[str, str]], labels: list[dict[str, str]]) -> float:
         """Compute global F1 over all (image, field) pairs.
 
         A pair is a true positive if the predicted string equals the ground
@@ -2798,8 +2798,8 @@ class DonutEvaluator:
 
     def compute_all_metrics(
         self,
-        predictions: list[dict],
-        ground_truths: list[dict],
+        predictions: list[dict[str, str]],
+        ground_truths: list[dict[str, str]],
     ) -> dict[str, float]:
         """Compute all metrics: global F1, per-field F1, per-field NED, exact match.
 
@@ -2813,7 +2813,7 @@ class DonutEvaluator:
 # ---------------------------------------------------------------------------
 
 
-def _unwrap_prediction(parsed: dict, task_prompt: str) -> dict:
+def _unwrap_prediction(parsed: dict[str, Any], task_prompt: str) -> dict[str, str]:
     """Unwrap task-prompt wrappers from token2json output.
 
     token2json may wrap SROIE output as ``{"sroie": {...}}``.
@@ -2856,7 +2856,7 @@ def run_inference(
     task_prompt: str,
     max_length: int = 512,
     preloaded_image: Any | None = None,
-) -> dict:
+) -> dict[str, str]:
     """Run inference on a single image. Accepts an optional pre-loaded PIL Image.
 
     This is the backward-compatible module-level function. For new code,
@@ -2947,7 +2947,7 @@ def run_inference(
     return result
 
 
-def remap_cord_to_sroie(cord_output: dict | list) -> dict[str, str]:
+def remap_cord_to_sroie(cord_output: dict[str, Any] | list[Any]) -> dict[str, str]:
     """Map CORD schema fields to SROIE field names (best effort).
 
     Handles the 'cord-v2' top-level wrapper that the pretrained CORD model
@@ -3266,7 +3266,7 @@ def load_test_samples() -> list[tuple[Path, dict[str, str]]]:
 def evaluate_donut_on_test(
     model_path: str,
     test_samples: list[tuple[Path, dict[str, str]]],
-) -> dict:
+) -> dict[str, Any]:
     """Evaluate a DONUT model on the SROIE test set. Returns metrics dict."""
     from transformers import DonutProcessor
 
@@ -3324,7 +3324,7 @@ def evaluate_donut_on_test(
 
 
 # ── Print metrics ────────────────────────────────────────────────────────────
-def print_metrics(name: str, metrics: dict) -> None:
+def print_metrics(name: str, metrics: dict[str, Any]) -> None:
     """Pretty-print evaluation metrics in structured format."""
     print(f"\n  {'=' * 55}")
     print(f"  {name} Results")
@@ -3344,7 +3344,7 @@ def print_metrics(name: str, metrics: dict) -> None:
     print(f"  {'=' * 55}")
 
 
-def generate_comparison_report(results: dict) -> None:
+def generate_comparison_report(results: dict[str, Any]) -> None:
     """Generate a detailed HTML comparison report of all evaluated models."""
     html_lines = [
         "<!DOCTYPE html>",
@@ -3410,7 +3410,7 @@ def generate_comparison_report(results: dict) -> None:
     print(f"\n📊 Detailed report saved -> {report_path}")
 
 
-def generate_json_summary(results: dict) -> None:
+def generate_json_summary(results: dict[str, Any]) -> None:
     """Export evaluation results in structured JSON format."""
     summary = {
         "evaluation_timestamp": __import__("datetime").datetime.now().isoformat(),
@@ -3739,7 +3739,7 @@ TRAIN_CONFIG: dict[str, Any] = {
 }
 
 
-def _sanitize_metrics(metrics: dict) -> dict:
+def _sanitize_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
     """Replace NaN/Inf float values with JSON-safe sentinels before serialization.
 
     Python's json.dumps raises ValueError on math.nan/math.inf by default (they
@@ -3758,7 +3758,7 @@ def _sanitize_metrics(metrics: dict) -> dict:
     return sanitized
 
 
-def _config_to_dict(config: ExperimentConfig) -> dict:
+def _config_to_dict(config: ExperimentConfig) -> dict[str, Any]:
     """Serialize an ExperimentConfig to the TRAIN_CONFIG dict format.
 
     Used to record the *actual* training hyperparameters in the result JSON,
@@ -3794,7 +3794,7 @@ def train_experiment(
     base_model: VisionEncoderDecoderModel | None = None,
     config: ExperimentConfig | None = None,
     sample_sources: list[str] | None = None,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Fine-tune DONUT on *samples* and save the model to *output_dir*.
 
     All hyperparameters come from *config* if supplied, otherwise from
@@ -4190,7 +4190,7 @@ def train_experiment(
 
 def evaluate_experiment(
     exp_id: int, model_dir: Path, config: ExperimentConfig | None = None
-) -> dict:
+) -> dict[str, Any]:
     """Evaluate a fine-tuned model (at *model_dir*) on the SROIE test set.
 
     Uses DonutEvaluator from donut_evaluator.py which handles:
@@ -4359,10 +4359,10 @@ def run_experiment(
     exp_id: int,
     base_processor: DonutProcessor | None = None,
     base_model: VisionEncoderDecoderModel | None = None,
-    overrides: dict | None = None,
+    overrides: dict[str, Any] | None = None,
     keep_model: bool = False,
     no_disk_cleanup: bool = False,
-) -> dict:
+) -> dict[str, Any]:
     """Run a single experiment: train, evaluate, save results.
 
     Checks cache validity (datasets AND hyperparams must match) before
@@ -4733,7 +4733,7 @@ def run_experiment(
     return result
 
 
-def run_custom_experiment(config: ExperimentConfig, result_file: Path) -> dict:
+def run_custom_experiment(config: ExperimentConfig, result_file: Path) -> dict[str, Any]:
     """Run a single experiment with custom hyperparameters (for sweeps).
 
     Similar to run_experiment but:
@@ -4812,8 +4812,8 @@ def run_experiment_from_config(
     cfg: _YAMLExperimentConfig,
     base_processor: DonutProcessor | None = None,
     base_model: VisionEncoderDecoderModel | None = None,
-    overrides: dict | None = None,
-) -> dict:
+    overrides: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Run a YAML-defined DONUT experiment (IDs 9+) via run_custom_experiment().
 
     Bridges the ``experiment_config_loader.ExperimentConfig`` object (YAML-sourced)

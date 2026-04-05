@@ -206,7 +206,7 @@ def run_multi_seed(
     seeds: list[int] | None = None,
     results_dir: str | Path = "results/multi_seed",
     force: bool = False,
-) -> dict:
+) -> dict[str, Any]:
     """Run experiment *experiment_id* with each seed in *seeds*.
 
     Parameters

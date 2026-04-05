@@ -1371,7 +1371,7 @@ class DAGScheduler:
         return results
 
 
-def print_dag(configs: list) -> None:
+def print_dag(configs: list[Any]) -> None:
     """Print the experiment dependency graph to stdout."""
     print("\nExperiment DAG:")
     print("=" * 60)
@@ -1659,7 +1659,7 @@ class GitController:
             return False
 
     @staticmethod
-    def commit(message: str, files: list | None = None) -> GitCommitReport:
+    def commit(message: str, files: list[str] | None = None) -> GitCommitReport:
         """Stage *files* (or all changes when None) and create a commit."""
         try:
             cmd = ["git", "add", "-A"] if files is None else ["git", "add"] + files

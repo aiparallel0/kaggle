@@ -126,7 +126,7 @@ except ImportError:
     class _TrainerState:
         epoch: int = 0
         global_step: int = 0
-        log_history: list = field(default_factory=list)
+        log_history: list[dict[str, Any]] = field(default_factory=list)
         best_metric: float | None = None
         best_model_checkpoint: str | None = None
 
@@ -557,7 +557,7 @@ except ImportError:
 
         # ── Tokenizer interface ────────────────────────────────────────────
 
-        def add_special_tokens(self, tokens: dict | list) -> int:
+        def add_special_tokens(self, tokens: dict[str, list[str]] | list[str]) -> int:
             if isinstance(tokens, dict):
                 tokens = tokens.get("additional_special_tokens", [])
             added = 0
@@ -598,7 +598,7 @@ except ImportError:
         def batch_decode(self, ids_list, **kwargs) -> list[str]:
             return [self.decode(ids, **kwargs) for ids in ids_list]
 
-        def token2json(self, tokens: str, **kwargs) -> dict:
+        def token2json(self, tokens: str, **kwargs) -> dict[str, str]:
             """Parse <s_field>VALUE</s_field> sequences into a dict."""
             import re as _re
 
@@ -1182,7 +1182,7 @@ except ImportError:
         Mirrors HF weight prefix: encoder.model.encoder.*
         """
 
-        def __init__(self, config_dict: dict):
+        def __init__(self, config_dict: dict[str, Any]):
             super().__init__()
             self.embeddings = _SwinPatchEmbedding(
                 in_channels=config_dict.get("num_channels", 3),
@@ -1214,7 +1214,7 @@ except ImportError:
           encoder.model.encoder.layernorm.*
         """
 
-        def __init__(self, config_dict: dict):
+        def __init__(self, config_dict: dict[str, Any]):
             super().__init__()
             self.encoder = _SwinModel(config_dict)
 
@@ -1228,7 +1228,7 @@ except ImportError:
         consistent with the VisionEncoderDecoderModel's 'encoder.*' prefix.
         """
 
-        def __init__(self, config_dict: dict):
+        def __init__(self, config_dict: dict[str, Any]):
             super().__init__()
             self.model = _SwinWrapper(config_dict)
 
@@ -1403,7 +1403,7 @@ except ImportError:
           layernorm_embedding.{weight,bias}
         """
 
-        def __init__(self, config_dict: dict):
+        def __init__(self, config_dict: dict[str, Any]):
             super().__init__()
             self.d_model = config_dict.get("d_model", 1024)
             vocab_size = config_dict.get("vocab_size", 57580)
@@ -1476,7 +1476,7 @@ except ImportError:
         Resulting in weight prefix: decoder.model.decoder.*
         """
 
-        def __init__(self, config_dict: dict):
+        def __init__(self, config_dict: dict[str, Any]):
             super().__init__()
             self.decoder = _BARTDecoderModel(config_dict)
 
@@ -1498,7 +1498,7 @@ except ImportError:
           lm_head.weight         (output projection, no bias)
         """
 
-        def __init__(self, config_dict: dict):
+        def __init__(self, config_dict: dict[str, Any]):
             super().__init__()
             self.config = _SimpleConfig(
                 tie_word_embeddings=False,
@@ -1575,7 +1575,7 @@ except ImportError:
         load_state_dict(state_dict, strict=False) works without remapping.
         """
 
-        def __init__(self, encoder_config: dict, decoder_config: dict):
+        def __init__(self, encoder_config: dict[str, Any], decoder_config: dict[str, Any]):
             super().__init__()
             self.encoder = _SwinEncoderModule(encoder_config)
             self.decoder = _BARTDecoderWrapper(decoder_config)
@@ -1937,7 +1937,7 @@ try:
 except ImportError:
     _PIL_AVAILABLE = False
 
-    def _png_unfilter(scanlines: list, width: int, bpp: int) -> bytes:
+    def _png_unfilter(scanlines: list[tuple[int, bytes]], width: int, bpp: int) -> bytes:
         """Apply PNG row de-filtering (Sub/Up/Average/Paeth)."""
         out = []
         prev = bytes(width * bpp)
@@ -2122,7 +2122,7 @@ except ImportError:
             s[0, :] /= np.sqrt(2.0)
             return 0.25 * (_M @ s @ _M.T)
 
-        def _build_huffman(counts: list, values: list) -> dict:
+        def _build_huffman(counts: list[int], values: list[int]) -> dict[tuple[int, int], int]:
             """Build Huffman decode table: {(code, length): symbol}."""
             table: dict = {}
             code = 0
@@ -2178,7 +2178,7 @@ except ImportError:
                 self._bits_left -= n
                 return (self._buf >> self._bits_left) & ((1 << n) - 1)
 
-            def decode_huffman(self, table: dict) -> int:
+            def decode_huffman(self, table: dict[tuple[int, int], int]) -> int:
                 code = 0
                 for length in range(1, 17):
                     code = (code << 1) | self.read_bits(1)
@@ -2558,7 +2558,7 @@ _ST_DTYPE_MAP: dict = {
 }
 
 
-def _load_safetensors(path: str | Path) -> dict:
+def _load_safetensors(path: str | Path) -> dict[str, Any]:
     """Load a .safetensors checkpoint file without the safetensors package.
 
     The safetensors binary format is simple:
@@ -3113,7 +3113,7 @@ class MultiDataset(Dataset):
     def __len__(self) -> int:
         return len(self.samples)
 
-    def __getitem__(self, idx: int) -> dict:
+    def __getitem__(self, idx: int) -> dict[str, Any]:
         img_path, gt = self.samples[idx]
 
         # Use precomputed pixel_values tensor if available (eliminates per-step
@@ -3408,7 +3408,7 @@ class LiveDashboardCallback(_TrainerCallbackBase):
                 except Exception:
                     pass
 
-    def close(self, metrics: "dict | None" = None) -> None:
+    def close(self, metrics: "dict[str, float] | None" = None) -> None:
         """Stop the rich.live.Live context and print a final summary card."""
         if self._live is not None:
             try:
@@ -3929,7 +3929,7 @@ class DonutTrainer:
         #               decoder_inputs_embeds at the same time
         # If the dataset provides per-sample loss_weight tensors (for aux_loss_weight
         # < 1.0), they are stacked into a 1-D batch tensor for compute_loss().
-        def _donut_data_collator(features: list[dict]) -> dict:
+        def _donut_data_collator(features: list[dict[str, Any]]) -> dict[str, Any]:
             batch = {
                 "pixel_values": torch.stack([f["pixel_values"] for f in features]),
                 "labels": torch.stack([f["labels"] for f in features]),

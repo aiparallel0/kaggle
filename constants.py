@@ -18,6 +18,7 @@ import os
 import threading
 from collections.abc import Generator, Iterable
 from pathlib import Path
+from typing import Any
 
 __all__ = [
     "FIELDS",
@@ -574,7 +575,7 @@ def _check_empty_gt_alignment() -> None:
     )
 
 
-def validate_pipeline_readiness() -> dict:
+def validate_pipeline_readiness() -> dict[str, Any]:
     """Run lightweight stdlib-only checks that the import chain is intact.
 
     This function is intentionally free of torch / transformers imports so it

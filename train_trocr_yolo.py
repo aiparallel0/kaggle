@@ -31,6 +31,7 @@ import struct
 import time
 import zlib
 from pathlib import Path
+from typing import Any
 
 import torch
 from torch.utils.data import DataLoader, Dataset
@@ -102,7 +103,7 @@ except ImportError:
 
     _PIL_AVAILABLE = False
 
-    def _png_unfilter(scanlines: list, width: int, bpp: int) -> bytes:
+    def _png_unfilter(scanlines: list[tuple[int, bytes]], width: int, bpp: int) -> bytes:
         """Apply PNG row de-filtering (Sub/Up/Average/Paeth)."""
         out = []
         prev = bytes(width * bpp)
@@ -638,7 +639,9 @@ except ImportError:
                     sd_path,
                 )
 
-        def __call__(self, img, verbose: bool = False, imgsz: int | None = None, **kwargs) -> list:
+        def __call__(
+            self, img, verbose: bool = False, imgsz: int | None = None, **kwargs
+        ) -> list[Any]:
             """Run inference on a single image. Returns list[_BoxResult]."""
             import numpy as _np
 
@@ -2014,7 +2017,7 @@ def _clear_lm_head_tied_keys(model: "torch.nn.Module") -> None:
                 pass  # class-level attribute; assignment not possible — harmless
 
 
-def _print_trocr_load_report(model_id: str, loading_info: dict) -> None:
+def _print_trocr_load_report(model_id: str, loading_info: dict[str, Any]) -> None:
     """Print a LOAD REPORT table for TrOCR, filtering known-benign missing keys.
 
     encoder.pooler.dense.{weight,bias} are always absent for BEiT-based TrOCR
@@ -2132,7 +2135,7 @@ def _build_experiment_trocr_metadata(
     return output_dir
 
 
-def _save_trocr_training_plots(history: dict, output_dir: Path) -> None:
+def _save_trocr_training_plots(history: dict[str, Any], output_dir: Path) -> None:
     """Save TrOCR training loss curves and CSV after training completes.
 
     Creates:
@@ -2274,7 +2277,7 @@ def _save_trocr_training_plots(history: dict, output_dir: Path) -> None:
         pass
 
 
-def _save_trocr_eval_plots(exp_metrics: dict, results_dir: Path) -> None:
+def _save_trocr_eval_plots(exp_metrics: dict[str, Any], results_dir: Path) -> None:
     """Save per-field F1 bar chart for TrOCR+YOLO evaluation results.
 
     Creates:
@@ -2388,7 +2391,7 @@ def _save_trocr_eval_plots(exp_metrics: dict, results_dir: Path) -> None:
 def train_trocr(
     output_dir: Path | None = None,
     train_data_dir: Path | None = None,
-) -> dict:
+) -> dict[str, Any]:
     """Fine-tune TrOCR on line crops from receipts.
 
     Parameters
@@ -3110,7 +3113,7 @@ def train_trocr(
 # ════════════════════════════════════════════════════════════════════════════
 # STAGE 3: TrOCR+YOLO Inference Pipeline
 # ════════════════════════════════════════════════════════════════════════════
-def _assign_fields_heuristic(ocr_lines: list[dict]) -> dict[str, str]:
+def _assign_fields_heuristic(ocr_lines: list[dict[str, Any]]) -> dict[str, str]:
     """Assign OCR-extracted text lines to SROIE fields using heuristics.
 
     This is the key weakness of the pipeline approach: rule-based field
@@ -3451,7 +3454,7 @@ class FieldAttentionAssigner(torch.nn.Module):
     @torch.no_grad()
     def assign(
         self,
-        ocr_lines: list[dict],
+        ocr_lines: list[dict[str, Any]],
         img_w: float = 1000.0,
         img_h: float = 1280.0,
         vision_feats: "list[torch.Tensor] | None" = None,
@@ -3756,7 +3759,7 @@ def _extract_ocr_lines(
     trocr_processor: "TrOCRProcessor",
     device: str = DEVICE,
     return_vision_feats: bool = False,
-) -> "tuple[list[dict], list[torch.Tensor] | None, int]":
+) -> "tuple[list[dict[str, Any]], list[torch.Tensor] | None, int]":
     """Run YOLO detection + TrOCR reading on one image.
 
     Returns
@@ -3915,7 +3918,7 @@ def evaluate_trocr_yolo_on_test(
     yolo_weights: str,
     trocr_model_path: str,
     test_samples: list[tuple[Path, dict[str, str]]],
-) -> dict:
+) -> dict[str, Any]:
     """Evaluate TrOCR+YOLO pipeline on the SROIE test set. Returns metrics dict.
 
     If a trained FieldAttentionAssigner checkpoint exists at the expected path
