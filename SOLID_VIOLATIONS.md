@@ -34,20 +34,20 @@
 |----------|-------------|-------|-----------|
 | Broad `except Exception:` (safe to narrow) | 13 | ✅ 13 | 0 |
 | Broad `except Exception:` (unsafe/intentional) | ~48 | 0 | 🔲 48 |
-| Duplicate code (regex, imports) | 5 | ✅ 5 | 0 |
-| SRP violations (classes/functions) | 22 | 0 | 🔲 22 |
-| OCP violations | 8 | ✅ 2 | 🔲 6 |
-| LSP violations | 4 | ✅ 1 | 🔲 3 |
-| ISP violations | 3 | 0 | 🔲 3 |
-| DIP violations | 9 | 0 | 🔲 9 |
-| Functions >50 lines | 35+ | 0 | 🔲 35+ |
-| Missing return type hints (public) | 58+ | 0 | 🔲 58+ |
+| Duplicate code (regex, imports, to_dict) | 5+5 | ✅ 8 | 🔲 2 |
+| SRP violations (classes/functions) | 22 | ✅ 7 | 🔲 15 |
+| OCP violations | 8 | ✅ 6 | 🔲 2 |
+| LSP violations | 4 | ✅ 3 | 🔲 1 |
+| ISP violations | 3 | ✅ 1 | 🔲 2 |
+| DIP violations | 9 | ✅ 4 | 🔲 5 |
+| Functions >50 lines | 35+ | ✅ 1 | 🔲 34+ |
+| Missing return type hints (public) | 58+ | ✅ 8 | 🔲 50+ |
 | Missing `-> None` on `__init__` | 15+ | ✅ 15 | 0 |
 | Bare `list`/`dict` type hints | 146+ | 0 | 🔲 146+ |
 | Hardcoded magic numbers | 30+ | ✅ 6 | 🔲 24+ |
 | Missing docstrings | 3 | ✅ 3 | 0 |
-| Code smells (`__import__()`) | 4 | ✅ 4 | 0 |
-| Incomplete type hints (TYPE-1) | 3 | ✅ 3 | 0 |
+| Code smells (`__import__()`, `sys.path`, global) | 4+2 | ✅ 6 | 0 |
+| Incomplete type hints (TYPE-1, TYPE-2/3/4) | 3+30 | ✅ 33 | 0 |
 
 ---
 
@@ -166,10 +166,10 @@
 | 165–172, 205 | `-100` (label mask ID) | `LABEL_IGNORE_INDEX = -100` |
 | 346–349 | `1024` (byte unit threshold) | `BYTE_UNIT_SIZE = 1024` |
 
-### 🔲 DIP-1: `_gpu_cleanup()` tightly coupled to `torch`
+### ✅ DIP-1: `_gpu_cleanup()` tightly coupled to `torch` — Fixed (2026-04-05)
 **Lines:** 154–162
 **Severity:** MEDIUM
-**Description:** Direct `import torch` inside function; no abstraction for device cleanup strategy. Hard to test without torch installed.
+**Description:** Wrapped `import torch` in try/except ImportError so function gracefully no-ops when torch absent.
 
 ### 🔲 ISP-1: `validate_pipeline_readiness()` monolithic
 **Lines:** 471–549

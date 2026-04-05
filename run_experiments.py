@@ -57,7 +57,7 @@ import struct
 import sys
 import time
 import zlib
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar
@@ -72,6 +72,19 @@ os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
 
 import torch  # noqa: E402
 from transformers import DonutProcessor, VisionEncoderDecoderModel  # noqa: E402
+
+# ---------------------------------------------------------------------------
+# OCP-3 fix: single constant for the SROIE task prompt prefix instead of
+# hardcoding the string literal in 5+ branching checks.
+# ---------------------------------------------------------------------------
+_SROIE_TASK_PROMPT_PREFIX = "<s_sroie"
+
+# ---------------------------------------------------------------------------
+# DIP-3 / DIP-4 fix: type aliases for model abstraction — allows swapping
+# architectures (e.g. to a different VisionEncoder) in a single place.
+# ---------------------------------------------------------------------------
+ModelType = VisionEncoderDecoderModel
+ProcessorType = DonutProcessor
 
 import data_pipeline as dataset_loaders  # noqa: E402
 import resource_manager as _mm  # noqa: E402
@@ -2116,6 +2129,18 @@ def _merge_token2json_pages(result: Any) -> dict:
     return {}
 
 
+def _select_parser(task_prompt: str, processor: ProcessorType) -> Callable[[str], dict]:
+    """Return the parser function appropriate for the given task prompt format.
+
+    OCP-4 fix: centralises the SROIE-vs-token2json dispatch so that callers
+    (``_parse_prediction``, ``run_inference``, ``_self_test``) no longer
+    duplicate the branching logic.
+    """
+    if task_prompt.startswith(_SROIE_TASK_PROMPT_PREFIX):
+        return _parse_sroie_output
+    return processor.token2json
+
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -2534,7 +2559,7 @@ class DonutEvaluator:
         cleaned = cleaned.replace(self.processor.tokenizer.pad_token, "").strip()
 
         # For SROIE, use custom parser; for CORD, use token2json
-        if self.task_prompt.startswith("<s_sroie"):
+        if self.task_prompt.startswith(_SROIE_TASK_PROMPT_PREFIX):
             try:
                 parsed = _parse_sroie_output(cleaned)
             except Exception as exc:
@@ -2691,7 +2716,7 @@ class DonutEvaluator:
             return EMPTY_GT.copy()
 
         # For SROIE output, use the custom parser that understands SROIE tags
-        if getattr(self, "task_prompt", "").startswith("<s_sroie"):
+        if getattr(self, "task_prompt", "").startswith(_SROIE_TASK_PROMPT_PREFIX):
             try:
                 result = _parse_sroie_output(tokens)
                 if result and any(v for v in result.values()):  # At least one non-empty field
@@ -2793,7 +2818,7 @@ def _unwrap_prediction(parsed: dict, task_prompt: str) -> dict:
 
     # Unwrap {"sroie": {...}} for SROIE task prompts
     if (
-        task_prompt.startswith("<s_sroie")
+        task_prompt.startswith(_SROIE_TASK_PROMPT_PREFIX)
         and "sroie" in parsed
         and isinstance(parsed["sroie"], dict)
     ):
@@ -2866,7 +2891,7 @@ def run_inference(model, processor, image_path, task_prompt, max_length=512, pre
         )
 
     # Check for task prompt mismatch (model outputting CORD schema for SROIE task)
-    if task_prompt.startswith("<s_sroie") and sequence.startswith("<s_cord-v2>"):
+    if task_prompt.startswith(_SROIE_TASK_PROMPT_PREFIX) and sequence.startswith("<s_cord-v2>"):
         logger.warning(
             "Task prompt mismatch for %s: asked for <s_sroie> but model output starts with "
             "<s_cord-v2>. Model has not learned SROIE task format (CORD pretraining dominates). "
@@ -2875,7 +2900,7 @@ def run_inference(model, processor, image_path, task_prompt, max_length=512, pre
         )
 
     # For SROIE output, use custom parser; for CORD, use token2json
-    if task_prompt.startswith("<s_sroie"):
+    if task_prompt.startswith(_SROIE_TASK_PROMPT_PREFIX):
         try:
             result = _parse_sroie_output(sequence)
             return result if result and any(v for v in result.values()) else {}
