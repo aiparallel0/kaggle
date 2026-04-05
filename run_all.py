@@ -3943,7 +3943,8 @@ def _micro_mode_handler(args: argparse.Namespace, logger: logging.Logger) -> int
 #    very expensive.  A unit test that patches TROCR_EPOCHS and checks that
 #    val_loss < 5.0 after training would have caught this immediately.
 #
-# Result after fix: superfast mode achieves Global F1 = 0.4810 with per-field
+# Measured result (after applying all fixes — TROCR_EPOCHS=5, TROCR_MAX_LEN=64,
+# correct YOLO imgsz): superfast mode achieves Global F1 = 0.4810 with per-field
 # breakdown Date=0.919, Company=0.476, Total=0.355, Address=0.176.  The
 # remaining gap to DONUT (0.8982) is structural (heuristic field assignment,
 # multi-line address limitation) — not a training or detection bug.

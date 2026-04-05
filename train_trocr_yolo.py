@@ -2422,11 +2422,11 @@ def train_trocr(
     # comment block in run_all.py near _superfast_mode_handler.
     if TROCR_EPOCHS < 3:
         raise ValueError(
-            f"TROCR_EPOCHS={TROCR_EPOCHS} is below the minimum safe value of 3. "
+            f"TROCR_EPOCHS={TROCR_EPOCHS} is below the absolute minimum of 3. "
             "1 epoch of TrOCR fine-tuning produces val_loss≈9.1 (non-functional decoder: "
             "every YOLO crop decodes to empty text, F1→0). "
-            "Use TROCR_EPOCHS ≥ 5 in all speed modes (brings val_loss to ~2.5–3.0, "
-            "sufficient for basic text decoding). "
+            "Use TROCR_EPOCHS ≥ 5 in speed modes (recommended; brings val_loss to ~2.5–3.0, "
+            "sufficient for basic text decoding); TROCR_EPOCHS=3 is the absolute floor only. "
             "See CLAUDE.md §16 Pattern 9."
         )
 
