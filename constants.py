@@ -503,12 +503,88 @@ PROJECT_ENTRY_POINT: str = "run_all:main"  # console_scripts entry point
 # ---------------------------------------------------------------------------
 
 
+def _check_constants_integrity() -> None:
+    """Verify constants.py exports have expected values.
+
+    Raises
+    ------
+    AssertionError
+        If any core constant has an unexpected value.
+    """
+    assert FIELDS == ["company", "date", "address", "total"], (
+        f"FIELDS={FIELDS!r} — expected ['company', 'date', 'address', 'total']"
+    )
+    assert len(NEW_TOKENS) >= 10, f"NEW_TOKENS has {len(NEW_TOKENS)} entries (expected ≥10)"
+    assert EMPTY_GT == {"company": "", "date": "", "address": "", "total": ""}, (
+        f"EMPTY_GT={EMPTY_GT!r}"
+    )
+    assert MAX_LENGTH > 0, f"MAX_LENGTH={MAX_LENGTH}"
+    assert BASE_MODEL, "BASE_MODEL is empty"
+    assert SEED == 42, f"SEED={SEED}"
+
+
+def _check_new_tokens_completeness() -> None:
+    """Verify all SROIE special tokens are present in NEW_TOKENS.
+
+    Raises
+    ------
+    AssertionError
+        If any expected SROIE token is missing from *NEW_TOKENS*.
+    """
+    expected = {
+        "<s_sroie>",
+        "</s_sroie>",
+        "<s_company>",
+        "</s_company>",
+        "<s_date>",
+        "</s_date>",
+        "<s_address>",
+        "</s_address>",
+        "<s_total>",
+        "</s_total>",
+    }
+    missing = expected - set(NEW_TOKENS)
+    assert not missing, f"NEW_TOKENS is missing: {missing}"
+
+
+def _check_data_pipeline_importable() -> None:
+    """Verify data_pipeline module is importable.
+
+    Raises
+    ------
+    AssertionError
+        If the *data_pipeline* module cannot be imported or lacks *SROIELoader*.
+    """
+    import importlib
+
+    mod = importlib.import_module("data_pipeline")
+    assert hasattr(mod, "SROIELoader"), "data_pipeline.SROIELoader not found"
+
+
+def _check_empty_gt_alignment() -> None:
+    """Verify EMPTY_GT keys match FIELDS.
+
+    Raises
+    ------
+    AssertionError
+        If the keys of *EMPTY_GT* do not exactly match *FIELDS*.
+    """
+    assert set(EMPTY_GT.keys()) == set(FIELDS), (
+        f"EMPTY_GT keys {set(EMPTY_GT.keys())} != FIELDS {set(FIELDS)}"
+    )
+
+
 def validate_pipeline_readiness() -> dict:
     """Run lightweight stdlib-only checks that the import chain is intact.
 
     This function is intentionally free of torch / transformers imports so it
     can be called before any heavy dependency is loaded (e.g. in CI, in the
     startup-diagnostics phase of run_all.py, or from a pre-commit hook).
+
+    Individual checks are available as module-level functions
+    (``_check_constants_integrity``, ``_check_new_tokens_completeness``,
+    ``_check_data_pipeline_importable``, ``_check_empty_gt_alignment``)
+    for callers that need to run a single check selectively.
 
     Returns
     -------
@@ -529,56 +605,10 @@ def validate_pipeline_readiness() -> dict:
         except Exception as exc:
             checks.append({"name": name, "passed": False, "error": str(exc)})
 
-    # 1. constants.py exports are intact
-    def _check_constants():
-        assert FIELDS == ["company", "date", "address", "total"], (
-            f"FIELDS={FIELDS!r} — expected ['company', 'date', 'address', 'total']"
-        )
-        assert len(NEW_TOKENS) >= 10, f"NEW_TOKENS has {len(NEW_TOKENS)} entries (expected ≥10)"
-        assert EMPTY_GT == {"company": "", "date": "", "address": "", "total": ""}, (
-            f"EMPTY_GT={EMPTY_GT!r}"
-        )
-        assert MAX_LENGTH > 0, f"MAX_LENGTH={MAX_LENGTH}"
-        assert BASE_MODEL, "BASE_MODEL is empty"
-        assert SEED == 42, f"SEED={SEED}"
-
-    _run("constants integrity", _check_constants)
-
-    # 2. All SROIE special tokens are present in NEW_TOKENS
-    def _check_new_tokens():
-        expected = {
-            "<s_sroie>",
-            "</s_sroie>",
-            "<s_company>",
-            "</s_company>",
-            "<s_date>",
-            "</s_date>",
-            "<s_address>",
-            "</s_address>",
-            "<s_total>",
-            "</s_total>",
-        }
-        missing = expected - set(NEW_TOKENS)
-        assert not missing, f"NEW_TOKENS is missing: {missing}"
-
-    _run("NEW_TOKENS completeness", _check_new_tokens)
-
-    # 3. data_pipeline importable (no torch needed for module-level code)
-    def _check_data_pipeline():
-        import importlib
-
-        mod = importlib.import_module("data_pipeline")
-        assert hasattr(mod, "SROIELoader"), "data_pipeline.SROIELoader not found"
-
-    _run("data_pipeline import", _check_data_pipeline)
-
-    # 4. EMPTY_GT template matches FIELDS
-    def _check_empty_gt():
-        assert set(EMPTY_GT.keys()) == set(FIELDS), (
-            f"EMPTY_GT keys {set(EMPTY_GT.keys())} != FIELDS {set(FIELDS)}"
-        )
-
-    _run("EMPTY_GT/FIELDS alignment", _check_empty_gt)
+    _run("constants integrity", _check_constants_integrity)
+    _run("NEW_TOKENS completeness", _check_new_tokens_completeness)
+    _run("data_pipeline import", _check_data_pipeline_importable)
+    _run("EMPTY_GT/FIELDS alignment", _check_empty_gt_alignment)
 
     all_passed = all(c["passed"] for c in checks)
     return {"passed": all_passed, "checks": checks}
