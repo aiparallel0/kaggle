@@ -805,6 +805,14 @@ def __call__(self, img, verbose: bool = False, imgsz: int | None = None, **kwarg
 - **Before PR #195:** Both YOLO (wrong `imgsz`) and TrOCR (1-epoch, `val_loss=9.1`) were broken in speed modes. YOLO crashed first → zero detections → RuntimeError. TrOCR's failure was invisible.
 - **PR #195** fixed YOLO parameter drift. YOLO now works (mAP50=0.935). But TrOCR at 1 epoch still produces garbage for every crop → `ocr_lines=[]` → same "YOLO detected 0 text regions" warning → same RuntimeError. The symptom was identical but the root cause had shifted entirely.
 - **The misleading log message** ("YOLO detected 0 text regions") sent investigation down the wrong path because YOLO was working fine. The new log messages now distinguish: "YOLO detected 0 text regions" (YOLO failure) vs "YOLO detected N regions but TrOCR decoded all N crops to empty text" (TrOCR failure).
+- **Current state after fix:** With `TROCR_EPOCHS=5`, `TROCR_MAX_LEN=64`, and correct YOLO params, superfast mode achieves **Global F1 = 0.4810** (Date=0.919, Company=0.476, Total=0.355, Address=0.176). The remaining gap to DONUT's 0.8982 is **structural** — heuristic field assignment and multi-line address limitation — not a training or detection bug.
+
+**Prevention rule:** When fixing one component of a multi-stage pipeline, always independently verify the **next** stage's output quality. Don't just check that the fixed component works — check that the full chain works. Specifically, after fixing YOLO, run the full YOLO→TrOCR→field-assignment→F1 chain and confirm F1 > 0 on test images before declaring the fix complete.
+
+**Diagnostic distinguishability principle:** Multi-component pipeline errors MUST produce distinct error messages per component. A generic "stage failed" message that doesn't identify *which* component is at fault wastes hours of debugging time. Apply this principle proactively:
+- Add separate counters for each failure mode before any fix
+- Name the actual culprit in the warning message, not just the symptom
+- The `_verify_yolo_detection_rate()` function now separately tracks `yolo_zero_count` and `trocr_empty_count` for exactly this reason
 
 **The lesson: always test the *full* pipeline end-to-end after fixing one component**, because a second latent bug may be hiding behind the first. Specifically:
 1. After fixing a component, verify not just that the fixed component passes, but that the *next* stage in the pipeline also produces valid output independently.

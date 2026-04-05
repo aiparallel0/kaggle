@@ -3916,6 +3916,38 @@ def _micro_mode_handler(args: argparse.Namespace, logger: logging.Logger) -> int
 # Fix: raise TROCR_EPOCHS floor to 5 in every speed mode.  5 epochs brings
 # val_loss to ~2.5–3.0, sufficient for basic text decoding.
 #
+# WHY WASN'T THIS FOUND EARLIER?
+#
+# 1. No minimum-epoch validation guard: no code asserted TROCR_EPOCHS >= N
+#    before starting training.  The validate_training_config() call checks
+#    optimizer step counts but does not check that epochs are high enough to
+#    reach a functional val_loss.  A runtime guard (ValueError for
+#    TROCR_EPOCHS < 3) has now been added at the top of train_trocr() in
+#    train_trocr_yolo.py so this class of failure is caught immediately.
+#
+# 2. _verify_yolo_detection_rate() only tracked a single combined counter
+#    (empty ocr_lines), not two separate counters for (a) YOLO-zero-box images
+#    and (b) TrOCR-all-empty images.  Both failure modes produce the same
+#    symptom (ocr_lines == []), so the error message always blamed YOLO even
+#    when YOLO was working perfectly.  The function signature now takes both
+#    yolo_zero_count and trocr_empty_count separately and produces two distinct
+#    warning messages.
+#
+# 3. Masked cascading failure: YOLO was also broken (imgsz drift) pre-PR#195,
+#    so it crashed first.  Classic masked cascading failure — bug in component A
+#    (YOLO) hid bug in component B (TrOCR).  Fixing A revealed B with the same
+#    error message, sending investigation down the wrong path.
+#
+# 4. No integration test for speed modes: speed modes were only tested by
+#    running the full pipeline (10–50 min), which made iterative debugging
+#    very expensive.  A unit test that patches TROCR_EPOCHS and checks that
+#    val_loss < 5.0 after training would have caught this immediately.
+#
+# Result after fix: superfast mode achieves Global F1 = 0.4810 with per-field
+# breakdown Date=0.919, Company=0.476, Total=0.355, Address=0.176.  The
+# remaining gap to DONUT (0.8982) is structural (heuristic field assignment,
+# multi-line address limitation) — not a training or detection bug.
+#
 # Lesson: when fixing one component of a multi-stage pipeline, always verify
 # the *next* stage independently — a latent bug may be hiding behind the first.
 # ─────────────────────────────────────────────────────────────────────────────
