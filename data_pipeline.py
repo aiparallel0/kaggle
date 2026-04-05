@@ -1426,6 +1426,73 @@ class FUNSDLoader(BaseDatasetLoader):
 
     # ── public interface ──────────────────────────────────────────────
 
+    def _load_from_hf_arrow(self, split: str, img_dest_dir: Path) -> list[Sample] | None:
+        """Try loading FUNSD from HF Arrow cache.
+
+        Returns a list of samples on success, or ``None`` if the Arrow
+        cache is missing or the ``datasets`` package is unavailable.
+        """
+        hf_cache = self._hf_cache()
+        if not hf_cache.exists():
+            return None
+
+        try:
+            from datasets import load_from_disk  # type: ignore
+
+            ds = load_from_disk(str(hf_cache))
+            ds_splits = list(ds.keys()) if hasattr(ds, "keys") else ["train"]
+            samples: list[Sample] = []
+            for ds_split in ds_splits:
+                if ds_split == "test":
+                    continue
+                if split != "train" and ds_split != split:
+                    continue
+                split_ds = ds[ds_split] if hasattr(ds, "keys") else ds
+                for item in split_ds:
+                    words = item.get("words", [])
+                    ner_tags = item.get("ner_tags", [])
+                    pil_image = item.get("image")
+                    if not words or pil_image is None:
+                        continue
+                    gt = self._funsd_remap(words, ner_tags)
+                    rgb = pil_image.convert("RGB")
+                    img_hash = hashlib.md5(rgb.tobytes()).hexdigest()[:8]
+                    img_path = img_dest_dir / f"{ds_split}_{img_hash}.jpg"
+                    if not img_path.exists():
+                        rgb.save(img_path, "JPEG")
+                    samples.append((img_path, gt))
+            _mm.release_hf_dataset(ds)
+            _mm.flush_hf_arrow_cache()
+            return samples
+        except ImportError:
+            return None
+        except Exception as exc:
+            raise self._fatal(f"Failed to load Arrow cache: {exc}") from exc
+
+    def _load_from_inline_cache(self, split: str, dest: Path) -> list[Sample]:
+        """Load FUNSD from the inline JSONL fallback cache."""
+        inline_cache = dest / "hf_cache_inline"
+        if not inline_cache.exists():
+            raise self._fatal(
+                "Neither HF Arrow cache nor inline cache found. "
+                "Install the `datasets` package or run _hf_download_dataset_inline()."
+            )
+        samples: list[Sample] = []
+        for row in _hf_load_jsonl_rows(inline_cache, split="train"):
+            if split == "test":
+                continue
+            words = row.get("words", [])
+            ner_tags = row.get("ner_tags", [])
+            img_val = row.get("image")
+            if not words or img_val is None:
+                continue
+            img_path = Path(str(img_val))
+            if not img_path.exists():
+                continue
+            gt = self._funsd_remap(words, ner_tags)
+            samples.append((img_path, gt))
+        return samples
+
     def load(self, split: str = "train") -> list[Sample]:
         """Load FUNSD and normalize to SROIE schema.
 
@@ -1437,64 +1504,12 @@ class FUNSDLoader(BaseDatasetLoader):
         """
         dest = self._download()
         img_dest_dir = _ensure_dir(dest / "images")
-        samples: list[Sample] = []
 
-        # ── HF Arrow path (preferred) ─────────────────────────────────────────
-        hf_cache = self._hf_cache()
-        _use_inline = not hf_cache.exists()
-        if not _use_inline:
-            try:
-                from datasets import load_from_disk  # type: ignore
-
-                ds = load_from_disk(str(hf_cache))
-                ds_splits = list(ds.keys()) if hasattr(ds, "keys") else ["train"]
-                for ds_split in ds_splits:
-                    if ds_split == "test":
-                        continue
-                    if split != "train" and ds_split != split:
-                        continue
-                    split_ds = ds[ds_split] if hasattr(ds, "keys") else ds
-                    for item in split_ds:
-                        words = item.get("words", [])
-                        ner_tags = item.get("ner_tags", [])
-                        pil_image = item.get("image")
-                        if not words or pil_image is None:
-                            continue
-                        gt = self._funsd_remap(words, ner_tags)
-                        rgb = pil_image.convert("RGB")
-                        img_hash = hashlib.md5(rgb.tobytes()).hexdigest()[:8]
-                        img_path = img_dest_dir / f"{ds_split}_{img_hash}.jpg"
-                        if not img_path.exists():
-                            rgb.save(img_path, "JPEG")
-                        samples.append((img_path, gt))
-                _mm.release_hf_dataset(ds)
-                _mm.flush_hf_arrow_cache()
-            except ImportError:
-                _use_inline = True
-            except Exception as exc:
-                raise self._fatal(f"Failed to load Arrow cache: {exc}") from exc
-
-        # ── Inline JSONL fallback ─────────────────────────────────────────────
-        if _use_inline:
-            inline_cache = dest / "hf_cache_inline"
-            if not inline_cache.exists():
-                raise self._fatal(
-                    "Neither HF Arrow cache nor inline cache found. "
-                    "Install the `datasets` package or run _hf_download_dataset_inline()."
-                )
-            for row in _hf_load_jsonl_rows(inline_cache, split="train"):
-                if split == "test":
-                    continue
-                words = row.get("words", [])
-                ner_tags = row.get("ner_tags", [])
-                img_val = row.get("image")
-                if not words or img_val is None:
-                    continue
-                img_path = Path(str(img_val))
-                if not img_path.exists():
-                    continue
-                gt = self._funsd_remap(words, ner_tags)
-                samples.append((img_path, gt))
+        # Try HF Arrow first
+        samples = self._load_from_hf_arrow(split, img_dest_dir)
+        if samples is None:
+            # Fall back to inline cache
+            samples = self._load_from_inline_cache(split, dest)
 
         if not samples:
             self._warn("FUNSD returned 0 samples — check HF cache.")
@@ -1864,6 +1879,102 @@ class CORDv2Loader(BaseDatasetLoader):
     # ── CORD-v2 → SROIE remapping ─────────────────────────────────────
 
     @staticmethod
+    def _cord_extract_company(gt_parsed: dict) -> str:
+        """Extract company name from CORD-v2 parsed ground truth.
+
+        Looks in ``store_info.store_name`` first, then falls back to the
+        first ``nm`` (name) field from menu items.
+        """
+        store_info = gt_parsed.get("store_info", {})
+        if isinstance(store_info, dict):
+            company = str(store_info.get("store_name", "")).strip()
+            if company:
+                return company
+
+        # Fallback: first nm (name) from menu items
+        menu = gt_parsed.get("menu", [])
+        if isinstance(menu, list) and menu:
+            first_item = menu[0]
+            if isinstance(first_item, dict):
+                return str(first_item.get("nm", "")).strip()
+        return ""
+
+    @staticmethod
+    def _cord_extract_date(gt_parsed: dict) -> str:
+        """Extract date from CORD-v2 parsed ground truth.
+
+        Searches nested paths for a date pattern, then falls back to
+        dedicated date fields in ``payment``.
+        """
+        _date_re = re.compile(
+            r"\b\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}\b"
+            r"|\b\d{4}[\/\-\.]\d{1,2}[\/\-\.]\d{1,2}\b"
+        )
+        # CORD-v2 stores date in various locations
+        for date_path in [
+            ("store_info", "store_addr"),  # sometimes combined
+            ("payment", "date"),
+            ("subtotal", "cnt"),
+        ]:
+            node = gt_parsed
+            for key in date_path:
+                if isinstance(node, dict):
+                    node = node.get(key, {})
+            if isinstance(node, str) and node.strip():
+                m = _date_re.search(node)
+                if m:
+                    return m.group()
+
+        # Dedicated date field search
+        payment = gt_parsed.get("payment", {})
+        if isinstance(payment, dict):
+            for k in ("date", "date_time", "receipt_date"):
+                val = str(payment.get(k, "")).strip()
+                if val:
+                    return val
+        return ""
+
+    @staticmethod
+    def _cord_extract_address(gt_parsed: dict, company: str) -> tuple[str, str]:
+        """Extract address from CORD-v2 parsed ground truth.
+
+        Returns ``(company_override, address)`` — when the store address
+        contains a concatenated company+address and ``company`` is empty,
+        :func:`extract_address_from_seller` splits them.
+        """
+        store_info = gt_parsed.get("store_info", {})
+        if isinstance(store_info, dict):
+            addr = str(store_info.get("store_addr", "")).strip()
+            # Sometimes company and address are concatenated in store_addr
+            if addr and not company:
+                return extract_address_from_seller(addr)
+            return "", addr
+        return "", ""
+
+    @staticmethod
+    def _cord_extract_total(gt_parsed: dict) -> str:
+        """Extract total from CORD-v2 parsed ground truth.
+
+        Checks ``total.total_price`` and related keys first, then falls
+        back to ``subtotal.subtotal_price``.
+        """
+        _currency_re = r"^[\$€£¥₹₩\u20ac\u00a3\u00a5]+"
+        total_node = gt_parsed.get("total", {})
+        if isinstance(total_node, dict):
+            for total_key in ("total_price", "creditcardprice", "cashprice", "emoneyprice"):
+                val = str(total_node.get(total_key, "")).strip()
+                if val:
+                    return re.sub(_currency_re, "", val).strip()
+
+        # Fallback: subtotal_price
+        subtotal = gt_parsed.get("subtotal", {})
+        if isinstance(subtotal, dict):
+            val = str(subtotal.get("subtotal_price", "")).strip()
+            if val:
+                return re.sub(_currency_re, "", val).strip()
+        return ""
+
+    @staticmethod
     def _cord_remap(ground_truth_str: Any) -> dict[str, str]:
         """Parse CORD-v2 ground_truth JSON and remap to SROIE schema.
 
@@ -1878,79 +1989,16 @@ class CORDv2Loader(BaseDatasetLoader):
                 if isinstance(ground_truth_str, str)
                 else ground_truth_str
             )
-            gt_parse = obj.get("gt_parse", obj)
+            gt_parsed = obj.get("gt_parse", obj)
 
-            # ── company ──────────────────────────────────────────────
-            # Store name is in gt_parse.store_info.store_name or nm field of menu items
-            store_info = gt_parse.get("store_info", {})
-            if isinstance(store_info, dict):
-                gt["company"] = str(store_info.get("store_name", "")).strip()
-
-            # Fallback: first nm (name) from menu items
-            if not gt["company"]:
-                menu = gt_parse.get("menu", [])
-                if isinstance(menu, list) and menu:
-                    first_item = menu[0]
-                    if isinstance(first_item, dict):
-                        gt["company"] = str(first_item.get("nm", "")).strip()
-
-            # ── date ─────────────────────────────────────────────────
-            # CORD-v2 stores date in various locations
-            for date_path in [
-                ("store_info", "store_addr"),  # sometimes combined
-                ("payment", "date"),
-                ("subtotal", "cnt"),
-            ]:
-                node = gt_parse
-                for key in date_path:
-                    if isinstance(node, dict):
-                        node = node.get(key, {})
-                if isinstance(node, str) and node.strip():
-                    # Quick date-pattern check
-                    _date_re = re.compile(
-                        r"\b\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}\b"
-                        r"|\b\d{4}[\/\-\.]\d{1,2}[\/\-\.]\d{1,2}\b"
-                    )
-                    m = _date_re.search(node)
-                    if m:
-                        gt["date"] = m.group()
-                        break
-
-            # Dedicated date field search
-            if not gt["date"]:
-                payment = gt_parse.get("payment", {})
-                if isinstance(payment, dict):
-                    for k in ("date", "date_time", "receipt_date"):
-                        val = str(payment.get(k, "")).strip()
-                        if val:
-                            gt["date"] = val
-                            break
-
-            # ── address ──────────────────────────────────────────────
-            if isinstance(store_info, dict):
-                addr = str(store_info.get("store_addr", "")).strip()
-                # Sometimes company and address are concatenated in store_addr
-                if addr and not gt["company"]:
-                    gt["company"], gt["address"] = extract_address_from_seller(addr)
-                else:
-                    gt["address"] = addr
-
-            # ── total ─────────────────────────────────────────────────
-            total_node = gt_parse.get("total", {})
-            if isinstance(total_node, dict):
-                for total_key in ("total_price", "creditcardprice", "cashprice", "emoneyprice"):
-                    val = str(total_node.get(total_key, "")).strip()
-                    if val:
-                        gt["total"] = re.sub(r"^[\$€£¥₹₩\u20ac\u00a3\u00a5]+", "", val).strip()
-                        break
-
-            # Fallback: subtotal_price
-            if not gt["total"]:
-                subtotal = gt_parse.get("subtotal", {})
-                if isinstance(subtotal, dict):
-                    val = str(subtotal.get("subtotal_price", "")).strip()
-                    if val:
-                        gt["total"] = re.sub(r"^[\$€£¥₹₩\u20ac\u00a3\u00a5]+", "", val).strip()
+            gt["company"] = CORDv2Loader._cord_extract_company(gt_parsed)
+            gt["date"] = CORDv2Loader._cord_extract_date(gt_parsed)
+            company_override, gt["address"] = CORDv2Loader._cord_extract_address(
+                gt_parsed, gt["company"]
+            )
+            if company_override and not gt["company"]:
+                gt["company"] = company_override
+            gt["total"] = CORDv2Loader._cord_extract_total(gt_parsed)
 
         except (json.JSONDecodeError, AttributeError, TypeError):
             pass
