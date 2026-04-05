@@ -491,7 +491,7 @@ def _download_with_progress(url: str, dest_path: Path) -> None:
             elapsed = time.time() - t0
             print(f"\nDownload complete in {elapsed:.1f}s")
             return
-        except Exception as exc:
+        except (urllib.error.URLError, urllib.error.HTTPError, OSError) as exc:
             if dest_path.exists():
                 dest_path.unlink()
             if attempt < max_retries - 1:
@@ -614,7 +614,7 @@ def _hf_write_and_mark(
                                 img_req.add_header("Authorization", f"Bearer {hf_token}")
                             with urllib.request.urlopen(img_req, timeout=30) as img_resp:
                                 img_path.write_bytes(img_resp.read())
-                        except Exception as img_exc:
+                        except (urllib.error.URLError, urllib.error.HTTPError, OSError) as img_exc:
                             log.warning("[inline-hf] Image %d download failed: %s", idx, img_exc)
                     record[key] = str(img_path)
                 elif isinstance(val, (str, int, float, list, dict, bool)) or val is None:
@@ -711,7 +711,12 @@ def _hf_download_dataset_inline(
         for offset in range(0, total_rows + batch_size, batch_size):
             try:
                 rows = _hf_fetch_rows_batch(repo_id, config, split, offset, batch_size, hf_token)
-            except Exception as exc:
+            except (
+                urllib.error.URLError,
+                urllib.error.HTTPError,
+                OSError,
+                json.JSONDecodeError,
+            ) as exc:
                 log.warning("[inline-hf] Batch offset=%d failed: %s — stopping early.", offset, exc)
                 break
             if not rows:
@@ -1190,7 +1195,7 @@ class WildReceiptLoader(BaseDatasetLoader):
             tar_path.unlink(missing_ok=True)
             marker.touch()
             self._log("Download and extraction complete.")
-        except Exception as exc:
+        except (urllib.error.URLError, urllib.error.HTTPError, OSError, tarfile.TarError) as exc:
             raise self._fatal(
                 f"Download failed from {url}: {exc}. This experiment will have MISSING DATA."
             ) from exc
@@ -1254,7 +1259,7 @@ class WildReceiptLoader(BaseDatasetLoader):
                 obj = json.loads(line)
                 # Must have annotations list and file_name
                 return not ("annotations" not in obj or "file_name" not in obj)
-        except Exception:
+        except (OSError, json.JSONDecodeError):
             return False
 
     def clear_cache(self) -> None:
@@ -1365,12 +1370,17 @@ class FUNSDLoader(BaseDatasetLoader):
             try:
                 _hf_download_dataset_inline(_funsd_repo, dest, hf_token, split="train")
                 marker.touch()
-            except Exception as exc:
+            except (
+                urllib.error.URLError,
+                urllib.error.HTTPError,
+                OSError,
+                json.JSONDecodeError,
+            ) as exc:
                 raise self._fatal(
                     f"Inline download failed for {_funsd_repo}: {exc}\n"
                     "  Tip: set HF_FUNSD_REVISION=<commit> or place hf_token.txt for auth."
                 ) from exc
-        except Exception as exc:
+        except Exception as exc:  # intentional broad catch: HF datasets library
             raise self._fatal(
                 f"Download failed for {_funsd_repo}: {exc}\n"
                 "  If the repo requires authentication or has moved, set hf_token.txt "
@@ -1492,7 +1502,7 @@ class FUNSDLoader(BaseDatasetLoader):
             return samples
         except ImportError:
             return None
-        except Exception as exc:
+        except Exception as exc:  # intentional broad catch: HF datasets library
             raise self._fatal(f"Failed to load Arrow cache: {exc}") from exc
 
     def _load_from_inline_cache(self, split: str, dest: Path) -> list[Sample]:
@@ -1558,7 +1568,7 @@ class FUNSDLoader(BaseDatasetLoader):
                 return False
             item = first_split[0]
             return bool(item.get("words")) and "ner_tags" in item
-        except Exception:
+        except Exception:  # intentional broad catch: HF datasets library
             return False
 
     def clear_cache(self) -> None:
@@ -1587,7 +1597,7 @@ class FUNSDLoader(BaseDatasetLoader):
                 split_ds = ds[s] if hasattr(ds, "keys") else ds
                 total += len(split_ds)
             return total
-        except Exception:
+        except Exception:  # intentional broad catch: HF datasets library
             return 0
 
 
@@ -1640,12 +1650,17 @@ class InvoicesDonutLoader(BaseDatasetLoader):
             try:
                 _hf_download_dataset_inline(_inv_repo, dest, hf_token, split="train")
                 marker.touch()
-            except Exception as exc:
+            except (
+                urllib.error.URLError,
+                urllib.error.HTTPError,
+                OSError,
+                json.JSONDecodeError,
+            ) as exc:
                 raise self._fatal(
                     f"Inline download failed for {_inv_repo}: {exc}\n"
                     "  Tip: set HF_INVOICES_REVISION=<commit> or place hf_token.txt for auth."
                 ) from exc
-        except Exception as exc:
+        except Exception as exc:  # intentional broad catch: HF datasets library
             raise self._fatal(
                 f"Download failed for {_inv_repo}: {exc}\n"
                 "  If the dataset schema changed, set HF_INVOICES_REVISION=<known-good-commit>.\n"
@@ -1738,7 +1753,7 @@ class InvoicesDonutLoader(BaseDatasetLoader):
                 _mm.flush_hf_arrow_cache()
             except ImportError:
                 _use_inline = True
-            except Exception as exc:
+            except Exception as exc:  # intentional broad catch: HF datasets library
                 raise self._fatal(f"Failed to load Arrow cache: {exc}") from exc
 
         # ── Inline JSONL fallback ─────────────────────────────────────────────
@@ -1781,7 +1796,7 @@ class InvoicesDonutLoader(BaseDatasetLoader):
                 return False
             obj = json.loads(gt_str) if isinstance(gt_str, str) else gt_str
             return "gt_parse" in obj
-        except Exception:
+        except Exception:  # intentional broad catch: HF datasets library
             return False
 
     def clear_cache(self) -> None:
@@ -1810,7 +1825,7 @@ class InvoicesDonutLoader(BaseDatasetLoader):
                 split_ds = ds[s] if hasattr(ds, "keys") else ds
                 total += len(split_ds)
             return total
-        except Exception:
+        except Exception:  # intentional broad catch: HF datasets library
             return 0
 
 
@@ -1877,12 +1892,17 @@ class CORDv2Loader(BaseDatasetLoader):
             try:
                 _hf_download_dataset_inline(_cord_repo, dest, hf_token, split="train")
                 marker.touch()
-            except Exception as exc:
+            except (
+                urllib.error.URLError,
+                urllib.error.HTTPError,
+                OSError,
+                json.JSONDecodeError,
+            ) as exc:
                 raise self._fatal(
                     f"Inline download failed for {_cord_repo}: {exc}\n"
                     "  Tip: set HF_CORD_REVISION=<commit> or place hf_token.txt for auth."
                 ) from exc
-        except Exception as exc:
+        except Exception as exc:  # intentional broad catch: HF datasets library
             raise self._fatal(
                 f"CORD-v2 download failed for {_cord_repo}: {exc}\n"
                 "  Override via HF_CORD_REVISION=<commit> to pin a known-good version."
@@ -2030,7 +2050,7 @@ class CORDv2Loader(BaseDatasetLoader):
             from datasets import load_from_disk  # type: ignore
 
             ds = load_from_disk(str(hf_cache))
-        except Exception as exc:
+        except Exception as exc:  # intentional broad catch: HF datasets library
             raise self._fatal(f"Failed to load CORD-v2 cache: {exc}") from exc
 
         samples: list[Sample] = []
@@ -2077,7 +2097,7 @@ class CORDv2Loader(BaseDatasetLoader):
                 return False
             obj = json.loads(gt_str) if isinstance(gt_str, str) else gt_str
             return "gt_parse" in obj
-        except Exception:
+        except Exception:  # intentional broad catch: HF datasets library
             return False
 
     def clear_cache(self) -> None:
@@ -2104,7 +2124,7 @@ class CORDv2Loader(BaseDatasetLoader):
                 split_ds = ds[s] if hasattr(ds, "keys") else ds
                 total += len(split_ds)
             return total
-        except Exception:
+        except Exception:  # intentional broad catch: HF datasets library
             return 0
 
 
@@ -2582,7 +2602,7 @@ def _llm_split(seller: str) -> tuple[str, str] | None:
             text = response.choices[0].message.content.strip()
             obj = json.loads(text)
             return (str(obj.get("company", "")), str(obj.get("address", "")))
-        except Exception as exc:
+        except Exception as exc:  # intentional broad catch: third-party OpenAI SDK
             log.debug("OpenAI fallback failed for %r: %s", seller, exc)
 
     if anthropic_key:
@@ -2598,7 +2618,7 @@ def _llm_split(seller: str) -> tuple[str, str] | None:
             text = message.content[0].text.strip()
             obj = json.loads(text)
             return (str(obj.get("company", "")), str(obj.get("address", "")))
-        except Exception as exc:
+        except Exception as exc:  # intentional broad catch: third-party Anthropic SDK
             log.debug("Anthropic fallback failed for %r: %s", seller, exc)
 
     return None
@@ -2639,7 +2659,7 @@ def _load_seller_strings() -> tuple[list[str], str]:
         log.info("Loaded %d seller strings from HuggingFace.", len(sellers))
         return sellers, "katanaml-org/invoices-donut-data-v1 (HuggingFace)"
 
-    except Exception as exc:
+    except Exception as exc:  # intentional broad catch: HF datasets library
         log.warning(
             "HuggingFace dataset unavailable (%s). "
             "Falling back to representative built-in examples.",
