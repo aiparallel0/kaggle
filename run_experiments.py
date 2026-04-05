@@ -3456,13 +3456,54 @@ def _apply_resolution_sync(
 # ---------------------------------------------------------------------------
 
 
+class _TrainerCompatMixin:
+    """Adapter properties that make ExperimentConfig duck-type compatible with DonutTrainer.
+
+    DonutTrainer reads hyperparameters via attribute access using names like
+    max_epochs, learning_rate, num_train_epochs, etc.  This mixin provides
+    those aliases, keeping the parameter storage (ExperimentConfig) clean.
+    """
+
+    @property
+    def max_epochs(self) -> int:
+        return self.epochs  # type: ignore[attr-defined]
+
+    @property
+    def learning_rate(self) -> float:
+        return self.lr  # type: ignore[attr-defined]
+
+    @property
+    def per_device_train_batch_size(self) -> int:
+        return self.batch_size  # type: ignore[attr-defined]
+
+    @property
+    def id(self) -> int:
+        """Alias for experiment_id — used by dag_scheduler.py and run_all.py dispatch."""
+        return self.experiment_id  # type: ignore[attr-defined]
+
+    @property
+    def dataset_names(self) -> list[str]:
+        """Names of all datasets in this experiment.
+
+        Returns datasets directly since they are already strings in this class.
+        Provides a consistent interface with experiment_config_loader.ExperimentConfig
+        which stores DatasetEntry objects instead.
+        """
+        return self.datasets  # type: ignore[attr-defined]
+
+    @property
+    def base_checkpoint(self) -> str:
+        """Alias for base_model — used by experiment_config_loader code paths."""
+        return self.base_model  # type: ignore[attr-defined]
+
+
 @dataclass
-class ExperimentConfig:
+class ExperimentConfig(_TrainerCompatMixin):
     """Single source of truth for all training hyperparameters.
 
     Every training parameter (epochs, lr, batch_size, etc.) lives here.
-    DonutTrainer reads them via duck-typed attribute access using the
-    property aliases below (max_epochs, learning_rate, etc.).
+    DonutTrainer reads them via duck-typed attribute access provided by
+    the _TrainerCompatMixin (max_epochs, learning_rate, etc.).
     """
 
     name: str
@@ -3524,46 +3565,10 @@ class ExperimentConfig:
     # Requires aux dataset presence; does nothing for SROIE-only experiments.
     aux_loss_weight: float = 1.0
 
-    # -- Duck-typed aliases for DonutTrainer compatibility ----------------
-    # DonutTrainer reads config.max_epochs, config.learning_rate, etc.
-    # These properties ensure a single source of truth (no duplication).
-
-    @property
-    def max_epochs(self) -> int:
-        return self.epochs
-
-    @property
-    def learning_rate(self) -> float:
-        return self.lr
-
-    @property
-    def per_device_train_batch_size(self) -> int:
-        return self.batch_size
-
     @property
     def output_dir(self) -> str:
         """Default output directory; overridden at call site when needed."""
         return str(WORKSPACE / "models" / f"experiment_{self.experiment_id}")
-
-    @property
-    def id(self) -> int:
-        """Alias for experiment_id — used by dag_scheduler.py and run_all.py dispatch."""
-        return self.experiment_id
-
-    @property
-    def dataset_names(self) -> list[str]:
-        """Names of all datasets in this experiment.
-
-        Returns datasets directly since they are already strings in this class.
-        Provides a consistent interface with experiment_config_loader.ExperimentConfig
-        which stores DatasetEntry objects instead.
-        """
-        return self.datasets
-
-    @property
-    def base_checkpoint(self) -> str:
-        """Alias for base_model — used by experiment_config_loader code paths."""
-        return self.base_model
 
 
 # ---------------------------------------------------------------------------
