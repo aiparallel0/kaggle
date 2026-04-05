@@ -32,7 +32,7 @@ import urllib.request
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, overload
 
 # Ensure sibling modules are importable regardless of CWD.
 _SCRIPT_DIR = str(Path(__file__).resolve().parent)
@@ -237,7 +237,7 @@ class DatasetNormalizer:
         self._assert_coverage(normalised)
         return normalised
 
-    def _normalise_dict(self, raw: dict) -> dict[str, str]:
+    def _normalise_dict(self, raw: dict[str, Any]) -> dict[str, str]:
         """Normalise a single ground-truth dict to the canonical schema."""
         # Step 1: resolve aliases
         resolved: dict[str, str] = {}
@@ -297,13 +297,24 @@ def normalise_samples(
     source_name: str = "unknown",
     coverage_threshold: float = 0.30,
     strip_currency: bool = False,
+    normalizer: DatasetNormalizer | None = None,
 ) -> list[Sample]:
-    """Convenience wrapper around DatasetNormalizer.normalise()."""
-    return DatasetNormalizer(
-        coverage_threshold=coverage_threshold,
-        strip_currency=strip_currency,
-        source_name=source_name,
-    ).normalise(samples)
+    """Convenience wrapper around DatasetNormalizer.normalise().
+
+    Parameters
+    ----------
+    normalizer : DatasetNormalizer | None
+        Optional pre-configured normalizer instance.  When *None*
+        (default), a new ``DatasetNormalizer`` is constructed from the
+        remaining keyword arguments.
+    """
+    if normalizer is None:
+        normalizer = DatasetNormalizer(
+            coverage_threshold=coverage_threshold,
+            strip_currency=strip_currency,
+            source_name=source_name,
+        )
+    return normalizer.normalise(samples)
 
 
 # ---------------------------------------------------------------------------
@@ -480,7 +491,7 @@ def _download_with_progress(url: str, dest_path: Path) -> None:
             elapsed = time.time() - t0
             print(f"\nDownload complete in {elapsed:.1f}s")
             return
-        except Exception as exc:
+        except (urllib.error.URLError, urllib.error.HTTPError, OSError) as exc:
             if dest_path.exists():
                 dest_path.unlink()
             if attempt < max_retries - 1:
@@ -520,6 +531,100 @@ def _hf_api_get(url: str, hf_token: str | None = None) -> Any:
         return json.loads(resp.read())
 
 
+def _hf_discover_config(repo_id: str, hf_token: str | None = None) -> str:
+    """Discover the first available config name for a HuggingFace dataset.
+
+    Queries the datasets-server ``/splits`` endpoint and returns the config
+    name from the first split entry.  Falls back to ``"default"`` when the
+    API call fails or the response is malformed.
+    """
+    try:
+        splits_info = _hf_api_get(
+            f"https://datasets-server.huggingface.co/splits?dataset={repo_id}",
+            hf_token,
+        )
+        return (
+            splits_info["splits"][0].get("config", "default")
+            if splits_info.get("splits")
+            else "default"
+        )
+    except (KeyError, IndexError, TypeError):
+        return "default"
+
+
+def _hf_fetch_rows_batch(
+    repo_id: str,
+    config: str,
+    split: str,
+    offset: int,
+    length: int,
+    hf_token: str | None = None,
+) -> list[dict[str, Any]]:
+    """Fetch a single batch of rows from the HuggingFace datasets-server API.
+
+    Returns the list of row dicts from the ``rows`` key, or an empty list
+    when the request fails (the caller decides whether to retry or stop).
+
+    Raises
+    ------
+    Exception
+        Propagates any HTTP / JSON error so the caller can log and decide
+        whether to continue.
+    """
+    resp = _hf_api_get(
+        f"https://datasets-server.huggingface.co/rows"
+        f"?dataset={repo_id}&config={config}&split={split}"
+        f"&offset={offset}&length={length}",
+        hf_token,
+    )
+    return resp.get("rows", [])
+
+
+def _hf_write_and_mark(
+    all_rows: list[dict[str, Any]],
+    img_dir: Path,
+    jsonl_path: Path,
+    split: str,
+    marker_path: Path,
+    hf_token: str | None = None,
+) -> None:
+    """Write downloaded rows to JSONL, save images to disk, and create the done marker.
+
+    For each row:
+    - Image columns (dicts with a ``"src"`` key) are downloaded to *img_dir*
+      and their path is stored in the JSONL record.
+    - All other JSON-serialisable values are written verbatim.
+
+    After all rows are written, the *marker_path* file is touched to signal
+    that the download is complete.
+    """
+    log = logging.getLogger(__name__)
+    with open(jsonl_path, "w", encoding="utf-8") as f_out:
+        for idx, row_wrapper in enumerate(all_rows):
+            row = row_wrapper.get("row", row_wrapper)
+            record: dict[str, Any] = {}
+            for key, val in row.items():
+                if isinstance(val, dict) and "src" in val:
+                    # Image feature — download the image URL
+                    img_path = img_dir / f"{split}_{idx:06d}.jpg"
+                    if not img_path.exists():
+                        try:
+                            img_req = urllib.request.Request(val["src"])
+                            if hf_token:
+                                img_req.add_header("Authorization", f"Bearer {hf_token}")
+                            with urllib.request.urlopen(img_req, timeout=30) as img_resp:
+                                img_path.write_bytes(img_resp.read())
+                        except (urllib.error.URLError, urllib.error.HTTPError, OSError) as img_exc:
+                            log.warning("[inline-hf] Image %d download failed: %s", idx, img_exc)
+                    record[key] = str(img_path)
+                elif isinstance(val, (str, int, float, list, dict, bool)) or val is None:
+                    record[key] = val
+            f_out.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+    marker_path.touch()
+    log.info("[inline-hf] Download complete: %d rows saved to %s", len(all_rows), jsonl_path.parent)
+
+
 def _hf_download_dataset_inline(
     repo_id: str,
     dest_dir: Path,
@@ -537,6 +642,11 @@ def _hf_download_dataset_inline(
 
     This is a zero-external-dependency replacement for:
         ds = load_dataset(repo_id); ds.save_to_disk(...)
+
+    Delegates to:
+    - :func:`_hf_discover_config` — HF API config discovery
+    - :func:`_hf_fetch_rows_batch` — paginated row fetching
+    - :func:`_hf_write_and_mark` — JSONL + image writing and marker creation
     """
     cache_dir = dest_dir / "hf_cache_inline"
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -579,18 +689,7 @@ def _hf_download_dataset_inline(
         log.info("[inline-hf] Downloading %s/%s from HuggingFace datasets-server …", repo_id, split)
 
         # ── Discover config name ──────────────────────────────────────────────────
-        try:
-            splits_info = _hf_api_get(
-                f"https://datasets-server.huggingface.co/splits?dataset={repo_id}",
-                hf_token,
-            )
-            config = (
-                splits_info["splits"][0].get("config", "default")
-                if splits_info.get("splits")
-                else "default"
-            )
-        except (KeyError, IndexError, TypeError):
-            config = "default"
+        config = _hf_discover_config(repo_id, hf_token)
 
         # ── Get total row count ───────────────────────────────────────────────────
         total_rows = 1000  # fallback estimate
@@ -611,16 +710,15 @@ def _hf_download_dataset_inline(
         all_rows: list[dict] = []
         for offset in range(0, total_rows + batch_size, batch_size):
             try:
-                resp = _hf_api_get(
-                    f"https://datasets-server.huggingface.co/rows"
-                    f"?dataset={repo_id}&config={config}&split={split}"
-                    f"&offset={offset}&length={batch_size}",
-                    hf_token,
-                )
-            except Exception as exc:
+                rows = _hf_fetch_rows_batch(repo_id, config, split, offset, batch_size, hf_token)
+            except (
+                urllib.error.URLError,
+                urllib.error.HTTPError,
+                OSError,
+                json.JSONDecodeError,
+            ) as exc:
                 log.warning("[inline-hf] Batch offset=%d failed: %s — stopping early.", offset, exc)
                 break
-            rows = resp.get("rows", [])
             if not rows:
                 break
             all_rows.extend(rows)
@@ -628,37 +726,12 @@ def _hf_download_dataset_inline(
             if len(all_rows) >= total_rows:
                 break
 
-        # ── Process rows: save images, write JSONL ────────────────────────────────
-        with open(jsonl_path, "w", encoding="utf-8") as f_out:
-            for idx, row_wrapper in enumerate(all_rows):
-                row = row_wrapper.get("row", row_wrapper)
-                record: dict[str, Any] = {}
-                for key, val in row.items():
-                    if isinstance(val, dict) and "src" in val:
-                        # Image feature — download the image URL
-                        img_path = img_dir / f"{split}_{idx:06d}.jpg"
-                        if not img_path.exists():
-                            try:
-                                img_req = urllib.request.Request(val["src"])
-                                if hf_token:
-                                    img_req.add_header("Authorization", f"Bearer {hf_token}")
-                                with urllib.request.urlopen(img_req, timeout=30) as img_resp:
-                                    img_path.write_bytes(img_resp.read())
-                            except Exception as img_exc:
-                                log.warning(
-                                    "[inline-hf] Image %d download failed: %s", idx, img_exc
-                                )
-                        record[key] = str(img_path)
-                    elif isinstance(val, (str, int, float, list, dict, bool)) or val is None:
-                        record[key] = val
-                f_out.write(json.dumps(record, ensure_ascii=False) + "\n")
-
-        marker.touch()
-        log.info("[inline-hf] Download complete: %d rows saved to %s", len(all_rows), cache_dir)
+        # ── Process rows: save images, write JSONL, create marker ─────────────────
+        _hf_write_and_mark(all_rows, img_dir, jsonl_path, split, marker, hf_token)
         return cache_dir
 
 
-def _hf_load_jsonl_rows(cache_dir: Path, split: str = "train") -> list[dict]:
+def _hf_load_jsonl_rows(cache_dir: Path, split: str = "train") -> list[dict[str, Any]]:
     """Load the inline-downloaded JSONL cache produced by _hf_download_dataset_inline().
 
     Each returned dict has the same keys as the original HF dataset row, except:
@@ -711,7 +784,7 @@ def _validate_samples_nonempty(samples: list[Sample], dataset_name: str) -> list
     return samples
 
 
-def _log_field_coverage(samples: list, dataset_name: str) -> None:
+def _log_field_coverage(samples: list[tuple[Path, dict[str, str]]], dataset_name: str) -> None:
     """Log per-field fill rates for a loaded dataset.
 
     Parameters
@@ -816,14 +889,23 @@ class BaseDatasetLoader(ABC):
         """
         ...
 
-    @abstractmethod
-    def clear_cache(self) -> None:
-        """Delete any local cached data for this dataset."""
-        ...
+    def clear_cache(self) -> None:  # noqa: B027
+        """Delete any local cached data for this dataset.
+
+        Subclasses that download data should override this to remove
+        their local cache directory.  The default is a no-op, which is
+        correct for datasets whose data is user-provided (e.g. SROIE).
+        """
 
     @abstractmethod
     def sample_count(self, split: str = "train") -> int:
         """Return the number of samples in *split* without fully loading."""
+        ...
+
+    @property
+    @abstractmethod
+    def _subdir_name(self) -> str:
+        """Subdirectory name under data/ for this dataset (e.g. 'funsd')."""
         ...
 
     # ── helpers available to subclasses ───────────────────────────────
@@ -881,6 +963,20 @@ class BaseDatasetLoader(ABC):
         """
         return dest_dir / "hf_cache"
 
+    # ── Template methods using _subdir_name ───────────────────────────
+
+    def _dest_dir(self) -> Path:
+        """Get and create the destination directory for this dataset."""
+        return self._get_dest_dir(self._subdir_name)
+
+    def _marker(self) -> Path:
+        """Get the marker file path for a cached dataset."""
+        return self._get_marker_path(self._dest_dir())
+
+    def _hf_cache(self) -> Path:
+        """Get the HuggingFace cache subdirectory for a dataset."""
+        return self._get_hf_cache_dir(self._dest_dir())
+
     @staticmethod
     def _empty_gt_dict() -> dict[str, str]:
         """Return a new empty ground-truth dict with all SROIE fields.
@@ -935,6 +1031,10 @@ class SROIELoader(BaseDatasetLoader):
     """
 
     name = "SROIE"
+
+    @property
+    def _subdir_name(self) -> str:
+        return "sroie"
 
     # Map split name → (img_subdir, key_subdir)
     _SPLIT_DIRS = {
@@ -1060,17 +1160,13 @@ class WildReceiptLoader(BaseDatasetLoader):
 
     # ── download & extraction ─────────────────────────────────────────
 
-    def _dest_dir(self) -> Path:
-        """Phase 1: Use shared consolidation utility."""
-        return self._get_dest_dir("wildreceipt")
+    @property
+    def _subdir_name(self) -> str:
+        return "wildreceipt"
 
     def _inner_dir(self) -> Path:
         """The extracted ``wildreceipt/`` subdirectory inside _dest_dir()."""
         return self._dest_dir() / "wildreceipt"
-
-    def _marker(self) -> Path:
-        """Phase 1: Use shared consolidation utility."""
-        return self._get_marker_path(self._dest_dir())
 
     def _download(self) -> Path:
         """Download and extract the tar if not already cached."""
@@ -1099,7 +1195,7 @@ class WildReceiptLoader(BaseDatasetLoader):
             tar_path.unlink(missing_ok=True)
             marker.touch()
             self._log("Download and extraction complete.")
-        except Exception as exc:
+        except (urllib.error.URLError, urllib.error.HTTPError, OSError, tarfile.TarError) as exc:
             raise self._fatal(
                 f"Download failed from {url}: {exc}. This experiment will have MISSING DATA."
             ) from exc
@@ -1163,7 +1259,7 @@ class WildReceiptLoader(BaseDatasetLoader):
                 obj = json.loads(line)
                 # Must have annotations list and file_name
                 return not ("annotations" not in obj or "file_name" not in obj)
-        except Exception:
+        except (OSError, json.JSONDecodeError):
             return False
 
     def clear_cache(self) -> None:
@@ -1233,17 +1329,9 @@ class FUNSDLoader(BaseDatasetLoader):
 
     # ── download ──────────────────────────────────────────────────────
 
-    def _dest_dir(self) -> Path:
-        """Phase 1: Use shared consolidation utility."""
-        return self._get_dest_dir("funsd")
-
-    def _hf_cache(self) -> Path:
-        """Phase 1: Use shared consolidation utility."""
-        return self._get_hf_cache_dir(self._dest_dir())
-
-    def _marker(self) -> Path:
-        """Phase 1: Use shared consolidation utility."""
-        return self._get_marker_path(self._dest_dir())
+    @property
+    def _subdir_name(self) -> str:
+        return "funsd"
 
     def _download(self) -> Path:
         """Download FUNSD from the HuggingFace datasets hub."""
@@ -1282,12 +1370,17 @@ class FUNSDLoader(BaseDatasetLoader):
             try:
                 _hf_download_dataset_inline(_funsd_repo, dest, hf_token, split="train")
                 marker.touch()
-            except Exception as exc:
+            except (
+                urllib.error.URLError,
+                urllib.error.HTTPError,
+                OSError,
+                json.JSONDecodeError,
+            ) as exc:
                 raise self._fatal(
                     f"Inline download failed for {_funsd_repo}: {exc}\n"
                     "  Tip: set HF_FUNSD_REVISION=<commit> or place hf_token.txt for auth."
                 ) from exc
-        except Exception as exc:
+        except Exception as exc:  # intentional broad catch: HF datasets library
             raise self._fatal(
                 f"Download failed for {_funsd_repo}: {exc}\n"
                 "  If the repo requires authentication or has moved, set hf_token.txt "
@@ -1369,6 +1462,73 @@ class FUNSDLoader(BaseDatasetLoader):
 
     # ── public interface ──────────────────────────────────────────────
 
+    def _load_from_hf_arrow(self, split: str, img_dest_dir: Path) -> list[Sample] | None:
+        """Try loading FUNSD from HF Arrow cache.
+
+        Returns a list of samples on success, or ``None`` if the Arrow
+        cache is missing or the ``datasets`` package is unavailable.
+        """
+        hf_cache = self._hf_cache()
+        if not hf_cache.exists():
+            return None
+
+        try:
+            from datasets import load_from_disk  # type: ignore
+
+            ds = load_from_disk(str(hf_cache))
+            ds_splits = list(ds.keys()) if hasattr(ds, "keys") else ["train"]
+            samples: list[Sample] = []
+            for ds_split in ds_splits:
+                if ds_split == "test":
+                    continue
+                if split != "train" and ds_split != split:
+                    continue
+                split_ds = ds[ds_split] if hasattr(ds, "keys") else ds
+                for item in split_ds:
+                    words = item.get("words", [])
+                    ner_tags = item.get("ner_tags", [])
+                    pil_image = item.get("image")
+                    if not words or pil_image is None:
+                        continue
+                    gt = self._funsd_remap(words, ner_tags)
+                    rgb = pil_image.convert("RGB")
+                    img_hash = hashlib.md5(rgb.tobytes()).hexdigest()[:8]
+                    img_path = img_dest_dir / f"{ds_split}_{img_hash}.jpg"
+                    if not img_path.exists():
+                        rgb.save(img_path, "JPEG")
+                    samples.append((img_path, gt))
+            _mm.release_hf_dataset(ds)
+            _mm.flush_hf_arrow_cache()
+            return samples
+        except ImportError:
+            return None
+        except Exception as exc:  # intentional broad catch: HF datasets library
+            raise self._fatal(f"Failed to load Arrow cache: {exc}") from exc
+
+    def _load_from_inline_cache(self, split: str, dest: Path) -> list[Sample]:
+        """Load FUNSD from the inline JSONL fallback cache."""
+        inline_cache = dest / "hf_cache_inline"
+        if not inline_cache.exists():
+            raise self._fatal(
+                "Neither HF Arrow cache nor inline cache found. "
+                "Install the `datasets` package or run _hf_download_dataset_inline()."
+            )
+        samples: list[Sample] = []
+        for row in _hf_load_jsonl_rows(inline_cache, split="train"):
+            if split == "test":
+                continue
+            words = row.get("words", [])
+            ner_tags = row.get("ner_tags", [])
+            img_val = row.get("image")
+            if not words or img_val is None:
+                continue
+            img_path = Path(str(img_val))
+            if not img_path.exists():
+                continue
+            gt = self._funsd_remap(words, ner_tags)
+            samples.append((img_path, gt))
+        return samples
+
     def load(self, split: str = "train") -> list[Sample]:
         """Load FUNSD and normalize to SROIE schema.
 
@@ -1380,64 +1540,12 @@ class FUNSDLoader(BaseDatasetLoader):
         """
         dest = self._download()
         img_dest_dir = _ensure_dir(dest / "images")
-        samples: list[Sample] = []
 
-        # ── HF Arrow path (preferred) ─────────────────────────────────────────
-        hf_cache = self._hf_cache()
-        _use_inline = not hf_cache.exists()
-        if not _use_inline:
-            try:
-                from datasets import load_from_disk  # type: ignore
-
-                ds = load_from_disk(str(hf_cache))
-                ds_splits = list(ds.keys()) if hasattr(ds, "keys") else ["train"]
-                for ds_split in ds_splits:
-                    if ds_split == "test":
-                        continue
-                    if split != "train" and ds_split != split:
-                        continue
-                    split_ds = ds[ds_split] if hasattr(ds, "keys") else ds
-                    for item in split_ds:
-                        words = item.get("words", [])
-                        ner_tags = item.get("ner_tags", [])
-                        pil_image = item.get("image")
-                        if not words or pil_image is None:
-                            continue
-                        gt = self._funsd_remap(words, ner_tags)
-                        rgb = pil_image.convert("RGB")
-                        img_hash = hashlib.md5(rgb.tobytes()).hexdigest()[:8]
-                        img_path = img_dest_dir / f"{ds_split}_{img_hash}.jpg"
-                        if not img_path.exists():
-                            rgb.save(img_path, "JPEG")
-                        samples.append((img_path, gt))
-                _mm.release_hf_dataset(ds)
-                _mm.flush_hf_arrow_cache()
-            except ImportError:
-                _use_inline = True
-            except Exception as exc:
-                raise self._fatal(f"Failed to load Arrow cache: {exc}") from exc
-
-        # ── Inline JSONL fallback ─────────────────────────────────────────────
-        if _use_inline:
-            inline_cache = dest / "hf_cache_inline"
-            if not inline_cache.exists():
-                raise self._fatal(
-                    "Neither HF Arrow cache nor inline cache found. "
-                    "Install the `datasets` package or run _hf_download_dataset_inline()."
-                )
-            for row in _hf_load_jsonl_rows(inline_cache, split="train"):
-                if split == "test":
-                    continue
-                words = row.get("words", [])
-                ner_tags = row.get("ner_tags", [])
-                img_val = row.get("image")
-                if not words or img_val is None:
-                    continue
-                img_path = Path(str(img_val))
-                if not img_path.exists():
-                    continue
-                gt = self._funsd_remap(words, ner_tags)
-                samples.append((img_path, gt))
+        # Try HF Arrow first
+        samples = self._load_from_hf_arrow(split, img_dest_dir)
+        if samples is None:
+            # Fall back to inline cache
+            samples = self._load_from_inline_cache(split, dest)
 
         if not samples:
             self._warn("FUNSD returned 0 samples — check HF cache.")
@@ -1460,7 +1568,7 @@ class FUNSDLoader(BaseDatasetLoader):
                 return False
             item = first_split[0]
             return bool(item.get("words")) and "ner_tags" in item
-        except Exception:
+        except Exception:  # intentional broad catch: HF datasets library
             return False
 
     def clear_cache(self) -> None:
@@ -1489,7 +1597,7 @@ class FUNSDLoader(BaseDatasetLoader):
                 split_ds = ds[s] if hasattr(ds, "keys") else ds
                 total += len(split_ds)
             return total
-        except Exception:
+        except Exception:  # intentional broad catch: HF datasets library
             return 0
 
 
@@ -1501,17 +1609,9 @@ class InvoicesDonutLoader(BaseDatasetLoader):
 
     # ── download ──────────────────────────────────────────────────────
 
-    def _dest_dir(self) -> Path:
-        """Phase 1: Use shared consolidation utility."""
-        return self._get_dest_dir("invoices_donut")
-
-    def _hf_cache(self) -> Path:
-        """Phase 1: Use shared consolidation utility."""
-        return self._get_hf_cache_dir(self._dest_dir())
-
-    def _marker(self) -> Path:
-        """Phase 1: Use shared consolidation utility."""
-        return self._get_marker_path(self._dest_dir())
+    @property
+    def _subdir_name(self) -> str:
+        return "invoices_donut"
 
     def _download(self) -> Path:
         """Download Invoices-DONUT from the HuggingFace datasets hub."""
@@ -1550,12 +1650,17 @@ class InvoicesDonutLoader(BaseDatasetLoader):
             try:
                 _hf_download_dataset_inline(_inv_repo, dest, hf_token, split="train")
                 marker.touch()
-            except Exception as exc:
+            except (
+                urllib.error.URLError,
+                urllib.error.HTTPError,
+                OSError,
+                json.JSONDecodeError,
+            ) as exc:
                 raise self._fatal(
                     f"Inline download failed for {_inv_repo}: {exc}\n"
                     "  Tip: set HF_INVOICES_REVISION=<commit> or place hf_token.txt for auth."
                 ) from exc
-        except Exception as exc:
+        except Exception as exc:  # intentional broad catch: HF datasets library
             raise self._fatal(
                 f"Download failed for {_inv_repo}: {exc}\n"
                 "  If the dataset schema changed, set HF_INVOICES_REVISION=<known-good-commit>.\n"
@@ -1648,7 +1753,7 @@ class InvoicesDonutLoader(BaseDatasetLoader):
                 _mm.flush_hf_arrow_cache()
             except ImportError:
                 _use_inline = True
-            except Exception as exc:
+            except Exception as exc:  # intentional broad catch: HF datasets library
                 raise self._fatal(f"Failed to load Arrow cache: {exc}") from exc
 
         # ── Inline JSONL fallback ─────────────────────────────────────────────
@@ -1691,7 +1796,7 @@ class InvoicesDonutLoader(BaseDatasetLoader):
                 return False
             obj = json.loads(gt_str) if isinstance(gt_str, str) else gt_str
             return "gt_parse" in obj
-        except Exception:
+        except Exception:  # intentional broad catch: HF datasets library
             return False
 
     def clear_cache(self) -> None:
@@ -1720,7 +1825,7 @@ class InvoicesDonutLoader(BaseDatasetLoader):
                 split_ds = ds[s] if hasattr(ds, "keys") else ds
                 total += len(split_ds)
             return total
-        except Exception:
+        except Exception:  # intentional broad catch: HF datasets library
             return 0
 
 
@@ -1750,14 +1855,9 @@ class CORDv2Loader(BaseDatasetLoader):
 
     # ── internal paths ────────────────────────────────────────────────
 
-    def _dest_dir(self) -> Path:
-        return self._get_dest_dir("cord_v2")
-
-    def _hf_cache(self) -> Path:
-        return self._get_hf_cache_dir(self._dest_dir())
-
-    def _marker(self) -> Path:
-        return self._get_marker_path(self._dest_dir())
+    @property
+    def _subdir_name(self) -> str:
+        return "cord_v2"
 
     def _download(self) -> Path:
         dest = self._dest_dir()
@@ -1792,12 +1892,17 @@ class CORDv2Loader(BaseDatasetLoader):
             try:
                 _hf_download_dataset_inline(_cord_repo, dest, hf_token, split="train")
                 marker.touch()
-            except Exception as exc:
+            except (
+                urllib.error.URLError,
+                urllib.error.HTTPError,
+                OSError,
+                json.JSONDecodeError,
+            ) as exc:
                 raise self._fatal(
                     f"Inline download failed for {_cord_repo}: {exc}\n"
                     "  Tip: set HF_CORD_REVISION=<commit> or place hf_token.txt for auth."
                 ) from exc
-        except Exception as exc:
+        except Exception as exc:  # intentional broad catch: HF datasets library
             raise self._fatal(
                 f"CORD-v2 download failed for {_cord_repo}: {exc}\n"
                 "  Override via HF_CORD_REVISION=<commit> to pin a known-good version."
@@ -1805,6 +1910,102 @@ class CORDv2Loader(BaseDatasetLoader):
         return dest
 
     # ── CORD-v2 → SROIE remapping ─────────────────────────────────────
+
+    @staticmethod
+    def _cord_extract_company(gt_parsed: dict[str, Any]) -> str:
+        """Extract company name from CORD-v2 parsed ground truth.
+
+        Looks in ``store_info.store_name`` first, then falls back to the
+        first ``nm`` (name) field from menu items.
+        """
+        store_info = gt_parsed.get("store_info", {})
+        if isinstance(store_info, dict):
+            company = str(store_info.get("store_name", "")).strip()
+            if company:
+                return company
+
+        # Fallback: first nm (name) from menu items
+        menu = gt_parsed.get("menu", [])
+        if isinstance(menu, list) and menu:
+            first_item = menu[0]
+            if isinstance(first_item, dict):
+                return str(first_item.get("nm", "")).strip()
+        return ""
+
+    @staticmethod
+    def _cord_extract_date(gt_parsed: dict[str, Any]) -> str:
+        """Extract date from CORD-v2 parsed ground truth.
+
+        Searches nested paths for a date pattern, then falls back to
+        dedicated date fields in ``payment``.
+        """
+        _date_re = re.compile(
+            r"\b\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}\b"
+            r"|\b\d{4}[\/\-\.]\d{1,2}[\/\-\.]\d{1,2}\b"
+        )
+        # CORD-v2 stores date in various locations
+        for date_path in [
+            ("store_info", "store_addr"),  # sometimes combined
+            ("payment", "date"),
+            ("subtotal", "cnt"),
+        ]:
+            node = gt_parsed
+            for key in date_path:
+                if isinstance(node, dict):
+                    node = node.get(key, {})
+            if isinstance(node, str) and node.strip():
+                m = _date_re.search(node)
+                if m:
+                    return m.group()
+
+        # Dedicated date field search
+        payment = gt_parsed.get("payment", {})
+        if isinstance(payment, dict):
+            for k in ("date", "date_time", "receipt_date"):
+                val = str(payment.get(k, "")).strip()
+                if val:
+                    return val
+        return ""
+
+    @staticmethod
+    def _cord_extract_address(gt_parsed: dict[str, Any], company: str) -> tuple[str, str]:
+        """Extract address from CORD-v2 parsed ground truth.
+
+        Returns ``(company_override, address)`` — when the store address
+        contains a concatenated company+address and ``company`` is empty,
+        :func:`extract_address_from_seller` splits them.
+        """
+        store_info = gt_parsed.get("store_info", {})
+        if isinstance(store_info, dict):
+            addr = str(store_info.get("store_addr", "")).strip()
+            # Sometimes company and address are concatenated in store_addr
+            if addr and not company:
+                return extract_address_from_seller(addr)
+            return "", addr
+        return "", ""
+
+    @staticmethod
+    def _cord_extract_total(gt_parsed: dict[str, Any]) -> str:
+        """Extract total from CORD-v2 parsed ground truth.
+
+        Checks ``total.total_price`` and related keys first, then falls
+        back to ``subtotal.subtotal_price``.
+        """
+        _currency_re = r"^[\$€£¥₹₩\u20ac\u00a3\u00a5]+"
+        total_node = gt_parsed.get("total", {})
+        if isinstance(total_node, dict):
+            for total_key in ("total_price", "creditcardprice", "cashprice", "emoneyprice"):
+                val = str(total_node.get(total_key, "")).strip()
+                if val:
+                    return re.sub(_currency_re, "", val).strip()
+
+        # Fallback: subtotal_price
+        subtotal = gt_parsed.get("subtotal", {})
+        if isinstance(subtotal, dict):
+            val = str(subtotal.get("subtotal_price", "")).strip()
+            if val:
+                return re.sub(_currency_re, "", val).strip()
+        return ""
 
     @staticmethod
     def _cord_remap(ground_truth_str: Any) -> dict[str, str]:
@@ -1821,79 +2022,16 @@ class CORDv2Loader(BaseDatasetLoader):
                 if isinstance(ground_truth_str, str)
                 else ground_truth_str
             )
-            gt_parse = obj.get("gt_parse", obj)
+            gt_parsed = obj.get("gt_parse", obj)
 
-            # ── company ──────────────────────────────────────────────
-            # Store name is in gt_parse.store_info.store_name or nm field of menu items
-            store_info = gt_parse.get("store_info", {})
-            if isinstance(store_info, dict):
-                gt["company"] = str(store_info.get("store_name", "")).strip()
-
-            # Fallback: first nm (name) from menu items
-            if not gt["company"]:
-                menu = gt_parse.get("menu", [])
-                if isinstance(menu, list) and menu:
-                    first_item = menu[0]
-                    if isinstance(first_item, dict):
-                        gt["company"] = str(first_item.get("nm", "")).strip()
-
-            # ── date ─────────────────────────────────────────────────
-            # CORD-v2 stores date in various locations
-            for date_path in [
-                ("store_info", "store_addr"),  # sometimes combined
-                ("payment", "date"),
-                ("subtotal", "cnt"),
-            ]:
-                node = gt_parse
-                for key in date_path:
-                    if isinstance(node, dict):
-                        node = node.get(key, {})
-                if isinstance(node, str) and node.strip():
-                    # Quick date-pattern check
-                    _date_re = re.compile(
-                        r"\b\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}\b"
-                        r"|\b\d{4}[\/\-\.]\d{1,2}[\/\-\.]\d{1,2}\b"
-                    )
-                    m = _date_re.search(node)
-                    if m:
-                        gt["date"] = m.group()
-                        break
-
-            # Dedicated date field search
-            if not gt["date"]:
-                payment = gt_parse.get("payment", {})
-                if isinstance(payment, dict):
-                    for k in ("date", "date_time", "receipt_date"):
-                        val = str(payment.get(k, "")).strip()
-                        if val:
-                            gt["date"] = val
-                            break
-
-            # ── address ──────────────────────────────────────────────
-            if isinstance(store_info, dict):
-                addr = str(store_info.get("store_addr", "")).strip()
-                # Sometimes company and address are concatenated in store_addr
-                if addr and not gt["company"]:
-                    gt["company"], gt["address"] = extract_address_from_seller(addr)
-                else:
-                    gt["address"] = addr
-
-            # ── total ─────────────────────────────────────────────────
-            total_node = gt_parse.get("total", {})
-            if isinstance(total_node, dict):
-                for total_key in ("total_price", "creditcardprice", "cashprice", "emoneyprice"):
-                    val = str(total_node.get(total_key, "")).strip()
-                    if val:
-                        gt["total"] = re.sub(r"^[\$€£¥₹₩\u20ac\u00a3\u00a5]+", "", val).strip()
-                        break
-
-            # Fallback: subtotal_price
-            if not gt["total"]:
-                subtotal = gt_parse.get("subtotal", {})
-                if isinstance(subtotal, dict):
-                    val = str(subtotal.get("subtotal_price", "")).strip()
-                    if val:
-                        gt["total"] = re.sub(r"^[\$€£¥₹₩\u20ac\u00a3\u00a5]+", "", val).strip()
+            gt["company"] = CORDv2Loader._cord_extract_company(gt_parsed)
+            gt["date"] = CORDv2Loader._cord_extract_date(gt_parsed)
+            company_override, gt["address"] = CORDv2Loader._cord_extract_address(
+                gt_parsed, gt["company"]
+            )
+            if company_override and not gt["company"]:
+                gt["company"] = company_override
+            gt["total"] = CORDv2Loader._cord_extract_total(gt_parsed)
 
         except (json.JSONDecodeError, AttributeError, TypeError):
             pass
@@ -1912,7 +2050,7 @@ class CORDv2Loader(BaseDatasetLoader):
             from datasets import load_from_disk  # type: ignore
 
             ds = load_from_disk(str(hf_cache))
-        except Exception as exc:
+        except Exception as exc:  # intentional broad catch: HF datasets library
             raise self._fatal(f"Failed to load CORD-v2 cache: {exc}") from exc
 
         samples: list[Sample] = []
@@ -1959,7 +2097,7 @@ class CORDv2Loader(BaseDatasetLoader):
                 return False
             obj = json.loads(gt_str) if isinstance(gt_str, str) else gt_str
             return "gt_parse" in obj
-        except Exception:
+        except Exception:  # intentional broad catch: HF datasets library
             return False
 
     def clear_cache(self) -> None:
@@ -1986,7 +2124,7 @@ class CORDv2Loader(BaseDatasetLoader):
                 split_ds = ds[s] if hasattr(ds, "keys") else ds
                 total += len(split_ds)
             return total
-        except Exception:
+        except Exception:  # intentional broad catch: HF datasets library
             return 0
 
 
@@ -2153,6 +2291,119 @@ def split_dataset(
     )
 
 
+def _apply_oversampling(
+    train_samples: list[Sample],
+    sroie_data: list[Sample],
+    sroie_oversample: int,
+) -> tuple[list[Sample], list[str]]:
+    """Apply SROIE oversampling and return extended train samples with source tags.
+
+    SROIE training samples are duplicated *sroie_oversample* times (minimum 1)
+    and appended to *train_samples*.  List multiplication creates N references
+    to the same immutable Sample tuples — safe and memory-efficient for
+    read-only iteration.
+
+    Parameters
+    ----------
+    train_samples : list[Sample]
+        Accumulator list; SROIE samples are appended in-place.
+    sroie_data : list[Sample]
+        Raw SROIE training samples (not yet oversampled).
+    sroie_oversample : int
+        Number of times to duplicate SROIE training samples.
+
+    Returns
+    -------
+    (extended_train, source_tags) where *source_tags* has one ``"sroie"``
+    entry per added sample.
+    """
+    oversample_count = max(1, sroie_oversample)
+    oversampled = sroie_data * oversample_count
+    train_samples.extend(oversampled)
+    return train_samples, ["sroie"] * len(oversampled)
+
+
+def _split_auxiliary_data(
+    aux_samples: list[Sample],
+    seed: int,
+) -> tuple[list[Sample], list[Sample]]:
+    """Split auxiliary dataset samples into train and validation portions.
+
+    Uses a 70/15/15 train/val/test split via :func:`split_dataset`.  The
+    held-out 15 % test portion is discarded (SROIE test set is used for
+    final evaluation).
+
+    Returns
+    -------
+    (train_split, val_split)
+    """
+    train_split, val_split, _ = split_dataset(aux_samples, seed=seed)
+    return train_split, val_split
+
+
+def _load_and_merge_datasets(
+    dataset_names: list[str],
+    sroie_oversample: int,
+) -> tuple[list[Sample], list[Sample], list[str], dict[str, int]]:
+    """Load all requested datasets and merge into combined train/val lists.
+
+    Iterates over *dataset_names*, loading each via ``_LOADERS``.  SROIE
+    samples are oversampled via :func:`_apply_oversampling`; auxiliary
+    datasets are split 70/15/15 via :func:`_split_auxiliary_data`.
+
+    Returns
+    -------
+    (combined_train, combined_val, combined_train_sources, per_loader_counts)
+    """
+    combined_train: list[Sample] = []
+    combined_val: list[Sample] = []
+    combined_train_sources: list[str] = []
+    per_loader_counts: dict[str, int] = {}
+
+    for name in dataset_names:
+        loader = _LOADERS.get(name)
+        if loader is None:
+            raise ValueError(f"Unknown dataset '{name}'. Valid: {list(_LOADERS)}")
+        try:
+            data = loader()
+        except DatasetLoadError:
+            # Re-raise — the error has already been printed to stderr
+            raise
+        per_loader_counts[name] = len(data)
+
+        if name == "sroie":
+            # SROIE: train split → combined_train (optionally oversampled);
+            # val split → combined_val (never oversampled).
+            _, sroie_sources = _apply_oversampling(combined_train, data, sroie_oversample)
+            combined_train_sources.extend(sroie_sources)
+            sroie_val = load_sroie_val()
+            combined_val.extend(sroie_val)
+        else:
+            # Auxiliary datasets: 70/15/15 split
+            train_split, val_split = _split_auxiliary_data(data, seed=SEED)
+            combined_train.extend(train_split)
+            combined_train_sources.extend([name] * len(train_split))
+            combined_val.extend(val_split)
+
+    return combined_train, combined_val, combined_train_sources, per_loader_counts
+
+
+@overload
+def get_combined_dataset(
+    dataset_names: list[str],
+    sroie_oversample: int = 1,
+    return_sources: Literal[False] = False,
+) -> tuple[list[Sample], list[Sample]]: ...
+
+
+@overload
+def get_combined_dataset(
+    dataset_names: list[str],
+    sroie_oversample: int = 1,
+    return_sources: Literal[True] = ...,
+) -> tuple[list[Sample], list[Sample], list[str]]: ...
+
+
 def get_combined_dataset(
     dataset_names: list[str],
     sroie_oversample: int = 1,
@@ -2168,6 +2419,11 @@ def get_combined_dataset(
 
     After merging, both combined_train and combined_val are shuffled with
     a fixed seed so that samples from different datasets are interleaved.
+
+    Delegates to:
+    - :func:`_load_and_merge_datasets` — per-dataset loading and merging
+    - :func:`_apply_oversampling` — SROIE duplication
+    - :func:`_split_auxiliary_data` — 70/15/15 auxiliary splitting
 
     Parameters
     ----------
@@ -2192,38 +2448,9 @@ def get_combined_dataset(
         When return_sources is True.  train_sources[i] is the dataset name
         for train_samples[i] (e.g. "sroie" or "wildreceipt").
     """
-    combined_train: list[Sample] = []
-    combined_val: list[Sample] = []
-    combined_train_sources: list[str] = []
-    per_loader_counts: dict[str, int] = {}
-
-    for name in dataset_names:
-        loader = _LOADERS.get(name)
-        if loader is None:
-            raise ValueError(f"Unknown dataset '{name}'. Valid: {list(_LOADERS)}")
-        try:
-            data = loader()
-        except DatasetLoadError:
-            # Re-raise — the error has already been printed to stderr
-            raise
-        per_loader_counts[name] = len(data)
-
-        if name == "sroie":
-            # SROIE: train split → combined_train (optionally oversampled);
-            # val split → combined_val (never oversampled).
-            # List multiplication creates N references to the same immutable
-            # Sample tuples — safe and memory-efficient for read-only iteration.
-            oversample_count = max(1, sroie_oversample)
-            combined_train.extend(data * oversample_count)
-            combined_train_sources.extend(["sroie"] * (len(data) * oversample_count))
-            sroie_val = load_sroie_val()
-            combined_val.extend(sroie_val)
-        else:
-            # Auxiliary datasets: 70/15/15 split
-            train_split, val_split, _ = split_dataset(data, seed=SEED)
-            combined_train.extend(train_split)
-            combined_train_sources.extend([name] * len(train_split))
-            combined_val.extend(val_split)
+    combined_train, combined_val, combined_train_sources, _ = _load_and_merge_datasets(
+        dataset_names, sroie_oversample
+    )
 
     # Fixed-seed shuffle to interleave samples from different datasets.
     # Use the same RNG state for both combined_train and combined_train_sources
@@ -2375,7 +2602,7 @@ def _llm_split(seller: str) -> tuple[str, str] | None:
             text = response.choices[0].message.content.strip()
             obj = json.loads(text)
             return (str(obj.get("company", "")), str(obj.get("address", "")))
-        except Exception as exc:
+        except Exception as exc:  # intentional broad catch: third-party OpenAI SDK
             log.debug("OpenAI fallback failed for %r: %s", seller, exc)
 
     if anthropic_key:
@@ -2391,7 +2618,7 @@ def _llm_split(seller: str) -> tuple[str, str] | None:
             text = message.content[0].text.strip()
             obj = json.loads(text)
             return (str(obj.get("company", "")), str(obj.get("address", "")))
-        except Exception as exc:
+        except Exception as exc:  # intentional broad catch: third-party Anthropic SDK
             log.debug("Anthropic fallback failed for %r: %s", seller, exc)
 
     return None
@@ -2432,7 +2659,7 @@ def _load_seller_strings() -> tuple[list[str], str]:
         log.info("Loaded %d seller strings from HuggingFace.", len(sellers))
         return sellers, "katanaml-org/invoices-donut-data-v1 (HuggingFace)"
 
-    except Exception as exc:
+    except Exception as exc:  # intentional broad catch: HF datasets library
         log.warning(
             "HuggingFace dataset unavailable (%s). "
             "Falling back to representative built-in examples.",

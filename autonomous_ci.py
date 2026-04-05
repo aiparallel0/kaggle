@@ -28,6 +28,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s: %(message)s")
@@ -94,7 +95,7 @@ class TestSuiteResult:
     def duration_sec(self) -> float:
         return self.completed_at - self.started_at
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize to JSON-compatible dict."""
         return {
             "started_at": self.started_at,
@@ -295,7 +296,7 @@ def evaluate_test_results(
     test_result: TestSuiteResult,
     provider: str = "auto",
     claude_model: str = "claude-sonnet-4-5-20251001",
-) -> dict:
+) -> dict[str, Any]:
     """Send test results to AI for evaluation.
 
     Returns dict with keys: verdict (MERGE/BLOCK/COMMENT_ONLY), reasoning, issues.
@@ -403,10 +404,10 @@ def get_pr_number_for_branch(branch: str, repo: str | None = None) -> int | None
 
 def post_ci_results_comment(
     test_result: TestSuiteResult,
-    evaluation: dict,
+    evaluation: dict[str, Any],
     issue_number: int,
     repo: str | None = None,
-    fix_attempts: list | None = None,
+    fix_attempts: list[AutoFixAttempt] | None = None,
 ) -> dict | None:
     """Post CI test results as a GitHub comment on a PR."""
     from diagnostics import github_post_comment

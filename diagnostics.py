@@ -26,8 +26,10 @@ import re
 import subprocess
 import time
 import traceback
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -51,10 +53,10 @@ class RuntimeCheckpoint:
     gpu_mem_allocated_mb: float | None = None
     gpu_mem_reserved_mb: float | None = None
     ram_used_mb: float | None = None
-    issues: list[dict] = field(default_factory=list)
-    metrics: dict = field(default_factory=dict)
+    issues: list[dict[str, Any]] = field(default_factory=list)
+    metrics: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {k: v for k, v in self.__dict__.items() if v is not None and v != [] and v != {}}
 
 
@@ -180,7 +182,7 @@ class DiagnosticCallback:
         github_notify: bool = False,
         github_repo: str | None = None,
         github_issue_number: int | None = None,
-    ):
+    ) -> None:
         self.experiment_id = experiment_id
         self.output_dir = Path(output_dir or "results")
         self.ai_diagnose = ai_diagnose
@@ -209,13 +211,27 @@ class DiagnosticCallback:
         except ImportError:
             pass
 
-    def on_log(self, args, state, control, logs=None, **kwargs):
+    def on_log(
+        self,
+        args: Any,
+        state: Any,
+        control: Any,
+        logs: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
         """Capture training loss from log events."""
         if logs and "loss" in logs:
             self._train_loss_history.append(logs["loss"])
-        return control
 
-    def on_evaluate(self, args, state, control, metrics=None, model=None, **kwargs):
+    def on_evaluate(
+        self,
+        args: Any,
+        state: Any,
+        control: Any,
+        metrics: dict[str, Any] | None = None,
+        model: Any | None = None,
+        **kwargs: Any,
+    ) -> None:
         """Run diagnostic checks after each evaluation."""
         cp = self._collect_checkpoint(state, metrics)
         self.checkpoints.append(cp)
@@ -282,14 +298,17 @@ class DiagnosticCallback:
                             issue_number=self.github_issue_number,
                         )
 
-        return control
-
-    def on_train_end(self, args, state, control, **kwargs):
+    def on_train_end(
+        self,
+        args: Any,
+        state: Any,
+        control: Any,
+        **kwargs: Any,
+    ) -> None:
         """Save diagnostic report at end of training."""
         self._save_report()
-        return control
 
-    def _collect_checkpoint(self, state, metrics) -> RuntimeCheckpoint:
+    def _collect_checkpoint(self, state: Any, metrics: dict[str, Any] | None) -> RuntimeCheckpoint:
         """Collect telemetry into a RuntimeCheckpoint."""
         cp = RuntimeCheckpoint(
             timestamp=time.time(),
@@ -332,7 +351,7 @@ class DiagnosticCallback:
 
         return cp
 
-    def _detect_patterns(self, cp: RuntimeCheckpoint) -> list[dict]:
+    def _detect_patterns(self, cp: RuntimeCheckpoint) -> list[dict[str, Any]]:
         """Check checkpoint against known bug pattern signatures."""
         issues = []
         for pattern in _BUG_PATTERNS:
@@ -351,7 +370,7 @@ class DiagnosticCallback:
                                 "fix": pattern["fix"],
                             }
                         )
-            except Exception:
+            except Exception:  # intentional broad catch: pattern lambdas are arbitrary callables
                 pass  # pattern lambda failed — skip
         return issues
 
@@ -368,7 +387,7 @@ class DiagnosticCallback:
             parts.append(f"gpu_mem={cp.gpu_mem_allocated_mb:.0f}MB")
         return ", ".join(parts)
 
-    def _log_issues(self, cp: RuntimeCheckpoint, issues: list[dict]):
+    def _log_issues(self, cp: RuntimeCheckpoint, issues: list[dict[str, Any]]) -> None:
         """Log detected issues with appropriate severity."""
         for issue in issues:
             severity = issue.get("severity", "warning")
@@ -384,7 +403,7 @@ class DiagnosticCallback:
             else:
                 logger.warning(msg)
 
-    def _run_ai_diagnosis(self, cp: RuntimeCheckpoint, issues: list[dict]):
+    def _run_ai_diagnosis(self, cp: RuntimeCheckpoint, issues: list[dict[str, Any]]) -> None:
         """Call AI API (Claude or Mistral) for deeper diagnosis of critical issues."""
         context = {
             "experiment_id": self.experiment_id,
@@ -405,7 +424,7 @@ class DiagnosticCallback:
             # Attach to checkpoint
             cp.metrics["ai_diagnosis"] = diagnosis
 
-    def _save_report(self):
+    def _save_report(self) -> None:
         """Write accumulated diagnostics to JSON."""
         self.output_dir.mkdir(parents=True, exist_ok=True)
         report_path = self.output_dir / f"diagnostics_exp{self.experiment_id}.json"
@@ -421,7 +440,7 @@ class DiagnosticCallback:
         report_path.write_text(json.dumps(report, indent=2))
         logger.info("Diagnostics report saved → %s", report_path)
 
-    def _build_summary(self) -> dict:
+    def _build_summary(self) -> dict[str, Any]:
         """Build a concise summary of all detected issues."""
         all_issues = []
         for cp in self.checkpoints:
@@ -484,7 +503,7 @@ Keep response under 300 words."""
 
 
 def _call_claude(
-    context: dict,
+    context: dict[str, Any],
     model: str = "claude-sonnet-4-5-20251001",
     system_prompt: str | None = None,
     max_tokens: int = 500,
@@ -523,13 +542,13 @@ def _call_claude(
     except ImportError:
         logger.debug("anthropic package not installed — pip install anthropic")
         return None
-    except Exception as exc:
+    except Exception as exc:  # intentional broad catch: anthropic SDK errors are version-dependent
         logger.warning("Claude API call failed: %s", exc)
         return None
 
 
 def _call_mistral(
-    context: dict,
+    context: dict[str, Any],
     model: str = "mistral-small-latest",
     system_prompt: str | None = None,
     max_tokens: int = 500,
@@ -567,13 +586,13 @@ def _call_mistral(
     except ImportError:
         logger.debug("mistralai package not installed — pip install mistralai")
         return None
-    except Exception as exc:
+    except Exception as exc:  # intentional broad catch: mistralai SDK errors are version-dependent
         logger.warning("Mistral API call failed: %s", exc)
         return None
 
 
 def _call_mistral_httpx(
-    context: dict,
+    context: dict[str, Any],
     model: str = "mistral-small-latest",
     system_prompt: str | None = None,
     max_tokens: int = 500,
@@ -591,6 +610,7 @@ def _call_mistral_httpx(
     if not api_key:
         return None
 
+    import urllib.error
     import urllib.request
 
     payload = json.dumps(
@@ -621,7 +641,13 @@ def _call_mistral_httpx(
         with urllib.request.urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read().decode())
             return data["choices"][0]["message"]["content"]
-    except Exception as exc:
+    except (
+        urllib.error.URLError,
+        urllib.error.HTTPError,
+        json.JSONDecodeError,
+        KeyError,
+        IndexError,
+    ) as exc:
         logger.warning("Mistral HTTP call failed: %s", exc)
         return None
 
@@ -669,14 +695,14 @@ def _get_github_repo() -> str:
             m = re.search(r"github\.com[:/](.+?)(?:\.git)?$", url)
             if m:
                 return m.group(1)
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         pass
     return ""
 
 
 def _github_request(
     method: str, endpoint: str, token: str, payload: dict | None = None
-) -> dict | None:
+) -> dict[str, Any] | None:
     """Execute a GitHub REST API call. Returns parsed JSON or None on failure.
 
     Parameters
@@ -691,6 +717,7 @@ def _github_request(
     payload : dict or None
         Request body; serialised to JSON when given.
     """
+    import urllib.error
     import urllib.request
 
     url = f"https://api.github.com{endpoint}"
@@ -710,12 +737,12 @@ def _github_request(
     try:
         with urllib.request.urlopen(req, timeout=20) as resp:
             return json.loads(resp.read().decode())
-    except Exception as exc:
+    except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError) as exc:
         logger.warning("GitHub API call %s %s failed: %s", method, endpoint, exc)
         return None
 
 
-def github_search_open_issues(title_prefix: str, repo: str | None = None) -> list[dict]:
+def github_search_open_issues(title_prefix: str, repo: str | None = None) -> list[dict[str, Any]]:
     """Search for open GitHub issues whose title contains ``title_prefix``.
 
     Used by :func:`github_create_issue` to avoid creating duplicate issues
@@ -761,7 +788,7 @@ def github_create_issue(
     labels: list[str] | None = None,
     repo: str | None = None,
     deduplicate: bool = True,
-) -> dict | None:
+) -> dict[str, Any] | None:
     """Create a GitHub issue and return the response dict (includes ``html_url``).
 
     Parameters
@@ -834,7 +861,7 @@ def github_post_comment(
     issue_number: int,
     body: str,
     repo: str | None = None,
-) -> dict | None:
+) -> dict[str, Any] | None:
     """Post a comment on an existing GitHub issue or pull request.
 
     Parameters
@@ -881,7 +908,7 @@ def github_report_failure(
     repo: str | None = None,
     issue_number: int | None = None,
     deduplicate: bool = True,
-) -> dict | None:
+) -> dict[str, Any] | None:
     """Create a GitHub issue (or comment on an existing one) for a pipeline failure.
 
     Composes a structured Markdown body from the failure context, any AI
@@ -974,7 +1001,7 @@ def github_report_failure(
 
 
 def ai_diagnose(
-    context: dict,
+    context: dict[str, Any],
     provider: str = "auto",
     claude_model: str = "claude-sonnet-4-5-20251001",
     mistral_model: str = "mistral-small-latest",
@@ -1060,7 +1087,7 @@ class PipelineDiagnostics:
         github_notify: bool = False,
         github_repo: str | None = None,
         github_issue_number: int | None = None,
-    ):
+    ) -> None:
         self.ai_diagnose = ai_diagnose
         self.ai_provider = ai_provider
         self.output_dir = Path(output_dir or "results")
@@ -1070,7 +1097,7 @@ class PipelineDiagnostics:
         self.github_repo = github_repo or _get_github_repo() or None
         self.github_issue_number = github_issue_number
 
-    def wrap_stage(self, stage_name: str, func, args) -> object:
+    def wrap_stage(self, stage_name: str, func: Callable[..., object], args: Any) -> object:
         """Execute a stage function with diagnostic wrapping.
 
         Returns the stage's return value (typically a StageResult).
@@ -1094,7 +1121,7 @@ class PipelineDiagnostics:
             self.stage_reports.append(report)
             return result
 
-        except Exception as exc:
+        except Exception as exc:  # intentional broad catch: pipeline stage error-reporting boundary
             elapsed = time.monotonic() - t0
             gpu_after = self._gpu_snapshot()
             tb = traceback.format_exc()
@@ -1176,7 +1203,7 @@ class PipelineDiagnostics:
         return report_path
 
     @staticmethod
-    def _gpu_snapshot() -> dict | None:
+    def _gpu_snapshot() -> dict[str, float] | None:
         """Capture current GPU memory state."""
         try:
             import torch
@@ -1213,7 +1240,7 @@ def smoke_test(verbose: bool = True) -> bool:
     checks_total = 0
     errors = []
 
-    def _check(name: str, func):
+    def _check(name: str, func: Callable[[], None]) -> None:
         nonlocal checks_passed, checks_total
         checks_total += 1
         try:
@@ -1221,7 +1248,7 @@ def smoke_test(verbose: bool = True) -> bool:
             checks_passed += 1
             if verbose:
                 print(f"  [PASS] {name}")
-        except Exception as exc:
+        except Exception as exc:  # intentional broad catch: arbitrary check callables
             errors.append((name, str(exc)))
             if verbose:
                 print(f"  [FAIL] {name}: {exc}")
@@ -1232,18 +1259,18 @@ def smoke_test(verbose: bool = True) -> bool:
         print("=" * 60)
 
     # 1. Import chain
-    def _check_imports():
+    def _check_imports() -> None:
         from constants import BASE_MODEL, FIELDS, NEW_TOKENS, SEED  # noqa: F401
 
     _check("Import constants", _check_imports)
 
-    def _check_dataset_loaders():
+    def _check_dataset_loaders() -> None:
         from data_pipeline import SROIELoader  # noqa: F401
 
     _check("Import dataset loaders", _check_dataset_loaders)
 
     # 2. Model + processor load
-    def _check_model_load():
+    def _check_model_load() -> None:
         from constants import BASE_MODEL, NEW_TOKENS
 
         try:
@@ -1261,7 +1288,7 @@ def smoke_test(verbose: bool = True) -> bool:
     _check("Model + processor load", _check_model_load)
 
     # 3. Token ID roundtrip (GP-3 + GP-4)
-    def _check_token_ids():
+    def _check_token_ids() -> None:
         from transformers import DonutProcessor, VisionEncoderDecoderModel
 
         from constants import BASE_MODEL, NEW_TOKENS
@@ -1284,7 +1311,7 @@ def smoke_test(verbose: bool = True) -> bool:
     _check("Token ID roundtrip (GP-3/GP-4)", _check_token_ids)
 
     # 4. Forward pass (dummy input)
-    def _check_forward():
+    def _check_forward() -> None:
         import torch
         from transformers import DonutProcessor, VisionEncoderDecoderModel
 

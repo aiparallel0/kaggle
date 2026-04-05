@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import gc
 import logging
+from typing import Any
 
 __all__ = [
     "compute_pil_mb_per_sample",
@@ -783,7 +784,7 @@ class TrainingAuditLogger:
         - vs_baseline: <+/- percent>% F1
     """
 
-    def __init__(self, append_to_file: str = "terminal.txt"):
+    def __init__(self, append_to_file: str = "terminal.txt") -> None:
         """Initialize audit logger.
 
         Args:
@@ -988,7 +989,7 @@ class TrainingConfig:
                 f"got '{self.lr_scheduler_type}'"
             )
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         """Export configuration as dictionary."""
         return {
             "batch_size": self.batch_size,

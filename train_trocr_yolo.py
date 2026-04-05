@@ -25,11 +25,13 @@ FIX: Imports constants from shared module.
 import gc
 import json
 import logging
+import math
 import re
 import struct
 import time
 import zlib
 from pathlib import Path
+from typing import Any
 
 import torch
 from torch.utils.data import DataLoader, Dataset
@@ -101,7 +103,7 @@ except ImportError:
 
     _PIL_AVAILABLE = False
 
-    def _png_unfilter(scanlines: list, width: int, bpp: int) -> bytes:
+    def _png_unfilter(scanlines: list[tuple[int, bytes]], width: int, bpp: int) -> bytes:
         """Apply PNG row de-filtering (Sub/Up/Average/Paeth)."""
         out = []
         prev = bytes(width * bpp)
@@ -637,7 +639,9 @@ except ImportError:
                     sd_path,
                 )
 
-        def __call__(self, img, verbose: bool = False, imgsz: int | None = None, **kwargs) -> list:
+        def __call__(
+            self, img, verbose: bool = False, imgsz: int | None = None, **kwargs
+        ) -> list[Any]:
             """Run inference on a single image. Returns list[_BoxResult]."""
             import numpy as _np
 
@@ -982,6 +986,7 @@ except ImportError:
 from constants import (  # noqa: E402
     DEVICE,
     FIELDS,
+    LABEL_IGNORE_INDEX,
     MAX_CONSECUTIVE_BATCH_FAILURES,
     SEED,
     WORKSPACE,
@@ -1355,7 +1360,7 @@ class TrOCRReceiptDataset(Dataset):
                             truncation=True,
                             return_tensors="pt",
                         ).input_ids.squeeze(0)
-                        _lbl[_lbl == processor.tokenizer.pad_token_id] = -100
+                        _lbl[_lbl == processor.tokenizer.pad_token_id] = LABEL_IGNORE_INDEX
                         pixel_values_list.append(_pv)
                         labels_list.append(_lbl)
                         if (_i + 1) % 100 == 0 or (_i + 1) == n_total:
@@ -1401,7 +1406,7 @@ class TrOCRReceiptDataset(Dataset):
             return_tensors="pt",
         ).input_ids.squeeze(0)
 
-        labels[labels == self.processor.tokenizer.pad_token_id] = -100
+        labels[labels == self.processor.tokenizer.pad_token_id] = LABEL_IGNORE_INDEX
         return {"pixel_values": pixel_values, "labels": labels}
 
 
@@ -1577,7 +1582,7 @@ def train_yolo(output_dir: Path | None = None, num_train_samples: int = 0) -> Pa
                 # Fix: issue_report_summary critical #3 — log at ERROR level so the operator
                 # knows the state dict companion file was NOT saved. Inference without
                 # ultralytics installed will fall back to random weights as a result.
-                __import__("logging").getLogger(__name__).error(
+                logging.getLogger(__name__).error(
                     "Could not save YOLO companion state dict to %s — inference without "
                     "ultralytics installed will use random init (degraded quality). Error: %s",
                     sd_path,
@@ -2013,7 +2018,7 @@ def _clear_lm_head_tied_keys(model: "torch.nn.Module") -> None:
                 pass  # class-level attribute; assignment not possible — harmless
 
 
-def _print_trocr_load_report(model_id: str, loading_info: dict) -> None:
+def _print_trocr_load_report(model_id: str, loading_info: dict[str, Any]) -> None:
     """Print a LOAD REPORT table for TrOCR, filtering known-benign missing keys.
 
     encoder.pooler.dense.{weight,bias} are always absent for BEiT-based TrOCR
@@ -2042,7 +2047,7 @@ def _print_trocr_load_report(model_id: str, loading_info: dict) -> None:
 
 
 def _build_experiment_trocr_metadata(
-    exp_datasets: list,
+    exp_datasets: list[str],
     sroie_oversample: int,
     output_dir: Path,
 ) -> Path:
@@ -2131,7 +2136,7 @@ def _build_experiment_trocr_metadata(
     return output_dir
 
 
-def _save_trocr_training_plots(history: dict, output_dir: Path) -> None:
+def _save_trocr_training_plots(history: dict[str, Any], output_dir: Path) -> None:
     """Save TrOCR training loss curves and CSV after training completes.
 
     Creates:
@@ -2273,7 +2278,7 @@ def _save_trocr_training_plots(history: dict, output_dir: Path) -> None:
         pass
 
 
-def _save_trocr_eval_plots(exp_metrics: dict, results_dir: Path) -> None:
+def _save_trocr_eval_plots(exp_metrics: dict[str, Any], results_dir: Path) -> None:
     """Save per-field F1 bar chart for TrOCR+YOLO evaluation results.
 
     Creates:
@@ -2387,7 +2392,7 @@ def _save_trocr_eval_plots(exp_metrics: dict, results_dir: Path) -> None:
 def train_trocr(
     output_dir: Path | None = None,
     train_data_dir: Path | None = None,
-) -> dict:
+) -> dict[str, Any]:
     """Fine-tune TrOCR on line crops from receipts.
 
     Parameters
@@ -2580,7 +2585,7 @@ def train_trocr(
         except Exception as _exc:
             # Fix: issue_report_summary critical #3 — log at ERROR level so the operator
             # knows VRAM detection failed and gradient checkpointing defaulted to enabled.
-            __import__("logging").getLogger(__name__).error(
+            logging.getLogger(__name__).error(
                 "[TrOCR] VRAM detection failed — defaulting gradient checkpointing to ENABLED. "
                 "If this causes OOM, set grad_ckpt_vram_threshold_gb explicitly in "
                 "ControlSuite.trocr. Error: %s",
@@ -2712,7 +2717,7 @@ def train_trocr(
             if step < _warmup_steps:
                 return step / _warmup_steps
             progress = (step - _warmup_steps) / max(1, total_steps - _warmup_steps)
-            return max(0.1, 0.5 * (1.0 + __import__("math").cos(__import__("math").pi * progress)))
+            return max(0.1, 0.5 * (1.0 + math.cos(math.pi * progress)))
 
         scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=_lr_lambda)
         print(f"  [TrOCR] Micro mode: AdamW+cosine-warmup, lr={_micro_lr:.2e}")
@@ -2792,7 +2797,7 @@ def train_trocr(
     history = {"train_loss": [], "val_loss": [], "num_train_samples": 0}
     history["num_train_samples"] = len(train_ds)
     start = time.time()
-    _trocr_logger = __import__("logging").getLogger(__name__)
+    _trocr_logger = logging.getLogger(__name__)
 
     try:
         _trocr_skipped_total = 0  # GradScaler overflow steps across all epochs
@@ -3109,7 +3114,7 @@ def train_trocr(
 # ════════════════════════════════════════════════════════════════════════════
 # STAGE 3: TrOCR+YOLO Inference Pipeline
 # ════════════════════════════════════════════════════════════════════════════
-def _assign_fields_heuristic(ocr_lines: list[dict]) -> dict[str, str]:
+def _assign_fields_heuristic(ocr_lines: list[dict[str, Any]]) -> dict[str, str]:
     """Assign OCR-extracted text lines to SROIE fields using heuristics.
 
     This is the key weakness of the pipeline approach: rule-based field
@@ -3450,7 +3455,7 @@ class FieldAttentionAssigner(torch.nn.Module):
     @torch.no_grad()
     def assign(
         self,
-        ocr_lines: list[dict],
+        ocr_lines: list[dict[str, Any]],
         img_w: float = 1000.0,
         img_h: float = 1280.0,
         vision_feats: "list[torch.Tensor] | None" = None,
@@ -3755,7 +3760,7 @@ def _extract_ocr_lines(
     trocr_processor: "TrOCRProcessor",
     device: str = DEVICE,
     return_vision_feats: bool = False,
-) -> "tuple[list[dict], list[torch.Tensor] | None, int]":
+) -> "tuple[list[dict[str, Any]], list[torch.Tensor] | None, int]":
     """Run YOLO detection + TrOCR reading on one image.
 
     Returns
@@ -3914,7 +3919,7 @@ def evaluate_trocr_yolo_on_test(
     yolo_weights: str,
     trocr_model_path: str,
     test_samples: list[tuple[Path, dict[str, str]]],
-) -> dict:
+) -> dict[str, Any]:
     """Evaluate TrOCR+YOLO pipeline on the SROIE test set. Returns metrics dict.
 
     If a trained FieldAttentionAssigner checkpoint exists at the expected path

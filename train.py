@@ -126,7 +126,7 @@ except ImportError:
     class _TrainerState:
         epoch: int = 0
         global_step: int = 0
-        log_history: list = field(default_factory=list)
+        log_history: list[dict[str, Any]] = field(default_factory=list)
         best_metric: float | None = None
         best_model_checkpoint: str | None = None
 
@@ -450,7 +450,7 @@ except ImportError:
 
             self._np = _np
             self._model_dir = Path(pretrained_model_name_or_path)
-            self._size = {"height": 1280, "width": 960}
+            self._size = {"height": DONUT_IMAGE_SIZE[0], "width": DONUT_IMAGE_SIZE[1]}
             self._sp = None
             self._vocab: dict = {}
             self._id2tok: dict = {}
@@ -500,8 +500,8 @@ except ImportError:
             """Resize to (H, W), normalize, return [3, H, W] float32 tensor."""
             import numpy as _np
 
-            target_h = self._size.get("height", 1280)
-            target_w = self._size.get("width", 960)
+            target_h = self._size.get("height", DONUT_IMAGE_SIZE[0])
+            target_w = self._size.get("width", DONUT_IMAGE_SIZE[1])
 
             if isinstance(img, _np.ndarray):
                 arr = img
@@ -557,7 +557,7 @@ except ImportError:
 
         # ── Tokenizer interface ────────────────────────────────────────────
 
-        def add_special_tokens(self, tokens: dict | list) -> int:
+        def add_special_tokens(self, tokens: dict[str, list[str]] | list[str]) -> int:
             if isinstance(tokens, dict):
                 tokens = tokens.get("additional_special_tokens", [])
             added = 0
@@ -598,7 +598,7 @@ except ImportError:
         def batch_decode(self, ids_list, **kwargs) -> list[str]:
             return [self.decode(ids, **kwargs) for ids in ids_list]
 
-        def token2json(self, tokens: str, **kwargs) -> dict:
+        def token2json(self, tokens: str, **kwargs) -> dict[str, str]:
             """Parse <s_field>VALUE</s_field> sequences into a dict."""
             import re as _re
 
@@ -625,6 +625,7 @@ except ImportError:
         Returns:
             Path to *dest_dir*
         """
+        import urllib.error as _urlerr
         import urllib.request as _urlreq
 
         dest = Path(dest_dir)
@@ -654,7 +655,7 @@ except ImportError:
             try:
                 with _urlreq.urlopen(req, timeout=120) as resp:
                     out_path.write_bytes(resp.read())
-            except Exception:
+            except (_urlerr.URLError, OSError):
                 # Non-fatal: some files (e.g. tokenizer.model) may not exist for
                 # every checkpoint; skip silently and continue.
                 pass
@@ -666,7 +667,7 @@ except ImportError:
             try:
                 with _urlreq.urlopen(req, timeout=300) as resp:
                     (dest / "pytorch_model.bin").write_bytes(resp.read())
-            except Exception:
+            except (_urlerr.URLError, OSError):
                 pass
 
         return dest
@@ -1128,7 +1129,7 @@ except ImportError:
             if num_heads is None:
                 num_heads = [4, 8, 16, 32]
             if image_size is None:
-                image_size = [1280, 960]
+                image_size = list(DONUT_IMAGE_SIZE)
 
             num_stages = len(depths)
             # Stochastic depth decay rule
@@ -1182,7 +1183,7 @@ except ImportError:
         Mirrors HF weight prefix: encoder.model.encoder.*
         """
 
-        def __init__(self, config_dict: dict):
+        def __init__(self, config_dict: dict[str, Any]):
             super().__init__()
             self.embeddings = _SwinPatchEmbedding(
                 in_channels=config_dict.get("num_channels", 3),
@@ -1193,7 +1194,7 @@ except ImportError:
                 embed_dim=config_dict.get("embed_dim", 128),
                 depths=config_dict.get("depths", [2, 2, 14, 2]),
                 num_heads=config_dict.get("num_heads", [4, 8, 16, 32]),
-                image_size=config_dict.get("image_size", [1280, 960]),
+                image_size=config_dict.get("image_size", list(DONUT_IMAGE_SIZE)),
                 patch_size=config_dict.get("patch_size", 4),
                 window_size=config_dict.get("window_size", 8),
                 mlp_ratio=config_dict.get("mlp_ratio", 4.0),
@@ -1214,7 +1215,7 @@ except ImportError:
           encoder.model.encoder.layernorm.*
         """
 
-        def __init__(self, config_dict: dict):
+        def __init__(self, config_dict: dict[str, Any]):
             super().__init__()
             self.encoder = _SwinModel(config_dict)
 
@@ -1228,7 +1229,7 @@ except ImportError:
         consistent with the VisionEncoderDecoderModel's 'encoder.*' prefix.
         """
 
-        def __init__(self, config_dict: dict):
+        def __init__(self, config_dict: dict[str, Any]):
             super().__init__()
             self.model = _SwinWrapper(config_dict)
 
@@ -1403,7 +1404,7 @@ except ImportError:
           layernorm_embedding.{weight,bias}
         """
 
-        def __init__(self, config_dict: dict):
+        def __init__(self, config_dict: dict[str, Any]):
             super().__init__()
             self.d_model = config_dict.get("d_model", 1024)
             vocab_size = config_dict.get("vocab_size", 57580)
@@ -1476,7 +1477,7 @@ except ImportError:
         Resulting in weight prefix: decoder.model.decoder.*
         """
 
-        def __init__(self, config_dict: dict):
+        def __init__(self, config_dict: dict[str, Any]):
             super().__init__()
             self.decoder = _BARTDecoderModel(config_dict)
 
@@ -1498,7 +1499,7 @@ except ImportError:
           lm_head.weight         (output projection, no bias)
         """
 
-        def __init__(self, config_dict: dict):
+        def __init__(self, config_dict: dict[str, Any]):
             super().__init__()
             self.config = _SimpleConfig(
                 tie_word_embeddings=False,
@@ -1575,7 +1576,7 @@ except ImportError:
         load_state_dict(state_dict, strict=False) works without remapping.
         """
 
-        def __init__(self, encoder_config: dict, decoder_config: dict):
+        def __init__(self, encoder_config: dict[str, Any], decoder_config: dict[str, Any]):
             super().__init__()
             self.encoder = _SwinEncoderModule(encoder_config)
             self.decoder = _BARTDecoderWrapper(decoder_config)
@@ -1650,7 +1651,9 @@ except ImportError:
             # be replaced with a real token ID before embedding lookup.
             bos = labels.new_full((labels.shape[0], 1), start_id)
             _labels_clean = labels.clone()
-            _labels_clean[_labels_clean == -100] = pad_id  # replace ignore-index with pad
+            _labels_clean[_labels_clean == LABEL_IGNORE_INDEX] = (
+                pad_id  # replace ignore-index with pad
+            )
             decoder_input_ids = torch.cat([bos, _labels_clean[:, :-1]], dim=1)  # shift right
 
             # Encode image
@@ -1669,7 +1672,7 @@ except ImportError:
                 loss = _F.cross_entropy(
                     shift_logits.view(-1, shift_logits.size(-1)),
                     shift_labels.view(-1),
-                    ignore_index=-100,
+                    ignore_index=LABEL_IGNORE_INDEX,
                 )
 
             return _ModelOutput(loss=loss, logits=logits)
@@ -1935,7 +1938,7 @@ try:
 except ImportError:
     _PIL_AVAILABLE = False
 
-    def _png_unfilter(scanlines: list, width: int, bpp: int) -> bytes:
+    def _png_unfilter(scanlines: list[tuple[int, bytes]], width: int, bpp: int) -> bytes:
         """Apply PNG row de-filtering (Sub/Up/Average/Paeth)."""
         out = []
         prev = bytes(width * bpp)
@@ -2120,7 +2123,7 @@ except ImportError:
             s[0, :] /= np.sqrt(2.0)
             return 0.25 * (_M @ s @ _M.T)
 
-        def _build_huffman(counts: list, values: list) -> dict:
+        def _build_huffman(counts: list[int], values: list[int]) -> dict[tuple[int, int], int]:
             """Build Huffman decode table: {(code, length): symbol}."""
             table: dict = {}
             code = 0
@@ -2176,7 +2179,7 @@ except ImportError:
                 self._bits_left -= n
                 return (self._buf >> self._bits_left) & ((1 << n) - 1)
 
-            def decode_huffman(self, table: dict) -> int:
+            def decode_huffman(self, table: dict[tuple[int, int], int]) -> int:
                 code = 0
                 for length in range(1, 17):
                     code = (code << 1) | self.read_bits(1)
@@ -2208,7 +2211,7 @@ except ImportError:
 
         try:
             data = Path(path).read_bytes()
-        except Exception:
+        except OSError:
             return None
 
         if len(data) < 4 or data[0] != 0xFF or data[1] != 0xD8:
@@ -2263,7 +2266,7 @@ except ImportError:
                             if tag == 0x0112:  # Orientation
                                 exif_orientation = struct.unpack_from(bo + "H", tiff, eoff + 8)[0]
                                 break
-                except Exception:
+                except (struct.error, ValueError, IndexError):
                     pass
 
             elif 0xE0 <= marker <= 0xEF:  # other APP markers — skip
@@ -2435,7 +2438,7 @@ except ImportError:
                                 pc = mcu_col * h_blocks * 8 + hb * 8
                                 planes[ci][pr : pr + 8, pc : pc + 8] = spatial
 
-        except Exception:
+        except Exception:  # intentional broad catch: partial JPEG decode recovery
             # On bitstream error: return whatever we have (partial decode)
             pass
 
@@ -2556,7 +2559,7 @@ _ST_DTYPE_MAP: dict = {
 }
 
 
-def _load_safetensors(path: str | Path) -> dict:
+def _load_safetensors(path: str | Path) -> dict[str, Any]:
     """Load a .safetensors checkpoint file without the safetensors package.
 
     The safetensors binary format is simple:
@@ -2591,7 +2594,9 @@ import resource_manager as _mm  # noqa: E402
 # drift if any file was updated without updating the others.
 from constants import (  # noqa: E402
     BASE_MODEL,
+    DONUT_IMAGE_SIZE,
     FIELDS,
+    LABEL_IGNORE_INDEX,
     MAX_LENGTH,
     NEW_TOKENS,
     SEED,
@@ -2646,9 +2651,11 @@ class LmHeadCloneCallback(TrainerCallback):
 
     def on_save(self, args, state, control, model=None, **kwargs):
         if model is None:
+            logger.debug("LmHeadCloneCallback.on_save: model is None — skipping clone")
             return control
         decoder = getattr(model, "decoder", None)
         if decoder is None:
+            logger.debug("LmHeadCloneCallback.on_save: model has no decoder attr — skipping clone")
             return control
         lm_head = getattr(decoder, "lm_head", None)
         if lm_head is not None and hasattr(lm_head, "weight"):
@@ -2657,6 +2664,8 @@ class LmHeadCloneCallback(TrainerCallback):
                 "LmHeadCloneCallback.on_save: cloned lm_head.weight (epoch %s)",
                 state.epoch,
             )
+        else:
+            logger.debug("LmHeadCloneCallback.on_save: no lm_head.weight found — skipping clone")
         return control
 
 
@@ -2735,7 +2744,7 @@ class SROIEOnlyValCallback(TrainerCallback):
         Where to write the per-epoch ``sroie_only_val_f1.csv`` log.
     """
 
-    def __init__(self, sroie_val_samples, processor, output_dir: Path):
+    def __init__(self, sroie_val_samples, processor, output_dir: Path) -> None:
         super().__init__()
         self._samples = sroie_val_samples
         self._processor = processor
@@ -2792,10 +2801,10 @@ class SROIEOnlyValCallback(TrainerCallback):
                             total += 1
                             if pred_val == gt_val:
                                 correct += 1
-                    except Exception:
+                    except Exception:  # intentional broad catch: OOM recovery in callback
                         total += len(FIELDS)  # count as all wrong on error
             f1 = correct / total if total > 0 else 0.0
-        except Exception as exc:
+        except Exception as exc:  # intentional broad catch: OOM recovery boundary
             logger.warning("SROIEOnlyValCallback: failed to compute F1: %s", exc)
             model.train()
             return control
@@ -2815,7 +2824,7 @@ class SROIEOnlyValCallback(TrainerCallback):
                 if write_header:
                     writer.writeheader()
                 writer.writerow(self._rows[-1])
-        except Exception as exc:
+        except OSError as exc:
             logger.warning("SROIEOnlyValCallback: could not write CSV: %s", exc)
         return control
 
@@ -2859,7 +2868,7 @@ class SROIEDataset(Dataset):
         processor: DonutProcessor,
         samples: list[tuple[Path, dict[str, str]]],
         max_length: int = MAX_LENGTH,
-    ):
+    ) -> None:
         super().__init__()
         self.processor = processor
         self.max_length = max_length
@@ -2919,7 +2928,7 @@ class SROIEDataset(Dataset):
             truncation=True,
             return_tensors="pt",
         ).input_ids.squeeze()
-        labels[labels == self.processor.tokenizer.pad_token_id] = -100
+        labels[labels == self.processor.tokenizer.pad_token_id] = LABEL_IGNORE_INDEX
         # Mask empty-field spans so they contribute no gradient to the loss.
         labels = _mask_empty_field_labels(labels, gt, self.processor.tokenizer)
         return {"pixel_values": pixel_values, "labels": labels}
@@ -2948,7 +2957,7 @@ class MultiDataset(Dataset):
         precompute_tensors: bool = True,
         sample_sources: list[str] | None = None,
         aux_loss_weight: float = 1.0,
-    ):
+    ) -> None:
         self.samples = samples
         self.processor = processor
         self.max_length = max_length
@@ -2976,8 +2985,8 @@ class MultiDataset(Dataset):
                 from resource_manager import get_image_size_from_processor_config
 
                 _img_h, _img_w = get_image_size_from_processor_config()
-            except Exception:
-                _img_h, _img_w = 1280, 960  # safe fallback to DONUT native resolution
+            except (ImportError, RuntimeError):
+                _img_h, _img_w = DONUT_IMAGE_SIZE  # safe fallback to DONUT native resolution
             if _mm.ram_cache_is_safe(len(samples), _img_h, _img_w):
                 import concurrent.futures
 
@@ -2985,7 +2994,7 @@ class MultiDataset(Dataset):
                     idx, path = idx_path
                     try:
                         return idx, _load_image(path)
-                    except Exception:
+                    except (OSError, ValueError):
                         return idx, None
 
                 with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
@@ -3039,7 +3048,7 @@ class MultiDataset(Dataset):
                                 self._pixel_cache[_idx] = processor(
                                     _img, return_tensors="pt"
                                 ).pixel_values.squeeze()
-                            except Exception:
+                            except (RuntimeError, ValueError):
                                 pass
                         _log.info(
                             "[Tensor Cache] Precomputed %d/%d pixel_values tensors",
@@ -3068,7 +3077,7 @@ class MultiDataset(Dataset):
                         truncation=True,
                         return_tensors="pt",
                     ).input_ids.squeeze()
-                    _lbl[_lbl == processor.tokenizer.pad_token_id] = -100
+                    _lbl[_lbl == processor.tokenizer.pad_token_id] = LABEL_IGNORE_INDEX
                     _lbl = _mask_empty_field_labels(_lbl, _gt, processor.tokenizer)
                     self._label_cache[_idx] = _lbl
                 _log.info("[Label Cache] Precomputed %d label tensors", len(self._label_cache))
@@ -3105,7 +3114,7 @@ class MultiDataset(Dataset):
     def __len__(self) -> int:
         return len(self.samples)
 
-    def __getitem__(self, idx: int) -> dict:
+    def __getitem__(self, idx: int) -> dict[str, Any]:
         img_path, gt = self.samples[idx]
 
         # Use precomputed pixel_values tensor if available (eliminates per-step
@@ -3137,7 +3146,7 @@ class MultiDataset(Dataset):
                 truncation=True,
                 return_tensors="pt",
             ).input_ids.squeeze()
-            labels[labels == self.processor.tokenizer.pad_token_id] = -100
+            labels[labels == self.processor.tokenizer.pad_token_id] = LABEL_IGNORE_INDEX
             labels = _mask_empty_field_labels(labels, gt, self.processor.tokenizer)
 
         item = {"pixel_values": pixel_values, "labels": labels}
@@ -3156,6 +3165,15 @@ class MultiDataset(Dataset):
 # LiveDashboardCallback (inlined from live_dashboard.py)
 # ---------------------------------------------------------------------------
 
+# Resolve TrainerCallback at class-definition time (not at __init__ time) to
+# avoid monkey-patching self.__class__ — a proper mixin/composition pattern.
+try:
+    from transformers import TrainerCallback as _TrainerCallbackBase
+except ImportError:
+
+    class _TrainerCallbackBase:  # type: ignore[no-redef]
+        """Stub when transformers is not installed."""
+
 
 @dataclass
 class _EpochRow:
@@ -3165,7 +3183,7 @@ class _EpochRow:
     best_f1: float = float("nan")
 
 
-class LiveDashboardCallback:
+class LiveDashboardCallback(_TrainerCallbackBase):
     """Trainer callback — per-epoch CSV + rich.live.Live table for a lab-style console.
 
     When ``rich`` is installed the table is rendered in-place (overwriting previous
@@ -3173,8 +3191,8 @@ class LiveDashboardCallback:
     entire experiment run.  Falls back silently to plain logging when rich is absent
     or when DISABLE_LIVE_DASHBOARD=1 is set.
 
-    Compatible with HuggingFace ``TrainerCallback`` — class is patched at __init__
-    time to inherit TrainerCallback without a top-level transformers import.
+    Inherits from ``TrainerCallback`` when transformers is installed, or from a
+    no-op stub otherwise.
     """
 
     def __init__(
@@ -3187,16 +3205,6 @@ class LiveDashboardCallback:
         dataset_names: "list[str] | None" = None,
         num_samples: int = 0,
     ) -> None:
-        try:
-            from transformers import TrainerCallback
-
-            self.__class__ = type(
-                "LiveDashboardCallback",
-                (self.__class__, TrainerCallback),
-                {},
-            )
-        except ImportError:
-            pass
 
         if csv_path is None:
             csv_path = f"convergence_exp{experiment_id}.csv"
@@ -3241,7 +3249,7 @@ class LiveDashboardCallback:
 
             self._live = Live(self._build_table(), refresh_per_second=4, transient=True)
             self._live.start()
-        except Exception as exc:
+        except Exception as exc:  # intentional broad catch: third-party rich library
             logger.debug("[LiveDashboard] Could not start rich.live.Live: %s", exc)
             self._live = None
 
@@ -3319,14 +3327,14 @@ class LiveDashboardCallback:
                         footer_parts.append(
                             f"VRAM: {format_bytes(vram_used)}/{format_bytes(vram_total)}"
                         )
-                except Exception:
+                except (RuntimeError, AttributeError):
                     pass
                 table.caption = Text(" · ".join(footer_parts), style="dim")
-            except Exception:
+            except Exception:  # intentional broad catch: third-party rich library
                 pass
 
             return table
-        except Exception:
+        except Exception:  # intentional broad catch: third-party rich library
             return ""
 
     def on_log(
@@ -3387,7 +3395,7 @@ class LiveDashboardCallback:
         if self._rich_enabled and self._live is not None:
             try:
                 self._live.update(self._build_table())
-            except Exception as exc:
+            except Exception as exc:  # intentional broad catch: third-party rich library
                 logger.debug("[LiveDashboard] live.update failed: %s", exc)
 
     def update_best_f1(self, f1: float) -> None:
@@ -3398,15 +3406,15 @@ class LiveDashboardCallback:
             if self._live is not None:
                 try:
                     self._live.update(self._build_table())
-                except Exception:
+                except Exception:  # intentional broad catch: third-party rich library
                     pass
 
-    def close(self, metrics: "dict | None" = None) -> None:
+    def close(self, metrics: "dict[str, float] | None" = None) -> None:
         """Stop the rich.live.Live context and print a final summary card."""
         if self._live is not None:
             try:
                 self._live.stop()
-            except Exception:
+            except Exception:  # intentional broad catch: third-party rich library
                 pass
             self._live = None
 
@@ -3448,7 +3456,7 @@ class LiveDashboardCallback:
 
                     _, _, disk_free = get_disk_usage()
                     summary_table.add_row("Disk free", format_bytes(disk_free))
-                except Exception:
+                except (ImportError, OSError):
                     pass
                 console.print(
                     Panel(
@@ -3458,7 +3466,7 @@ class LiveDashboardCallback:
                         padding=(0, 1),
                     )
                 )
-            except Exception:
+            except Exception:  # intentional broad catch: third-party rich library
                 pass
 
 
@@ -3508,7 +3516,7 @@ class DonutTrainer:
         model: VisionEncoderDecoderModel,
         train_dataset: Dataset,
         val_dataset: Dataset | None = None,
-    ):
+    ) -> None:
         if len(train_dataset) == 0:
             raise ValueError(
                 "Training dataset is empty (0 samples). Cannot train on an "
@@ -3825,7 +3833,7 @@ class DonutTrainer:
                 )
             except ImportError:
                 pass  # diagnostics.py not present — skip
-            except Exception as _diag_exc:
+            except Exception as _diag_exc:  # intentional broad catch: third-party diagnostics
                 logger.debug("[Diagnostics] Registration failed: %s", _diag_exc)
 
         # LiveDashboardCallback — auto-registered when rich is installed.
@@ -3858,7 +3866,7 @@ class DonutTrainer:
                 logger.debug("[LiveDashboard] Callback registered for experiment %d", exp_id)
             except ImportError:
                 pass  # live_dashboard.py not found — skip silently
-            except Exception as _ld_exc:
+            except Exception as _ld_exc:  # intentional broad catch: third-party registration
                 logger.debug("[LiveDashboard] Registration failed: %s", _ld_exc)
 
         # Gradient checkpointing: trades compute for VRAM — ~halves activation
@@ -3922,7 +3930,7 @@ class DonutTrainer:
         #               decoder_inputs_embeds at the same time
         # If the dataset provides per-sample loss_weight tensors (for aux_loss_weight
         # < 1.0), they are stacked into a 1-D batch tensor for compute_loss().
-        def _donut_data_collator(features: list[dict]) -> dict:
+        def _donut_data_collator(features: list[dict[str, Any]]) -> dict[str, Any]:
             batch = {
                 "pixel_values": torch.stack([f["pixel_values"] for f in features]),
                 "labels": torch.stack([f["labels"] for f in features]),
@@ -3967,9 +3975,9 @@ class DonutTrainer:
                         _logits.reshape(-1, _logits.size(-1)),
                         _labels.reshape(-1),
                         reduction="none",
-                        ignore_index=-100,
+                        ignore_index=LABEL_IGNORE_INDEX,
                     ).view(_labels.size())  # (B, T)
-                    _valid = (_labels != -100).float()
+                    _valid = (_labels != LABEL_IGNORE_INDEX).float()
                     _per_sample = (_per_tok * _valid).sum(dim=1) / _valid.sum(dim=1).clamp(
                         min=1
                     )  # (B,)
@@ -4170,22 +4178,27 @@ class DonutTrainer:
     # ------------------------------------------------------------------
 
     def save(self, path: Path | None = None) -> None:
-        """Save the fine-tuned model and processor to disk.
-
-        INDENTATION FIX: this method was previously indented with 1 space
-        instead of 4, making Python treat it as module-level code and raising
-        an IndentationError on import — which crashed all 8 DONUT experiments.
-        """
+        """Save the fine-tuned model and processor to disk."""
         save_dir = Path(path) if path is not None else self._output_dir
         save_dir.mkdir(parents=True, exist_ok=True)
 
-        # ── lm_head detach fix ─────────────────────────────────────────────
-        # transformers ≥5.x recomputes tied-weight lists before serialization
-        # and may use content-hash equality (not just data_ptr()) to deduplicate.
-        # Bypass save_pretrained entirely: write the state dict directly with
-        # safetensors.torch.save_file so HF's internal dedup logic is never
-        # invoked.  The lm_head weight gets .clone().contiguous() to guarantee
-        # a unique data pointer AND a unique content hash.
+        self._save_model_weights(save_dir)
+        self.processor.save_pretrained(str(save_dir))
+        logger.info("Model + processor saved → %s", save_dir)
+
+        self._verify_sroie_tokens(save_dir)
+        self._verify_lm_head_shard(save_dir)
+
+    def _save_model_weights(self, save_dir: Path) -> None:
+        """Save model weights with lm_head detach fix.
+
+        transformers ≥5.x recomputes tied-weight lists before serialization
+        and may use content-hash equality (not just data_ptr()) to deduplicate.
+        Bypass save_pretrained entirely: write the state dict directly with
+        safetensors.torch.save_file so HF's internal dedup logic is never
+        invoked.  The lm_head weight gets .clone().contiguous() to guarantee
+        a unique data pointer AND a unique content hash.
+        """
         decoder = self.model.decoder
         try:
             from safetensors.torch import save_file as _st_save_file  # noqa: PLC0415
@@ -4203,11 +4216,9 @@ class DonutTrainer:
             if hasattr(decoder, "lm_head"):
                 decoder.lm_head.weight = torch.nn.Parameter(decoder.lm_head.weight.data.clone())
             self.model.save_pretrained(str(save_dir))
-        # ──────────────────────────────────────────────────────────────────
-        self.processor.save_pretrained(str(save_dir))
-        logger.info("Model + processor saved → %s", save_dir)
 
-        # ── Post-save verification: confirm all SROIE tokens survived serialization ──
+    def _verify_sroie_tokens(self, save_dir: Path) -> None:
+        """Post-save verification: confirm all SROIE tokens survived serialization."""
         _verify_proc = DonutProcessor.from_pretrained(str(save_dir))
         _unk_id = _verify_proc.tokenizer.unk_token_id
         _missing = [
@@ -4228,12 +4239,15 @@ class DonutTrainer:
             save_dir,
         )
 
-        # ── Post-save lm_head.weight verification ────────────────────────────
-        # Verify that lm_head.weight was not deduped out of the safetensors shard.
-        # If safetensors sees embed_tokens.weight and lm_head.weight sharing the
-        # same data pointer, it silently omits lm_head from the shard — producing
-        # F1~0.42 on reload (Bug B / lm_head_dedup, CLAUDE.md §16).
-        # The clone() above should prevent this; this check confirms it.
+    def _verify_lm_head_shard(self, save_dir: Path) -> None:
+        """Post-save lm_head.weight verification.
+
+        Verify that lm_head.weight was not deduped out of the safetensors shard.
+        If safetensors sees embed_tokens.weight and lm_head.weight sharing the
+        same data pointer, it silently omits lm_head from the shard — producing
+        F1~0.42 on reload (Bug B / lm_head_dedup, CLAUDE.md §16).
+        The clone() in _save_model_weights should prevent this; this check confirms it.
+        """
         _shard_file = save_dir / "model.safetensors"
         if not _shard_file.exists():
             # Multi-shard save: find the index
@@ -4265,7 +4279,7 @@ class DonutTrainer:
                 logger.debug("safetensors not importable — skipping lm_head shard check")
             except RuntimeError:
                 raise  # re-raise our own CRITICAL errors
-            except Exception as _sf_exc:
+            except (OSError, KeyError, ValueError) as _sf_exc:
                 logger.warning("lm_head shard check failed (non-critical): %s", _sf_exc)
 
     # ------------------------------------------------------------------

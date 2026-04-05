@@ -57,7 +57,7 @@ import struct
 import sys
 import time
 import zlib
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar
@@ -73,6 +73,19 @@ os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
 import torch  # noqa: E402
 from transformers import DonutProcessor, VisionEncoderDecoderModel  # noqa: E402
 
+# ---------------------------------------------------------------------------
+# OCP-3 fix: single constant for the SROIE task prompt prefix instead of
+# hardcoding the string literal in 5+ branching checks.
+# ---------------------------------------------------------------------------
+_SROIE_TASK_PROMPT_PREFIX = "<s_sroie"
+
+# ---------------------------------------------------------------------------
+# DIP-3 / DIP-4 fix: type aliases for model abstraction — allows swapping
+# architectures (e.g. to a different VisionEncoder) in a single place.
+# ---------------------------------------------------------------------------
+ModelType = VisionEncoderDecoderModel
+ProcessorType = DonutProcessor
+
 import data_pipeline as dataset_loaders  # noqa: E402
 import resource_manager as _mm  # noqa: E402
 
@@ -81,6 +94,7 @@ import resource_manager as _mm  # noqa: E402
 from constants import (  # noqa: E402
     BASE_MODEL,
     DEVICE,
+    DONUT_IMAGE_SIZE,
     EMPTY_GT,
     FIELDS,
     MAX_LENGTH,
@@ -274,8 +288,8 @@ class _YAMLExperimentConfig:
     full_parameter_finetuning: bool = True
 
     # Data / preprocessing
-    image_height: int = 1280  # DONUT native — do NOT exceed without allow_high_res
-    image_width: int = 960  # DONUT native — do NOT exceed without allow_high_res
+    image_height: int = DONUT_IMAGE_SIZE[0]  # DONUT native — do NOT exceed without allow_high_res
+    image_width: int = DONUT_IMAGE_SIZE[1]  # DONUT native — do NOT exceed without allow_high_res
     allow_high_res: bool = False  # bypasses image_height>1280 / image_width>960 guard
     max_length: int = 768  # MAX_LENGTH from constants.py
 
@@ -331,32 +345,36 @@ class _YAMLExperimentConfig:
 
     def _validate(self) -> None:
         # Resolution guard — most important check
-        if self.image_height > 1280 and not self.allow_high_res:
+        if self.image_height > DONUT_IMAGE_SIZE[0] and not self.allow_high_res:
             raise ValueError(
                 f"Exp {self.id}: image_height={self.image_height} exceeds "
-                f"DONUT native 1280. RAM scales as (H×W)/(1280×960). "
+                f"DONUT native {DONUT_IMAGE_SIZE[0]}. RAM scales as "
+                f"(H×W)/({DONUT_IMAGE_SIZE[0]}×{DONUT_IMAGE_SIZE[1]}). "
                 f"See memory_manager.py § 'The processor_config.json Rule'. "
                 f"Set allow_high_res: true in the YAML to bypass this guard."
             )
-        if self.image_width > 960 and not self.allow_high_res:
+        if self.image_width > DONUT_IMAGE_SIZE[1] and not self.allow_high_res:
             raise ValueError(
                 f"Exp {self.id}: image_width={self.image_width} exceeds "
-                f"DONUT native 960. RAM scales as (H×W)/(1280×960). "
+                f"DONUT native {DONUT_IMAGE_SIZE[1]}. RAM scales as "
+                f"(H×W)/({DONUT_IMAGE_SIZE[0]}×{DONUT_IMAGE_SIZE[1]}). "
                 f"Set allow_high_res: true in the YAML to bypass this guard."
             )
-        if self.image_height > 1280 and self.allow_high_res:
+        if self.image_height > DONUT_IMAGE_SIZE[0] and self.allow_high_res:
             logger.debug(
-                "[Exp %d] High-res mode: height=%d (>1280). allow_high_res=True bypasses guard. "
+                "[Exp %d] High-res mode: height=%d (>%d). allow_high_res=True bypasses guard. "
                 "Ensure processor_config.json updated before training.",
                 self.id,
                 self.image_height,
+                DONUT_IMAGE_SIZE[0],
             )
-        if self.image_width > 960 and self.allow_high_res:
+        if self.image_width > DONUT_IMAGE_SIZE[1] and self.allow_high_res:
             logger.debug(
-                "[Exp %d] High-res mode: width=%d (>960). allow_high_res=True bypasses guard. "
+                "[Exp %d] High-res mode: width=%d (>%d). allow_high_res=True bypasses guard. "
                 "Ensure processor_config.json updated before training.",
                 self.id,
                 self.image_width,
+                DONUT_IMAGE_SIZE[1],
             )
 
         # Weight-tying guard
@@ -519,7 +537,7 @@ def load_all_experiments(
             cfg = _yaml_to_config(p)
             if experiment_ids is None or cfg.id in experiment_ids:
                 configs.append(cfg)
-        except Exception as exc:
+        except (OSError, KeyError, ValueError, TypeError) as exc:
             errors.append(f"  {p}: {exc}")
 
     if errors:
@@ -781,7 +799,7 @@ class DonutControlConfig:
     # Must be multiples of patch_size (32). Pretrain used [2560, 1920].
     # Finetuning: [1280, 960] (width × height). Larger = more VRAM, slower.
     # Common values: [640,480], [960,720], [1280,960], [1920,1440], [2560,1920]
-    input_size: list[int] = field(default_factory=lambda: [1280, 960])
+    input_size: list[int] = field(default_factory=lambda: list(DONUT_IMAGE_SIZE))
 
     # ── Architecture (READ-ONLY — do not change from pretrain value) ────────
     # impact: CRITICAL ⚠️ UNDERDOCUMENTED
@@ -1641,7 +1659,7 @@ def validate_sroie_oversample(
         )
 
 
-def get_augmentation_transforms(preset: str | None):
+def get_augmentation_transforms(preset: str | None) -> Callable[..., Any] | None:
     """Return a torchvision transforms pipeline for the given preset, or None.
 
     Preset specifications
@@ -1767,7 +1785,7 @@ try:
 except ImportError:
     _PIL_AVAILABLE = False
 
-    def _png_unfilter(scanlines: list, width: int, bpp: int) -> bytes:
+    def _png_unfilter(scanlines: list[tuple[int, bytes]], width: int, bpp: int) -> bytes:
         """Apply PNG row de-filtering (Sub/Up/Average/Paeth)."""
         out = []
         prev = bytes(width * bpp)
@@ -1856,7 +1874,7 @@ except ImportError:
             arr[row] = pixels[:, ::-1]  # BGR → RGB
         return arr
 
-    def _load_jpeg_ctypes(path: str | Path):
+    def _load_jpeg_ctypes(path: str | Path) -> Any:
         """Load JPEG via ImageMagick subprocess (system libjpeg fallback)."""
         import subprocess as _sp
 
@@ -1876,11 +1894,11 @@ except ImportError:
                     arr = np.frombuffer(pixel_data, dtype=np.uint8)
                     if len(arr) >= h * w * 3:
                         return arr[: h * w * 3].reshape(h, w, 3)
-        except Exception:
+        except (OSError, ValueError, IndexError, _sp.SubprocessError):
             pass
         return None
 
-    def _load_image(path: str | Path):  # type: ignore[misc]
+    def _load_image(path: str | Path) -> Any:  # type: ignore[misc]
         """Load an image file as an RGB numpy array without PIL."""
         path = Path(path)
         suffix = path.suffix.lower()
@@ -1911,7 +1929,7 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 
-def _initialize_new_token_embeddings(model, tokenizer) -> None:
+def _initialize_new_token_embeddings(model: VisionEncoderDecoderModel, tokenizer: Any) -> None:
     """Initialise newly added SROIE special-token embeddings from semantically
     similar existing tokens rather than random noise.
 
@@ -2020,7 +2038,7 @@ def _initialize_new_token_embeddings(model, tokenizer) -> None:
     )
 
 
-def _parse_sroie_output(tokens: str) -> dict:
+def _parse_sroie_output(tokens: str) -> dict[str, str]:
     """Parse SROIE XML-like output format into a dict.
 
     SROIE format: <s_sroie><s_company>VALUE</s_company><s_date>VALUE</s_date>...
@@ -2083,7 +2101,7 @@ def _parse_sroie_output(tokens: str) -> dict:
     return result
 
 
-def _merge_token2json_pages(result: Any) -> dict:
+def _merge_token2json_pages(result: Any) -> dict[str, Any]:
     """Merge multi-page CORD output (list) into single dict (Phase 0b).
 
     The base checkpoint (donut-base-finetuned-cord-v2) knows about <sep/>
@@ -2114,6 +2132,18 @@ def _merge_token2json_pages(result: Any) -> dict:
 
     # Neither list nor dict (shouldn't happen, but defensive)
     return {}
+
+
+def _select_parser(task_prompt: str, processor: ProcessorType) -> Callable[[str], dict[str, str]]:
+    """Return the parser function appropriate for the given task prompt format.
+
+    OCP-4 fix: centralises the SROIE-vs-token2json dispatch so that callers
+    (``_parse_prediction``, ``run_inference``, ``_self_test``) no longer
+    duplicate the branching logic.
+    """
+    if task_prompt.startswith(_SROIE_TASK_PROMPT_PREFIX):
+        return _parse_sroie_output
+    return processor.token2json
 
 
 # ---------------------------------------------------------------------------
@@ -2151,7 +2181,7 @@ class EvaluationResult:
     per_field: dict[str, dict[str, float]] = field(default_factory=dict)
     num_samples: int = 0
     parse_failures: int = 0
-    raw_predictions: list[dict] | None = None
+    raw_predictions: list[dict[str, str]] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to a flat dict compatible with legacy compute_metrics output."""
@@ -2172,7 +2202,9 @@ class EvaluationResult:
 # ---------------------------------------------------------------------------
 
 
-def load_model_with_tied_weights(model_path: str, device: str = DEVICE, processor=None):
+def load_model_with_tied_weights(
+    model_path: str, device: str = DEVICE, processor: DonutProcessor | None = None
+) -> VisionEncoderDecoderModel:
     # Use output_loading_info=True to detect missing keys at load time.
     # This is how we distinguish "trained lm_head loaded correctly" from
     # "lm_head randomly re-initialized because it was missing from the shard".
@@ -2240,7 +2272,11 @@ def load_model_with_tied_weights(model_path: str, device: str = DEVICE, processo
     return model
 
 
-def _retie_decoder_head(model, missing_keys=None, model_path=None) -> None:
+def _retie_decoder_head(
+    model: VisionEncoderDecoderModel,
+    missing_keys: list[str] | None = None,
+    model_path: str | None = None,
+) -> None:
     """Re-tie or recover lm_head.weight after from_pretrained().
 
     Parameters
@@ -2390,7 +2426,7 @@ class DonutEvaluator:
                     len(self.processor.tokenizer) if self.processor is not None else None
                 ),
             )
-        except Exception as _ckpt_exc:
+        except (ImportError, OSError, ValueError) as _ckpt_exc:
             logger.warning("[DonutEvaluator] Checkpoint validation warning: %s", _ckpt_exc)
 
         self.model = load_model_with_tied_weights(
@@ -2480,6 +2516,8 @@ class DonutEvaluator:
     def _self_test(self) -> None:
         """Run inference on one sample and verify the model produces output.
 
+        Raises SelfTestFailedError on failure, returns None on success.
+
         The self-test asserts that the result is a dict with at least one
         non-empty field value. If it fails, raises with diagnostic info
         including the raw token sequence.
@@ -2489,7 +2527,7 @@ class DonutEvaluator:
         the model can produce *any* parseable output (non-empty dict).
         """
         if not self.test_dataset:
-            raise RuntimeError("Self-test failed: test_dataset is empty")
+            raise SelfTestFailedError("Self-test failed: test_dataset is empty")
 
         img_path, gt = self.test_dataset[0]
         logger.debug("Self-test: running inference on %s", img_path)
@@ -2532,10 +2570,10 @@ class DonutEvaluator:
         cleaned = cleaned.replace(self.processor.tokenizer.pad_token, "").strip()
 
         # For SROIE, use custom parser; for CORD, use token2json
-        if self.task_prompt.startswith("<s_sroie"):
+        if self.task_prompt.startswith(_SROIE_TASK_PROMPT_PREFIX):
             try:
                 parsed = _parse_sroie_output(cleaned)
-            except Exception as exc:
+            except Exception as exc:  # intentional broad catch: parser error boundary
                 raise SelfTestFailedError(
                     f"Self-test FAILED: SROIE parser raised {type(exc).__name__}: {exc}\n"
                     f"  Raw tokens: {raw_tokens!r}\n"
@@ -2545,7 +2583,7 @@ class DonutEvaluator:
         else:
             try:
                 parsed = self.processor.token2json(cleaned)
-            except Exception as exc:
+            except Exception as exc:  # intentional broad catch: transformers token2json
                 raise SelfTestFailedError(
                     f"Self-test FAILED: token2json raised {type(exc).__name__}: {exc}\n"
                     f"  Raw tokens: {raw_tokens!r}\n"
@@ -2615,7 +2653,7 @@ class DonutEvaluator:
         image_path: Path,
         task_prompt: str,
         preloaded_image: Any | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         """Run inference on a single image and return parsed dict.
 
         Handles:
@@ -2665,7 +2703,7 @@ class DonutEvaluator:
     # Parsing
     # ------------------------------------------------------------------
 
-    def _parse_prediction(self, tokens: str) -> dict:
+    def _parse_prediction(self, tokens: str) -> dict[str, str]:
         """Parse prediction using appropriate parser for the task format.
 
         For SROIE task prompts (<s_sroie>), uses the custom _parse_sroie_output()
@@ -2689,7 +2727,7 @@ class DonutEvaluator:
             return EMPTY_GT.copy()
 
         # For SROIE output, use the custom parser that understands SROIE tags
-        if getattr(self, "task_prompt", "").startswith("<s_sroie"):
+        if getattr(self, "task_prompt", "").startswith(_SROIE_TASK_PROMPT_PREFIX):
             try:
                 result = _parse_sroie_output(tokens)
                 if result and any(v for v in result.values()):  # At least one non-empty field
@@ -2698,7 +2736,7 @@ class DonutEvaluator:
                 logger.warning("SROIE parser returned empty result from tokens: %.100s", tokens)
                 self.parse_failure_count += 1
                 return EMPTY_GT.copy()
-            except Exception as exc:
+            except (ValueError, KeyError, IndexError, AttributeError) as exc:
                 logger.warning("SROIE parser failed: %s — tokens: %.100s", exc, tokens)
                 self.parse_failure_count += 1
                 return EMPTY_GT.copy()
@@ -2718,16 +2756,12 @@ class DonutEvaluator:
             logger.warning("token2json returned empty result: %s", type(result))
             self.parse_failure_count += 1
             return EMPTY_GT.copy()
-        except Exception as exc:
-            logger.warning("token2json failed: %s — tokens: %.100s", exc, tokens)
+        except Exception as exc:  # intentional broad catch: transformers token2json
+            logger.warning("token2json raised %s: %s", type(exc).__name__, exc)
             self.parse_failure_count += 1
             return EMPTY_GT.copy()
 
-    # ------------------------------------------------------------------
-    # Metrics
-    # ------------------------------------------------------------------
-
-    def _compute_f1(self, preds: list[dict], labels: list[dict]) -> float:
+    def _compute_f1(self, preds: list[dict[str, str]], labels: list[dict[str, str]]) -> float:
         """Compute global F1 over all (image, field) pairs.
 
         A pair is a true positive if the predicted string equals the ground
@@ -2765,8 +2799,8 @@ class DonutEvaluator:
 
     def compute_all_metrics(
         self,
-        predictions: list[dict],
-        ground_truths: list[dict],
+        predictions: list[dict[str, str]],
+        ground_truths: list[dict[str, str]],
     ) -> dict[str, float]:
         """Compute all metrics: global F1, per-field F1, per-field NED, exact match.
 
@@ -2780,7 +2814,7 @@ class DonutEvaluator:
 # ---------------------------------------------------------------------------
 
 
-def _unwrap_prediction(parsed: dict, task_prompt: str) -> dict:
+def _unwrap_prediction(parsed: dict[str, Any], task_prompt: str) -> dict[str, str]:
     """Unwrap task-prompt wrappers from token2json output.
 
     token2json may wrap SROIE output as ``{"sroie": {...}}``.
@@ -2791,7 +2825,7 @@ def _unwrap_prediction(parsed: dict, task_prompt: str) -> dict:
 
     # Unwrap {"sroie": {...}} for SROIE task prompts
     if (
-        task_prompt.startswith("<s_sroie")
+        task_prompt.startswith(_SROIE_TASK_PROMPT_PREFIX)
         and "sroie" in parsed
         and isinstance(parsed["sroie"], dict)
     ):
@@ -2816,7 +2850,14 @@ def _unwrap_prediction(parsed: dict, task_prompt: str) -> dict:
 _module_inference_count = 0
 
 
-def run_inference(model, processor, image_path, task_prompt, max_length=512, preloaded_image=None):
+def run_inference(
+    model: VisionEncoderDecoderModel,
+    processor: DonutProcessor,
+    image_path: str | Path,
+    task_prompt: str,
+    max_length: int = 512,
+    preloaded_image: Any | None = None,
+) -> dict[str, str]:
     """Run inference on a single image. Accepts an optional pre-loaded PIL Image.
 
     This is the backward-compatible module-level function. For new code,
@@ -2864,7 +2905,7 @@ def run_inference(model, processor, image_path, task_prompt, max_length=512, pre
         )
 
     # Check for task prompt mismatch (model outputting CORD schema for SROIE task)
-    if task_prompt.startswith("<s_sroie") and sequence.startswith("<s_cord-v2>"):
+    if task_prompt.startswith(_SROIE_TASK_PROMPT_PREFIX) and sequence.startswith("<s_cord-v2>"):
         logger.warning(
             "Task prompt mismatch for %s: asked for <s_sroie> but model output starts with "
             "<s_cord-v2>. Model has not learned SROIE task format (CORD pretraining dominates). "
@@ -2873,7 +2914,7 @@ def run_inference(model, processor, image_path, task_prompt, max_length=512, pre
         )
 
     # For SROIE output, use custom parser; for CORD, use token2json
-    if task_prompt.startswith("<s_sroie"):
+    if task_prompt.startswith(_SROIE_TASK_PROMPT_PREFIX):
         try:
             result = _parse_sroie_output(sequence)
             return result if result and any(v for v in result.values()) else {}
@@ -2907,7 +2948,7 @@ def run_inference(model, processor, image_path, task_prompt, max_length=512, pre
     return result
 
 
-def remap_cord_to_sroie(cord_output):
+def remap_cord_to_sroie(cord_output: dict[str, Any] | list[Any]) -> dict[str, str]:
     """Map CORD schema fields to SROIE field names (best effort).
 
     Handles the 'cord-v2' top-level wrapper that the pretrained CORD model
@@ -2996,7 +3037,7 @@ def remap_cord_to_sroie(cord_output):
     return result
 
 
-def normalized_edit_distance(pred, gt):
+def normalized_edit_distance(pred: str, gt: str) -> float:
     """Compute Normalized Edit Distance (NED) between pred and gt strings.
 
     NED = editdistance(pred, gt) / max(len(pred), len(gt))
@@ -3011,7 +3052,9 @@ def normalized_edit_distance(pred, gt):
     return _edit_distance(pred, gt) / max(len(pred), len(gt))
 
 
-def compute_metrics(predictions, ground_truths):
+def compute_metrics(
+    predictions: list[dict[str, str]], ground_truths: list[dict[str, str]]
+) -> dict[str, float]:
     """Official SROIE Task 3 metric: global F1 over all (image, field) pairs.
 
     A pair is TP if predicted string == ground truth string
@@ -3079,7 +3122,7 @@ def compute_metrics(predictions, ground_truths):
     return summary
 
 
-def print_results(pretrained_m, finetuned_m):
+def print_results(pretrained_m: dict[str, Any], finetuned_m: dict[str, Any]) -> None:
     """Pretty-print side-by-side pretrained vs. fine-tuned metrics."""
     print(f"\n{'=' * 72}")
     print(f"{'METRIC':<30} {'PRETRAINED':>18} {'FINE-TUNED':>18}")
@@ -3126,7 +3169,7 @@ def print_results(pretrained_m, finetuned_m):
 # ---------------------------------------------------------------------------
 
 
-def evaluate_main():
+def evaluate_main() -> None:
     """Legacy standalone entry point for ad-hoc evaluation.
 
     For the full 8-experiment pipeline, use ``python run_all.py`` instead.
@@ -3224,7 +3267,7 @@ def load_test_samples() -> list[tuple[Path, dict[str, str]]]:
 def evaluate_donut_on_test(
     model_path: str,
     test_samples: list[tuple[Path, dict[str, str]]],
-) -> dict:
+) -> dict[str, Any]:
     """Evaluate a DONUT model on the SROIE test set. Returns metrics dict."""
     from transformers import DonutProcessor
 
@@ -3282,7 +3325,7 @@ def evaluate_donut_on_test(
 
 
 # ── Print metrics ────────────────────────────────────────────────────────────
-def print_metrics(name: str, metrics: dict) -> None:
+def print_metrics(name: str, metrics: dict[str, Any]) -> None:
     """Pretty-print evaluation metrics in structured format."""
     print(f"\n  {'=' * 55}")
     print(f"  {name} Results")
@@ -3302,7 +3345,7 @@ def print_metrics(name: str, metrics: dict) -> None:
     print(f"  {'=' * 55}")
 
 
-def generate_comparison_report(results: dict) -> None:
+def generate_comparison_report(results: dict[str, Any]) -> None:
     """Generate a detailed HTML comparison report of all evaluated models."""
     html_lines = [
         "<!DOCTYPE html>",
@@ -3368,7 +3411,7 @@ def generate_comparison_report(results: dict) -> None:
     print(f"\n📊 Detailed report saved -> {report_path}")
 
 
-def generate_json_summary(results: dict) -> None:
+def generate_json_summary(results: dict[str, Any]) -> None:
     """Export evaluation results in structured JSON format."""
     summary = {
         "evaluation_timestamp": __import__("datetime").datetime.now().isoformat(),
@@ -3404,8 +3447,8 @@ _FINETUNE_W: int = 960  # width
 
 
 def _apply_resolution_sync(
-    processor,
-    model,
+    processor: DonutProcessor,
+    model: VisionEncoderDecoderModel,
     height: int = _FINETUNE_H,
     width: int = _FINETUNE_W,
 ) -> None:
@@ -3454,13 +3497,54 @@ def _apply_resolution_sync(
 # ---------------------------------------------------------------------------
 
 
+class _TrainerCompatMixin:
+    """Adapter properties that make ExperimentConfig duck-type compatible with DonutTrainer.
+
+    DonutTrainer reads hyperparameters via attribute access using names like
+    max_epochs, learning_rate, num_train_epochs, etc.  This mixin provides
+    those aliases, keeping the parameter storage (ExperimentConfig) clean.
+    """
+
+    @property
+    def max_epochs(self) -> int:
+        return self.epochs  # type: ignore[attr-defined]
+
+    @property
+    def learning_rate(self) -> float:
+        return self.lr  # type: ignore[attr-defined]
+
+    @property
+    def per_device_train_batch_size(self) -> int:
+        return self.batch_size  # type: ignore[attr-defined]
+
+    @property
+    def id(self) -> int:
+        """Alias for experiment_id — used by dag_scheduler.py and run_all.py dispatch."""
+        return self.experiment_id  # type: ignore[attr-defined]
+
+    @property
+    def dataset_names(self) -> list[str]:
+        """Names of all datasets in this experiment.
+
+        Returns datasets directly since they are already strings in this class.
+        Provides a consistent interface with experiment_config_loader.ExperimentConfig
+        which stores DatasetEntry objects instead.
+        """
+        return self.datasets  # type: ignore[attr-defined]
+
+    @property
+    def base_checkpoint(self) -> str:
+        """Alias for base_model — used by experiment_config_loader code paths."""
+        return self.base_model  # type: ignore[attr-defined]
+
+
 @dataclass
-class ExperimentConfig:
+class ExperimentConfig(_TrainerCompatMixin):
     """Single source of truth for all training hyperparameters.
 
     Every training parameter (epochs, lr, batch_size, etc.) lives here.
-    DonutTrainer reads them via duck-typed attribute access using the
-    property aliases below (max_epochs, learning_rate, etc.).
+    DonutTrainer reads them via duck-typed attribute access provided by
+    the _TrainerCompatMixin (max_epochs, learning_rate, etc.).
     """
 
     name: str
@@ -3522,46 +3606,10 @@ class ExperimentConfig:
     # Requires aux dataset presence; does nothing for SROIE-only experiments.
     aux_loss_weight: float = 1.0
 
-    # -- Duck-typed aliases for DonutTrainer compatibility ----------------
-    # DonutTrainer reads config.max_epochs, config.learning_rate, etc.
-    # These properties ensure a single source of truth (no duplication).
-
-    @property
-    def max_epochs(self) -> int:
-        return self.epochs
-
-    @property
-    def learning_rate(self) -> float:
-        return self.lr
-
-    @property
-    def per_device_train_batch_size(self) -> int:
-        return self.batch_size
-
     @property
     def output_dir(self) -> str:
         """Default output directory; overridden at call site when needed."""
         return str(WORKSPACE / "models" / f"experiment_{self.experiment_id}")
-
-    @property
-    def id(self) -> int:
-        """Alias for experiment_id — used by dag_scheduler.py and run_all.py dispatch."""
-        return self.experiment_id
-
-    @property
-    def dataset_names(self) -> list[str]:
-        """Names of all datasets in this experiment.
-
-        Returns datasets directly since they are already strings in this class.
-        Provides a consistent interface with experiment_config_loader.ExperimentConfig
-        which stores DatasetEntry objects instead.
-        """
-        return self.datasets
-
-    @property
-    def base_checkpoint(self) -> str:
-        """Alias for base_model — used by experiment_config_loader code paths."""
-        return self.base_model
 
 
 # ---------------------------------------------------------------------------
@@ -3692,7 +3740,7 @@ TRAIN_CONFIG: dict[str, Any] = {
 }
 
 
-def _sanitize_metrics(metrics: dict) -> dict:
+def _sanitize_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
     """Replace NaN/Inf float values with JSON-safe sentinels before serialization.
 
     Python's json.dumps raises ValueError on math.nan/math.inf by default (they
@@ -3711,7 +3759,7 @@ def _sanitize_metrics(metrics: dict) -> dict:
     return sanitized
 
 
-def _config_to_dict(config: ExperimentConfig) -> dict:
+def _config_to_dict(config: ExperimentConfig) -> dict[str, Any]:
     """Serialize an ExperimentConfig to the TRAIN_CONFIG dict format.
 
     Used to record the *actual* training hyperparameters in the result JSON,
@@ -3743,11 +3791,11 @@ def train_experiment(
     samples: list[tuple[Path, dict]],
     output_dir: Path,
     val_samples: list[tuple[Path, dict]] | None = None,
-    base_processor=None,
-    base_model=None,
-    config=None,
+    base_processor: DonutProcessor | None = None,
+    base_model: VisionEncoderDecoderModel | None = None,
+    config: ExperimentConfig | None = None,
     sample_sources: list[str] | None = None,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Fine-tune DONUT on *samples* and save the model to *output_dir*.
 
     All hyperparameters come from *config* if supplied, otherwise from
@@ -3787,7 +3835,7 @@ def train_experiment(
     # Called once initially and again on each OOM retry so that GPU-resident
     # tensors from the failed attempt are never referenced on the retry.
     # ---------------------------------------------------------------------------
-    def _build_model_and_datasets():
+    def _build_model_and_datasets() -> tuple[Any, Any, Any, Any]:
         if base_processor is not None and base_model is not None:
             _proc = copy.deepcopy(base_processor)
             _mdl = copy.deepcopy(base_model)
@@ -4143,7 +4191,7 @@ def train_experiment(
 
 def evaluate_experiment(
     exp_id: int, model_dir: Path, config: ExperimentConfig | None = None
-) -> dict:
+) -> dict[str, Any]:
     """Evaluate a fine-tuned model (at *model_dir*) on the SROIE test set.
 
     Uses DonutEvaluator from donut_evaluator.py which handles:
@@ -4310,12 +4358,12 @@ def _check_disk_space_before_experiment(exp_id: int) -> bool:
 
 def run_experiment(
     exp_id: int,
-    base_processor=None,
-    base_model=None,
-    overrides: dict | None = None,
+    base_processor: DonutProcessor | None = None,
+    base_model: VisionEncoderDecoderModel | None = None,
+    overrides: dict[str, Any] | None = None,
     keep_model: bool = False,
     no_disk_cleanup: bool = False,
-) -> dict:
+) -> dict[str, Any]:
     """Run a single experiment: train, evaluate, save results.
 
     Checks cache validity (datasets AND hyperparams must match) before
@@ -4686,7 +4734,7 @@ def run_experiment(
     return result
 
 
-def run_custom_experiment(config: ExperimentConfig, result_file: Path) -> dict:
+def run_custom_experiment(config: ExperimentConfig, result_file: Path) -> dict[str, Any]:
     """Run a single experiment with custom hyperparameters (for sweeps).
 
     Similar to run_experiment but:
@@ -4762,11 +4810,11 @@ def run_custom_experiment(config: ExperimentConfig, result_file: Path) -> dict:
 
 
 def run_experiment_from_config(
-    cfg,
-    base_processor=None,
-    base_model=None,
-    overrides: dict | None = None,
-) -> dict:
+    cfg: _YAMLExperimentConfig,
+    base_processor: DonutProcessor | None = None,
+    base_model: VisionEncoderDecoderModel | None = None,
+    overrides: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Run a YAML-defined DONUT experiment (IDs 9+) via run_custom_experiment().
 
     Bridges the ``experiment_config_loader.ExperimentConfig`` object (YAML-sourced)
@@ -4839,7 +4887,7 @@ def run_experiment_from_config(
 
 
 def _print_experiment_summary(
-    exp_id: int, config: ExperimentConfig, metrics: dict, elapsed_sec: float = 0.0
+    exp_id: int, config: ExperimentConfig, metrics: dict[str, Any], elapsed_sec: float = 0.0
 ) -> None:
     """Print a rich Panel summary for the experiment result (plain text fallback).
 

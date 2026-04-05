@@ -82,6 +82,7 @@ import traceback
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 # Ensure the script's own directory is on sys.path so sibling modules
 # (constants, reporting, data_pipeline, …) are importable regardless of CWD.
@@ -89,7 +90,7 @@ _SCRIPT_DIR = str(Path(__file__).resolve().parent)
 if _SCRIPT_DIR not in sys.path:
     sys.path.insert(0, _SCRIPT_DIR)
 
-from constants import BASE_MODEL, IMAGE_EXTS, SEED, _gpu_cleanup  # noqa: E402, I001
+from constants import BASE_MODEL, DONUT_IMAGE_SIZE, IMAGE_EXTS, SEED, _gpu_cleanup  # noqa: E402, I001
 
 __all__ = [
     "PipelineOrchestrator",
@@ -343,7 +344,7 @@ def _install_dependencies() -> None:
         )
 
 
-def _verify_critical_packages() -> list:
+def _verify_critical_packages() -> list[str]:
     """Return list of still-missing critical packages after install attempt."""
     return [pkg for pkg in _CRITICAL_VERIFY_PACKAGES if _is_package_missing(pkg)]
 
@@ -491,7 +492,7 @@ class _DualStreamHandler(logging.Handler):
         "- epochs:",
     )
 
-    def __init__(self, file_path: Path, collapse_after: int = 3):
+    def __init__(self, file_path: Path, collapse_after: int = 3) -> None:
         super().__init__()
         self.file_path = file_path
         self.file_handle = open(str(file_path), "a", encoding="utf-8")  # noqa: SIM115
@@ -664,7 +665,16 @@ class HyperparameterGrid:
 # When True, fancy box-drawing banners and tables are printed to console.
 # Set by --fancy CLI flag in main().  All verbose output still goes to
 # terminal.txt regardless of this flag.
-_FANCY_OUTPUT: bool = False
+
+
+class _OutputConfig:
+    """Runtime output configuration — avoids a bare mutable global.
+
+    Accessing ``_OutputConfig.fancy`` is thread-safe for reads; the single
+    write happens once in ``main()`` before any workers are spawned.
+    """
+
+    fancy: bool = False
 
 
 def _banner(text: str) -> None:
@@ -701,7 +711,7 @@ def _step(n: int, total: int, desc: str) -> None:
         print(f"\n[{n}/{total}] {desc}")
 
 
-def _load_summary_rows(results_dir: Path) -> list[dict]:
+def _load_summary_rows(results_dir: Path) -> list[dict[str, Any]]:
     """Load experiment result rows from JSON files for summary display."""
     rows = []
     for rf in sorted(results_dir.glob("experiment_*.json")):
@@ -830,7 +840,7 @@ def _print_final_summary(results_dir: Path, pdf_compiled: bool | None = None) ->
 
         rows = _load_summary_rows(results_dir)
         if not rows:
-            if _FANCY_OUTPUT:
+            if _OutputConfig.fancy:
                 _print_fancy_summary(results_dir, pdf_compiled)
             else:
                 _compact_summary(results_dir, pdf_compiled)
@@ -891,7 +901,7 @@ def _print_final_summary(results_dir: Path, pdf_compiled: bool | None = None) ->
     except Exception:
         pass
 
-    if _FANCY_OUTPUT:
+    if _OutputConfig.fancy:
         _print_fancy_summary(results_dir, pdf_compiled)
     else:
         _compact_summary(results_dir, pdf_compiled)
@@ -902,7 +912,7 @@ def _print_final_summary(results_dir: Path, pdf_compiled: bool | None = None) ->
 # ---------------------------------------------------------------------------
 
 
-def _parse_param_overrides(params: list[str]) -> dict:
+def _parse_param_overrides(params: list[str]) -> dict[str, Any]:
     """Parse a list of 'KEY=VALUE' strings into a dict with auto-cast values.
 
     Numeric values are auto-cast to int or float where possible; all others
@@ -1021,7 +1031,7 @@ def _print_all_params() -> None:
     print(f"\n{eq}\n")
 
 
-def _apply_params_override(args) -> None:
+def _apply_params_override(args: argparse.Namespace) -> None:
     """Read params_override.json and apply its contents to the EXPERIMENTS global.
 
     File location: --params-override path (default: /workspace/params_override.json).
@@ -1064,7 +1074,7 @@ def _apply_params_override(args) -> None:
     # Gather valid field names from ExperimentConfig
     valid_fields = {f.name for f in dataclasses.fields(re_mod.ExperimentConfig)}
 
-    def _warn_unknown(keys: dict, scope: str) -> dict:
+    def _warn_unknown(keys: dict[str, Any], scope: str) -> dict[str, Any]:
         clean = {}
         for k, v in keys.items():
             if k in valid_fields:
@@ -1154,7 +1164,7 @@ def _setup_hf_auth() -> None:
 # ---------------------------------------------------------------------------
 
 
-def stage_install(args) -> StageResult:
+def stage_install(args: argparse.Namespace) -> StageResult:
     """Clone SROIE from GitHub and set up train/val/test directories using 80/10/10 split."""
     _banner("STAGE 0 — SROIE data install")
     warnings: list[str] = []
@@ -1280,7 +1290,7 @@ def stage_install(args) -> StageResult:
 # ---------------------------------------------------------------------------
 
 
-def stage_download(args) -> StageResult:
+def stage_download(args: argparse.Namespace) -> StageResult:
     """Verify SROIE exists, fetch auxiliary datasets in parallel, then download model inline."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -1401,7 +1411,7 @@ def stage_download(args) -> StageResult:
 # ---------------------------------------------------------------------------
 
 
-def stage_pretrained_baseline(args) -> StageResult:
+def stage_pretrained_baseline(args: argparse.Namespace) -> StageResult:
     """Evaluate the CORD-finetuned DONUT model as a cross-dataset transfer (CORD→SROIE) baseline.
 
     Loads ``naver-clova-ix/donut-base-finetuned-cord-v2`` and applies a structural
@@ -1479,8 +1489,8 @@ def stage_pretrained_baseline(args) -> StageResult:
 
 
 def _interactive_experiment_selection(
-    all_configs: "list",
-) -> "list":
+    all_configs: "list[Any]",
+) -> "list[Any]":
     """
     Prompt the user at the terminal to select which experiments to run.
 
@@ -1525,7 +1535,7 @@ def _interactive_experiment_selection(
     return selected
 
 
-def _load_experiment_configs_for_run(args) -> "list":
+def _load_experiment_configs_for_run(args: argparse.Namespace) -> "list[Any]":
     """
     Load the experiment configs to run, respecting the following priority:
 
@@ -1627,10 +1637,14 @@ def _ensure_processor_config(path: str = "processor_config.json") -> None:
     p = Path(path)
     if p.exists():
         return
-    cfg = {"image_processor": {"size": {"height": 1280, "width": 960}}}
+    cfg = {
+        "image_processor": {"size": {"height": DONUT_IMAGE_SIZE[0], "width": DONUT_IMAGE_SIZE[1]}}
+    }
     try:
         p.write_text(json.dumps(cfg, indent=2) + "\n")
-        logging.getLogger(__name__).debug("[env] Generated %s (height=1280, width=960)", p)
+        logging.getLogger(__name__).debug(
+            "[env] Generated %s (height=%d, width=%d)", p, *DONUT_IMAGE_SIZE
+        )
     except OSError as exc:
         logging.getLogger(__name__).debug(
             "[env] Could not write %s: %s — continuing without it", p, exc
@@ -1677,12 +1691,12 @@ def _incremental_push_result(exp_id: int) -> None:
 
 
 def _autonomous_feedback_loop(
-    failed_ids: list,
+    failed_ids: list[int],
     *,
     args,
-    yaml_cfg_map: dict,
+    yaml_cfg_map: dict[int, Any],
     use_yaml_dispatch: bool,
-) -> list:
+) -> list[int]:
     """Run CI auto-fix and retry any experiments that failed with code errors.
 
     This is the "stop being the glue" feedback loop:
@@ -1782,7 +1796,7 @@ def _autonomous_feedback_loop(
     return still_failed
 
 
-def stage_experiments(args) -> StageResult:
+def stage_experiments(args: argparse.Namespace) -> StageResult:
     """Run all (or a single) experiment(s) SEQUENTIALLY. Returns StageResult."""
     import run_experiments as re_mod  # local module
 
@@ -2102,7 +2116,7 @@ def stage_experiments(args) -> StageResult:
     )
 
 
-def _run_trocr_yolo_experiment(args, cfg) -> dict:
+def _run_trocr_yolo_experiment(args: argparse.Namespace, cfg) -> dict[str, Any]:
     """
     Dispatch Experiment 12 (arch_type=trocr_yolo) to the TrOCR+YOLO training path.
     Returns a result dict compatible with the stage_experiments summary logic.
@@ -2135,7 +2149,7 @@ def _run_trocr_yolo_experiment(args, cfg) -> dict:
     }
 
 
-def _run_zero_shot_experiment(args, cfg) -> dict:
+def _run_zero_shot_experiment(args: argparse.Namespace, cfg) -> dict[str, Any]:
     """
     Run a zero-shot evaluation (no training).  Loads the base checkpoint,
     runs inference on the SROIE test set, and saves results.
@@ -2188,7 +2202,9 @@ def _run_zero_shot_experiment(args, cfg) -> dict:
         }
 
 
-def _run_yaml_donut_experiment(args, cfg, base_processor=None, base_model=None) -> dict:
+def _run_yaml_donut_experiment(
+    args: argparse.Namespace, cfg, base_processor=None, base_model=None
+) -> dict[str, Any]:
     """
     Run a DONUT experiment defined purely in YAML (IDs 9+ not in legacy EXPERIMENTS dict).
     Delegates to run_experiments.run_experiment_from_config().
@@ -2218,7 +2234,7 @@ def _run_yaml_donut_experiment(args, cfg, base_processor=None, base_model=None) 
 # ---------------------------------------------------------------------------
 
 
-def stage_trocr_data_prep(args) -> StageResult:
+def stage_trocr_data_prep(args: argparse.Namespace) -> StageResult:
     """Prepare YOLO bbox labels and TrOCR line crops from existing SROIE split.
 
     Uses the SROIE split created by stage_install() (500/63/63), ensuring
@@ -2257,7 +2273,7 @@ def stage_trocr_data_prep(args) -> StageResult:
 # ---------------------------------------------------------------------------
 
 
-def stage_trocr_experiments(args) -> StageResult:
+def stage_trocr_experiments(args: argparse.Namespace) -> StageResult:
     """Train YOLOv8 + TrOCR and evaluate on the same 63 SROIE test images.
 
     By default trains a **separate TrOCR model for each of the 8 experiments**
@@ -2463,13 +2479,13 @@ def stage_trocr_experiments(args) -> StageResult:
 
 
 def _evaluate_field_assigner(
-    test_samples: list,
+    test_samples: list[Any],
     yolo_model,
     trocr_model,
     trocr_processor,
     assigner,
     logger: "logging.Logger",
-) -> dict:
+) -> dict[str, Any]:
     """Run inference on every test sample with the given assigner and return F1 metrics.
 
     Uses the canonical ``compute_metrics`` from ``run_experiments`` so scoring is
@@ -2501,7 +2517,7 @@ def _evaluate_field_assigner(
     return _re.compute_metrics(predictions, ground_truths)
 
 
-def _print_backend_comparison(all_results: dict, logger: "logging.Logger") -> None:
+def _print_backend_comparison(all_results: dict[str, Any], logger: "logging.Logger") -> None:
     """Print a comparison table of all TrOCR+YOLO backend F1 scores to stdout and log."""
     _COLS = ("Global F1", "Company", "Date", "Address", "Total", "Params")
     _W = (12, 10, 10, 10, 10, 14)
@@ -2583,7 +2599,7 @@ def _print_backend_comparison(all_results: dict, logger: "logging.Logger") -> No
 # ---------------------------------------------------------------------------
 
 
-def stage_trocr_all_backends(args) -> StageResult:
+def stage_trocr_all_backends(args: argparse.Namespace) -> StageResult:
     """Train TrOCR+YOLO once, then train and evaluate all three FieldAttentionAssigner backends.
 
     Execution order
@@ -2825,7 +2841,7 @@ def stage_trocr_all_backends(args) -> StageResult:
     return StageResult(name="TrOCR All Backends", duration=0.0, exit_status=0, warnings=warnings)
 
 
-def stage_benchmark(args) -> StageResult:
+def stage_benchmark(args: argparse.Namespace) -> StageResult:
     """Run head-to-head benchmark: DONUT vs YOLOv8+TrOCR+Regex on the SROIE test set.
 
     Automatically selects the best DONUT experiment model (highest global F1)
@@ -2988,7 +3004,7 @@ def stage_benchmark(args) -> StageResult:
 # ---------------------------------------------------------------------------
 
 
-def stage_comparison(args) -> StageResult:
+def stage_comparison(args: argparse.Namespace) -> StageResult:
     """Generate cross-architecture comparison plots and tables.
 
     Produces plots and LaTeX-injectable content comparing DONUT vs
@@ -3016,7 +3032,7 @@ def stage_comparison(args) -> StageResult:
 # ---------------------------------------------------------------------------
 
 
-def stage_paper(args) -> StageResult:
+def stage_paper(args: argparse.Namespace) -> StageResult:
     """Generate LaTeX tables, plots, fill paper_filled.tex and presentation_filled.tex.
 
     Handles partial runs gracefully: if ``all_experiments.json`` is missing or
@@ -3172,7 +3188,7 @@ def stage_paper(args) -> StageResult:
 # ---------------------------------------------------------------------------
 
 
-def stage_push_results(args) -> StageResult:
+def stage_push_results(args: argparse.Namespace) -> StageResult:
     """Auto-commit and push experiment results to the current branch."""
     t0 = time.monotonic()
     warnings: list[str] = []
@@ -3247,7 +3263,7 @@ def stage_push_results(args) -> StageResult:
 class PipelineOrchestrator:
     """Orchestrates all pipeline stages SEQUENTIALLY with timing and status tracking."""
 
-    def __init__(self, args):
+    def __init__(self, args: argparse.Namespace) -> None:
         self.args = args
         self.stages: list[StageResult] = []
 
@@ -3341,7 +3357,7 @@ class PipelineOrchestrator:
         if self.args.paper_only:
             self._run_stage("Paper Generation", stage_paper)
             logging.getLogger(__name__).debug("\n%s", repr(self))
-            if _FANCY_OUTPUT:
+            if _OutputConfig.fancy:
                 print(repr(self))
             return exit_code
 
@@ -3420,7 +3436,7 @@ class PipelineOrchestrator:
 
         # Log full box-drawing execution table to terminal.txt (debug); show compact on console.
         logging.getLogger(__name__).debug("\n%s", repr(self))
-        if _FANCY_OUTPUT:
+        if _OutputConfig.fancy:
             print(repr(self))
         return exit_code
 
@@ -3479,7 +3495,7 @@ class PipelineOrchestrator:
 # ---------------------------------------------------------------------------
 
 
-def _quick_mode_handler(args, logger: logging.Logger) -> int:
+def _quick_mode_handler(args: argparse.Namespace, logger: logging.Logger) -> int:
     """Execute quick mode: train only Exp 1 (SROIE) + TrOCR+YOLO.
 
     Steps:
@@ -3558,7 +3574,7 @@ def _quick_mode_handler(args, logger: logging.Logger) -> int:
         return 2
 
 
-def _quick_all_mode_handler(args, logger: logging.Logger) -> int:
+def _quick_all_mode_handler(args: argparse.Namespace, logger: logging.Logger) -> int:
     """Execute quick mode with hyperparameter sweep.
 
     Runs quick test for multiple hyperparameter combinations and generates
@@ -3686,7 +3702,7 @@ def _quick_all_mode_handler(args, logger: logging.Logger) -> int:
 # ---------------------------------------------------------------------------
 
 
-def _mini_mode_handler(args, logger: logging.Logger) -> int:
+def _mini_mode_handler(args: argparse.Namespace, logger: logging.Logger) -> int:
     """Mini mode: 1 DONUT exp (5 epochs) + YOLO (50 epochs, production) + TrOCR (5 epochs).
 
     Produces paper_mini.tex with all \\VAR{} placeholders resolved.
@@ -3767,7 +3783,7 @@ def _mini_mode_handler(args, logger: logging.Logger) -> int:
     return _generate_mini_paper(args_paper, logger)
 
 
-def _micro_mode_handler(args, logger: logging.Logger) -> int:
+def _micro_mode_handler(args: argparse.Namespace, logger: logging.Logger) -> int:
     """Micro mode: ultra-fast smoke-test targeting < 10 minutes.
 
     Optimisation levers vs mini mode:
@@ -3905,7 +3921,7 @@ def _micro_mode_handler(args, logger: logging.Logger) -> int:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _superfast_mode_handler(args, logger: logging.Logger) -> int:
+def _superfast_mode_handler(args: argparse.Namespace, logger: logging.Logger) -> int:
     """Superfast mode: TrOCR+YOLO only, absolute bare minimum, target <3 min on RTX 4090.
 
     No DONUT training.  Runs the full TrOCR+YOLO pipeline at minimum settings,
@@ -3976,7 +3992,7 @@ def _superfast_mode_handler(args, logger: logging.Logger) -> int:
     return _generate_mini_paper(args_paper, logger)
 
 
-def _instant_mode_handler(args, logger: logging.Logger) -> int:
+def _instant_mode_handler(args: argparse.Namespace, logger: logging.Logger) -> int:
     """Instant mode: maximum caching, target <30s on repeat runs.
 
     First run: behaves like --superfast but also builds tensor caches and
@@ -4053,7 +4069,9 @@ def _instant_mode_handler(args, logger: logging.Logger) -> int:
     return _generate_mini_paper(args_paper, logger)
 
 
-def _stage_trocr_data_prep_cached(args, logger: logging.Logger) -> "StageResult":
+def _stage_trocr_data_prep_cached(
+    args: argparse.Namespace, logger: logging.Logger
+) -> "StageResult":
     """Enhanced data-prep stage for instant mode: uses a hash-based marker file.
 
     Writes ``data/.prep_complete_{hash}.marker`` after a successful
@@ -4130,7 +4148,7 @@ def _stage_trocr_data_prep_cached(args, logger: logging.Logger) -> "StageResult"
     return StageResult(name="TrOCR Data Prep", duration=0.0, exit_status=0, warnings=warnings)
 
 
-def _generate_mini_paper(args, logger: logging.Logger) -> int:
+def _generate_mini_paper(args: argparse.Namespace, logger: logging.Logger) -> int:
     """Generate paper_mini.tex, guaranteed to have zero unresolved \\VAR{} placeholders.
 
     Strategy: build_var_map() populates as many keys as possible from available
@@ -4676,8 +4694,7 @@ def main() -> None:
 
     # Fancy mode: enable box-drawing banners and decorative console output.
     if getattr(args, "fancy", False):
-        global _FANCY_OUTPUT  # noqa: PLW0603
-        _FANCY_OUTPUT = True
+        _OutputConfig.fancy = True
 
     # EARLY DISPATCH: Check for quick mode before running full pipeline
     if args.quick:

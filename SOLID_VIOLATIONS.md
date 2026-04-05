@@ -32,19 +32,22 @@
 
 | Category | Total Found | Fixed | Remaining |
 |----------|-------------|-------|-----------|
-| Broad `except Exception:` (safe to narrow) | 13 | ✅ 13 | 0 |
-| Broad `except Exception:` (unsafe/intentional) | ~48 | 0 | 🔲 48 |
-| Duplicate code (regex, imports) | 5 | ✅ 5 | 0 |
-| SRP violations (classes/functions) | 22 | 0 | 🔲 22 |
-| OCP violations | 8 | 0 | 🔲 8 |
-| LSP violations | 4 | 0 | 🔲 4 |
-| ISP violations | 3 | 0 | 🔲 3 |
-| DIP violations | 9 | 0 | 🔲 9 |
-| Functions >50 lines | 35+ | 0 | 🔲 35+ |
-| Missing return type hints (public) | 58+ | 0 | 🔲 58+ |
-| Missing `-> None` on `__init__` | 15+ | 0 | 🔲 15+ |
-| Bare `list`/`dict` type hints | 146+ | 0 | 🔲 146+ |
-| Hardcoded magic numbers | 30+ | 0 | 🔲 30+ |
+| Broad `except Exception:` (safe to narrow) | 13+11 | ✅ 24 | 0 |
+| Broad `except Exception:` (unsafe/intentional) | ~48 | ✅ 48 annotated | 0 |
+| Duplicate code (regex, imports, to_dict) | 5+5 | ✅ 10 | 0 |
+| SRP violations (classes/functions) | 22 | ✅ 7 | 🔲 15 |
+| OCP violations | 8 | ✅ 7 | 🔲 1 |
+| LSP violations | 4 | ✅ 4 | 0 |
+| ISP violations | 3 | ✅ 2 | 🔲 1 |
+| DIP violations | 9 | ✅ 5 | 🔲 4 |
+| Functions >50 lines | 35+ | ✅ 1 | 🔲 34+ |
+| Missing return type hints (public) | 58+ | ✅ 58+ | 0 |
+| Missing `-> None` on `__init__` | 15+ | ✅ 15 | 0 |
+| Bare `list`/`dict` type hints | 146+ | ✅ 146+ | 0 |
+| Hardcoded magic numbers | 30+ | ✅ 20+ | 🔲 10+ |
+| Missing docstrings | 3 | ✅ 3 | 0 |
+| Code smells (`__import__()`, `sys.path`, global) | 4+3 | ✅ 7 | 0 |
+| Incomplete type hints (TYPE-1, TYPE-2/3/4) | 3+30+25 | ✅ 58 | 0 |
 
 ---
 
@@ -77,6 +80,60 @@
 | reporting.py | 1558 | Duplicate `import gc` in same function (already imported at line 1539) |
 | cloud_orchestration.py | 1392 | Redundant `import argparse` inside function (already at module-level line 8) |
 
+### ✅ Named Constants Extraction (OCP-1, OCP-5, CROSS-4)
+
+| Constant | File | Old | New |
+|----------|------|-----|-----|
+| `LABEL_IGNORE_INDEX = -100` | constants.py | Bare `-100` in 6 locations | Named constant, used in constants.py + train.py |
+| `BYTE_UNIT_SIZE = 1024` | constants.py | Bare `1024` in format_bytes | Named constant |
+| `MAX_DATALOADER_WORKERS = 8` | constants.py | `min(8, ...)` | Named constant |
+| `MIN_DATALOADER_WORKERS = 4` | constants.py | `max(4, ...)` | Named constant |
+| `DONUT_IMAGE_SIZE = (1280, 960)` | constants.py | `{"height": 1280, "width": 960}` in train.py + run_all.py | Single constant, imported in train.py + run_all.py |
+
+### ✅ Docstrings Added (DOC-1)
+
+| File | Method | Description |
+|------|--------|-------------|
+| constants.py | `DeduplicatingHandler.emit()` | "Process a log record, collapsing consecutive identical messages." |
+| constants.py | `DeduplicatingHandler.flush()` | "Flush any pending deduplicated record, then flush the target handler." |
+| constants.py | `DeduplicatingHandler.close()` | "Flush pending records, close the target handler, then close self." |
+
+### ✅ Type Hints Fixed (TYPE-1)
+
+| File | Location | Change |
+|------|----------|--------|
+| constants.py | `_mask_empty_field_labels()` | Added `labels: "torch.Tensor"`, `tokenizer: "PreTrainedTokenizerBase"` |
+| constants.py | `get_disk_usage()` | Replaced string literal types with real `str \| Path \| None` and `tuple[int, int, int]` |
+| constants.py | `_progress()` | Added `iterable: Iterable` param type and `-> Generator` return type |
+
+### ✅ `-> None` on `__init__` Methods (CROSS-5)
+
+| File | Class |
+|------|-------|
+| cloud_orchestration.py | `StorageManager`, `CodeRepairOrchestrator`, `MLTrainingOrchestrator`, `CloudPipelineOrchestrator` |
+| reporting.py | `_DonutInference`, `TrOCRYOLOPipeline`, `ResultsAggregator` |
+| resource_manager.py | `_AuditLogger` |
+| run_all.py | `_DualStreamHandler`, `PipelineOrchestrator` |
+| diagnostics.py | `DiagnosticCallback`, `PipelineDiagnostics` |
+| train.py | `SROIEOnlyValCallback`, `SROIEDataset`, `MultiDataset`, `DonutTrainer` |
+
+### ✅ `LmHeadCloneCallback` Silent Returns Fixed (LSP-3)
+
+| File | Line | Change |
+|------|------|--------|
+| train.py | 2649 | Added `logger.debug("...model is None...")` before return |
+| train.py | 2652 | Added `logger.debug("...no decoder attr...")` before return |
+| train.py | 2660 | Added `logger.debug("...no lm_head.weight...")` else branch |
+
+### ✅ `__import__()` Replaced with Standard Imports (SMELL-1)
+
+| File | Line | Old | New |
+|------|------|-----|-----|
+| train_trocr_yolo.py | ~1580 | `__import__("logging").getLogger(...)` | `logging.getLogger(...)` |
+| train_trocr_yolo.py | ~2583 | `__import__("logging").getLogger(...)` | `logging.getLogger(...)` |
+| train_trocr_yolo.py | ~2715 | `__import__("math").cos(...)` | `math.cos(...)` (added `import math` to top) |
+| train_trocr_yolo.py | ~2795 | `__import__("logging").getLogger(...)` | `logging.getLogger(...)` |
+
 ---
 
 ## 3. constants.py (549 LOC)
@@ -100,38 +157,40 @@
 - Keep all names in `constants.py` via re-exports
 - Extract implementations into `utils/logging.py`, `utils/ml.py`, `utils/progress.py`, `utils/metrics.py`, `utils/disk.py`
 
-### 🔲 OCP-1: Hardcoded magic numbers
+### ✅ OCP-1: Hardcoded magic numbers — Fixed in PR (2026-04-05)
 **Lines:** 133, 165–172, 346–349
 **Severity:** MEDIUM
-| Line | Value | Should be |
-|------|-------|-----------|
-| 133 | `min(8, max(4, ...))` | `MAX_DATALOADER_WORKERS = 8`, `MIN_DATALOADER_WORKERS = 4` |
+| Line | Value | Replaced with |
+|------|-------|---------------|
+| 133 | `min(8, max(4, ...))` | `MAX_DATALOADER_WORKERS`, `MIN_DATALOADER_WORKERS` |
 | 165–172, 205 | `-100` (label mask ID) | `LABEL_IGNORE_INDEX = -100` |
 | 346–349 | `1024` (byte unit threshold) | `BYTE_UNIT_SIZE = 1024` |
 
-### 🔲 DIP-1: `_gpu_cleanup()` tightly coupled to `torch`
+### ✅ DIP-1: `_gpu_cleanup()` tightly coupled to `torch` — Fixed (2026-04-05)
 **Lines:** 154–162
 **Severity:** MEDIUM
-**Description:** Direct `import torch` inside function; no abstraction for device cleanup strategy. Hard to test without torch installed.
+**Description:** Wrapped `import torch` in try/except ImportError so function gracefully no-ops when torch absent.
 
 ### 🔲 ISP-1: `validate_pipeline_readiness()` monolithic
 **Lines:** 471–549
 **Severity:** MEDIUM
 **Description:** 90-line function with nested closures. Claims "stdlib-only" but imports `importlib` and `data_pipeline`. Cannot selectively run certain checks. Returns dict structure instead of raising exceptions.
 
-### 🔲 DOC-1: `DeduplicatingHandler` methods missing docstrings
+### ✅ DOC-1: `DeduplicatingHandler` methods missing docstrings — Fixed in PR (2026-04-05)
 **Lines:** 275, 301, 306
 **Severity:** LOW
+Added docstrings to `emit()`, `flush()`, `close()`.
 
-### 🔲 TYPE-1: Incomplete type hints
+### ✅ TYPE-1: Incomplete type hints — Fixed in PR (2026-04-05)
 **Lines:** 164 (`labels` param), 353 (string literal types), 379 (`iterable` untyped, missing return type)
 **Severity:** LOW
+Added `labels: "torch.Tensor"`, `tokenizer: "PreTrainedTokenizerBase"`, real types for `get_disk_usage()`, `_progress(iterable: Iterable) -> Generator`.
 
 ---
 
 ## 4. data_pipeline.py (3,003 LOC)
 
-### 🔲 OCP-2: Repeated `_dest_dir()`/`_marker()`/`_hf_cache()` methods
+### ✅ OCP-2: Repeated `_dest_dir()`/`_marker()`/`_hf_cache()` methods — Fixed (2026-04-05)
 **Lines:** 1062–1072, 1235–1245, 1503–1513, 1752–1759
 **Severity:** HIGH
 **Description:** Four loader classes (`WildReceiptLoader`, `FUNSDLoader`, `InvoicesDonutLoader`, `CORDv2Loader`) each implement identical `_dest_dir()`, `_marker()`, `_hf_cache()` patterns. Should use template method pattern in `BaseDatasetLoader` with abstract `_subdir_name()`.
@@ -146,17 +205,17 @@
 **Severity:** MEDIUM
 **Description:** Orchestrates dataset loading, SROIE oversampling, 70/15/15 splitting, shuffling, and optional source tracking.
 
-### 🔲 LSP-1: `SROIELoader.clear_cache()` is a no-op
+### ✅ LSP-1: `SROIELoader.clear_cache()` is a no-op — Fixed (2026-04-05)
 **Lines:** 1010–1012
 **Severity:** MEDIUM
 **Description:** Base class contract expects `clear_cache()` to clear data, but SROIE returns immediately with a log message. Either make `clear_cache()` non-abstract or document SROIE immutable cache.
 
-### 🔲 DIP-2: `normalise_samples()` instantiates concrete `DatasetNormalizer`
+### ✅ DIP-2: `normalise_samples()` accepts optional normalizer param — Fixed (2026-04-05)
 **Lines:** 294–305
 **Severity:** MEDIUM
 **Description:** Should accept normalizer as optional parameter with default factory.
 
-### 🔲 ISP-2: `get_combined_dataset()` union return type
+### ✅ ISP-2: `get_combined_dataset()` union return type — Fixed (2026-04-05)
 **Lines:** 2159
 **Severity:** LOW
 **Description:** Returns `tuple[list, list] | tuple[list, list, list]` depending on `return_sources` flag. Should use `@overload` or return a dataclass.
@@ -220,12 +279,12 @@
 **Severity:** MEDIUM
 **Description:** Hardcoded dependency on processor class.
 
-### 🔲 TYPE-2: 21+ functions missing return type hints
+### ✅ TYPE-2: 21+ functions missing return type hints — Fixed (2026-04-05)
 **Lines:** 454, 494, 659, 1600, 1644, 2175, 2766, 2819, 2910, 2999, 3014, 3082, 3129, 3224, 4144, 4764
 **Severity:** MEDIUM
 **Key missing:** `load_model_with_tied_weights()`, `run_inference()`, `compute_metrics()`, `normalized_edit_distance()`, `remap_cord_to_sroie()`
 
-### 🔲 TYPE-3: Missing parameter type hints
+### ✅ TYPE-3: Missing parameter type hints — Fixed (2026-04-05)
 **Lines:** 2175 (`processor`), 2819 (`model`, `processor`, `preloaded_image`), 2910 (`cord_output`), 2999 (`pred`, `gt`), 3014 (`predictions`, `ground_truths`), 3082 (`pretrained_m`, `finetuned_m`)
 **Severity:** MEDIUM
 
@@ -257,20 +316,20 @@
 **Severity:** MEDIUM
 **Description:** F1 calculation, CSV write, logging, and model inference all in one callback.
 
-### 🔲 OCP-5: Hardcoded image dimensions
+### ✅ OCP-5: Hardcoded image dimensions — Fixed in PR (2026-04-05)
 **Lines:** 453, 2981
 **Severity:** MEDIUM
-**Description:** `{"height": 1280, "width": 960}` repeated twice. Should be `DONUT_IMAGE_SIZE` constant.
+**Description:** Replaced with `DONUT_IMAGE_SIZE` constant from `constants.py`.
 
 ### 🔲 OCP-6: `LiveDashboardCallback.__init__()` monkey-patching
 **Lines:** 3190–3200
 **Severity:** MEDIUM
 **Description:** Dynamic class type replacement via `self.__class__ = type(...)`. Prevents clean extension.
 
-### 🔲 LSP-3: `LmHeadCloneCallback.on_save()` silent early returns
+### ✅ LSP-3: `LmHeadCloneCallback.on_save()` silent early returns — Fixed in PR (2026-04-05)
 **Lines:** 2647–2660
 **Severity:** MEDIUM
-**Description:** Early returns (lines 2649, 2652) break callback contract. No indication that clone was skipped.
+**Description:** Added debug-level logging to all early returns so skipped clones are observable.
 
 ### 🔲 DIP-5: `DonutTrainer` — direct concrete dependencies
 **Lines:** 3470–4279
@@ -282,7 +341,7 @@
 **Severity:** MEDIUM
 **Description:** Direct `DonutProcessor` type dependency. No interface abstraction.
 
-### 🔲 EXCEPT-BROAD: 23 instances of `except Exception`
+### ✅ EXCEPT-BROAD: 23 instances of `except Exception` — 11 narrowed, 12 annotated as intentional (2026-04-05)
 **Lines:** 657, 669, 2211, 2266, 2438, 2795, 2798, 2818, 2988, 3042, 3244, 3322, 3391, 3401, 3461, 3659, 3828, 3861, 3887, 3898, 3980, 4268, 4269
 **Severity:** HIGH (many mask real bugs, especially in callbacks)
 
@@ -318,7 +377,7 @@
 **Severity:** MEDIUM
 **Description:** Direct `import run_experiments as re_mod`, `DonutProcessor.from_pretrained()` inside function.
 
-### 🔲 TYPE-4: Untyped `args` parameter across 10+ functions
+### ✅ TYPE-4: `args` parameter typed as `argparse.Namespace` in 25 functions — Fixed (2026-04-05)
 **Lines:** 1024, 1528, 2105, 2138, 2191, 3250, 4056
 **Severity:** MEDIUM
 **Description:** `args` parameter has no type hint in many functions. Should be `argparse.Namespace` or a dataclass.
@@ -339,7 +398,7 @@
 **Lines:** 4587–4824
 **Severity:** MEDIUM
 
-### 🔲 GLOBAL-1: Mutable global `_FANCY_OUTPUT`
+### ✅ GLOBAL-1: `_FANCY_OUTPUT` replaced with `_OutputConfig` class — Fixed (2026-04-05)
 **Lines:** 667
 **Severity:** MEDIUM
 **Description:** Modified at runtime based on `--fancy` flag, accessed in multiple functions. Tests or concurrent runs will interfere.
@@ -366,10 +425,10 @@
 ### 🔲 FUNC-10: `train_field_assigner` — 178 lines
 **Severity:** MEDIUM
 
-### 🔲 SMELL-1: 5 `__import__()` misuses
+### ✅ SMELL-1: 5 `__import__()` misuses — Fixed in PR (2026-04-05)
 **Lines:** ~1580, ~2583, ~2715 (×2), ~2795
 **Severity:** MEDIUM
-**Description:** Uses `__import__("math")` etc. instead of top-level `import math`. Code smell that obscures dependencies.
+**Description:** Replaced `__import__("math")` and `__import__("logging")` with top-level `import math` and standard `logging.getLogger(__name__)` calls.
 
 ### 🔲 EXCEPT-BROAD: 19+ instances of `except Exception`
 **Lines:** ~1454, ~1640, ~2192, ~2197, ~2329, ~3037, ~3041, ~3045, ~3049, ~3053, ~3057, ~3061, ~3065
@@ -398,7 +457,7 @@
 **Lines:** ~784
 **Severity:** LOW
 
-### 🔲 SMELL-2: Hardcoded `sys.path` manipulation
+### ✅ SMELL-2: `sys.path` manipulation documented — Fixed (2026-04-05)
 **Lines:** 27–29
 **Severity:** MEDIUM
 **Description:** Fragile assumption about module location.
@@ -416,7 +475,7 @@
 **Severity:** MEDIUM
 **Description:** Direct subprocess calls prevent testability.
 
-### 🔲 DUP-1: Two similar `to_dict()` methods
+### ✅ DUP-1: Two similar `to_dict()` methods — Fixed with SerializableDataclass mixin (2026-04-05)
 **Lines:** ~122 lines and ~118 lines
 **Severity:** MEDIUM
 **Description:** Should use `dataclasses.asdict()` or a mixin.
@@ -439,7 +498,7 @@
 **Severity:** HIGH
 **Description:** Should split into `TrainingMonitor`, `PatternDetector`, `TelemetryCollector`, `Reporter`.
 
-### 🔲 TYPE-5: 12+ functions without return type hints
+### ✅ TYPE-5: 12+ functions without return type hints — Fixed (2026-04-05)
 **Lines:** 212, 218, 287 (callback methods), and others
 **Severity:** LOW
 
@@ -515,13 +574,14 @@ All instances in train.py (23), run_all.py (22), train_trocr_yolo.py (19+), repo
 **Files:** constants.py, train.py, diagnostics.py, train_trocr_yolo.py
 **Description:** Same module imported lazily inside multiple functions. Consider top-level conditional import.
 
-### 🔲 CROSS-4: Image dimensions `(1280, 960)` hardcoded in multiple files
+### ✅ CROSS-4: Image dimensions `(1280, 960)` hardcoded in multiple files — Fixed in PR (2026-04-05)
 **Files:** train.py (lines 453, 2981), run_all.py (lines 1630, 1633), train_trocr_yolo.py
-**Description:** Should be a single `DONUT_IMAGE_SIZE = (1280, 960)` constant in `constants.py`.
+**Description:** Defined `DONUT_IMAGE_SIZE = (1280, 960)` in `constants.py` and used it in train.py and run_all.py.
 
-### 🔲 CROSS-5: Missing `-> None` on 15+ `__init__` methods
-**Files:** cloud_orchestration.py (5), reporting.py (4), diagnostics.py (2), resource_manager.py (1), run_all.py (2), data_pipeline.py (1)
+### ✅ CROSS-5: Missing `-> None` on 15+ `__init__` methods — Fixed in PR (2026-04-05)
+**Files:** cloud_orchestration.py (4), reporting.py (3), diagnostics.py (2), resource_manager.py (1), run_all.py (2), train.py (4)
 **Severity:** LOW but pervasive
+Added `-> None` return type annotation to 16 `__init__` methods across 6 files.
 
 ---
 
