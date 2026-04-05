@@ -26,8 +26,10 @@ import re
 import subprocess
 import time
 import traceback
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -209,13 +211,27 @@ class DiagnosticCallback:
         except ImportError:
             pass
 
-    def on_log(self, args, state, control, logs=None, **kwargs):
+    def on_log(
+        self,
+        args: Any,
+        state: Any,
+        control: Any,
+        logs: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
         """Capture training loss from log events."""
         if logs and "loss" in logs:
             self._train_loss_history.append(logs["loss"])
-        return control
 
-    def on_evaluate(self, args, state, control, metrics=None, model=None, **kwargs):
+    def on_evaluate(
+        self,
+        args: Any,
+        state: Any,
+        control: Any,
+        metrics: dict[str, Any] | None = None,
+        model: Any | None = None,
+        **kwargs: Any,
+    ) -> None:
         """Run diagnostic checks after each evaluation."""
         cp = self._collect_checkpoint(state, metrics)
         self.checkpoints.append(cp)
@@ -282,14 +298,17 @@ class DiagnosticCallback:
                             issue_number=self.github_issue_number,
                         )
 
-        return control
-
-    def on_train_end(self, args, state, control, **kwargs):
+    def on_train_end(
+        self,
+        args: Any,
+        state: Any,
+        control: Any,
+        **kwargs: Any,
+    ) -> None:
         """Save diagnostic report at end of training."""
         self._save_report()
-        return control
 
-    def _collect_checkpoint(self, state, metrics) -> RuntimeCheckpoint:
+    def _collect_checkpoint(self, state: Any, metrics: dict[str, Any] | None) -> RuntimeCheckpoint:
         """Collect telemetry into a RuntimeCheckpoint."""
         cp = RuntimeCheckpoint(
             timestamp=time.time(),
@@ -368,7 +387,7 @@ class DiagnosticCallback:
             parts.append(f"gpu_mem={cp.gpu_mem_allocated_mb:.0f}MB")
         return ", ".join(parts)
 
-    def _log_issues(self, cp: RuntimeCheckpoint, issues: list[dict]):
+    def _log_issues(self, cp: RuntimeCheckpoint, issues: list[dict]) -> None:
         """Log detected issues with appropriate severity."""
         for issue in issues:
             severity = issue.get("severity", "warning")
@@ -384,7 +403,7 @@ class DiagnosticCallback:
             else:
                 logger.warning(msg)
 
-    def _run_ai_diagnosis(self, cp: RuntimeCheckpoint, issues: list[dict]):
+    def _run_ai_diagnosis(self, cp: RuntimeCheckpoint, issues: list[dict]) -> None:
         """Call AI API (Claude or Mistral) for deeper diagnosis of critical issues."""
         context = {
             "experiment_id": self.experiment_id,
@@ -405,7 +424,7 @@ class DiagnosticCallback:
             # Attach to checkpoint
             cp.metrics["ai_diagnosis"] = diagnosis
 
-    def _save_report(self):
+    def _save_report(self) -> None:
         """Write accumulated diagnostics to JSON."""
         self.output_dir.mkdir(parents=True, exist_ok=True)
         report_path = self.output_dir / f"diagnostics_exp{self.experiment_id}.json"
@@ -421,7 +440,7 @@ class DiagnosticCallback:
         report_path.write_text(json.dumps(report, indent=2))
         logger.info("Diagnostics report saved → %s", report_path)
 
-    def _build_summary(self) -> dict:
+    def _build_summary(self) -> dict[str, Any]:
         """Build a concise summary of all detected issues."""
         all_issues = []
         for cp in self.checkpoints:
@@ -676,7 +695,7 @@ def _get_github_repo() -> str:
 
 def _github_request(
     method: str, endpoint: str, token: str, payload: dict | None = None
-) -> dict | None:
+) -> dict[str, Any] | None:
     """Execute a GitHub REST API call. Returns parsed JSON or None on failure.
 
     Parameters
@@ -761,7 +780,7 @@ def github_create_issue(
     labels: list[str] | None = None,
     repo: str | None = None,
     deduplicate: bool = True,
-) -> dict | None:
+) -> dict[str, Any] | None:
     """Create a GitHub issue and return the response dict (includes ``html_url``).
 
     Parameters
@@ -834,7 +853,7 @@ def github_post_comment(
     issue_number: int,
     body: str,
     repo: str | None = None,
-) -> dict | None:
+) -> dict[str, Any] | None:
     """Post a comment on an existing GitHub issue or pull request.
 
     Parameters
@@ -881,7 +900,7 @@ def github_report_failure(
     repo: str | None = None,
     issue_number: int | None = None,
     deduplicate: bool = True,
-) -> dict | None:
+) -> dict[str, Any] | None:
     """Create a GitHub issue (or comment on an existing one) for a pipeline failure.
 
     Composes a structured Markdown body from the failure context, any AI
@@ -1070,7 +1089,7 @@ class PipelineDiagnostics:
         self.github_repo = github_repo or _get_github_repo() or None
         self.github_issue_number = github_issue_number
 
-    def wrap_stage(self, stage_name: str, func, args) -> object:
+    def wrap_stage(self, stage_name: str, func: Callable[..., object], args: Any) -> object:
         """Execute a stage function with diagnostic wrapping.
 
         Returns the stage's return value (typically a StageResult).
@@ -1213,7 +1232,7 @@ def smoke_test(verbose: bool = True) -> bool:
     checks_total = 0
     errors = []
 
-    def _check(name: str, func):
+    def _check(name: str, func: Callable[[], None]) -> None:
         nonlocal checks_passed, checks_total
         checks_total += 1
         try:
@@ -1232,18 +1251,18 @@ def smoke_test(verbose: bool = True) -> bool:
         print("=" * 60)
 
     # 1. Import chain
-    def _check_imports():
+    def _check_imports() -> None:
         from constants import BASE_MODEL, FIELDS, NEW_TOKENS, SEED  # noqa: F401
 
     _check("Import constants", _check_imports)
 
-    def _check_dataset_loaders():
+    def _check_dataset_loaders() -> None:
         from data_pipeline import SROIELoader  # noqa: F401
 
     _check("Import dataset loaders", _check_dataset_loaders)
 
     # 2. Model + processor load
-    def _check_model_load():
+    def _check_model_load() -> None:
         from constants import BASE_MODEL, NEW_TOKENS
 
         try:
@@ -1261,7 +1280,7 @@ def smoke_test(verbose: bool = True) -> bool:
     _check("Model + processor load", _check_model_load)
 
     # 3. Token ID roundtrip (GP-3 + GP-4)
-    def _check_token_ids():
+    def _check_token_ids() -> None:
         from transformers import DonutProcessor, VisionEncoderDecoderModel
 
         from constants import BASE_MODEL, NEW_TOKENS
@@ -1284,7 +1303,7 @@ def smoke_test(verbose: bool = True) -> bool:
     _check("Token ID roundtrip (GP-3/GP-4)", _check_token_ids)
 
     # 4. Forward pass (dummy input)
-    def _check_forward():
+    def _check_forward() -> None:
         import torch
         from transformers import DonutProcessor, VisionEncoderDecoderModel
 
