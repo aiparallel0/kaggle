@@ -2332,7 +2332,7 @@ class PaperInjector:
                     var_map["pre_prec"] = _safe(lp, "global_precision")
                     var_map["pre_rec"] = _safe(lp, "global_recall")
                     var_map["pre_em"] = _safe(lp, "overall_exact_match")
-                except Exception:
+                except (OSError, json.JSONDecodeError):
                     pass
 
         # Gains
@@ -2344,7 +2344,7 @@ class PaperInjector:
             var_map["gain_over_published"] = f"{(best_f1 - DONUT_PUBLISHED_F1):+.4f}"
             # gain_best_over_baseline: best experiment vs our own SROIE-only baseline
             var_map["gain_best_over_baseline"] = f"{(best_f1 - exp1_f1):+.4f}"
-        except Exception:
+        except (TypeError, ValueError):
             var_map["gain_1_4"] = "N/A"
             var_map["gain_over_published"] = "N/A"
             var_map["gain_best_over_baseline"] = "N/A"
@@ -2384,7 +2384,7 @@ class PaperInjector:
                 var_map["trocr_best_f1"] = f"{trocr_best_f1:.4f}"
                 var_map["trocr_best_f1_pct"] = f"{trocr_best_f1 * 100:.2f}"
                 var_map["trocr_best_exp"] = trocr_best_exp
-            except Exception:
+            except (OSError, json.JSONDecodeError, TypeError, ValueError):
                 pass
 
         # Ensure basic TrOCR vars have fallback values if file was missing
@@ -2422,7 +2422,7 @@ class PaperInjector:
                         var_map["trocr_best_f1"] = f"{_bf1:.4f}"
                         var_map["trocr_best_f1_pct"] = f"{_bf1 * 100:.2f}"
                 var_map["trocr_best_backend"] = _best_backend_name
-            except Exception:
+            except (OSError, json.JSONDecodeError, ValueError):
                 pass
 
         # Fallbacks for all backend vars so LaTeX compiles even on partial runs
@@ -2723,7 +2723,7 @@ def generate_training_plots(results_dir: Path = Path("results")) -> None:
     """
     try:
         _plot_convergence_main()
-    except Exception:
+    except Exception:  # intentional broad catch: plotting may fail in multiple ways
         pass  # Gracefully skip if plotting unavailable
 
 
@@ -3122,7 +3122,7 @@ def main() -> None:
         # Generate cubic-spline convergence .tex files via plot_convergence
         try:
             generate_all(results_dir=output_dir)
-        except Exception as exc:
+        except Exception as exc:  # intentional broad catch: wraps I/O, CSV, and scipy
             warnings.warn(
                 f"plot_convergence.generate_all() failed: {exc}",
                 stacklevel=2,
@@ -3147,7 +3147,7 @@ def main() -> None:
                 try:
                     _new_content = output_path.read_text(encoding="utf-8", errors="replace")
                     run_paper_diff(_old_content, _new_content, results_dir="results")
-                except Exception as _pd_exc:
+                except Exception as _pd_exc:  # intentional broad catch: wraps I/O + Rich
                     print(f"[PaperDiff] Skipped: {_pd_exc}")
         else:
             print(f"paper.tex not found at {args.paper}; skipping filled paper generation.")
@@ -3265,7 +3265,7 @@ def print_diff_table(
                     f"[{dir_colour}]{c['direction']}[/{dir_colour}]",
                 )
             console.print(table)
-        except Exception:
+        except Exception:  # intentional broad catch: Rich library table rendering
             print(plain_text)
     else:
         print(plain_text)
@@ -3353,7 +3353,7 @@ class ResultsAggregator:
                         metrics=metrics,
                     )
                     experiments.append(exp)
-            except Exception as e:
+            except (OSError, json.JSONDecodeError, KeyError, TypeError) as e:
                 self._logger.warning(f"Could not load {exp_file}: {e}")
 
         if not experiments:
@@ -3418,7 +3418,7 @@ class ResultsAggregator:
             output_file.write_text(_json.dumps(data, indent=2))
             self._logger.info(f"✓ Saved aggregated results to {output_file}")
             return True
-        except Exception as e:
+        except (OSError, TypeError, AttributeError) as e:
             self._logger.error(f"Could not save aggregated results: {e}")
             return False
 
@@ -3442,7 +3442,7 @@ class ResultsAggregator:
                     metrics=metrics,
                 )
                 experiments.append(exp)
-            except Exception as e:
+            except (OSError, json.JSONDecodeError, KeyError, TypeError) as e:
                 _logging.getLogger(__name__).warning(f"Could not load {exp_file}: {e}")
         return experiments
 
