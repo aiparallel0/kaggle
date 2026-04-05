@@ -986,6 +986,7 @@ except ImportError:
 from constants import (  # noqa: E402
     DEVICE,
     FIELDS,
+    LABEL_IGNORE_INDEX,
     MAX_CONSECUTIVE_BATCH_FAILURES,
     SEED,
     WORKSPACE,
@@ -1359,7 +1360,7 @@ class TrOCRReceiptDataset(Dataset):
                             truncation=True,
                             return_tensors="pt",
                         ).input_ids.squeeze(0)
-                        _lbl[_lbl == processor.tokenizer.pad_token_id] = -100
+                        _lbl[_lbl == processor.tokenizer.pad_token_id] = LABEL_IGNORE_INDEX
                         pixel_values_list.append(_pv)
                         labels_list.append(_lbl)
                         if (_i + 1) % 100 == 0 or (_i + 1) == n_total:
@@ -1405,7 +1406,7 @@ class TrOCRReceiptDataset(Dataset):
             return_tensors="pt",
         ).input_ids.squeeze(0)
 
-        labels[labels == self.processor.tokenizer.pad_token_id] = -100
+        labels[labels == self.processor.tokenizer.pad_token_id] = LABEL_IGNORE_INDEX
         return {"pixel_values": pixel_values, "labels": labels}
 
 

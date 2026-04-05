@@ -500,8 +500,8 @@ except ImportError:
             """Resize to (H, W), normalize, return [3, H, W] float32 tensor."""
             import numpy as _np
 
-            target_h = self._size.get("height", 1280)
-            target_w = self._size.get("width", 960)
+            target_h = self._size.get("height", DONUT_IMAGE_SIZE[0])
+            target_w = self._size.get("width", DONUT_IMAGE_SIZE[1])
 
             if isinstance(img, _np.ndarray):
                 arr = img
@@ -1129,7 +1129,7 @@ except ImportError:
             if num_heads is None:
                 num_heads = [4, 8, 16, 32]
             if image_size is None:
-                image_size = [1280, 960]
+                image_size = list(DONUT_IMAGE_SIZE)
 
             num_stages = len(depths)
             # Stochastic depth decay rule
@@ -1194,7 +1194,7 @@ except ImportError:
                 embed_dim=config_dict.get("embed_dim", 128),
                 depths=config_dict.get("depths", [2, 2, 14, 2]),
                 num_heads=config_dict.get("num_heads", [4, 8, 16, 32]),
-                image_size=config_dict.get("image_size", [1280, 960]),
+                image_size=config_dict.get("image_size", list(DONUT_IMAGE_SIZE)),
                 patch_size=config_dict.get("patch_size", 4),
                 window_size=config_dict.get("window_size", 8),
                 mlp_ratio=config_dict.get("mlp_ratio", 4.0),
@@ -1672,7 +1672,7 @@ except ImportError:
                 loss = _F.cross_entropy(
                     shift_logits.view(-1, shift_logits.size(-1)),
                     shift_labels.view(-1),
-                    ignore_index=-100,
+                    ignore_index=LABEL_IGNORE_INDEX,
                 )
 
             return _ModelOutput(loss=loss, logits=logits)
@@ -3975,7 +3975,7 @@ class DonutTrainer:
                         _logits.reshape(-1, _logits.size(-1)),
                         _labels.reshape(-1),
                         reduction="none",
-                        ignore_index=-100,
+                        ignore_index=LABEL_IGNORE_INDEX,
                     ).view(_labels.size())  # (B, T)
                     _valid = (_labels != LABEL_IGNORE_INDEX).float()
                     _per_sample = (_per_tok * _valid).sum(dim=1) / _valid.sum(dim=1).clamp(

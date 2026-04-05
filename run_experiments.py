@@ -94,6 +94,7 @@ import resource_manager as _mm  # noqa: E402
 from constants import (  # noqa: E402
     BASE_MODEL,
     DEVICE,
+    DONUT_IMAGE_SIZE,
     EMPTY_GT,
     FIELDS,
     MAX_LENGTH,
@@ -287,8 +288,8 @@ class _YAMLExperimentConfig:
     full_parameter_finetuning: bool = True
 
     # Data / preprocessing
-    image_height: int = 1280  # DONUT native — do NOT exceed without allow_high_res
-    image_width: int = 960  # DONUT native — do NOT exceed without allow_high_res
+    image_height: int = DONUT_IMAGE_SIZE[0]  # DONUT native — do NOT exceed without allow_high_res
+    image_width: int = DONUT_IMAGE_SIZE[1]  # DONUT native — do NOT exceed without allow_high_res
     allow_high_res: bool = False  # bypasses image_height>1280 / image_width>960 guard
     max_length: int = 768  # MAX_LENGTH from constants.py
 
@@ -344,32 +345,36 @@ class _YAMLExperimentConfig:
 
     def _validate(self) -> None:
         # Resolution guard — most important check
-        if self.image_height > 1280 and not self.allow_high_res:
+        if self.image_height > DONUT_IMAGE_SIZE[0] and not self.allow_high_res:
             raise ValueError(
                 f"Exp {self.id}: image_height={self.image_height} exceeds "
-                f"DONUT native 1280. RAM scales as (H×W)/(1280×960). "
+                f"DONUT native {DONUT_IMAGE_SIZE[0]}. RAM scales as "
+                f"(H×W)/({DONUT_IMAGE_SIZE[0]}×{DONUT_IMAGE_SIZE[1]}). "
                 f"See memory_manager.py § 'The processor_config.json Rule'. "
                 f"Set allow_high_res: true in the YAML to bypass this guard."
             )
-        if self.image_width > 960 and not self.allow_high_res:
+        if self.image_width > DONUT_IMAGE_SIZE[1] and not self.allow_high_res:
             raise ValueError(
                 f"Exp {self.id}: image_width={self.image_width} exceeds "
-                f"DONUT native 960. RAM scales as (H×W)/(1280×960). "
+                f"DONUT native {DONUT_IMAGE_SIZE[1]}. RAM scales as "
+                f"(H×W)/({DONUT_IMAGE_SIZE[0]}×{DONUT_IMAGE_SIZE[1]}). "
                 f"Set allow_high_res: true in the YAML to bypass this guard."
             )
-        if self.image_height > 1280 and self.allow_high_res:
+        if self.image_height > DONUT_IMAGE_SIZE[0] and self.allow_high_res:
             logger.debug(
-                "[Exp %d] High-res mode: height=%d (>1280). allow_high_res=True bypasses guard. "
+                "[Exp %d] High-res mode: height=%d (>%d). allow_high_res=True bypasses guard. "
                 "Ensure processor_config.json updated before training.",
                 self.id,
                 self.image_height,
+                DONUT_IMAGE_SIZE[0],
             )
-        if self.image_width > 960 and self.allow_high_res:
+        if self.image_width > DONUT_IMAGE_SIZE[1] and self.allow_high_res:
             logger.debug(
-                "[Exp %d] High-res mode: width=%d (>960). allow_high_res=True bypasses guard. "
+                "[Exp %d] High-res mode: width=%d (>%d). allow_high_res=True bypasses guard. "
                 "Ensure processor_config.json updated before training.",
                 self.id,
                 self.image_width,
+                DONUT_IMAGE_SIZE[1],
             )
 
         # Weight-tying guard
@@ -794,7 +799,7 @@ class DonutControlConfig:
     # Must be multiples of patch_size (32). Pretrain used [2560, 1920].
     # Finetuning: [1280, 960] (width × height). Larger = more VRAM, slower.
     # Common values: [640,480], [960,720], [1280,960], [1920,1440], [2560,1920]
-    input_size: list[int] = field(default_factory=lambda: [1280, 960])
+    input_size: list[int] = field(default_factory=lambda: list(DONUT_IMAGE_SIZE))
 
     # ── Architecture (READ-ONLY — do not change from pretrain value) ────────
     # impact: CRITICAL ⚠️ UNDERDOCUMENTED
