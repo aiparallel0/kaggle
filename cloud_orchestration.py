@@ -760,7 +760,7 @@ class EpochConfoundAudit:
 
             source = EpochConfoundAudit._RUN_EXPERIMENTS_FILE.read_text(encoding="utf-8")
             tree = ast.parse(source)
-        except Exception:
+        except SyntaxError:
             return documented_defaults
 
         # Walk the AST looking for ExperimentConfig keyword calls.
@@ -1389,8 +1389,6 @@ def print_dag(configs: list) -> None:
 
 
 def main_dag_scheduler() -> None:
-    import argparse
-
     parser = argparse.ArgumentParser(description="Show or test the experiment DAG")
     parser.add_argument(
         "--list",

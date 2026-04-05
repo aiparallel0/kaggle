@@ -1637,3 +1637,63 @@ Every OOM PR from #80 to #109 fixed GPU VRAM symptoms. The actual 192 GB RAM exp
 - Compounded by DataLoader worker processes staying alive across experiments (`persistent_workers=True` + `prefetch_factor=4`)
 
 The fix is in commit adding this section. Do not revert `processor_config.json` to `2560×1920`.
+
+---
+
+## § 21. SOLID Principles — Deep-Cleaning Audit (2026-04-04)
+
+A comprehensive SOLID analysis was performed across all 14 Python files (34,213 LOC). Results are documented in `SOLID_VIOLATIONS.md` with exact line ranges for every issue.
+
+### What Was Fixed
+
+| Category | Count | Files Touched |
+|----------|-------|---------------|
+| Broad `except Exception:` narrowed to specific types | 13 | constants.py, data_pipeline.py, sweep.py, cloud_orchestration.py, reporting.py, train_trocr_yolo.py |
+| Duplicate regex definitions removed | 4 patterns | data_pipeline.py |
+| Duplicate imports removed | 2 | reporting.py, cloud_orchestration.py |
+| Silent failure converted to logged warning | 1 | data_pipeline.py (FUNSD remap) |
+
+### Key Remaining Technical Debt
+
+**Critical (P0):**
+- `DonutTrainer.train()` is 617 lines (train.py:3528–4145) — needs decomposition into 5+ methods
+- `train_experiment()` is 402 lines (run_experiments.py:3741–4143)
+- `run_experiment()` is 378 lines (run_experiments.py:4311–4688)
+- `TrOCRReceiptDataset` is a god class with 21 methods (train_trocr_yolo.py)
+- `auto_fix_and_retry()` is 251 lines (autonomous_ci.py:786–1036)
+
+**High (P1):**
+- 4 dataset loader classes repeat identical `_dest_dir()`/`_marker()`/`_hf_cache()` methods — needs template method
+- Task prompt format hardcoded in 5+ places in run_experiments.py — needs strategy pattern
+- 6 mode handlers in run_all.py with duplicated patterns — needs factory pattern
+
+**Medium (P2):**
+- 58+ public functions missing return type hints
+- 15+ `__init__` methods missing `-> None`
+- Image dimensions `(1280, 960)` hardcoded in 4+ locations across files
+- ~48 remaining `except Exception:` blocks (most require careful per-instance analysis)
+
+### Exception Narrowing Convention
+
+When narrowing exception catches, always match specific types to the try block:
+
+| Try Block Operation | Catch |
+|---------------------|-------|
+| `json.load()` / `json.loads()` | `json.JSONDecodeError` |
+| `import X` | `ImportError` |
+| `Path.read_text()` / file I/O | `OSError` (covers `FileNotFoundError`, `PermissionError`, etc.) |
+| `dict[key]` / `list[idx]` | `KeyError, IndexError` |
+| `ast.parse()` | `SyntaxError` |
+| `int(x)` / `float(x)` | `ValueError` |
+| `obj.attr` | `AttributeError` |
+| `psutil.*` / optional libs | `ImportError, RuntimeError` |
+| `urllib.request.urlopen()` | `urllib.error.URLError, urllib.error.HTTPError` |
+| Logging handler `emit()` | `Exception` (intentional — handlers must not propagate) |
+
+### Guardrail: Do NOT narrow these
+
+1. **Logging handler `emit()` methods** — Python logging convention requires catching all exceptions
+2. **OOM recovery boundaries** in training loops — `torch.cuda.OutOfMemoryError` is a subclass of `RuntimeError`, but other unpredictable GPU errors also occur
+3. **Third-party library wrappers** where the set of possible exceptions is unknown or version-dependent
+
+See `SOLID_VIOLATIONS.md` for the complete inventory with line-by-line detail.

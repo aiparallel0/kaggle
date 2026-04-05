@@ -1555,8 +1555,6 @@ def benchmark_compare_main() -> None:
         del yolo_trocr
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-        import gc
-
         gc.collect()
 
     if not all_results:
@@ -1725,7 +1723,7 @@ def _load_exp_data(
 
     try:
         epochs, train_losses, eval_losses = _read_csv(csv_path)
-    except Exception:
+    except (FileNotFoundError, ValueError, OSError):
         return None
 
     train_xs, train_ys = smooth_curve(epochs, train_losses)
@@ -1940,7 +1938,7 @@ def generate_all(
             for entry in sel.get("experiments", []):
                 if entry.get("enabled", True):
                     exp_ids.append(str(int(str(entry.get("id", "")))))
-        except Exception:
+        except (json.JSONDecodeError, FileNotFoundError, ValueError):
             pass
 
     if not exp_ids:
