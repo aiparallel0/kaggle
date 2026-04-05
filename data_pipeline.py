@@ -520,6 +520,100 @@ def _hf_api_get(url: str, hf_token: str | None = None) -> Any:
         return json.loads(resp.read())
 
 
+def _hf_discover_config(repo_id: str, hf_token: str | None = None) -> str:
+    """Discover the first available config name for a HuggingFace dataset.
+
+    Queries the datasets-server ``/splits`` endpoint and returns the config
+    name from the first split entry.  Falls back to ``"default"`` when the
+    API call fails or the response is malformed.
+    """
+    try:
+        splits_info = _hf_api_get(
+            f"https://datasets-server.huggingface.co/splits?dataset={repo_id}",
+            hf_token,
+        )
+        return (
+            splits_info["splits"][0].get("config", "default")
+            if splits_info.get("splits")
+            else "default"
+        )
+    except (KeyError, IndexError, TypeError):
+        return "default"
+
+
+def _hf_fetch_rows_batch(
+    repo_id: str,
+    config: str,
+    split: str,
+    offset: int,
+    length: int,
+    hf_token: str | None = None,
+) -> list[dict]:
+    """Fetch a single batch of rows from the HuggingFace datasets-server API.
+
+    Returns the list of row dicts from the ``rows`` key, or an empty list
+    when the request fails (the caller decides whether to retry or stop).
+
+    Raises
+    ------
+    Exception
+        Propagates any HTTP / JSON error so the caller can log and decide
+        whether to continue.
+    """
+    resp = _hf_api_get(
+        f"https://datasets-server.huggingface.co/rows"
+        f"?dataset={repo_id}&config={config}&split={split}"
+        f"&offset={offset}&length={length}",
+        hf_token,
+    )
+    return resp.get("rows", [])
+
+
+def _hf_write_and_mark(
+    all_rows: list[dict],
+    img_dir: Path,
+    jsonl_path: Path,
+    split: str,
+    marker_path: Path,
+    hf_token: str | None = None,
+) -> None:
+    """Write downloaded rows to JSONL, save images to disk, and create the done marker.
+
+    For each row:
+    - Image columns (dicts with a ``"src"`` key) are downloaded to *img_dir*
+      and their path is stored in the JSONL record.
+    - All other JSON-serialisable values are written verbatim.
+
+    After all rows are written, the *marker_path* file is touched to signal
+    that the download is complete.
+    """
+    log = logging.getLogger(__name__)
+    with open(jsonl_path, "w", encoding="utf-8") as f_out:
+        for idx, row_wrapper in enumerate(all_rows):
+            row = row_wrapper.get("row", row_wrapper)
+            record: dict[str, Any] = {}
+            for key, val in row.items():
+                if isinstance(val, dict) and "src" in val:
+                    # Image feature — download the image URL
+                    img_path = img_dir / f"{split}_{idx:06d}.jpg"
+                    if not img_path.exists():
+                        try:
+                            img_req = urllib.request.Request(val["src"])
+                            if hf_token:
+                                img_req.add_header("Authorization", f"Bearer {hf_token}")
+                            with urllib.request.urlopen(img_req, timeout=30) as img_resp:
+                                img_path.write_bytes(img_resp.read())
+                        except Exception as img_exc:
+                            log.warning("[inline-hf] Image %d download failed: %s", idx, img_exc)
+                    record[key] = str(img_path)
+                elif isinstance(val, (str, int, float, list, dict, bool)) or val is None:
+                    record[key] = val
+            f_out.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+    marker_path.touch()
+    log.info("[inline-hf] Download complete: %d rows saved to %s", len(all_rows), jsonl_path.parent)
+
+
 def _hf_download_dataset_inline(
     repo_id: str,
     dest_dir: Path,
@@ -537,6 +631,11 @@ def _hf_download_dataset_inline(
 
     This is a zero-external-dependency replacement for:
         ds = load_dataset(repo_id); ds.save_to_disk(...)
+
+    Delegates to:
+    - :func:`_hf_discover_config` — HF API config discovery
+    - :func:`_hf_fetch_rows_batch` — paginated row fetching
+    - :func:`_hf_write_and_mark` — JSONL + image writing and marker creation
     """
     cache_dir = dest_dir / "hf_cache_inline"
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -579,18 +678,7 @@ def _hf_download_dataset_inline(
         log.info("[inline-hf] Downloading %s/%s from HuggingFace datasets-server …", repo_id, split)
 
         # ── Discover config name ──────────────────────────────────────────────────
-        try:
-            splits_info = _hf_api_get(
-                f"https://datasets-server.huggingface.co/splits?dataset={repo_id}",
-                hf_token,
-            )
-            config = (
-                splits_info["splits"][0].get("config", "default")
-                if splits_info.get("splits")
-                else "default"
-            )
-        except (KeyError, IndexError, TypeError):
-            config = "default"
+        config = _hf_discover_config(repo_id, hf_token)
 
         # ── Get total row count ───────────────────────────────────────────────────
         total_rows = 1000  # fallback estimate
@@ -611,16 +699,10 @@ def _hf_download_dataset_inline(
         all_rows: list[dict] = []
         for offset in range(0, total_rows + batch_size, batch_size):
             try:
-                resp = _hf_api_get(
-                    f"https://datasets-server.huggingface.co/rows"
-                    f"?dataset={repo_id}&config={config}&split={split}"
-                    f"&offset={offset}&length={batch_size}",
-                    hf_token,
-                )
+                rows = _hf_fetch_rows_batch(repo_id, config, split, offset, batch_size, hf_token)
             except Exception as exc:
                 log.warning("[inline-hf] Batch offset=%d failed: %s — stopping early.", offset, exc)
                 break
-            rows = resp.get("rows", [])
             if not rows:
                 break
             all_rows.extend(rows)
@@ -628,33 +710,8 @@ def _hf_download_dataset_inline(
             if len(all_rows) >= total_rows:
                 break
 
-        # ── Process rows: save images, write JSONL ────────────────────────────────
-        with open(jsonl_path, "w", encoding="utf-8") as f_out:
-            for idx, row_wrapper in enumerate(all_rows):
-                row = row_wrapper.get("row", row_wrapper)
-                record: dict[str, Any] = {}
-                for key, val in row.items():
-                    if isinstance(val, dict) and "src" in val:
-                        # Image feature — download the image URL
-                        img_path = img_dir / f"{split}_{idx:06d}.jpg"
-                        if not img_path.exists():
-                            try:
-                                img_req = urllib.request.Request(val["src"])
-                                if hf_token:
-                                    img_req.add_header("Authorization", f"Bearer {hf_token}")
-                                with urllib.request.urlopen(img_req, timeout=30) as img_resp:
-                                    img_path.write_bytes(img_resp.read())
-                            except Exception as img_exc:
-                                log.warning(
-                                    "[inline-hf] Image %d download failed: %s", idx, img_exc
-                                )
-                        record[key] = str(img_path)
-                    elif isinstance(val, (str, int, float, list, dict, bool)) or val is None:
-                        record[key] = val
-                f_out.write(json.dumps(record, ensure_ascii=False) + "\n")
-
-        marker.touch()
-        log.info("[inline-hf] Download complete: %d rows saved to %s", len(all_rows), cache_dir)
+        # ── Process rows: save images, write JSONL, create marker ─────────────────
+        _hf_write_and_mark(all_rows, img_dir, jsonl_path, split, marker, hf_token)
         return cache_dir
 
 
@@ -2153,6 +2210,103 @@ def split_dataset(
     )
 
 
+def _apply_oversampling(
+    train_samples: list[Sample],
+    sroie_data: list[Sample],
+    sroie_oversample: int,
+) -> tuple[list[Sample], list[str]]:
+    """Apply SROIE oversampling and return extended train samples with source tags.
+
+    SROIE training samples are duplicated *sroie_oversample* times (minimum 1)
+    and appended to *train_samples*.  List multiplication creates N references
+    to the same immutable Sample tuples — safe and memory-efficient for
+    read-only iteration.
+
+    Parameters
+    ----------
+    train_samples : list[Sample]
+        Accumulator list; SROIE samples are appended in-place.
+    sroie_data : list[Sample]
+        Raw SROIE training samples (not yet oversampled).
+    sroie_oversample : int
+        Number of times to duplicate SROIE training samples.
+
+    Returns
+    -------
+    (extended_train, source_tags) where *source_tags* has one ``"sroie"``
+    entry per added sample.
+    """
+    oversample_count = max(1, sroie_oversample)
+    oversampled = sroie_data * oversample_count
+    train_samples.extend(oversampled)
+    return train_samples, ["sroie"] * len(oversampled)
+
+
+def _split_auxiliary_data(
+    aux_samples: list[Sample],
+    seed: int,
+) -> tuple[list[Sample], list[Sample]]:
+    """Split auxiliary dataset samples into train and validation portions.
+
+    Uses a 70/15/15 train/val/test split via :func:`split_dataset`.  The
+    held-out 15 % test portion is discarded (SROIE test set is used for
+    final evaluation).
+
+    Returns
+    -------
+    (train_split, val_split)
+    """
+    train_split, val_split, _ = split_dataset(aux_samples, seed=seed)
+    return train_split, val_split
+
+
+def _load_and_merge_datasets(
+    dataset_names: list[str],
+    sroie_oversample: int,
+) -> tuple[list[Sample], list[Sample], list[str], dict[str, int]]:
+    """Load all requested datasets and merge into combined train/val lists.
+
+    Iterates over *dataset_names*, loading each via ``_LOADERS``.  SROIE
+    samples are oversampled via :func:`_apply_oversampling`; auxiliary
+    datasets are split 70/15/15 via :func:`_split_auxiliary_data`.
+
+    Returns
+    -------
+    (combined_train, combined_val, combined_train_sources, per_loader_counts)
+    """
+    combined_train: list[Sample] = []
+    combined_val: list[Sample] = []
+    combined_train_sources: list[str] = []
+    per_loader_counts: dict[str, int] = {}
+
+    for name in dataset_names:
+        loader = _LOADERS.get(name)
+        if loader is None:
+            raise ValueError(f"Unknown dataset '{name}'. Valid: {list(_LOADERS)}")
+        try:
+            data = loader()
+        except DatasetLoadError:
+            # Re-raise — the error has already been printed to stderr
+            raise
+        per_loader_counts[name] = len(data)
+
+        if name == "sroie":
+            # SROIE: train split → combined_train (optionally oversampled);
+            # val split → combined_val (never oversampled).
+            _, sroie_sources = _apply_oversampling(combined_train, data, sroie_oversample)
+            combined_train_sources.extend(sroie_sources)
+            sroie_val = load_sroie_val()
+            combined_val.extend(sroie_val)
+        else:
+            # Auxiliary datasets: 70/15/15 split
+            train_split, val_split = _split_auxiliary_data(data, seed=SEED)
+            combined_train.extend(train_split)
+            combined_train_sources.extend([name] * len(train_split))
+            combined_val.extend(val_split)
+
+    return combined_train, combined_val, combined_train_sources, per_loader_counts
+
+
 def get_combined_dataset(
     dataset_names: list[str],
     sroie_oversample: int = 1,
@@ -2168,6 +2322,11 @@ def get_combined_dataset(
 
     After merging, both combined_train and combined_val are shuffled with
     a fixed seed so that samples from different datasets are interleaved.
+
+    Delegates to:
+    - :func:`_load_and_merge_datasets` — per-dataset loading and merging
+    - :func:`_apply_oversampling` — SROIE duplication
+    - :func:`_split_auxiliary_data` — 70/15/15 auxiliary splitting
 
     Parameters
     ----------
@@ -2192,38 +2351,9 @@ def get_combined_dataset(
         When return_sources is True.  train_sources[i] is the dataset name
         for train_samples[i] (e.g. "sroie" or "wildreceipt").
     """
-    combined_train: list[Sample] = []
-    combined_val: list[Sample] = []
-    combined_train_sources: list[str] = []
-    per_loader_counts: dict[str, int] = {}
-
-    for name in dataset_names:
-        loader = _LOADERS.get(name)
-        if loader is None:
-            raise ValueError(f"Unknown dataset '{name}'. Valid: {list(_LOADERS)}")
-        try:
-            data = loader()
-        except DatasetLoadError:
-            # Re-raise — the error has already been printed to stderr
-            raise
-        per_loader_counts[name] = len(data)
-
-        if name == "sroie":
-            # SROIE: train split → combined_train (optionally oversampled);
-            # val split → combined_val (never oversampled).
-            # List multiplication creates N references to the same immutable
-            # Sample tuples — safe and memory-efficient for read-only iteration.
-            oversample_count = max(1, sroie_oversample)
-            combined_train.extend(data * oversample_count)
-            combined_train_sources.extend(["sroie"] * (len(data) * oversample_count))
-            sroie_val = load_sroie_val()
-            combined_val.extend(sroie_val)
-        else:
-            # Auxiliary datasets: 70/15/15 split
-            train_split, val_split, _ = split_dataset(data, seed=SEED)
-            combined_train.extend(train_split)
-            combined_train_sources.extend([name] * len(train_split))
-            combined_val.extend(val_split)
+    combined_train, combined_val, combined_train_sources, _ = _load_and_merge_datasets(
+        dataset_names, sroie_oversample
+    )
 
     # Fixed-seed shuffle to interleave samples from different datasets.
     # Use the same RNG state for both combined_train and combined_train_sources
