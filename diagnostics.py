@@ -370,7 +370,7 @@ class DiagnosticCallback:
                                 "fix": pattern["fix"],
                             }
                         )
-            except Exception:
+            except Exception:  # intentional broad catch: pattern lambdas are arbitrary callables
                 pass  # pattern lambda failed — skip
         return issues
 
@@ -542,7 +542,7 @@ def _call_claude(
     except ImportError:
         logger.debug("anthropic package not installed — pip install anthropic")
         return None
-    except Exception as exc:
+    except Exception as exc:  # intentional broad catch: anthropic SDK errors are version-dependent
         logger.warning("Claude API call failed: %s", exc)
         return None
 
@@ -586,7 +586,7 @@ def _call_mistral(
     except ImportError:
         logger.debug("mistralai package not installed — pip install mistralai")
         return None
-    except Exception as exc:
+    except Exception as exc:  # intentional broad catch: mistralai SDK errors are version-dependent
         logger.warning("Mistral API call failed: %s", exc)
         return None
 
@@ -610,6 +610,7 @@ def _call_mistral_httpx(
     if not api_key:
         return None
 
+    import urllib.error
     import urllib.request
 
     payload = json.dumps(
@@ -640,7 +641,13 @@ def _call_mistral_httpx(
         with urllib.request.urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read().decode())
             return data["choices"][0]["message"]["content"]
-    except Exception as exc:
+    except (
+        urllib.error.URLError,
+        urllib.error.HTTPError,
+        json.JSONDecodeError,
+        KeyError,
+        IndexError,
+    ) as exc:
         logger.warning("Mistral HTTP call failed: %s", exc)
         return None
 
@@ -688,7 +695,7 @@ def _get_github_repo() -> str:
             m = re.search(r"github\.com[:/](.+?)(?:\.git)?$", url)
             if m:
                 return m.group(1)
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         pass
     return ""
 
@@ -710,6 +717,7 @@ def _github_request(
     payload : dict or None
         Request body; serialised to JSON when given.
     """
+    import urllib.error
     import urllib.request
 
     url = f"https://api.github.com{endpoint}"
@@ -729,7 +737,7 @@ def _github_request(
     try:
         with urllib.request.urlopen(req, timeout=20) as resp:
             return json.loads(resp.read().decode())
-    except Exception as exc:
+    except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError) as exc:
         logger.warning("GitHub API call %s %s failed: %s", method, endpoint, exc)
         return None
 
@@ -1113,7 +1121,7 @@ class PipelineDiagnostics:
             self.stage_reports.append(report)
             return result
 
-        except Exception as exc:
+        except Exception as exc:  # intentional broad catch: pipeline stage error-reporting boundary
             elapsed = time.monotonic() - t0
             gpu_after = self._gpu_snapshot()
             tb = traceback.format_exc()
@@ -1240,7 +1248,7 @@ def smoke_test(verbose: bool = True) -> bool:
             checks_passed += 1
             if verbose:
                 print(f"  [PASS] {name}")
-        except Exception as exc:
+        except Exception as exc:  # intentional broad catch: arbitrary check callables
             errors.append((name, str(exc)))
             if verbose:
                 print(f"  [FAIL] {name}: {exc}")
