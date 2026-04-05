@@ -537,7 +537,7 @@ def load_all_experiments(
             cfg = _yaml_to_config(p)
             if experiment_ids is None or cfg.id in experiment_ids:
                 configs.append(cfg)
-        except Exception as exc:
+        except (OSError, KeyError, ValueError, TypeError) as exc:
             errors.append(f"  {p}: {exc}")
 
     if errors:
@@ -1894,7 +1894,7 @@ except ImportError:
                     arr = np.frombuffer(pixel_data, dtype=np.uint8)
                     if len(arr) >= h * w * 3:
                         return arr[: h * w * 3].reshape(h, w, 3)
-        except Exception:
+        except (OSError, ValueError, IndexError, _sp.SubprocessError):
             pass
         return None
 
@@ -2426,7 +2426,7 @@ class DonutEvaluator:
                     len(self.processor.tokenizer) if self.processor is not None else None
                 ),
             )
-        except Exception as _ckpt_exc:
+        except (ImportError, OSError, ValueError) as _ckpt_exc:
             logger.warning("[DonutEvaluator] Checkpoint validation warning: %s", _ckpt_exc)
 
         self.model = load_model_with_tied_weights(
@@ -2573,7 +2573,7 @@ class DonutEvaluator:
         if self.task_prompt.startswith(_SROIE_TASK_PROMPT_PREFIX):
             try:
                 parsed = _parse_sroie_output(cleaned)
-            except Exception as exc:
+            except Exception as exc:  # intentional broad catch: parser error boundary
                 raise SelfTestFailedError(
                     f"Self-test FAILED: SROIE parser raised {type(exc).__name__}: {exc}\n"
                     f"  Raw tokens: {raw_tokens!r}\n"
@@ -2583,7 +2583,7 @@ class DonutEvaluator:
         else:
             try:
                 parsed = self.processor.token2json(cleaned)
-            except Exception as exc:
+            except Exception as exc:  # intentional broad catch: transformers token2json
                 raise SelfTestFailedError(
                     f"Self-test FAILED: token2json raised {type(exc).__name__}: {exc}\n"
                     f"  Raw tokens: {raw_tokens!r}\n"
@@ -2736,7 +2736,7 @@ class DonutEvaluator:
                 logger.warning("SROIE parser returned empty result from tokens: %.100s", tokens)
                 self.parse_failure_count += 1
                 return EMPTY_GT.copy()
-            except Exception as exc:
+            except (ValueError, KeyError, IndexError, AttributeError) as exc:
                 logger.warning("SROIE parser failed: %s — tokens: %.100s", exc, tokens)
                 self.parse_failure_count += 1
                 return EMPTY_GT.copy()
@@ -2756,14 +2756,10 @@ class DonutEvaluator:
             logger.warning("token2json returned empty result: %s", type(result))
             self.parse_failure_count += 1
             return EMPTY_GT.copy()
-        except Exception as exc:
-            logger.warning("token2json failed: %s — tokens: %.100s", exc, tokens)
+        except Exception as exc:  # intentional broad catch: transformers token2json
+            logger.warning("token2json raised %s: %s", type(exc).__name__, exc)
             self.parse_failure_count += 1
             return EMPTY_GT.copy()
-
-    # ------------------------------------------------------------------
-    # Metrics
-    # ------------------------------------------------------------------
 
     def _compute_f1(self, preds: list[dict[str, str]], labels: list[dict[str, str]]) -> float:
         """Compute global F1 over all (image, field) pairs.

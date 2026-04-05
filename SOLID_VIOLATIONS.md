@@ -33,7 +33,7 @@
 | Category | Total Found | Fixed | Remaining |
 |----------|-------------|-------|-----------|
 | Broad `except Exception:` (safe to narrow) | 13+11 | ✅ 24 | 0 |
-| Broad `except Exception:` (unsafe/intentional) | ~48 | 0 | 🔲 48 |
+| Broad `except Exception:` (unsafe/intentional) | ~48 | ✅ 48 annotated | 0 |
 | Duplicate code (regex, imports, to_dict) | 5+5 | ✅ 10 | 0 |
 | SRP violations (classes/functions) | 22 | ✅ 7 | 🔲 15 |
 | OCP violations | 8 | ✅ 7 | 🔲 1 |
@@ -43,8 +43,8 @@
 | Functions >50 lines | 35+ | ✅ 1 | 🔲 34+ |
 | Missing return type hints (public) | 58+ | ✅ 58+ | 0 |
 | Missing `-> None` on `__init__` | 15+ | ✅ 15 | 0 |
-| Bare `list`/`dict` type hints | 146+ | ✅ 128+ | 🔲 18 |
-| Hardcoded magic numbers | 30+ | ✅ 6 | 🔲 24+ |
+| Bare `list`/`dict` type hints | 146+ | ✅ 146+ | 0 |
+| Hardcoded magic numbers | 30+ | ✅ 20+ | 🔲 10+ |
 | Missing docstrings | 3 | ✅ 3 | 0 |
 | Code smells (`__import__()`, `sys.path`, global) | 4+3 | ✅ 7 | 0 |
 | Incomplete type hints (TYPE-1, TYPE-2/3/4) | 3+30+25 | ✅ 58 | 0 |
