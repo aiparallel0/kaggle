@@ -32,18 +32,18 @@
 
 | Category | Total Found | Fixed | Remaining |
 |----------|-------------|-------|-----------|
-| Broad `except Exception:` (safe to narrow) | 13 | ✅ 13 | 0 |
+| Broad `except Exception:` (safe to narrow) | 13+11 | ✅ 24 | 0 |
 | Broad `except Exception:` (unsafe/intentional) | ~48 | 0 | 🔲 48 |
-| Duplicate code (regex, imports, to_dict) | 5+5 | ✅ 8 | 🔲 2 |
+| Duplicate code (regex, imports, to_dict) | 5+5 | ✅ 10 | 0 |
 | SRP violations (classes/functions) | 22 | ✅ 7 | 🔲 15 |
-| OCP violations | 8 | ✅ 6 | 🔲 2 |
+| OCP violations | 8 | ✅ 7 | 🔲 1 |
 | LSP violations | 4 | ✅ 4 | 0 |
-| ISP violations | 3 | ✅ 1 | 🔲 2 |
+| ISP violations | 3 | ✅ 2 | 🔲 1 |
 | DIP violations | 9 | ✅ 5 | 🔲 4 |
 | Functions >50 lines | 35+ | ✅ 1 | 🔲 34+ |
-| Missing return type hints (public) | 58+ | ✅ 8 | 🔲 50+ |
+| Missing return type hints (public) | 58+ | ✅ 58+ | 0 |
 | Missing `-> None` on `__init__` | 15+ | ✅ 15 | 0 |
-| Bare `list`/`dict` type hints | 146+ | 0 | 🔲 146+ |
+| Bare `list`/`dict` type hints | 146+ | ✅ 128+ | 🔲 18 |
 | Hardcoded magic numbers | 30+ | ✅ 6 | 🔲 24+ |
 | Missing docstrings | 3 | ✅ 3 | 0 |
 | Code smells (`__import__()`, `sys.path`, global) | 4+3 | ✅ 7 | 0 |
@@ -190,7 +190,7 @@ Added `labels: "torch.Tensor"`, `tokenizer: "PreTrainedTokenizerBase"`, real typ
 
 ## 4. data_pipeline.py (3,003 LOC)
 
-### 🔲 OCP-2: Repeated `_dest_dir()`/`_marker()`/`_hf_cache()` methods
+### ✅ OCP-2: Repeated `_dest_dir()`/`_marker()`/`_hf_cache()` methods — Fixed (2026-04-05)
 **Lines:** 1062–1072, 1235–1245, 1503–1513, 1752–1759
 **Severity:** HIGH
 **Description:** Four loader classes (`WildReceiptLoader`, `FUNSDLoader`, `InvoicesDonutLoader`, `CORDv2Loader`) each implement identical `_dest_dir()`, `_marker()`, `_hf_cache()` patterns. Should use template method pattern in `BaseDatasetLoader` with abstract `_subdir_name()`.
@@ -215,7 +215,7 @@ Added `labels: "torch.Tensor"`, `tokenizer: "PreTrainedTokenizerBase"`, real typ
 **Severity:** MEDIUM
 **Description:** Should accept normalizer as optional parameter with default factory.
 
-### 🔲 ISP-2: `get_combined_dataset()` union return type
+### ✅ ISP-2: `get_combined_dataset()` union return type — Fixed (2026-04-05)
 **Lines:** 2159
 **Severity:** LOW
 **Description:** Returns `tuple[list, list] | tuple[list, list, list]` depending on `return_sources` flag. Should use `@overload` or return a dataclass.
@@ -279,12 +279,12 @@ Added `labels: "torch.Tensor"`, `tokenizer: "PreTrainedTokenizerBase"`, real typ
 **Severity:** MEDIUM
 **Description:** Hardcoded dependency on processor class.
 
-### 🔲 TYPE-2: 21+ functions missing return type hints
+### ✅ TYPE-2: 21+ functions missing return type hints — Fixed (2026-04-05)
 **Lines:** 454, 494, 659, 1600, 1644, 2175, 2766, 2819, 2910, 2999, 3014, 3082, 3129, 3224, 4144, 4764
 **Severity:** MEDIUM
 **Key missing:** `load_model_with_tied_weights()`, `run_inference()`, `compute_metrics()`, `normalized_edit_distance()`, `remap_cord_to_sroie()`
 
-### 🔲 TYPE-3: Missing parameter type hints
+### ✅ TYPE-3: Missing parameter type hints — Fixed (2026-04-05)
 **Lines:** 2175 (`processor`), 2819 (`model`, `processor`, `preloaded_image`), 2910 (`cord_output`), 2999 (`pred`, `gt`), 3014 (`predictions`, `ground_truths`), 3082 (`pretrained_m`, `finetuned_m`)
 **Severity:** MEDIUM
 
@@ -341,7 +341,7 @@ Added `labels: "torch.Tensor"`, `tokenizer: "PreTrainedTokenizerBase"`, real typ
 **Severity:** MEDIUM
 **Description:** Direct `DonutProcessor` type dependency. No interface abstraction.
 
-### 🔲 EXCEPT-BROAD: 23 instances of `except Exception`
+### ✅ EXCEPT-BROAD: 23 instances of `except Exception` — 11 narrowed, 12 annotated as intentional (2026-04-05)
 **Lines:** 657, 669, 2211, 2266, 2438, 2795, 2798, 2818, 2988, 3042, 3244, 3322, 3391, 3401, 3461, 3659, 3828, 3861, 3887, 3898, 3980, 4268, 4269
 **Severity:** HIGH (many mask real bugs, especially in callbacks)
 
@@ -475,7 +475,7 @@ Added `labels: "torch.Tensor"`, `tokenizer: "PreTrainedTokenizerBase"`, real typ
 **Severity:** MEDIUM
 **Description:** Direct subprocess calls prevent testability.
 
-### 🔲 DUP-1: Two similar `to_dict()` methods
+### ✅ DUP-1: Two similar `to_dict()` methods — Fixed with SerializableDataclass mixin (2026-04-05)
 **Lines:** ~122 lines and ~118 lines
 **Severity:** MEDIUM
 **Description:** Should use `dataclasses.asdict()` or a mixin.
@@ -498,7 +498,7 @@ Added `labels: "torch.Tensor"`, `tokenizer: "PreTrainedTokenizerBase"`, real typ
 **Severity:** HIGH
 **Description:** Should split into `TrainingMonitor`, `PatternDetector`, `TelemetryCollector`, `Reporter`.
 
-### 🔲 TYPE-5: 12+ functions without return type hints
+### ✅ TYPE-5: 12+ functions without return type hints — Fixed (2026-04-05)
 **Lines:** 212, 218, 287 (callback methods), and others
 **Severity:** LOW
 
