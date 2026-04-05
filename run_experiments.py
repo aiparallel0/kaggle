@@ -1654,7 +1654,7 @@ def validate_sroie_oversample(
         )
 
 
-def get_augmentation_transforms(preset: str | None):
+def get_augmentation_transforms(preset: str | None) -> Callable[..., Any] | None:
     """Return a torchvision transforms pipeline for the given preset, or None.
 
     Preset specifications
@@ -1869,7 +1869,7 @@ except ImportError:
             arr[row] = pixels[:, ::-1]  # BGR → RGB
         return arr
 
-    def _load_jpeg_ctypes(path: str | Path):
+    def _load_jpeg_ctypes(path: str | Path) -> Any:
         """Load JPEG via ImageMagick subprocess (system libjpeg fallback)."""
         import subprocess as _sp
 
@@ -1893,7 +1893,7 @@ except ImportError:
             pass
         return None
 
-    def _load_image(path: str | Path):  # type: ignore[misc]
+    def _load_image(path: str | Path) -> Any:  # type: ignore[misc]
         """Load an image file as an RGB numpy array without PIL."""
         path = Path(path)
         suffix = path.suffix.lower()
@@ -1924,7 +1924,7 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 
-def _initialize_new_token_embeddings(model, tokenizer) -> None:
+def _initialize_new_token_embeddings(model: VisionEncoderDecoderModel, tokenizer: Any) -> None:
     """Initialise newly added SROIE special-token embeddings from semantically
     similar existing tokens rather than random noise.
 
@@ -2197,7 +2197,9 @@ class EvaluationResult:
 # ---------------------------------------------------------------------------
 
 
-def load_model_with_tied_weights(model_path: str, device: str = DEVICE, processor=None):
+def load_model_with_tied_weights(
+    model_path: str, device: str = DEVICE, processor: DonutProcessor | None = None
+) -> VisionEncoderDecoderModel:
     # Use output_loading_info=True to detect missing keys at load time.
     # This is how we distinguish "trained lm_head loaded correctly" from
     # "lm_head randomly re-initialized because it was missing from the shard".
@@ -2265,7 +2267,11 @@ def load_model_with_tied_weights(model_path: str, device: str = DEVICE, processo
     return model
 
 
-def _retie_decoder_head(model, missing_keys=None, model_path=None) -> None:
+def _retie_decoder_head(
+    model: VisionEncoderDecoderModel,
+    missing_keys: list[str] | None = None,
+    model_path: str | None = None,
+) -> None:
     """Re-tie or recover lm_head.weight after from_pretrained().
 
     Parameters
@@ -2843,7 +2849,14 @@ def _unwrap_prediction(parsed: dict, task_prompt: str) -> dict:
 _module_inference_count = 0
 
 
-def run_inference(model, processor, image_path, task_prompt, max_length=512, preloaded_image=None):
+def run_inference(
+    model: VisionEncoderDecoderModel,
+    processor: DonutProcessor,
+    image_path: str | Path,
+    task_prompt: str,
+    max_length: int = 512,
+    preloaded_image: Any | None = None,
+) -> dict:
     """Run inference on a single image. Accepts an optional pre-loaded PIL Image.
 
     This is the backward-compatible module-level function. For new code,
@@ -2934,7 +2947,7 @@ def run_inference(model, processor, image_path, task_prompt, max_length=512, pre
     return result
 
 
-def remap_cord_to_sroie(cord_output):
+def remap_cord_to_sroie(cord_output: dict | list) -> dict[str, str]:
     """Map CORD schema fields to SROIE field names (best effort).
 
     Handles the 'cord-v2' top-level wrapper that the pretrained CORD model
@@ -3023,7 +3036,7 @@ def remap_cord_to_sroie(cord_output):
     return result
 
 
-def normalized_edit_distance(pred, gt):
+def normalized_edit_distance(pred: str, gt: str) -> float:
     """Compute Normalized Edit Distance (NED) between pred and gt strings.
 
     NED = editdistance(pred, gt) / max(len(pred), len(gt))
@@ -3038,7 +3051,9 @@ def normalized_edit_distance(pred, gt):
     return _edit_distance(pred, gt) / max(len(pred), len(gt))
 
 
-def compute_metrics(predictions, ground_truths):
+def compute_metrics(
+    predictions: list[dict[str, str]], ground_truths: list[dict[str, str]]
+) -> dict[str, float]:
     """Official SROIE Task 3 metric: global F1 over all (image, field) pairs.
 
     A pair is TP if predicted string == ground truth string
@@ -3106,7 +3121,7 @@ def compute_metrics(predictions, ground_truths):
     return summary
 
 
-def print_results(pretrained_m, finetuned_m):
+def print_results(pretrained_m: dict[str, Any], finetuned_m: dict[str, Any]) -> None:
     """Pretty-print side-by-side pretrained vs. fine-tuned metrics."""
     print(f"\n{'=' * 72}")
     print(f"{'METRIC':<30} {'PRETRAINED':>18} {'FINE-TUNED':>18}")
@@ -3153,7 +3168,7 @@ def print_results(pretrained_m, finetuned_m):
 # ---------------------------------------------------------------------------
 
 
-def evaluate_main():
+def evaluate_main() -> None:
     """Legacy standalone entry point for ad-hoc evaluation.
 
     For the full 8-experiment pipeline, use ``python run_all.py`` instead.
@@ -3431,8 +3446,8 @@ _FINETUNE_W: int = 960  # width
 
 
 def _apply_resolution_sync(
-    processor,
-    model,
+    processor: DonutProcessor,
+    model: VisionEncoderDecoderModel,
     height: int = _FINETUNE_H,
     width: int = _FINETUNE_W,
 ) -> None:
@@ -3775,9 +3790,9 @@ def train_experiment(
     samples: list[tuple[Path, dict]],
     output_dir: Path,
     val_samples: list[tuple[Path, dict]] | None = None,
-    base_processor=None,
-    base_model=None,
-    config=None,
+    base_processor: DonutProcessor | None = None,
+    base_model: VisionEncoderDecoderModel | None = None,
+    config: ExperimentConfig | None = None,
     sample_sources: list[str] | None = None,
 ) -> list[dict]:
     """Fine-tune DONUT on *samples* and save the model to *output_dir*.
@@ -3819,7 +3834,7 @@ def train_experiment(
     # Called once initially and again on each OOM retry so that GPU-resident
     # tensors from the failed attempt are never referenced on the retry.
     # ---------------------------------------------------------------------------
-    def _build_model_and_datasets():
+    def _build_model_and_datasets() -> tuple[Any, Any, Any, Any]:
         if base_processor is not None and base_model is not None:
             _proc = copy.deepcopy(base_processor)
             _mdl = copy.deepcopy(base_model)
@@ -4342,8 +4357,8 @@ def _check_disk_space_before_experiment(exp_id: int) -> bool:
 
 def run_experiment(
     exp_id: int,
-    base_processor=None,
-    base_model=None,
+    base_processor: DonutProcessor | None = None,
+    base_model: VisionEncoderDecoderModel | None = None,
     overrides: dict | None = None,
     keep_model: bool = False,
     no_disk_cleanup: bool = False,
@@ -4794,9 +4809,9 @@ def run_custom_experiment(config: ExperimentConfig, result_file: Path) -> dict:
 
 
 def run_experiment_from_config(
-    cfg,
-    base_processor=None,
-    base_model=None,
+    cfg: _YAMLExperimentConfig,
+    base_processor: DonutProcessor | None = None,
+    base_model: VisionEncoderDecoderModel | None = None,
     overrides: dict | None = None,
 ) -> dict:
     """Run a YAML-defined DONUT experiment (IDs 9+) via run_custom_experiment().
