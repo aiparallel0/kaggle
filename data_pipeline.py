@@ -32,7 +32,7 @@ import urllib.request
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, overload
 
 # Ensure sibling modules are importable regardless of CWD.
 _SCRIPT_DIR = str(Path(__file__).resolve().parent)
@@ -897,6 +897,12 @@ class BaseDatasetLoader(ABC):
         """Return the number of samples in *split* without fully loading."""
         ...
 
+    @property
+    @abstractmethod
+    def _subdir_name(self) -> str:
+        """Subdirectory name under data/ for this dataset (e.g. 'funsd')."""
+        ...
+
     # ── helpers available to subclasses ───────────────────────────────
 
     def _log(self, message: str) -> None:
@@ -952,6 +958,20 @@ class BaseDatasetLoader(ABC):
         """
         return dest_dir / "hf_cache"
 
+    # ── Template methods using _subdir_name ───────────────────────────
+
+    def _dest_dir(self) -> Path:
+        """Get and create the destination directory for this dataset."""
+        return self._get_dest_dir(self._subdir_name)
+
+    def _marker(self) -> Path:
+        """Get the marker file path for a cached dataset."""
+        return self._get_marker_path(self._dest_dir())
+
+    def _hf_cache(self) -> Path:
+        """Get the HuggingFace cache subdirectory for a dataset."""
+        return self._get_hf_cache_dir(self._dest_dir())
+
     @staticmethod
     def _empty_gt_dict() -> dict[str, str]:
         """Return a new empty ground-truth dict with all SROIE fields.
@@ -1006,6 +1026,10 @@ class SROIELoader(BaseDatasetLoader):
     """
 
     name = "SROIE"
+
+    @property
+    def _subdir_name(self) -> str:
+        return "sroie"
 
     # Map split name → (img_subdir, key_subdir)
     _SPLIT_DIRS = {
@@ -1131,17 +1155,13 @@ class WildReceiptLoader(BaseDatasetLoader):
 
     # ── download & extraction ─────────────────────────────────────────
 
-    def _dest_dir(self) -> Path:
-        """Phase 1: Use shared consolidation utility."""
-        return self._get_dest_dir("wildreceipt")
+    @property
+    def _subdir_name(self) -> str:
+        return "wildreceipt"
 
     def _inner_dir(self) -> Path:
         """The extracted ``wildreceipt/`` subdirectory inside _dest_dir()."""
         return self._dest_dir() / "wildreceipt"
-
-    def _marker(self) -> Path:
-        """Phase 1: Use shared consolidation utility."""
-        return self._get_marker_path(self._dest_dir())
 
     def _download(self) -> Path:
         """Download and extract the tar if not already cached."""
@@ -1304,17 +1324,9 @@ class FUNSDLoader(BaseDatasetLoader):
 
     # ── download ──────────────────────────────────────────────────────
 
-    def _dest_dir(self) -> Path:
-        """Phase 1: Use shared consolidation utility."""
-        return self._get_dest_dir("funsd")
-
-    def _hf_cache(self) -> Path:
-        """Phase 1: Use shared consolidation utility."""
-        return self._get_hf_cache_dir(self._dest_dir())
-
-    def _marker(self) -> Path:
-        """Phase 1: Use shared consolidation utility."""
-        return self._get_marker_path(self._dest_dir())
+    @property
+    def _subdir_name(self) -> str:
+        return "funsd"
 
     def _download(self) -> Path:
         """Download FUNSD from the HuggingFace datasets hub."""
@@ -1587,17 +1599,9 @@ class InvoicesDonutLoader(BaseDatasetLoader):
 
     # ── download ──────────────────────────────────────────────────────
 
-    def _dest_dir(self) -> Path:
-        """Phase 1: Use shared consolidation utility."""
-        return self._get_dest_dir("invoices_donut")
-
-    def _hf_cache(self) -> Path:
-        """Phase 1: Use shared consolidation utility."""
-        return self._get_hf_cache_dir(self._dest_dir())
-
-    def _marker(self) -> Path:
-        """Phase 1: Use shared consolidation utility."""
-        return self._get_marker_path(self._dest_dir())
+    @property
+    def _subdir_name(self) -> str:
+        return "invoices_donut"
 
     def _download(self) -> Path:
         """Download Invoices-DONUT from the HuggingFace datasets hub."""
@@ -1836,14 +1840,9 @@ class CORDv2Loader(BaseDatasetLoader):
 
     # ── internal paths ────────────────────────────────────────────────
 
-    def _dest_dir(self) -> Path:
-        return self._get_dest_dir("cord_v2")
-
-    def _hf_cache(self) -> Path:
-        return self._get_hf_cache_dir(self._dest_dir())
-
-    def _marker(self) -> Path:
-        return self._get_marker_path(self._dest_dir())
+    @property
+    def _subdir_name(self) -> str:
+        return "cord_v2"
 
     def _download(self) -> Path:
         dest = self._dest_dir()
@@ -2367,6 +2366,22 @@ def _load_and_merge_datasets(
             combined_val.extend(val_split)
 
     return combined_train, combined_val, combined_train_sources, per_loader_counts
+
+
+@overload
+def get_combined_dataset(
+    dataset_names: list[str],
+    sroie_oversample: int = 1,
+    return_sources: Literal[False] = False,
+) -> tuple[list[Sample], list[Sample]]: ...
+
+
+@overload
+def get_combined_dataset(
+    dataset_names: list[str],
+    sroie_oversample: int = 1,
+    return_sources: Literal[True] = ...,
+) -> tuple[list[Sample], list[Sample], list[str]]: ...
 
 
 def get_combined_dataset(
