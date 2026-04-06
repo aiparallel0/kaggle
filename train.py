@@ -293,7 +293,7 @@ except ImportError:
             device = next(self.model.parameters()).device
             use_amp = args.fp16 or args.bf16
             amp_dtype = torch.bfloat16 if args.bf16 else torch.float16
-            scaler = torch.cuda.amp.GradScaler(enabled=use_amp and torch.cuda.is_available())
+            scaler = torch.amp.GradScaler("cuda", enabled=use_amp and torch.cuda.is_available())
 
             train_loader = _DataLoader(
                 self.train_dataset,

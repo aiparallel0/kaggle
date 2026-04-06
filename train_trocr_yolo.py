@@ -802,7 +802,7 @@ except ImportError:
             # the unit-energy basin at high LR.  Gradient clipping (max_norm=1.0)
             # below is the primary safeguard; the lower LR provides a second layer.
             optimizer = torch.optim.AdamW(self.model.parameters(), lr=1e-4, weight_decay=5e-4)
-            scaler = torch.cuda.amp.GradScaler(enabled=amp and torch.cuda.is_available())
+            scaler = torch.amp.GradScaler("cuda", enabled=amp and torch.cuda.is_available())
             best_loss = float("inf")
             _skipped_steps_total = 0  # track GradScaler overflows across all epochs
 
@@ -2412,6 +2412,24 @@ def train_trocr(
         Training history with keys ``train_loss``, ``val_loss``, and
         ``num_train_samples``.
     """
+    # Minimum-epoch enforcement: 1 epoch of TrOCR fine-tuning produces val_loss≈9.1,
+    # which destroys microsoft/trocr-base-printed pretrained weights without learning
+    # any SROIE-specific patterns.  Every YOLO crop decodes to empty text, driving F1
+    # to 0 with a misleading "YOLO detected 0 text regions" error (YOLO is actually fine).
+    # Enforced here so it is impossible to silently train a non-functional TrOCR model,
+    # regardless of how the caller patched TROCR_EPOCHS.
+    # See CLAUDE.md §16 Pattern 9 (Masked Cascading Failures) and the post-mortem
+    # comment block in run_all.py near _superfast_mode_handler.
+    if TROCR_EPOCHS < 3:
+        raise ValueError(
+            f"TROCR_EPOCHS={TROCR_EPOCHS} is below the absolute minimum of 3. "
+            "1 epoch of TrOCR fine-tuning produces val_loss≈9.1 (non-functional decoder: "
+            "every YOLO crop decodes to empty text, F1→0). "
+            "Use TROCR_EPOCHS ≥ 5 in speed modes (recommended; brings val_loss to ~2.5–3.0, "
+            "sufficient for basic text decoding); TROCR_EPOCHS=3 is the absolute floor only. "
+            "See CLAUDE.md §16 Pattern 9."
+        )
+
     # Defensive GPU cleanup — free any leaked memory from prior stages
     # (DONUT experiments, YOLO training, etc.) before loading the 246M-param
     # TrOCR-base model.
@@ -2609,7 +2627,7 @@ def train_trocr(
         if (torch.cuda.is_available() and torch.cuda.is_bf16_supported())
         else torch.float16
     )
-    scaler = torch.cuda.amp.GradScaler(enabled=(_use_amp and _amp_dtype == torch.float16))
+    scaler = torch.amp.GradScaler("cuda", enabled=(_use_amp and _amp_dtype == torch.float16))
     print(
         f"  [TrOCR] AMP enabled: dtype={_amp_dtype}, gradient_checkpointing={_trocr_enable_grad_ckpt}"
         if _use_amp
@@ -4109,13 +4127,23 @@ if __name__ == "__main__":
     parser.add_argument(
         "--superfast",
         action="store_true",
-        help=("Bare minimum mode: YOLO production defaults + TrOCR 1 epoch max_len=32."),
+        help=(
+            "Bare minimum mode: YOLO production defaults + TrOCR 5 epochs max_len=64. "
+            "Floor of 5 epochs is enforced — 1 epoch produces val_loss≈9.1 (non-functional "
+            "decoder that outputs garbage for every crop, driving F1 to 0)."
+        ),
     )
     args = parser.parse_args()
 
     if args.superfast:
         # Patch module-level constants before calling train functions.
         # All originals are restored in the finally block.
+        # NOTE: TROCR_EPOCHS floor is 5, not 1.  1 epoch of TrOCR fine-tuning
+        # destroys microsoft/trocr-base-printed pretrained weights without learning
+        # SROIE patterns (val_loss=9.1268).  Every YOLO crop decodes to empty text,
+        # ocr_lines stays empty for 92% of images, and _verify_yolo_detection_rate
+        # raises a misleading RuntimeError blaming YOLO when YOLO is fine.
+        # See CLAUDE.md §16 Pattern 9 (Masked Cascading Failures).
         _sf_saved = {
             "TROCR_EPOCHS": TROCR_EPOCHS,
             "TROCR_MAX_LEN": TROCR_MAX_LEN,
@@ -4125,8 +4153,8 @@ if __name__ == "__main__":
 
         _mod = _sys.modules[__name__]
         try:
-            _mod.TROCR_EPOCHS = 1
-            _mod.TROCR_MAX_LEN = 32
+            _mod.TROCR_EPOCHS = 5  # floor: 1 epoch → val_loss≈9.1 (non-functional)
+            _mod.TROCR_MAX_LEN = 64  # 128→64: 2× faster; still covers ~50-char lines
             _mod.TROCR_BATCH = 4
             if args.stage in ("yolo", "both"):
                 train_yolo()
