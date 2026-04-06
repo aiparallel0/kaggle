@@ -1310,7 +1310,18 @@ def smoke_test(verbose: bool = True) -> bool:
 
     _check("Token ID roundtrip (GP-3/GP-4)", _check_token_ids)
 
-    # 4. Forward pass (dummy input)
+    # 4a. Pipeline Lemma Verification (L1–L8)
+    def _check_pipeline_lemmas() -> None:
+        from train_trocr_yolo import verify_pipeline_lemmas
+
+        results = verify_pipeline_lemmas()
+        failed = [k for k, v in results.items() if not v]
+        if failed:
+            raise AssertionError(f"Pipeline lemma failures: {', '.join(failed)}")
+
+    _check("Pipeline lemmas (L1-L8)", _check_pipeline_lemmas)
+
+    # 4b. Forward pass (dummy input)
     def _check_forward() -> None:
         import torch
         from transformers import DonutProcessor, VisionEncoderDecoderModel
@@ -1345,6 +1356,26 @@ def smoke_test(verbose: bool = True) -> bool:
         )
 
     _check("Forward pass (dummy input)", _check_forward)
+
+    # 5. YOLO+TrOCR field heuristic sanity check
+    def _check_field_heuristic() -> None:
+        from train_trocr_yolo import _assign_fields_heuristic
+
+        # Test with realistic receipt-like OCR lines
+        lines = [
+            {"text": "TEST COMPANY SDN BHD", "y": 10},
+            {"text": "NO 1 JALAN TEST", "y": 50},
+            {"text": "01/01/2024", "y": 120},
+            {"text": "TOTAL 10.00", "y": 300},
+        ]
+        result = _assign_fields_heuristic(lines)
+        from constants import FIELDS
+
+        for f in FIELDS:
+            assert f in result, f"Missing field: {f}"
+            assert isinstance(result[f], str), f"Non-string value for {f}"
+
+    _check("Field heuristic sanity", _check_field_heuristic)
 
     if verbose:
         print(f"\n{'=' * 60}")
