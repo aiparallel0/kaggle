@@ -35,12 +35,12 @@
 | Broad `except Exception:` (safe to narrow) | 13+11 | ✅ 24 | 0 |
 | Broad `except Exception:` (unsafe/intentional) | ~48 | ✅ 48 annotated | 0 |
 | Duplicate code (regex, imports, to_dict) | 5+5 | ✅ 10 | 0 |
-| SRP violations (classes/functions) | 22 | ✅ 7 | 🔲 15 |
-| OCP violations | 8 | ✅ 7 | 🔲 1 |
+| SRP violations (classes/functions) | 22 | ✅ 17 | 🔲 5 |
+| OCP violations | 8 | ✅ 8 | 0 |
 | LSP violations | 4 | ✅ 4 | 0 |
 | ISP violations | 3 | ✅ 2 | 🔲 1 |
-| DIP violations | 9 | ✅ 5 | 🔲 4 |
-| Functions >50 lines | 35+ | ✅ 1 | 🔲 34+ |
+| DIP violations | 9 | ✅ 7 | 🔲 2 |
+| Functions >50 lines | 35+ | ✅ 13 | 🔲 22+ |
 | Missing return type hints (public) | 58+ | ✅ 58+ | 0 |
 | Missing `-> None` on `__init__` | 15+ | ✅ 15 | 0 |
 | Bare `list`/`dict` type hints | 146+ | ✅ 146+ | 0 |
@@ -134,6 +134,118 @@
 | train_trocr_yolo.py | ~2715 | `__import__("math").cos(...)` | `math.cos(...)` (added `import math` to top) |
 | train_trocr_yolo.py | ~2795 | `__import__("logging").getLogger(...)` | `logging.getLogger(...)` |
 
+### ✅ SRP-10: DonutTrainer.train() decomposed (PR #202, 2026-04-06)
+
+Extracted 12 helper methods from the 639-line `train()` method in `train.py`:
+
+| Helper | Responsibility |
+|--------|---------------|
+| `_resolve_num_workers()` | DataLoader workers logic with cache awareness |
+| `_detect_precision()` | bf16/fp16 detection |
+| `_compute_warmup_steps()` | Warmup cap + training config validation |
+| `_build_training_args()` | `Seq2SeqTrainingArguments` construction |
+| `_build_param_groups()` | Layerwise optimizer parameter groups |
+| `_build_lr_scheduler()` | OneCycleLR or None |
+| `_register_callbacks()` | All 6 callback types |
+| `_configure_gradient_checkpointing()` | Gradient checkpointing setup |
+| `_build_data_collator()` | datasets.Dataset guard + collator closure |
+| `_build_custom_trainer()` | `_DonutSeq2SeqTrainer` inner class + instantiation |
+| `_run_pre_training_guardrails()` | All 7 guardrails (0–6) |
+| `_execute_training_loop()` | `trainer.train()` + cleanup |
+
+### ✅ SRP-12: MultiDataset.__init__() decomposed (PR #202, 2026-04-06)
+
+Extracted 4 helpers from the 134-line `__init__` in `train.py`:
+
+| Helper | Responsibility |
+|--------|---------------|
+| `_load_images_to_cache()` | RAM cache check + ThreadPoolExecutor image loading |
+| `_precompute_pixel_tensors()` | Pixel values precomputation with RAM check |
+| `_precompute_label_tensors()` | Token tensor precomputation |
+| `_log_field_masking_stats()` | Per-field masking statistics logging |
+
+### ✅ SRP-13: SROIEOnlyValCallback decomposed (PR #202, 2026-04-06)
+
+Extracted `_compute_sroie_only_f1()` from `on_epoch_end()` in `train.py`.
+
+### ✅ SRP-6: train_experiment() decomposed (PR #202, 2026-04-06)
+
+Extracted from the 403-line function in `run_experiments.py`:
+
+| Helper | Responsibility |
+|--------|---------------|
+| `_build_model_and_datasets()` | Model/processor/dataset construction (was nested closure) |
+| `_attempt_training_with_oom_recovery()` | Training loop with progressive batch halving on OOM |
+| `_save_trained_model()` | Save + processor spot-check + GPU cleanup |
+
+### ✅ SRP-7: run_experiment() decomposed (PR #202, 2026-04-06)
+
+Extracted from the 376-line function in `run_experiments.py`:
+
+| Helper | Responsibility |
+|--------|---------------|
+| `_validate_experiment_prerequisites()` | Disk space + oversample guard |
+| `_check_cache_validity()` | Cache staleness detection |
+| `_load_experiment_data()` | Data loading + subsampling |
+| `_run_training_phase()` | Training invocation wrapper |
+| `_run_evaluation_phase()` | Evaluation + F1 diagnostics |
+| `_save_experiment_results()` | JSON serialization + cleanup |
+| `_zero_metrics()` | DRY zero-metric builder |
+
+### ✅ OCP-3: _is_sroie_task_prompt() centralized (PR #202, 2026-04-06)
+
+Replaced 6 raw `startswith` calls with centralized `_is_sroie_task_prompt()` in `run_experiments.py`.
+
+### ✅ DIP-3/DIP-4: ModelProtocol and ProcessorProtocol (PR #202, 2026-04-06)
+
+Added runtime-checkable `ModelProtocol` and `ProcessorProtocol` in `run_experiments.py`.
+
+### ✅ SRP-2: _hf_download_dataset_inline() decomposed (PR #202, 2026-04-06)
+
+Extracted from the 103-line function in `data_pipeline.py`:
+
+| Helper | Responsibility |
+|--------|---------------|
+| `_hf_acquire_lock_and_check_cache()` | Threading lock + double-check cache marker |
+| `_hf_fetch_row_count()` | HF API row count query with fallback |
+| `_hf_download_rows_batch()` | Batch download loop (100 rows/page) |
+
+### ✅ SRP-3: get_combined_dataset() decomposed (PR #202, 2026-04-06)
+
+Extracted `_shuffle_with_sources()` for paired shuffle in `data_pipeline.py`.
+
+### ✅ FUNC-4: build_parser() decomposed (PR #202, 2026-04-06)
+
+Extracted from the ~334-line function in `run_all.py`:
+
+| Helper | Responsibility |
+|--------|---------------|
+| `_add_core_arguments()` | Experiment selection, workspace, data paths |
+| `_add_training_arguments()` | Batch size, learning rate, epochs |
+| `_add_mode_arguments()` | Quick, mini, micro, superfast, instant mode flags |
+| `_add_output_arguments()` | Paper, reporting, push flags |
+| `_add_skip_arguments()` | Skip flags for pipeline stages |
+
+### ✅ SRP-4: CORDv2Loader._cord_remap() already decomposed (verified 2026-04-06)
+
+Already delegates to `_cord_extract_company()`, `_cord_extract_date()`, `_cord_extract_address()`, `_cord_extract_total()`. Only 28 lines.
+
+### ✅ SRP-5: FUNSDLoader.load() already decomposed (verified 2026-04-06)
+
+Already delegates to `_load_from_hf_arrow()` and `_load_from_inline_cache()`. Only 23 lines.
+
+### ✅ OCP-6: LiveDashboardCallback — already uses proper composition (verified 2026-04-06)
+
+Uses early-binding pattern at class definition time (line 3168–3176) instead of monkey-patching. No `self.__class__` mutation.
+
+### ✅ FUNC-3: save() — already decomposed (verified 2026-04-06)
+
+Only 12 lines, delegates to `_save_model_weights()`, `_verify_sroie_tokens()`, `_verify_lm_head_shard()`.
+
+### ✅ FUNC-1: _build_model_and_datasets() — extracted as standalone (PR #202, 2026-04-06)
+
+Was a 195-line nested closure in `train_experiment()`, now a standalone module-level function.
+
 ---
 
 ## 3. constants.py (549 LOC)
@@ -195,10 +307,10 @@ Added `labels: "torch.Tensor"`, `tokenizer: "PreTrainedTokenizerBase"`, real typ
 **Severity:** HIGH
 **Description:** Four loader classes (`WildReceiptLoader`, `FUNSDLoader`, `InvoicesDonutLoader`, `CORDv2Loader`) each implement identical `_dest_dir()`, `_marker()`, `_hf_cache()` patterns. Should use template method pattern in `BaseDatasetLoader` with abstract `_subdir_name()`.
 
-### 🔲 SRP-2: `_hf_download_dataset_inline()` too long
+### ✅ SRP-2: `_hf_download_dataset_inline()` too long — Fixed in PR #202 (2026-04-06)
 **Lines:** 522–659 (138 lines)
 **Severity:** MEDIUM
-**Description:** Single function handles file locks, config discovery, row count fetch, batch download, JSON writing, and marker management. Should decompose into `_hf_discover_config()`, `_hf_fetch_rows_batch()`, `_hf_process_and_save_rows()`.
+**Description:** Decomposed into `_hf_acquire_lock_and_check_cache()`, `_hf_fetch_row_count()`, `_hf_download_rows_batch()`.
 
 ### 🔲 SRP-3: `get_combined_dataset()` too long
 **Lines:** 2155–2244 (119 lines)

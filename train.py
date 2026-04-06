@@ -2751,59 +2751,62 @@ class SROIEOnlyValCallback(TrainerCallback):
         self._output_dir = Path(output_dir)
         self._rows: list[dict] = []
 
+    def _compute_sroie_only_f1(self, model) -> float:
+        """Run inference on SROIE val samples and return exact-match F1.
+
+        Raises on failure — the caller (``on_epoch_end``) catches exceptions.
+        """
+        device = next(model.parameters()).device
+        model.eval()
+        correct = 0
+        total = 0
+        with torch.no_grad():
+            for img_path, gt in self._samples:
+                try:
+                    image = _load_image(img_path)
+                    pixel_values = self._processor(image, return_tensors="pt").pixel_values.to(
+                        device
+                    )
+                    decoder_input_ids = (
+                        torch.tensor(self._processor.tokenizer.convert_tokens_to_ids(["<s_sroie>"]))
+                        .unsqueeze(0)
+                        .to(device)
+                    )
+                    outputs = model.generate(
+                        pixel_values,
+                        decoder_input_ids=decoder_input_ids,
+                        max_length=128,
+                        num_beams=1,
+                    )
+                    decoded = self._processor.batch_decode(outputs, skip_special_tokens=False)[0]
+                    result = self._processor.token2json(decoded)
+                    if isinstance(result, list):
+                        merged: dict = {}
+                        for page in result:
+                            if isinstance(page, dict):
+                                for k, v in page.items():
+                                    if k not in merged:
+                                        merged[k] = v
+                        result = merged
+                    if not isinstance(result, dict):
+                        result = {}
+                    for fld in FIELDS:
+                        pred_val = str(result.get(fld, "")).lower().strip()
+                        gt_val = str(gt.get(fld, "")).lower().strip()
+                        total += 1
+                        if pred_val == gt_val:
+                            correct += 1
+                except Exception:  # intentional broad catch: OOM recovery in callback
+                    total += len(FIELDS)  # count as all wrong on error
+        return correct / total if total > 0 else 0.0
+
     def on_epoch_end(self, args, state, control, model=None, **kwargs):
         """Compute SROIE-only exact-match F1 and log it."""
         if model is None or not self._samples:
             return control
 
         try:
-            device = next(model.parameters()).device
-            model.eval()
-            correct = 0
-            total = 0
-            with torch.no_grad():
-                for img_path, gt in self._samples:
-                    try:
-                        image = _load_image(img_path)
-                        pixel_values = self._processor(image, return_tensors="pt").pixel_values.to(
-                            device
-                        )
-                        decoder_input_ids = (
-                            torch.tensor(
-                                self._processor.tokenizer.convert_tokens_to_ids(["<s_sroie>"])
-                            )
-                            .unsqueeze(0)
-                            .to(device)
-                        )
-                        outputs = model.generate(
-                            pixel_values,
-                            decoder_input_ids=decoder_input_ids,
-                            max_length=128,
-                            num_beams=1,
-                        )
-                        decoded = self._processor.batch_decode(outputs, skip_special_tokens=False)[
-                            0
-                        ]
-                        result = self._processor.token2json(decoded)
-                        if isinstance(result, list):
-                            merged: dict = {}
-                            for page in result:
-                                if isinstance(page, dict):
-                                    for k, v in page.items():
-                                        if k not in merged:
-                                            merged[k] = v
-                            result = merged
-                        if not isinstance(result, dict):
-                            result = {}
-                        for fld in FIELDS:
-                            pred_val = str(result.get(fld, "")).lower().strip()
-                            gt_val = str(gt.get(fld, "")).lower().strip()
-                            total += 1
-                            if pred_val == gt_val:
-                                correct += 1
-                    except Exception:  # intentional broad catch: OOM recovery in callback
-                        total += len(FIELDS)  # count as all wrong on error
-            f1 = correct / total if total > 0 else 0.0
+            f1 = self._compute_sroie_only_f1(model)
         except Exception as exc:  # intentional broad catch: OOM recovery boundary
             logger.warning("SROIEOnlyValCallback: failed to compute F1: %s", exc)
             model.train()
@@ -2975,114 +2978,141 @@ class MultiDataset(Dataset):
         self._aux_loss_weight: float = aux_loss_weight
 
         if cache_in_ram and len(samples) > 0:
-            # Determine actual image dimensions from processor_config.json so
-            # the RAM estimate is correct at any resolution.
-            # The old hardcoded `* 3` (3 MB/sample) was wrong at 2560×1920
-            # (actual: 14.06 MB/sample) causing the gate to open when it should
-            # be closed. memory_manager.ram_cache_is_safe() uses the real formula:
-            #   3 × H × W / 1_048_576 MB per sample.
-            try:
-                from resource_manager import get_image_size_from_processor_config
-
-                _img_h, _img_w = get_image_size_from_processor_config()
-            except (ImportError, RuntimeError):
-                _img_h, _img_w = DONUT_IMAGE_SIZE  # safe fallback to DONUT native resolution
-            if _mm.ram_cache_is_safe(len(samples), _img_h, _img_w):
-                import concurrent.futures
-
-                def _load_one(idx_path):
-                    idx, path = idx_path
-                    try:
-                        return idx, _load_image(path)
-                    except (OSError, ValueError):
-                        return idx, None
-
-                with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
-                    for idx, img in pool.map(_load_one, enumerate(s[0] for s in samples)):
-                        if img is not None:
-                            self._image_cache[idx] = img
-
-                logging.getLogger(__name__).info(
-                    "[RAM Cache] %d/%d images cached", len(self._image_cache), len(samples)
-                )
-            else:
-                logging.getLogger(__name__).info(
-                    "[RAM Cache] Skipped (ram_cache_is_safe returned False for %d samples at %dx%d)",
-                    len(samples),
-                    _img_h,
-                    _img_w,
-                )
-
-            # Precompute pixel_values tensors to eliminate per-step DonutImageProcessor
-            # overhead. Each float32 tensor is 3×1280×960×4 bytes ≈ 14.2 MB.
-            # Only attempt if: images are cached AND RAM allows the extra footprint.
-            # Hard cap: never allocate more than 4 GB of pixel tensors regardless of
-            # available RAM, because background model downloads and GPU activations
-            # consume headroom that psutil.virtual_memory() may not reflect yet.
-            _PIXEL_TENSOR_MAX_MB = 4096
-            _pix_mb = len(self._image_cache) * 14.2
-            _log = logging.getLogger(__name__)
-            if len(self._image_cache) > 0 and precompute_tensors:
-                if _pix_mb > _PIXEL_TENSOR_MAX_MB:
-                    _log.info(
-                        "[Tensor Cache] Skipped (estimated %.0f MB exceeds hard cap %d MB)",
-                        _pix_mb,
-                        _PIXEL_TENSOR_MAX_MB,
-                    )
-                else:
-                    _free_mb = _mm.ram_headroom_mb()
-                    if _pix_mb > _free_mb * 0.50:
-                        _log.info(
-                            "[Tensor Cache] Skipped (%.0f MB > 50%% of %.0f MB free RAM)",
-                            _pix_mb,
-                            _free_mb,
-                        )
-                    else:
-                        _log.info(
-                            "[Tensor Cache] Precomputing pixel_values for %d images (~%.0f MB) ...",
-                            len(self._image_cache),
-                            _pix_mb,
-                        )
-                        for _idx, _img in self._image_cache.items():
-                            try:
-                                self._pixel_cache[_idx] = processor(
-                                    _img, return_tensors="pt"
-                                ).pixel_values.squeeze()
-                            except (RuntimeError, ValueError):
-                                pass
-                        _log.info(
-                            "[Tensor Cache] Precomputed %d/%d pixel_values tensors",
-                            len(self._pixel_cache),
-                            len(samples),
-                        )
-            elif len(self._image_cache) > 0 and not precompute_tensors:
-                _log.info("[Tensor Cache] Skipped (precompute_tensors=False — val/eval dataset)")
-
-            # Precompute label token tensors — each is 768 ints (≈3 KB), always fits in RAM.
-            # Amortises tokeniser overhead (sentencepiece BPE encode + pad to max_length)
-            # across all training steps that revisit each sample.
-            if len(self._image_cache) > 0 and precompute_tensors:
-                _log = logging.getLogger(__name__)
-                for _idx, (_, _gt) in enumerate(samples):
-                    _target = "<s_sroie>"
-                    for _f in FIELDS:
-                        _v = _gt.get(_f, "")
-                        _target += f"<s_{_f}>{_v}</s_{_f}>"
-                    _target += "</s_sroie>"
-                    _lbl = processor.tokenizer(
-                        _target,
-                        add_special_tokens=False,  # match inference: no BOS/EOS wrappers
-                        max_length=max_length,
-                        padding="max_length",
-                        truncation=True,
-                        return_tensors="pt",
-                    ).input_ids.squeeze()
-                    _lbl[_lbl == processor.tokenizer.pad_token_id] = LABEL_IGNORE_INDEX
-                    _lbl = _mask_empty_field_labels(_lbl, _gt, processor.tokenizer)
-                    self._label_cache[_idx] = _lbl
-                _log.info("[Label Cache] Precomputed %d label tensors", len(self._label_cache))
+            self._load_images_to_cache(samples)
+            self._precompute_pixel_tensors(samples, processor, precompute_tensors)
+            self._precompute_label_tensors(samples, processor, max_length, precompute_tensors)
 
         # Log per-field masking statistics so empty-field dilution is visible.
+        self._log_field_masking_stats(samples)
+
+    def _load_images_to_cache(self, samples: list[tuple[Path, dict]]) -> None:
+        """Load images into RAM cache using a thread pool if memory allows."""
+        # Determine actual image dimensions from processor_config.json so
+        # the RAM estimate is correct at any resolution.
+        # The old hardcoded `* 3` (3 MB/sample) was wrong at 2560×1920
+        # (actual: 14.06 MB/sample) causing the gate to open when it should
+        # be closed. memory_manager.ram_cache_is_safe() uses the real formula:
+        #   3 × H × W / 1_048_576 MB per sample.
+        try:
+            from resource_manager import get_image_size_from_processor_config
+
+            _img_h, _img_w = get_image_size_from_processor_config()
+        except (ImportError, RuntimeError):
+            _img_h, _img_w = DONUT_IMAGE_SIZE  # safe fallback to DONUT native resolution
+        if _mm.ram_cache_is_safe(len(samples), _img_h, _img_w):
+            import concurrent.futures
+
+            def _load_one(idx_path):
+                idx, path = idx_path
+                try:
+                    return idx, _load_image(path)
+                except (OSError, ValueError):
+                    return idx, None
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+                for idx, img in pool.map(_load_one, enumerate(s[0] for s in samples)):
+                    if img is not None:
+                        self._image_cache[idx] = img
+
+            logging.getLogger(__name__).info(
+                "[RAM Cache] %d/%d images cached", len(self._image_cache), len(samples)
+            )
+        else:
+            logging.getLogger(__name__).info(
+                "[RAM Cache] Skipped (ram_cache_is_safe returned False for %d samples at %dx%d)",
+                len(samples),
+                _img_h,
+                _img_w,
+            )
+
+    def _precompute_pixel_tensors(
+        self,
+        samples: list[tuple[Path, dict]],
+        processor: DonutProcessor,
+        precompute_tensors: bool,
+    ) -> None:
+        """Precompute pixel_values tensors to eliminate per-step processor overhead.
+
+        Each float32 tensor is 3×1280×960×4 bytes ≈ 14.2 MB.
+        Only attempt if: images are cached AND RAM allows the extra footprint.
+        Hard cap: never allocate more than 4 GB of pixel tensors regardless of
+        available RAM, because background model downloads and GPU activations
+        consume headroom that psutil.virtual_memory() may not reflect yet.
+        """
+        _PIXEL_TENSOR_MAX_MB = 4096
+        _pix_mb = len(self._image_cache) * 14.2
+        _log = logging.getLogger(__name__)
+        if len(self._image_cache) > 0 and precompute_tensors:
+            if _pix_mb > _PIXEL_TENSOR_MAX_MB:
+                _log.info(
+                    "[Tensor Cache] Skipped (estimated %.0f MB exceeds hard cap %d MB)",
+                    _pix_mb,
+                    _PIXEL_TENSOR_MAX_MB,
+                )
+            else:
+                _free_mb = _mm.ram_headroom_mb()
+                if _pix_mb > _free_mb * 0.50:
+                    _log.info(
+                        "[Tensor Cache] Skipped (%.0f MB > 50%% of %.0f MB free RAM)",
+                        _pix_mb,
+                        _free_mb,
+                    )
+                else:
+                    _log.info(
+                        "[Tensor Cache] Precomputing pixel_values for %d images (~%.0f MB) ...",
+                        len(self._image_cache),
+                        _pix_mb,
+                    )
+                    for _idx, _img in self._image_cache.items():
+                        try:
+                            self._pixel_cache[_idx] = processor(
+                                _img, return_tensors="pt"
+                            ).pixel_values.squeeze()
+                        except (RuntimeError, ValueError):
+                            pass
+                    _log.info(
+                        "[Tensor Cache] Precomputed %d/%d pixel_values tensors",
+                        len(self._pixel_cache),
+                        len(samples),
+                    )
+        elif len(self._image_cache) > 0 and not precompute_tensors:
+            _log.info("[Tensor Cache] Skipped (precompute_tensors=False — val/eval dataset)")
+
+    def _precompute_label_tensors(
+        self,
+        samples: list[tuple[Path, dict]],
+        processor: DonutProcessor,
+        max_length: int,
+        precompute_tensors: bool,
+    ) -> None:
+        """Precompute label token tensors — each is 768 ints (≈3 KB), always fits in RAM.
+
+        Amortises tokeniser overhead (sentencepiece BPE encode + pad to max_length)
+        across all training steps that revisit each sample.
+        """
+        if len(self._image_cache) > 0 and precompute_tensors:
+            _log = logging.getLogger(__name__)
+            for _idx, (_, _gt) in enumerate(samples):
+                _target = "<s_sroie>"
+                for _f in FIELDS:
+                    _v = _gt.get(_f, "")
+                    _target += f"<s_{_f}>{_v}</s_{_f}>"
+                _target += "</s_sroie>"
+                _lbl = processor.tokenizer(
+                    _target,
+                    add_special_tokens=False,  # match inference: no BOS/EOS wrappers
+                    max_length=max_length,
+                    padding="max_length",
+                    truncation=True,
+                    return_tensors="pt",
+                ).input_ids.squeeze()
+                _lbl[_lbl == processor.tokenizer.pad_token_id] = LABEL_IGNORE_INDEX
+                _lbl = _mask_empty_field_labels(_lbl, _gt, processor.tokenizer)
+                self._label_cache[_idx] = _lbl
+            _log.info("[Label Cache] Precomputed %d label tensors", len(self._label_cache))
+
+    def _log_field_masking_stats(self, samples: list[tuple[Path, dict]]) -> None:
+        """Log per-field masking statistics so empty-field dilution is visible."""
         if samples:
             _log = logging.getLogger(__name__)
             for f in FIELDS:
@@ -3542,6 +3572,40 @@ class DonutTrainer:
         start_time = time.time()
 
         do_eval = self.val_dataset is not None and len(self.val_dataset) > 0
+        optimal_workers = self._resolve_num_workers(do_eval)
+
+        use_bf16, use_fp16 = self._detect_precision()
+        grad_accum = getattr(self.config, "gradient_accumulation_steps", 2)
+        eff_warmup, total_opt_steps = self._compute_warmup_steps(grad_accum)
+        training_args = self._build_training_args(
+            use_bf16, use_fp16, eff_warmup, grad_accum, optimal_workers, do_eval
+        )
+
+        optimizer, encoder_lr, decoder_lr = self._build_param_groups()
+        scheduler = self._build_lr_scheduler(optimizer, encoder_lr, decoder_lr, total_opt_steps)
+        callbacks = self._register_callbacks(do_eval)
+        self._configure_gradient_checkpointing()
+        collator = self._build_data_collator()
+        trainer = self._build_custom_trainer(
+            training_args, collator, callbacks, optimizer, scheduler
+        )
+        self._run_pre_training_guardrails()
+        self._execute_training_loop(trainer, callbacks)
+
+        duration = time.time() - start_time
+        return TrainingResult(
+            log_history=trainer.state.log_history,
+            train_samples=len(self.train_dataset),
+            val_samples=len(self.val_dataset) if self.val_dataset else 0,
+            duration_seconds=duration,
+        )
+
+    # ------------------------------------------------------------------
+    # train() helper methods — extracted for readability
+    # ------------------------------------------------------------------
+
+    def _resolve_num_workers(self, do_eval: bool) -> int:
+        """Determine optimal DataLoader num_workers, accounting for RAM caches."""
         optimal_workers = _optimal_num_workers()
 
         # Keep num_workers=0 when batch_size≤2 and the RAM/tensor cache is
@@ -3572,6 +3636,13 @@ class DonutTrainer:
             )
             optimal_workers = 0
 
+        return optimal_workers
+
+    def _detect_precision(self) -> tuple[bool, bool]:
+        """Detect bf16/fp16 support and log torch.compile skip.
+
+        Returns ``(use_bf16, use_fp16)``.
+        """
         # Detect bf16 support (Ampere+ GPUs including Blackwell) — prefer over fp16
         use_bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
         use_fp16 = torch.cuda.is_available() and not use_bf16
@@ -3586,13 +3657,19 @@ class DonutTrainer:
         # and the broken evaluation.
         logging.debug("torch.compile skipped (incompatible with autoregressive generate)")
 
-        # Cap warmup_steps to ≤10% of total optimizer steps.
-        # warmup=500 is correct for large datasets (Exp 8, ~3940 samples, ~1250 opt steps),
-        # but exceeds total training for small datasets (Exp 1, ~500 samples, ~320 opt steps),
-        # causing the LR to never reach peak value and producing CORD-schema hallucinations.
-        _grad_accum = getattr(self.config, "gradient_accumulation_steps", 2)
+        return use_bf16, use_fp16
+
+    def _compute_warmup_steps(self, grad_accum: int) -> tuple[int, int]:
+        """Cap warmup_steps to ≤10% of total optimizer steps.
+
+        Returns ``(eff_warmup, total_opt_steps)``.
+
+        warmup=500 is correct for large datasets (Exp 8, ~3940 samples, ~1250 opt steps),
+        but exceeds total training for small datasets (Exp 1, ~500 samples, ~320 opt steps),
+        causing the LR to never reach peak value and producing CORD-schema hallucinations.
+        """
         _steps_epoch = math.ceil(len(self.train_dataset) / self.config.per_device_train_batch_size)
-        _total_opt_steps = math.ceil(_steps_epoch / _grad_accum) * self.config.max_epochs
+        _total_opt_steps = math.ceil(_steps_epoch / grad_accum) * self.config.max_epochs
 
         # Validate that this configuration produces enough optimizer steps.
         # DONUT requires ~200+ steps to learn field content beyond XML scaffolding;
@@ -3602,7 +3679,7 @@ class DonutTrainer:
 
         _vtc(
             batch_size=self.config.per_device_train_batch_size,
-            gradient_accumulation_steps=_grad_accum,
+            gradient_accumulation_steps=grad_accum,
             num_train_samples=len(self.train_dataset),
             epochs=self.config.max_epochs,
         )
@@ -3618,6 +3695,21 @@ class DonutTrainer:
                 self.config.max_epochs,
             )
 
+        return _eff_warmup, _total_opt_steps
+
+    def _build_training_args(
+        self,
+        use_bf16: bool,
+        use_fp16: bool,
+        eff_warmup: int,
+        grad_accum: int,
+        optimal_workers: int,
+        do_eval: bool,
+    ) -> Seq2SeqTrainingArguments:
+        """Build and return ``Seq2SeqTrainingArguments``.
+
+        Includes the inspect-based dataloader kwarg guard for transformers 5.x compat.
+        """
         # Guard DataLoader kwargs that were renamed/removed in transformers 5.x.
         # When num_workers=8, passing dataloader_prefetch_factor=2 to
         # Seq2SeqTrainingArguments raises TypeError in transformers >= 5.0 if the
@@ -3635,16 +3727,16 @@ class DonutTrainer:
         elif "dataloader_prefetch_factor" in _ta_params:
             _dl_extra["dataloader_prefetch_factor"] = None
 
-        training_args = Seq2SeqTrainingArguments(
+        return Seq2SeqTrainingArguments(
             output_dir=str(self._output_dir),
             num_train_epochs=self.config.max_epochs,
             per_device_train_batch_size=self.config.per_device_train_batch_size,
             per_device_eval_batch_size=self.config.per_device_train_batch_size,
-            gradient_accumulation_steps=_grad_accum,
+            gradient_accumulation_steps=grad_accum,
             # Set to encoder_lr for HF logging purposes only — the custom
             # layerwise optimizer passed via optimizers= takes precedence.
             learning_rate=getattr(self.config, "encoder_lr", self.config.learning_rate),
-            warmup_steps=_eff_warmup,
+            warmup_steps=eff_warmup,
             weight_decay=getattr(self.config, "weight_decay", 0.01),
             # Label smoothing 0.1: regularises the lm_head distribution; reduces
             # overconfident predictions on rare SROIE tokens (e.g. RM amounts).
@@ -3675,21 +3767,27 @@ class DonutTrainer:
             **_dl_extra,
         )
 
-        # Build layerwise optimizer: encoder at encoder_lr, decoder at decoder_lr,
-        # with weight decay EXCLUDED from 1-D parameters (biases and LayerNorm
-        # scale/shift tensors).
-        #
-        # WHY exclude 1-D params from weight decay:
-        # - Bias terms: L2 regularization on biases makes it harder for the model
-        #   to learn precise additive offsets (e.g. vocabulary token logit biases).
-        # - LayerNorm weight/bias: shrinking these destabilizes normalization —
-        #   LayerNorm scale=1 and shift=0 is only the *initial* state, not the
-        #   optimal one; regularizing toward it hurts convergence.
-        # - Industry standard: GPT-2, BERT, T5 all exclude 1-D params from decay.
-        #
-        # Detection strategy: use p.ndim < 2 (all biases and LayerNorm params are
-        # 1-D scalars; all weight matrices are ≥2-D). This is more robust than
-        # name matching because it works regardless of HF module naming conventions.
+    def _build_param_groups(self) -> tuple[torch.optim.Optimizer, float, float]:
+        """Build layerwise optimizer with weight decay exclusion.
+
+        Returns ``(optimizer, encoder_lr, decoder_lr)``.
+
+        Build layerwise optimizer: encoder at encoder_lr, decoder at decoder_lr,
+        with weight decay EXCLUDED from 1-D parameters (biases and LayerNorm
+        scale/shift tensors).
+
+        WHY exclude 1-D params from weight decay:
+        - Bias terms: L2 regularization on biases makes it harder for the model
+          to learn precise additive offsets (e.g. vocabulary token logit biases).
+        - LayerNorm weight/bias: shrinking these destabilizes normalization —
+          LayerNorm scale=1 and shift=0 is only the *initial* state, not the
+          optimal one; regularizing toward it hurts convergence.
+        - Industry standard: GPT-2, BERT, T5 all exclude 1-D params from decay.
+
+        Detection strategy: use p.ndim < 2 (all biases and LayerNorm params are
+        1-D scalars; all weight matrices are ≥2-D). This is more robust than
+        name matching because it works regardless of HF module naming conventions.
+        """
         encoder_lr = getattr(self.config, "encoder_lr", self.config.learning_rate)
         decoder_lr = getattr(self.config, "decoder_lr", self.config.learning_rate)
         _weight_decay = getattr(self.config, "weight_decay", 0.01)
@@ -3738,18 +3836,28 @@ class DonutTrainer:
                 ],
             )
 
+        return optimizer, encoder_lr, decoder_lr
+
+    def _build_lr_scheduler(
+        self,
+        optimizer: torch.optim.Optimizer,
+        encoder_lr: float,
+        decoder_lr: float,
+        total_opt_steps: int,
+    ) -> "torch.optim.lr_scheduler._LRScheduler | None":
+        """Build OneCycleLR if configured, otherwise return ``None``."""
         # OneCycleLR: aggressive warmup + cosine decay, reaches peak LR immediately
         # — much faster convergence than cosine+warmup for short (2–3 epoch) micro runs
         _lr_schedule = getattr(self.config, "lr_schedule", "cosine")
         custom_scheduler = None
-        if _lr_schedule == "one_cycle" and _total_opt_steps > 0:
+        if _lr_schedule == "one_cycle" and total_opt_steps > 0:
             # 4 param groups now (enc_decay, enc_nodecay, dec_decay, dec_nodecay).
             # OneCycleLR requires one max_lr per param group — repeat each LR so
             # the no-decay group mirrors its decay counterpart's schedule.
             custom_scheduler = torch.optim.lr_scheduler.OneCycleLR(
                 optimizer,
                 max_lr=[encoder_lr, encoder_lr, decoder_lr, decoder_lr],
-                total_steps=_total_opt_steps,
+                total_steps=total_opt_steps,
                 pct_start=0.1,  # 10% warmup, 90% cosine decay
                 anneal_strategy="cos",
                 div_factor=10.0,  # start lr = max_lr / 10
@@ -3759,9 +3867,18 @@ class DonutTrainer:
                 "OneCycleLR: max_lr=[%.2e, %.2e], total_steps=%d",
                 encoder_lr,
                 decoder_lr,
-                _total_opt_steps,
+                total_opt_steps,
             )
+        return custom_scheduler
 
+    def _register_callbacks(self, do_eval: bool) -> list:
+        """Register all training callbacks and return the list.
+
+        Callback order matters:
+        - LmHeadCloneCallback MUST be first (before EarlyStopping) so the clone
+          happens before every checkpoint write.
+        - EarlyStoppingCallback MUST be before MinEpochsBeforeStoppingCallback.
+        """
         # LmHeadCloneCallback MUST be registered before EarlyStoppingCallback
         # so the clone happens before every checkpoint write (including the
         # best-model checkpoint that load_best_model_at_end reloads).
@@ -3869,6 +3986,14 @@ class DonutTrainer:
             except Exception as _ld_exc:  # intentional broad catch: third-party registration
                 logger.debug("[LiveDashboard] Registration failed: %s", _ld_exc)
 
+        return callbacks
+
+    def _configure_gradient_checkpointing(self) -> None:
+        """Enable gradient checkpointing to trade compute for VRAM.
+
+        ~Halves activation memory (allows batch=4 on 24 GB 4090 instead of batch=2).
+        Must set use_cache=False before enabling gradient checkpointing.
+        """
         # Gradient checkpointing: trades compute for VRAM — ~halves activation
         # memory (allows batch=4 on 24 GB 4090 instead of batch=2).
         # Must set use_cache=False before enabling gradient checkpointing.
@@ -3880,6 +4005,14 @@ class DonutTrainer:
         )
         logging.debug("Gradient checkpointing enabled (use_reentrant=False)")
 
+    def _build_data_collator(self) -> callable:
+        """Build the datasets.Dataset guard and data collator function.
+
+        The datasets.Dataset guard must run before the trainer is built since
+        ``Seq2SeqTrainer`` does ``isinstance(dataset, datasets.Dataset)``.
+
+        Returns the collator closure.
+        """
         # Guard: transformers Seq2SeqTrainer does
         #   isinstance(dataset, datasets.Dataset)
         # With HuggingFace datasets 3.x lazy-loading, a prior partial import
@@ -3938,6 +4071,23 @@ class DonutTrainer:
             if "loss_weight" in features[0]:
                 batch["loss_weight"] = torch.stack([f["loss_weight"] for f in features])
             return batch
+
+        return _donut_data_collator
+
+    def _build_custom_trainer(
+        self,
+        training_args: Seq2SeqTrainingArguments,
+        collator: callable,
+        callbacks: list,
+        optimizer: torch.optim.Optimizer,
+        scheduler,
+    ) -> Seq2SeqTrainer:
+        """Define the ``_DonutSeq2SeqTrainer`` inner class and return an instance.
+
+        The inner class prevents the decoder_input_ids/decoder_inputs_embeds
+        conflict that arises when HF ``Seq2SeqTrainer`` injects decoder_input_ids
+        into the batch after the data collator has omitted them.
+        """
 
         # Subclass that prevents decoder_input_ids/decoder_inputs_embeds conflict.
         #
@@ -4019,19 +4169,24 @@ class DonutTrainer:
                 finally:
                     self.label_smoother = _saved_smoother
 
-        trainer = _DonutSeq2SeqTrainer(
+        return _DonutSeq2SeqTrainer(
             model=self.model,
             args=training_args,
             train_dataset=self.train_dataset,
             eval_dataset=self.val_dataset,
-            data_collator=_donut_data_collator,
+            data_collator=collator,
             callbacks=callbacks or None,
-            optimizers=(optimizer, custom_scheduler),
+            optimizers=(optimizer, scheduler),
         )
 
+    def _run_pre_training_guardrails(self) -> None:
+        """Run all 7 pre-training guardrails (0–6).
+
+        These checks catch the known silent-failure modes documented in CLAUDE.md
+        §16 BEFORE training begins, so no compute is wasted on a broken setup.
+        Raises ``ValueError`` on failure.
+        """
         # ── Pre-training guardrails ────────────────────────────────────────────
-        # These checks catch the known silent-failure modes documented in CLAUDE.md
-        # §16 BEFORE training begins, so no compute is wasted on a broken setup.
         _decoder_config = getattr(self.model, "decoder", self.model).config
 
         # Guardrail 0: lm_head.weight must NOT share a data pointer with
@@ -4152,6 +4307,8 @@ class DonutTrainer:
         )
         # ── End pre-training guardrails ───────────────────────────────────────
 
+    def _execute_training_loop(self, trainer: Seq2SeqTrainer, callbacks: list) -> None:
+        """Run ``trainer.train()`` and clean up resources afterwards."""
         trainer.train()
 
         # Close the live dashboard (stops rich.live.Live so terminal is clean).
@@ -4164,14 +4321,6 @@ class DonutTrainer:
         # across experiments, accumulating ~450 MB per experiment (8 workers ×
         # 2 prefetch batches × ~28 MB/batch at 1280×960, batch_size=2).
         _mm.shutdown_dataloader_workers(trainer)
-
-        duration = time.time() - start_time
-        return TrainingResult(
-            log_history=trainer.state.log_history,
-            train_samples=len(self.train_dataset),
-            val_samples=len(self.val_dataset) if self.val_dataset else 0,
-            duration_seconds=duration,
-        )
 
     # ------------------------------------------------------------------
     # Saving

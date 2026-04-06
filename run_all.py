@@ -4301,14 +4301,9 @@ def _max_experiment_id() -> int:
         return 12
 
 
-def build_parser() -> argparse.ArgumentParser:
+def _add_core_arguments(p: argparse.ArgumentParser) -> None:
+    """Add experiment selection, workspace, and data path arguments."""
     _max_exp = _max_experiment_id()
-    p = argparse.ArgumentParser(
-        prog="run_all.py",
-        description="Complete DONUT SROIE pipeline: download → train → evaluate → paper",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=__doc__,
-    )
     p.add_argument(
         "--experiment",
         type=int,
@@ -4343,6 +4338,221 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip download & training; only generate the paper from existing results",
     )
+    p.add_argument(
+        "--sroie-dir",
+        default="/workspace/ICDAR-2019-SROIE/data",
+        metavar="PATH",
+        help="Path to SROIE data directory (default: /workspace/ICDAR-2019-SROIE/data)",
+    )
+    p.add_argument(
+        "--workspace",
+        default="/workspace",
+        metavar="PATH",
+        help="Workspace root for model checkpoints (default: /workspace)",
+    )
+
+
+def _add_training_arguments(p: argparse.ArgumentParser) -> None:
+    """Add batch size, learning rate, epochs, and related training arguments."""
+    p.add_argument(
+        "--param-grid",
+        nargs="+",
+        action="append",
+        metavar=("PARAM", "VALUE"),
+        help="Override parameter grid (e.g., --param-grid batch_size 4 8 16)",
+    )
+    p.add_argument(
+        "-p",
+        "--param",
+        metavar="KEY=VALUE",
+        action="append",
+        dest="params",
+        default=[],
+        help=(
+            "Override any ExperimentConfig field for a specific --experiment run. "
+            "Format: KEY=VALUE. Numeric values are auto-cast. "
+            "Example: --param epochs=5 --param lr=1e-4. "
+            "Can be specified multiple times. "
+            "Use with --experiment N to target a single experiment."
+        ),
+    )
+    p.add_argument(
+        "--list-params",
+        action="store_true",
+        help=(
+            "Print all DONUT experiment hyperparameters, memory constants, "
+            "system info, and TrOCR/YOLO parameters, then exit."
+        ),
+    )
+    p.add_argument(
+        "--params-override",
+        metavar="FILE",
+        default=None,
+        help=(
+            "Path to a JSON file with live parameter overrides. "
+            "Applied before any experiment runs. "
+            "Default: /workspace/params_override.json (if it exists). "
+            'Format: {"global": {"epochs": 5}, "experiments": {"6": {"epochs": 20}}}'
+        ),
+    )
+    # ── New flags (Tasks 2, 3, 7) ──────────────────────────────────────────
+    p.add_argument(
+        "--hparam-search",
+        action="store_true",
+        help=(
+            "Run Optuna hyperparameter sweep on the selected experiment "
+            "(default: Experiment 2).  Requires: pip install 'optuna>=3.0.0'. "
+            "Results stored in results/optuna/study.db."
+        ),
+    )
+    p.add_argument(
+        "--seeds",
+        metavar="SEEDS",
+        default=None,
+        help=(
+            "Comma-separated seed list for multi-seed robustness run. "
+            "Use with --experiment N to target a single experiment. "
+            "Example: --seeds 42,123,7,99,2026. "
+            "Aborts if any seed fails (no partial aggregation)."
+        ),
+    )
+    p.add_argument(
+        "--parallel",
+        action="store_true",
+        help=(
+            "Enable DAG-based parallel experiment scheduling on multi-GPU setups. "
+            "Experiments with no unmet depends_on run concurrently. "
+            "Auto-serialised on single-GPU / CPU-only machines."
+        ),
+    )
+
+
+def _add_mode_arguments(p: argparse.ArgumentParser) -> None:
+    """Add quick, mini, micro, superfast, and instant mode flags."""
+    p.add_argument(
+        "-quick",
+        "--quick",
+        action="store_true",
+        help="Quick test mode: train only Exp 1 (SROIE) + TrOCR+YOLO, generate results.tex",
+    )
+    p.add_argument(
+        "-all",
+        "--all",
+        action="store_true",
+        help="With -quick: run hyperparameter sweep (default: simple quick run)",
+    )
+    p.add_argument(
+        "--mini",
+        action="store_true",
+        help=(
+            "Mini mode: 1 DONUT exp (5 epochs) + 1 YOLO/TrOCR run (10/5 epochs). "
+            "Finishes in ~20 min. Generates paper_mini.tex with all metrics filled."
+        ),
+    )
+    p.add_argument(
+        "--micro",
+        action="store_true",
+        help=(
+            "Micro mode: ultra-fast smoke-test (<10 min). "
+            "DONUT: 5 epochs, 400 train samples, max_length=256, OneCycleLR. "
+            "YOLO: production defaults (yolov8x, 50 epochs, 512 px, AdamW). "
+            "TrOCR: 5 epochs, max_len=64, AdamW+linear-warmup. "
+            "Generates paper_micro.tex."
+        ),
+    )
+    p.add_argument(
+        "--superfast",
+        action="store_true",
+        help=(
+            "Superfast mode: TrOCR+YOLO only — no DONUT training. Absolute bare minimum. "
+            "YOLO: production defaults (yolov8x, 50 epochs, 512 px, AdamW). "
+            "TrOCR: 5 epochs, max_len=64, batch=4. "
+            "All 3 field-assigner backends (char/lm/lm+vision), 1 epoch each. "
+            "Target: <5 min on RTX 4090. Generates paper_superfast.tex."
+        ),
+    )
+    p.add_argument(
+        "--instant",
+        action="store_true",
+        help=(
+            "Instant mode: like --superfast but with aggressive tensor caching. "
+            "First run builds caches (~3.5 min). "
+            "Subsequent runs complete in <30 s by loading pre-processed tensors, "
+            "skipping data prep via a hash-based marker, and skipping YOLO+TrOCR "
+            "training when cached weights exist. "
+            "Generates paper_instant.tex."
+        ),
+    )
+
+
+def _add_output_arguments(p: argparse.ArgumentParser) -> None:
+    """Add paper, reporting, push, and display flags."""
+    p.add_argument(
+        "--paper-template",
+        default="paper/paper.tex",
+        metavar="FILE",
+        help="LaTeX template to fill (default: paper/paper.tex)",
+    )
+    p.add_argument(
+        "--output",
+        default="paper/paper_filled.tex",
+        metavar="FILE",
+        help="Output filled LaTeX file (default: paper/paper_filled.tex)",
+    )
+    p.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Show all logs on console (DEBUG level)",
+    )
+    p.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Quiet mode: suppress progress bars and verbose output; print only structured summary blocks. AI-agent-friendly.",
+    )
+    p.add_argument(
+        "--fancy",
+        action="store_true",
+        help=(
+            "Enable fancy console output: box-drawing banners, stage headers, "
+            "and the full box-drawing results table. By default the console is "
+            "minimal (plain text, no decorations) so output fits in Copilot chat."
+        ),
+    )
+    p.add_argument(
+        "--startup-log",
+        default="startup.log",
+        metavar="FILE",
+        help="Path for the startup diagnostics log (default: startup.log)",
+    )
+    p.add_argument(
+        "--skip-startup-check",
+        action="store_true",
+        help="Bypass startup diagnostics (useful for CI/automated runs)",
+    )
+    p.add_argument(
+        "--auto-push",
+        action="store_true",
+        default=bool(os.environ.get("AUTOPUSH_RESULTS")),
+        help=(
+            "Auto-commit and push experiment results after pipeline completion. "
+            "Also enabled by AUTOPUSH_RESULTS=1 env var."
+        ),
+    )
+    p.add_argument(
+        "--verify",
+        action="store_true",
+        help=(
+            "After each experiment completes, verify that F1 > 0. "
+            "Logs a WARNING if F1 == 0.0 (silent failure indicator). "
+            "Use with --experiment N for targeted validation. "
+            "Exits with code 1 if any experiment produces F1=0 after training."
+        ),
+    )
+
+
+def _add_skip_arguments(p: argparse.ArgumentParser) -> None:
+    """Add skip-trocr, skip-pretrained, skip-install, and related skip flags."""
     p.add_argument(
         "--skip-install",
         action="store_true",
@@ -4411,206 +4621,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Skip head-to-head benchmark (DONUT vs YOLOv8+TrOCR+Regex)",
     )
     p.add_argument(
-        "--sroie-dir",
-        default="/workspace/ICDAR-2019-SROIE/data",
-        metavar="PATH",
-        help="Path to SROIE data directory (default: /workspace/ICDAR-2019-SROIE/data)",
-    )
-    p.add_argument(
-        "--workspace",
-        default="/workspace",
-        metavar="PATH",
-        help="Workspace root for model checkpoints (default: /workspace)",
-    )
-    p.add_argument(
-        "--paper-template",
-        default="paper/paper.tex",
-        metavar="FILE",
-        help="LaTeX template to fill (default: paper/paper.tex)",
-    )
-    p.add_argument(
-        "--output",
-        default="paper/paper_filled.tex",
-        metavar="FILE",
-        help="Output filled LaTeX file (default: paper/paper_filled.tex)",
-    )
-    # Quick mode arguments (NEW)
-    p.add_argument(
-        "-quick",
-        "--quick",
-        action="store_true",
-        help="Quick test mode: train only Exp 1 (SROIE) + TrOCR+YOLO, generate results.tex",
-    )
-    p.add_argument(
-        "-all",
-        "--all",
-        action="store_true",
-        help="With -quick: run hyperparameter sweep (default: simple quick run)",
-    )
-    p.add_argument(
-        "--param-grid",
-        nargs="+",
-        action="append",
-        metavar=("PARAM", "VALUE"),
-        help="Override parameter grid (e.g., --param-grid batch_size 4 8 16)",
-    )
-    p.add_argument(
-        "-v",
-        "--verbose",
-        action="store_true",
-        help="Show all logs on console (DEBUG level)",
-    )
-    p.add_argument(
-        "--quiet",
-        action="store_true",
-        help="Quiet mode: suppress progress bars and verbose output; print only structured summary blocks. AI-agent-friendly.",
-    )
-    p.add_argument(
-        "--fancy",
-        action="store_true",
-        help=(
-            "Enable fancy console output: box-drawing banners, stage headers, "
-            "and the full box-drawing results table. By default the console is "
-            "minimal (plain text, no decorations) so output fits in Copilot chat."
-        ),
-    )
-    p.add_argument(
-        "--mini",
-        action="store_true",
-        help=(
-            "Mini mode: 1 DONUT exp (5 epochs) + 1 YOLO/TrOCR run (10/5 epochs). "
-            "Finishes in ~20 min. Generates paper_mini.tex with all metrics filled."
-        ),
-    )
-    p.add_argument(
-        "--micro",
-        action="store_true",
-        help=(
-            "Micro mode: ultra-fast smoke-test (<10 min). "
-            "DONUT: 5 epochs, 400 train samples, max_length=256, OneCycleLR. "
-            "YOLO: production defaults (yolov8x, 50 epochs, 512 px, AdamW). "
-            "TrOCR: 5 epochs, max_len=64, AdamW+linear-warmup. "
-            "Generates paper_micro.tex."
-        ),
-    )
-    p.add_argument(
-        "--superfast",
-        action="store_true",
-        help=(
-            "Superfast mode: TrOCR+YOLO only — no DONUT training. Absolute bare minimum. "
-            "YOLO: production defaults (yolov8x, 50 epochs, 512 px, AdamW). "
-            "TrOCR: 5 epochs, max_len=64, batch=4. "
-            "All 3 field-assigner backends (char/lm/lm+vision), 1 epoch each. "
-            "Target: <5 min on RTX 4090. Generates paper_superfast.tex."
-        ),
-    )
-    p.add_argument(
-        "--instant",
-        action="store_true",
-        help=(
-            "Instant mode: like --superfast but with aggressive tensor caching. "
-            "First run builds caches (~3.5 min). "
-            "Subsequent runs complete in <30 s by loading pre-processed tensors, "
-            "skipping data prep via a hash-based marker, and skipping YOLO+TrOCR "
-            "training when cached weights exist. "
-            "Generates paper_instant.tex."
-        ),
-    )
-    p.add_argument(
-        "--startup-log",
-        default="startup.log",
-        metavar="FILE",
-        help="Path for the startup diagnostics log (default: startup.log)",
-    )
-    p.add_argument(
-        "--skip-startup-check",
-        action="store_true",
-        help="Bypass startup diagnostics (useful for CI/automated runs)",
-    )
-    p.add_argument(
-        "-p",
-        "--param",
-        metavar="KEY=VALUE",
-        action="append",
-        dest="params",
-        default=[],
-        help=(
-            "Override any ExperimentConfig field for a specific --experiment run. "
-            "Format: KEY=VALUE. Numeric values are auto-cast. "
-            "Example: --param epochs=5 --param lr=1e-4. "
-            "Can be specified multiple times. "
-            "Use with --experiment N to target a single experiment."
-        ),
-    )
-    p.add_argument(
-        "--list-params",
-        action="store_true",
-        help=(
-            "Print all DONUT experiment hyperparameters, memory constants, "
-            "system info, and TrOCR/YOLO parameters, then exit."
-        ),
-    )
-    p.add_argument(
-        "--params-override",
-        metavar="FILE",
-        default=None,
-        help=(
-            "Path to a JSON file with live parameter overrides. "
-            "Applied before any experiment runs. "
-            "Default: /workspace/params_override.json (if it exists). "
-            'Format: {"global": {"epochs": 5}, "experiments": {"6": {"epochs": 20}}}'
-        ),
-    )
-    # ── New flags (Tasks 2, 3, 7) ──────────────────────────────────────────
-    p.add_argument(
-        "--hparam-search",
-        action="store_true",
-        help=(
-            "Run Optuna hyperparameter sweep on the selected experiment "
-            "(default: Experiment 2).  Requires: pip install 'optuna>=3.0.0'. "
-            "Results stored in results/optuna/study.db."
-        ),
-    )
-    p.add_argument(
-        "--seeds",
-        metavar="SEEDS",
-        default=None,
-        help=(
-            "Comma-separated seed list for multi-seed robustness run. "
-            "Use with --experiment N to target a single experiment. "
-            "Example: --seeds 42,123,7,99,2026. "
-            "Aborts if any seed fails (no partial aggregation)."
-        ),
-    )
-    p.add_argument(
-        "--parallel",
-        action="store_true",
-        help=(
-            "Enable DAG-based parallel experiment scheduling on multi-GPU setups. "
-            "Experiments with no unmet depends_on run concurrently. "
-            "Auto-serialised on single-GPU / CPU-only machines."
-        ),
-    )
-    p.add_argument(
-        "--auto-push",
-        action="store_true",
-        default=bool(os.environ.get("AUTOPUSH_RESULTS")),
-        help=(
-            "Auto-commit and push experiment results after pipeline completion. "
-            "Also enabled by AUTOPUSH_RESULTS=1 env var."
-        ),
-    )
-    p.add_argument(
-        "--verify",
-        action="store_true",
-        help=(
-            "After each experiment completes, verify that F1 > 0. "
-            "Logs a WARNING if F1 == 0.0 (silent failure indicator). "
-            "Use with --experiment N for targeted validation. "
-            "Exits with code 1 if any experiment produces F1=0 after training."
-        ),
-    )
-    p.add_argument(
         "--keep-models",
         action="store_true",
         default=False,
@@ -4632,6 +4642,20 @@ def build_parser() -> argparse.ArgumentParser:
             "Use for debugging only."
         ),
     )
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="run_all.py",
+        description="Complete DONUT SROIE pipeline: download → train → evaluate → paper",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
+    )
+    _add_core_arguments(p)
+    _add_training_arguments(p)
+    _add_mode_arguments(p)
+    _add_output_arguments(p)
+    _add_skip_arguments(p)
     return p
 
 
