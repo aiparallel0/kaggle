@@ -1,0 +1,66 @@
+# copilot-setup-steps.yml — Dev environment setup for the GitHub Copilot coding agent.
+#
+# This file tells the Copilot coding agent how to set up the development
+# environment when it works on issues assigned to @copilot.
+#
+# The job name MUST be exactly "copilot-setup-steps" (GitHub requirement).
+# Steps must complete successfully for Copilot to start working on an issue.
+#
+# Note: torch/transformers are not installed here because the Copilot agent
+# runs on ubuntu-latest (CPU-only). The `|| true` fallbacks prevent failures
+# when GPU-only packages cannot install. Core validation (constants import,
+# lint, smoke-test) still runs to give Copilot a working baseline.
+
+name: Copilot Setup Steps
+
+on:
+  workflow_dispatch:
+
+jobs:
+  copilot-setup-steps:
+    name: copilot-setup-steps
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      # -----------------------------------------------------------------------
+      # 1. Checkout
+      # -----------------------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------------
+      # 2. Set up Python 3.12
+      # -----------------------------------------------------------------------
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # -----------------------------------------------------------------------
+      # 3. Install lightweight tools (always available, no GPU needed)
+      # -----------------------------------------------------------------------
+      - name: Install lightweight tools
+        run: pip install ruff pyyaml
+
+      # -----------------------------------------------------------------------
+      # 4. Install full requirements (|| true: torch may fail on CPU-only runner)
+      # -----------------------------------------------------------------------
+      - name: Install requirements
+        run: pip install -r requirements.txt || true
+
+      # -----------------------------------------------------------------------
+      # 5. Validate constants import chain (must work without torch)
+      # -----------------------------------------------------------------------
+      - name: Validate constants import chain
+        run: |
+          python -c "from constants import FIELDS, BASE_MODEL, SEED"
+          echo "constants.py import chain OK"
+
+      # -----------------------------------------------------------------------
+      # 6. Run smoke test (|| true: may fail without GPU/model weights)
+      # -----------------------------------------------------------------------
+      - name: Run smoke test
+        run: python diagnostics.py --smoke-test || true

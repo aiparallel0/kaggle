@@ -1,0 +1,257 @@
+# gpu_training.yml — Automated GPU training, AI diagnosis, and Copilot auto-fix.
+#
+# What this workflow does:
+#   1. Runs on a self-hosted GPU runner (provisioned by vastai_runner.sh).
+#   2. Installs dependencies and runs `python run_all.py --micro --verify`
+#      (~10 min), streaming output to training.log.
+#   3. On failure: runs `python diagnostics.py --smoke-test --ai-diagnose` and
+#      creates a GitHub Issue with the log tail, assigned to @copilot so the
+#      Copilot coding agent can auto-fix it.
+#   4. On success: commits result files back to the branch.
+#   5. Always: uploads results/ and training.log as workflow artifacts.
+#
+# Required secrets:
+#   VASTAI_API_KEY     — Vast.ai API key (used by vastai_runner.sh)
+#   ANTHROPIC_API_KEY  — Claude API key for AI diagnosis (or use MISTRAL_API_KEY)
+#   MISTRAL_API_KEY    — Mistral API key (fallback when ANTHROPIC_API_KEY absent)
+#   GITHUB_TOKEN       — Default Actions token (already available)
+#
+# Trigger manually:
+#   gh workflow run gpu_training.yml -f training_mode=micro
+#
+# training_mode input values:
+#   instant   — TrOCR+YOLO only, <30s after warm cache
+#   superfast — TrOCR+YOLO only, <5 min
+#   micro     — DONUT+YOLO+TrOCR smoke test, ~10 min  (default)
+#   mini      — 1 DONUT exp + TrOCR+YOLO, ~20 min
+#   (empty)   — Full 8-experiment suite, ~10 h
+
+name: GPU Training
+
+on:
+  workflow_dispatch:
+    inputs:
+      training_mode:
+        description: "Training mode (instant/superfast/micro/mini or empty for full run)"
+        required: false
+        default: "micro"
+        type: choice
+        options:
+          - micro
+          - mini
+          - superfast
+          - instant
+          - ""
+  push:
+    branches:
+      - main
+    paths:
+      - "**.py"
+      - "experiments/**"
+      - "requirements.txt"
+
+jobs:
+  train:
+    name: GPU Training (${{ github.event.inputs.training_mode || 'micro' }})
+    # Runs on a self-hosted GPU runner registered by vastai_runner.sh.
+    # The runner registers itself with labels: self-hosted, gpu, vast-ai
+    runs-on: [self-hosted, gpu]
+
+    permissions:
+      contents: write   # push result commits back to branch
+      issues: write     # create failure issues assigned to @copilot
+
+    env:
+      GITHUB_REPO: ${{ github.repository }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+
+    steps:
+      # -----------------------------------------------------------------------
+      # 1. Checkout
+      # -----------------------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # -----------------------------------------------------------------------
+      # 2. Set up Python
+      # -----------------------------------------------------------------------
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # -----------------------------------------------------------------------
+      # 3. Install dependencies
+      # -----------------------------------------------------------------------
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          # Ensure linting tools are always available
+          pip install ruff pyyaml
+
+      # -----------------------------------------------------------------------
+      # 4. Validate import chain before training
+      # -----------------------------------------------------------------------
+      - name: Validate import chain
+        run: |
+          python -c "from constants import FIELDS, BASE_MODEL, SEED"
+          echo "Import chain OK"
+
+      # -----------------------------------------------------------------------
+      # 5. Write AI API keys to files (used by diagnostics.py)
+      # -----------------------------------------------------------------------
+      - name: Write AI API key files
+        run: |
+          if [ -n "$ANTHROPIC_API_KEY" ]; then
+            printf '%s\n' "$ANTHROPIC_API_KEY" > anthropic_api_key.txt
+          fi
+          if [ -n "$MISTRAL_API_KEY" ]; then
+            printf '%s\n' "$MISTRAL_API_KEY" > mistral_api_key.txt
+          fi
+
+      # -----------------------------------------------------------------------
+      # 6. Run training (continue-on-error so later steps always run)
+      # -----------------------------------------------------------------------
+      - name: Run training
+        id: train
+        continue-on-error: true
+        run: |
+          MODE="${{ github.event.inputs.training_mode || 'micro' }}"
+          FLAG=""
+          case "$MODE" in
+            instant)   FLAG="--instant" ;;
+            superfast) FLAG="--superfast" ;;
+            micro)     FLAG="--micro" ;;
+            mini)      FLAG="--mini" ;;
+            "")        FLAG="" ;;
+          esac
+
+          echo "Training mode: ${MODE} (flag: ${FLAG:-none})"
+          python run_all.py $FLAG --verify 2>&1 | tee training.log
+          # Preserve exit code from run_all.py (not tee)
+          exit "${PIPESTATUS[0]}"
+
+      # -----------------------------------------------------------------------
+      # 7. AI diagnosis on failure
+      # -----------------------------------------------------------------------
+      - name: AI diagnosis (on failure)
+        if: steps.train.outcome == 'failure'
+        run: |
+          python diagnostics.py \
+            --smoke-test \
+            --ai-diagnose \
+            --ai-provider auto \
+            --github-notify \
+            --github-repo "$GITHUB_REPO" \
+            2>&1 | tee -a training.log || true
+
+      # -----------------------------------------------------------------------
+      # 8. Create GitHub Issue assigned to @copilot (on failure)
+      # -----------------------------------------------------------------------
+      - name: Create failure issue for Copilot
+        if: steps.train.outcome == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+
+            // Read the last 4000 characters of the training log
+            let logContent = '';
+            try {
+              const fullLog = fs.readFileSync('training.log', 'utf8');
+              logContent = fullLog.length > 4000
+                ? '...(truncated)...\n' + fullLog.slice(-4000)
+                : fullLog;
+            } catch (e) {
+              logContent = `Could not read training.log: ${e.message}`;
+            }
+
+            const mode = '${{ github.event.inputs.training_mode || "micro" }}';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+
+            const body = [
+              `## GPU Training Failure`,
+              ``,
+              `**Commit:** \`${context.sha}\``,
+              `**Branch:** \`${context.ref.replace('refs/heads/', '')}\``,
+              `**Training mode:** \`${mode}\``,
+              `**Workflow run:** [View logs](${runUrl})`,
+              ``,
+              `### Tail of \`training.log\``,
+              '```',
+              logContent,
+              '```',
+              ``,
+              `### Context`,
+              `This repo implements DONUT + TrOCR + YOLOv8 for receipt KIE (SROIE dataset).`,
+              ``,
+              `### Known failure patterns (check these first)`,
+              `- **F1 ≈ 0.42** → \`lm_head.weight\` dropped by safetensors (Pattern 6 in CLAUDE.md §16)`,
+              `- **F1 = 0.00** → wrong \`decoder_start_token_id\` (use list form — GP-3 in CLAUDE.md §20)`,
+              `- **F1 ≈ 0.008** → \`token2json\` returned list due to \`<sep/>\` tokens (Pattern 5)`,
+              `- **Loss = NaN** → fp16 overflow; switch to bf16`,
+              `- **Import error** → run \`python -c "from constants import FIELDS, BASE_MODEL, SEED"\``,
+              ``,
+              `### Validation commands`,
+              '```bash',
+              `python diagnostics.py --smoke-test`,
+              `ruff check . && ruff format --check .`,
+              `python -c "from constants import FIELDS, BASE_MODEL, SEED"`,
+              '```',
+              ``,
+              `### Instructions for fix`,
+              `1. Run \`python run_all.py --micro --verify\` locally to reproduce.`,
+              `2. Check \`diagnostics.py --smoke-test\` output for known patterns.`,
+              `3. Fix the root cause — do NOT modify unrelated code.`,
+              `4. Ensure \`ruff check . && ruff format --check .\` passes before pushing.`,
+            ].join('\n');
+
+            const issue = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `[Auto] GPU training failure — ${new Date().toISOString().slice(0, 10)} (${mode} mode)`,
+              body: body,
+              labels: ['bug', 'training-failure'],
+              assignees: ['copilot'],
+            });
+
+            console.log(`Created issue #${issue.data.number}: ${issue.data.html_url}`);
+
+      # -----------------------------------------------------------------------
+      # 9. Commit and push result files back to branch (on success)
+      # -----------------------------------------------------------------------
+      - name: Commit results to branch (on success)
+        if: steps.train.outcome == 'success'
+        run: |
+          git config user.email "gpu-training[bot]@users.noreply.github.com"
+          git config user.name "GPU Training Bot"
+          git add results/ || true
+          git diff --cached --quiet || \
+            git commit -m "chore: add training results from GPU run ${GITHUB_SHA::8}"
+          git push origin HEAD:"${{ github.ref_name }}" || true
+
+      # -----------------------------------------------------------------------
+      # 10. Clean up API key files (always)
+      # -----------------------------------------------------------------------
+      - name: Clean up key files
+        if: always()
+        run: rm -f anthropic_api_key.txt mistral_api_key.txt
+
+      # -----------------------------------------------------------------------
+      # 11. Upload artifacts (always)
+      # -----------------------------------------------------------------------
+      - name: Upload training artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: training-results-${{ github.run_id }}
+          path: |
+            results/
+            training.log
+          if-no-files-found: ignore
+          retention-days: 30
