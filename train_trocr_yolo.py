@@ -27,6 +27,7 @@ import json
 import logging
 import math
 import re
+import statistics
 import struct
 import time
 import zlib
@@ -1990,6 +1991,15 @@ def _save_model_safetensors_direct(
     if _dec_cfg is not None:
         _dec_cfg.tie_word_embeddings = False
 
+    # Sync decoder_start_token_id in the decoder sub-config to match the
+    # top-level config.  Without this, the saved config.json has the correct
+    # value at the top level (set via processor.tokenizer.cls_token_id before
+    # training) but a stale default inside the decoder block, which breaks
+    # standalone checkpoint loading that reads only the decoder sub-config.
+    _top_dst_id = getattr(model.config, "decoder_start_token_id", None)
+    if _dec_cfg is not None and _top_dst_id is not None:
+        _dec_cfg.decoder_start_token_id = _top_dst_id
+
     _st_save_file(sd, save_dir / "model.safetensors")
     model.config.save_pretrained(str(save_dir))
 
@@ -3205,23 +3215,51 @@ def _assign_fields_heuristic(ocr_lines: list[dict[str, Any]]) -> dict[str, str]:
                     break
     result["company"] = " ".join(company_parts)
 
-    # Address: prefer lines with road/postcode keywords; cap at 3 keyword lines
-    # or 2 fallback lines (mirrors real receipt address format of 1-3 lines).
-    addr_keyword_parts = []
-    addr_other_parts = []
+    # Address: collect all remaining unassigned non-monetary lines, group them
+    # by vertical proximity, and pick the largest consecutive cluster.
+    #
+    # Rationale: SROIE addresses span 1–3 lines between the company name (top)
+    # and the date/total lines. Any unassigned line that is not a pure monetary
+    # amount is a candidate. Grouping by proximity ensures we pick the
+    # contiguous block of address lines rather than scattered text fragments.
+    addr_candidates: list[tuple[float, float, str]] = []
     for i, line in enumerate(sorted_lines):
         if i not in used:
             text = line.get("text", "").strip()
             if not text or _MONEY_RE.match(text):
                 continue
-            if _ADDRESS_RE.search(text):
-                if len(addr_keyword_parts) < 3:
-                    addr_keyword_parts.append(text)
+            y_top = float(line.get("y", 0))
+            y_bot = float(line.get("y2", y_top + 20))
+            addr_candidates.append((y_top, y_bot, text))
+
+    if addr_candidates:
+        # Estimate typical line height as the median of (y2 - y) across candidates.
+        # statistics.median() handles both odd and even-length lists correctly.
+        _heights = [y2 - y for y, y2, _ in addr_candidates if y2 > y]
+        _typical_h = statistics.median(_heights) if _heights else 30.0
+        # Two lines are "adjacent" if the gap between them is ≤ 1.5× typical height.
+        _gap_thresh = max(5.0, _typical_h * 1.5)
+
+        # Build consecutive groups.
+        groups: list[list[str]] = [[addr_candidates[0][2]]]
+        for j in range(1, len(addr_candidates)):
+            prev_y2 = addr_candidates[j - 1][1]
+            curr_y = addr_candidates[j][0]
+            if curr_y - prev_y2 <= _gap_thresh:
+                groups[-1].append(addr_candidates[j][2])
             else:
-                if len(addr_other_parts) < 2:
-                    addr_other_parts.append(text)
-    addr_parts = addr_keyword_parts if addr_keyword_parts else addr_other_parts
-    result["address"] = " ".join(addr_parts)
+                groups.append([addr_candidates[j][2]])
+
+        # Pick the largest group; fall back to keyword-matching group if tied.
+        def _group_score(g: list[str]) -> tuple[int, int]:
+            kw_count = sum(1 for t in g if _ADDRESS_RE.search(t))
+            return (len(g), kw_count)
+
+        best_group = max(groups, key=_group_score)
+        # Cap at 4 lines: SROIE addresses span 1–3 lines in practice; allowing
+        # 4 avoids silently truncating rare 4-line addresses without risk of
+        # including unrelated content (company and date/total are already removed).
+        result["address"] = " ".join(best_group[:4])
 
     return result
 
@@ -3998,6 +4036,15 @@ def evaluate_trocr_yolo_on_test(
     trocr_model = trocr_model.to(DEVICE)
     _materialize_meta_buffers(trocr_model, DEVICE)
     trocr_model.eval()
+
+    # Enable KV-cache for inference.  The model was saved with use_cache=False
+    # because gradient checkpointing (required during training on ≤24 GB GPUs)
+    # is incompatible with caching.  At inference time there is no gradient
+    # checkpointing, so enabling the cache reduces autoregressive generation
+    # from O(n²) to O(n) — a 2–5× latency improvement for typical receipt text.
+    trocr_model.config.use_cache = True
+    if hasattr(trocr_model, "decoder") and hasattr(trocr_model.decoder, "config"):
+        trocr_model.decoder.config.use_cache = True
 
     # Post-load self-test: run a single forward pass on a random image tensor
     # and verify the generated token IDs are not all identical.  A broken
