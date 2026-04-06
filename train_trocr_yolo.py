@@ -990,6 +990,7 @@ except ImportError:
 from constants import (  # noqa: E402
     DEVICE,
     FIELDS,
+    IMAGE_EXTS,
     LABEL_IGNORE_INDEX,
     MAX_CONSECUTIVE_BATCH_FAILURES,
     SEED,
@@ -1090,6 +1091,13 @@ _MIN_BOX_DIMENSION: int = 5  # L2: minimum crop width/height in pixels
 _MAX_DETECTION_FAILURE_RATE: float = 0.5  # L8: combined empty-ocr-lines threshold
 _NMS_IOU_EPSILON: float = 0.01  # L4: floating-point tolerance for IoU comparison
 _MAX_NMS_VERIFICATION_BOXES: int = 500  # L4: max boxes for O(n²) NMS verification
+
+# Minimum acceptable mAP@50 for YOLO detection quality gate.
+# Below this threshold, the print_yolo_detection_metrics() function emits a
+# prominent warning.  Chosen because mAP50 < 0.30 typically indicates that
+# YOLO is not finding text regions reliably enough for downstream TrOCR to
+# produce meaningful field extractions.
+_YOLO_MAP50_QUALITY_THRESHOLD: float = 0.3
 
 
 def _assert_resolution_invariant(train_imgsz: int, infer_imgsz: int) -> None:
@@ -2270,7 +2278,7 @@ def evaluate_yolo_detection(
                 if not val_dir.is_absolute():
                     val_dir = Path(data_yaml).parent / val_dir
                 result["yolo_num_val_images"] = sum(
-                    1 for p in val_dir.iterdir() if p.suffix.lower() in {".jpg", ".jpeg", ".png"}
+                    1 for p in val_dir.iterdir() if p.suffix.lower() in IMAGE_EXTS
                 )
             except (OSError, KeyError, TypeError, ValueError):
                 result["yolo_num_val_images"] = 0
@@ -2288,7 +2296,7 @@ def evaluate_yolo_detection(
             )
             return result
 
-        except Exception as exc:
+        except (ImportError, RuntimeError, AttributeError, OSError) as exc:
             _log.warning(
                 "ultralytics model.val() failed (%s: %s) — falling back to manual evaluation.",
                 type(exc).__name__,
@@ -2315,18 +2323,23 @@ def evaluate_yolo_detection(
         )
         # YOLO label dir mirrors image dir: images/val → labels/val
         val_labels_dir = Path(str(val_images_dir).replace("/images/", "/labels/"))
-    except (OSError, KeyError, TypeError, ValueError) as exc:
-        _log.warning("Could not parse dataset YAML %s: %s", data_yaml, exc)
+    except (ImportError, OSError, KeyError, TypeError, ValueError) as exc:
+        _log.warning(
+            "Could not parse dataset YAML %s: %s — cannot run manual detection eval.",
+            data_yaml,
+            exc,
+        )
+        return {"yolo_backend": "manual", "yolo_error": f"YAML parse failed: {exc}"}
 
     if val_images_dir is None or not val_images_dir.exists():
         _log.warning(
-            "YOLO validation image directory not found — cannot run manual detection eval."
+            "YOLO validation image directory not found at %s — cannot run manual detection eval.",
+            val_images_dir,
         )
         return {"yolo_backend": "manual", "yolo_error": "val images dir not found"}
 
     # Collect validation images
-    image_exts = {".jpg", ".jpeg", ".png", ".bmp", ".tiff"}
-    val_images = sorted(p for p in val_images_dir.iterdir() if p.suffix.lower() in image_exts)
+    val_images = sorted(p for p in val_images_dir.iterdir() if p.suffix.lower() in IMAGE_EXTS)
     if not val_images:
         _log.warning("No validation images found in %s", val_images_dir)
         return {"yolo_backend": "manual", "yolo_num_val_images": 0}
@@ -2436,8 +2449,11 @@ def print_yolo_detection_metrics(metrics: dict[str, Any]) -> None:
 
     # Quality gate: warn if detection quality is poor
     map50 = metrics.get("yolo_map50", 0.0)
-    if isinstance(map50, (int, float)) and map50 < 0.3:
-        print("  ⚠️  WARNING: mAP@50 is below 0.30 — YOLO detection quality is poor.")
+    if isinstance(map50, (int, float)) and map50 < _YOLO_MAP50_QUALITY_THRESHOLD:
+        print(
+            f"  ⚠️  WARNING: mAP@50 is below {_YOLO_MAP50_QUALITY_THRESHOLD:.2f} "
+            "— YOLO detection quality is poor."
+        )
         print("     This will degrade TrOCR+YOLO end-to-end F1 significantly.")
         print(
             "     Consider: more YOLO training epochs, verify data preparation, "

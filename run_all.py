@@ -2337,7 +2337,7 @@ def stage_trocr_experiments(args: argparse.Namespace) -> StageResult:
         if yolo_weights.exists():
             _log.info("Evaluating YOLO detection quality on validation set ...")
             yolo_detection_metrics = trocr_yolo.evaluate_yolo_detection(
-                yolo_weights=str(yolo_weights),
+                yolo_weights=yolo_weights,
             )
             trocr_yolo.print_yolo_detection_metrics(yolo_detection_metrics)
             # Save standalone detection metrics
