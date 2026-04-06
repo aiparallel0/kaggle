@@ -3800,10 +3800,10 @@ def train_trocr(
                     if (step + 1) % grad_accum == 0:
                         scaler.unscale_(optimizer)
                         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                        _scale_before_recovery = scaler.get_scale()
+                        _scale_before_step = scaler.get_scale()
                         scaler.step(optimizer)
                         scaler.update()
-                        if scaler.get_scale() >= _scale_before_recovery:
+                        if scaler.get_scale() >= _scale_before_step:
                             scheduler.step()
                         optimizer.zero_grad()
                     _consecutive_batch_failures = 0  # reset on success
