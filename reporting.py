@@ -722,46 +722,13 @@ class DonutPipeline:
 # ██████  PIPELINE B — YOLOv8 + TrOCR-base-printed + Regex
 # ─────────────────────────────────────────────────────────────────────────────
 
-# ── Regex patterns (pre-compiled, comprehensive) ────────────────────────────
-
-# Date patterns — covers DD/MM/YYYY, YYYY-MM-DD, D MMM YYYY, etc.
-_DATE_PATTERNS = [
-    re.compile(r"\b\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}\b"),
-    re.compile(r"\b\d{4}[\/\-\.]\d{1,2}[\/\-\.]\d{1,2}\b"),
-    re.compile(
-        r"\b\d{1,2}\s*(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|"
-        r"May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|"
-        r"Nov(?:ember)?|Dec(?:ember)?)\s*\d{2,4}\b",
-        re.IGNORECASE,
-    ),
-    # SROIE date header keywords
-    re.compile(r"(?:date|tarikh|tanggal)\s*[:\-]?\s*(\S+)", re.IGNORECASE),
-]
-
-# Total patterns — most specific first
-_TOTAL_PATTERNS = [
-    re.compile(
-        r"(?:total|jumlah|amount\s+due|grand\s+total|total\s+amount)"
-        r"\s*[:\-]?\s*(?:rm|myr|usd|\$|£|€)?\s*(\d[\d,]*\.\d{2})",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"(?:total|jumlah)\s*[:\-]?\s*(\d[\d,]*\.\d{2})",
-        re.IGNORECASE,
-    ),
-    # Fallback: largest monetary value on the page
-    re.compile(r"(?:rm|myr|\$|£|€)\s*(\d[\d,]*\.\d{2})"),
-    re.compile(r"(\d[\d,]*\.\d{2})\s*(?:rm|myr)?"),
-]
-
-# Address heuristics — detect lines that look like addresses
-_STREET_WORDS = re.compile(
-    r"\b(?:jalan|jln|lorong|lot|no\.?|blok|block|level|floor|tingkat|"
-    r"road|street|avenue|lane|drive|boulevard|plaza|mall|park|"
-    r"batu|km|kilometer|mile)\b",
-    re.IGNORECASE,
-)
-_POSTCODE_RE = re.compile(r"\b\d{5}\b")
+# ── Regex patterns — REMOVED ─────────────────────────────────────────────────
+# Previous versions of this file maintained independent regex patterns for field
+# assignment (_DATE_PATTERNS, _TOTAL_PATTERNS, _STREET_WORDS, _POSTCODE_RE).
+# These are now consolidated in train_trocr_yolo.py as the single canonical set
+# (_DATE_RE, _TOTAL_KEYWORD_RE, _TOTAL_RE, _MONEY_RE, _ADDRESS_RE, etc.).
+# TrOCRYOLOPipeline.predict() delegates to _assign_fields_heuristic() which
+# uses those canonical patterns.  Do NOT re-add regex patterns here.
 
 
 class TrOCRYOLOPipeline:
@@ -769,11 +736,13 @@ class TrOCRYOLOPipeline:
     Two-stage KIE pipeline:
       1. YOLOv8  — detects text region bounding boxes in the receipt image
       2. TrOCR   — reads text from each cropped region
-      3. Regex   — assigns each text line to one of 4 SROIE fields
+      3. Field assignment — delegates to the canonical _assign_fields_heuristic()
+         from train_trocr_yolo.py (bbox-aware, spatial grouping)
 
-    For best.pt (custom-trained YOLO): pass yolo_model_path.
-    TrOCR uses 'microsoft/trocr-base-printed' (no fine-tuning required
-    for clean printed receipts).
+    This class is a thin wrapper around the canonical pipeline functions in
+    train_trocr_yolo.py (_extract_ocr_lines + _assign_fields_heuristic).
+    It exists to provide a convenient OOP interface for the benchmark comparison
+    in reporting.py without duplicating any inference or field-assignment logic.
     """
 
     def __init__(
@@ -792,8 +761,14 @@ class TrOCRYOLOPipeline:
             TROCR_MODEL_ID,
             YOLO_BASE,
             YOLO_IMG_SIZE,
+            _assign_fields_heuristic,
+            _extract_ocr_lines,
             _materialize_meta_buffers,
         )
+
+        # Store canonical functions so predict() delegates without re-importing.
+        self._extract_ocr_lines = _extract_ocr_lines
+        self._assign_fields_heuristic = _assign_fields_heuristic
 
         # Store inference-time constants so all call sites read them consistently.
         self._yolo_img_size = YOLO_IMG_SIZE
@@ -822,212 +797,52 @@ class TrOCRYOLOPipeline:
         _materialize_meta_buffers(self.trocr_model, self.device)
         self.trocr_model.eval()
 
-    # ── YOLO: detect text bounding boxes ───────────────────────────────────
-    def _detect_boxes(self, image: Image.Image) -> list[tuple[int, int, int, int]]:
-        """
-        Run YOLOv8 on the image.
-        Returns list of (x1, y1, x2, y2) boxes sorted top-to-bottom.
-        Falls back to the full image as a single box if no detections.
-        """
-        results = self.yolo(
-            image,
-            conf=self.conf_threshold,
-            iou=self.iou_threshold,
-            imgsz=self._yolo_img_size,
-            verbose=False,
-        )
-        boxes = []
-        for r in results:
-            if r.boxes is None:
-                continue
-            for box in r.boxes.xyxy.cpu().numpy():
-                x1, y1, x2, y2 = [int(v) for v in box[:4]]
-                # Sanity: skip degenerate boxes
-                if (x2 - x1) < 5 or (y2 - y1) < 3:
-                    continue
-                boxes.append((x1, y1, x2, y2))
-
-        # Sort top-to-bottom (reading order)
-        boxes.sort(key=lambda b: b[1])
-
-        if not boxes:
-            # Fallback: treat full image as single text region
-            w, h = image.size
-            boxes = [(0, 0, w, h)]
-
-        return boxes
-
-    # ── TrOCR: read text from a crop ───────────────────────────────────────
-    def _read_crop(self, crop: Image.Image) -> str:
-        """Run TrOCR on a single cropped PIL image. Returns decoded string."""
-        pixel_values = self.trocr_processor(
-            crop.convert("RGB"), return_tensors="pt"
-        ).pixel_values.to(self.device)
-
-        with torch.no_grad():
-            generated = self.trocr_model.generate(
-                pixel_values,
-                max_new_tokens=self._trocr_max_len,
-            )
-
-        text = self.trocr_processor.batch_decode(generated, skip_special_tokens=True)[0]
-        return text.strip()
-
-    def _read_crops_batch(self, crops: list[Image.Image]) -> list[str]:
-        """Run TrOCR on a batch of cropped PIL images. Returns list of decoded strings."""
-        if not crops:
-            return []
-        pixel_values = torch.stack(
-            [
-                self.trocr_processor(crop.convert("RGB"), return_tensors="pt").pixel_values.squeeze(
-                    0
-                )
-                for crop in crops
-            ]
-        ).to(self.device)
-        with torch.no_grad():
-            generated = self.trocr_model.generate(
-                pixel_values,
-                max_new_tokens=self._trocr_max_len,
-            )
-        return [
-            t.strip()
-            for t in self.trocr_processor.batch_decode(generated, skip_special_tokens=True)
-        ]
-
-    # ── Regex: assign lines to fields ──────────────────────────────────────
-    def _assign_fields(self, lines: list[str]) -> dict[str, str]:
-        """
-        Rule-based field assignment.
-
-        Priority order (highest specificity wins):
-          1. TOTAL   — explicit keyword + monetary value, or largest number
-          2. DATE    — date-shaped token
-          3. ADDRESS — street-word heuristic or postcode
-          4. COMPANY — first non-empty line that isn't date/total/address
-
-        Returns dict with all 4 FIELDS keys always present.
-        """
-        result = {f: "" for f in FIELDS}
-        used: set = set()
-
-        full_text = "\n".join(lines)
-
-        # ── 1. TOTAL ────────────────────────────────────────────────────────
-        for pat in _TOTAL_PATTERNS:
-            m = pat.search(full_text)
-            if m:
-                # Extract the numeric part
-                captured = m.group(1) if m.lastindex else m.group(0)
-                # Clean: keep digits, comma, dot
-                captured = re.sub(r"[^\d.,]", "", captured)
-                result["total"] = captured
-                # Mark the line containing this match as used
-                for i, line in enumerate(lines):
-                    if pat.search(line):
-                        used.add(i)
-                        break
-                if result["total"]:
-                    break
-
-        # Fallback total: largest monetary value not yet assigned
-        if not result["total"]:
-            candidates = []
-            for i, line in enumerate(lines):
-                if i in used:
-                    continue
-                for m in re.finditer(r"\d[\d,]*\.\d{2}", line):
-                    try:
-                        val = float(m.group(0).replace(",", ""))
-                        candidates.append((val, m.group(0), i))
-                    except ValueError:
-                        pass
-            if candidates:
-                candidates.sort(reverse=True)
-                result["total"] = candidates[0][1]
-                used.add(candidates[0][2])
-
-        # ── 2. DATE ─────────��───────────────────────────────────────────────
-        for i, line in enumerate(lines):
-            if i in used:
-                continue
-            for pat in _DATE_PATTERNS:
-                m = pat.search(line)
-                if m:
-                    # If pattern has a capture group, use it
-                    captured = m.group(1) if m.lastindex else m.group(0)
-                    result["date"] = captured.strip()
-                    used.add(i)
-                    break
-            if result["date"]:
-                break
-
-        # ── 3. ADDRESS ──────────────────────────────────────────────────────
-        # Collect lines with address signals (may span multiple lines)
-        address_lines = []
-        for i, line in enumerate(lines):
-            if i in used:
-                continue
-            has_street = bool(_STREET_WORDS.search(line))
-            has_postcode = bool(_POSTCODE_RE.search(line))
-            # Address heuristic: 2+ words, contains digit or street word
-            has_digit = bool(re.search(r"\d", line))
-            looks_like_addr = (has_street or has_postcode) or (has_digit and len(line.split()) >= 3)
-            if looks_like_addr:
-                address_lines.append((i, line))
-
-        if address_lines:
-            # Take a run of consecutive address-like lines
-            result["address"] = " ".join(ln for _, ln in address_lines[:4])
-            for idx, _ in address_lines[:4]:
-                used.add(idx)
-
-        # ── 4. COMPANY ──────────────────────────────────────────────────────
-        # Heuristic: company is usually the first prominent text line
-        # (often all-caps, relatively short, appears near the top)
-        # We prefer lines from the top third of the image
-        top_third_limit = max(1, len(lines) // 3)
-        for i, line in enumerate(lines):
-            if i in used:
-                continue
-            if not line.strip():
-                continue
-            # Prefer lines from the top (header area) that are not purely numeric
-            if re.match(r"^[\d\s\.,:]+$", line):
-                continue
-            result["company"] = line.strip()
-            used.add(i)
-            if i < top_third_limit:
-                break  # confident it's the company header
-
-        return result
-
     # ── Full pipeline for one image ─────────────────────────────────────────
-    def predict(self, image: Image.Image) -> tuple[dict[str, str], float]:
-        """
-        Run the full YOLO→TrOCR→Regex pipeline on one image.
-        Returns (field_dict, inference_time_ms).
+    def predict(self, image_or_path: Image.Image | Path) -> tuple[dict[str, str], float]:
+        """Run the full YOLO→TrOCR→field-assignment pipeline on one image.
+
+        Delegates to the canonical ``_extract_ocr_lines()`` (YOLO detection +
+        TrOCR reading) and ``_assign_fields_heuristic()`` (regex + spatial
+        grouping) from train_trocr_yolo.py.  This guarantees that the benchmark
+        pipeline uses *exactly* the same inference and assignment code as the
+        training/evaluation pipeline — no parameter drift, no regex divergence.
+
+        Parameters
+        ----------
+        image_or_path : PIL.Image.Image or Path
+            Either an already-loaded PIL Image or a filesystem Path.
+            When a PIL Image is supplied, it is saved to a temporary file so
+            that ``_extract_ocr_lines()`` can load it (that function expects a
+            Path).
+
+        Returns
+        -------
+        field_dict : dict[str, str]
+            Predictions for the 4 SROIE fields.
+        inference_time_ms : float
+            Wall-clock time for the full pipeline in milliseconds.
         """
         t0 = time.perf_counter()
 
-        # Stage 1: detect text boxes
-        boxes = self._detect_boxes(image)
+        # _extract_ocr_lines expects a Path, not a PIL Image.
+        # If we received a PIL Image (from run_benchmark), save to a temp file.
+        if isinstance(image_or_path, Path):
+            img_path = image_or_path
+        else:
+            import tempfile  # noqa: PLC0415
 
-        # Stage 2: read text from each crop (batched — one GPU call for all boxes)
-        img_arr = image.convert("RGB")
-        crops = []
-        for x1, y1, x2, y2 in boxes:
-            # Add a small padding to each crop
-            pad = 4
-            x1p = max(0, x1 - pad)
-            y1p = max(0, y1 - pad)
-            x2p = min(img_arr.width, x2 + pad)
-            y2p = min(img_arr.height, y2 + pad)
-            crops.append(img_arr.crop((x1p, y1p, x2p, y2p)))
-        lines = [t for t in self._read_crops_batch(crops) if t]
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as _tmpf:
+                image_or_path.save(_tmpf.name)
+                img_path = Path(_tmpf.name)
 
-        # Stage 3: regex field assignment
-        pred = self._assign_fields(lines)
+        ocr_lines, _vision_feats, _yolo_box_count = self._extract_ocr_lines(
+            img_path,
+            self.yolo,
+            self.trocr_model,
+            self.trocr_processor,
+            device=self.device,
+        )
+        pred = self._assign_fields_heuristic(ocr_lines)
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
         return pred, elapsed_ms
 
@@ -1036,8 +851,8 @@ class TrOCRYOLOPipeline:
     ) -> BenchmarkResult:
         result = BenchmarkResult(method="YOLOv8+TrOCR+Regex")
         for img_path, gt in _progress(pairs, desc=desc):
-            img = Image.open(img_path).convert("RGB")
-            pred, ms = self.predict(img)
+            # Pass the Path directly — avoids the temp-file overhead.
+            pred, ms = self.predict(img_path)
             result.samples.append(
                 SampleResult(
                     image_name=img_path.name,
