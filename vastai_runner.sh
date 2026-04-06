@@ -269,12 +269,17 @@ cd /workspace/repo
 # -- Install Python dependencies --
 log_r "Installing Python dependencies..."
 pip install --quiet -r requirements.txt || true
-# Always ensure core linting/validation tools are present
+# Always ensure core linting/validation tools are present (must succeed)
 pip install --quiet ruff pyyaml
+# Verify critical packages installed (torch/transformers may need GPU extras)
+for pkg in torch transformers; do
+    python3 -c "import $pkg" 2>/dev/null \
+        || log_r "WARNING: $pkg not importable — GPU extras may be missing"
+done
 
-# -- Validate import chain (fast sanity check) --
+# -- Validate import chain (MUST succeed — constants.py must work without torch) --
 log_r "Validating import chain..."
-python3 -c "from constants import FIELDS, BASE_MODEL, SEED; print('  Import chain OK')" || true
+python3 -c "from constants import FIELDS, BASE_MODEL, SEED; print('  Import chain OK')"
 
 # -- Download and configure the GitHub Actions runner --
 log_r "Downloading Actions runner ${RUNNER_URL} ..."

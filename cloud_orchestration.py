@@ -2597,6 +2597,7 @@ class VastAIProvisioner:
             "Waiting for instance %s to boot (timeout %ds)...", instance_id, self.BOOT_TIMEOUT
         )
         elapsed = 0
+        status = "unknown"
         while elapsed < self.BOOT_TIMEOUT:
             try:
                 result = self._run_vastai("show", "instance", instance_id, "--raw", check=False)
@@ -2613,7 +2614,7 @@ class VastAIProvisioner:
 
             self.logger.debug(
                 "  Status: %s — waiting %ds (%d/%d s elapsed)...",
-                status if "status" in dir() else "unknown",
+                status,
                 self.POLL_INTERVAL,
                 elapsed,
                 self.BOOT_TIMEOUT,
@@ -2685,7 +2686,12 @@ cd /workspace/repo
 echo '[remote] Installing Python dependencies...'
 pip install --quiet -r requirements.txt || true
 pip install --quiet ruff pyyaml
-python3 -c "from constants import FIELDS, BASE_MODEL, SEED; print('[remote] Import chain OK')" || true
+for pkg in torch transformers; do
+    python3 -c "import $pkg" 2>/dev/null || \
+        echo "[remote] WARNING: $pkg not importable — GPU extras may be missing"
+done
+# constants.py MUST be importable without torch (hard fail — do not add || true)
+python3 -c "from constants import FIELDS, BASE_MODEL, SEED; print('[remote] Import chain OK')"
 echo '[remote] Downloading Actions runner...'
 mkdir -p /opt/actions-runner && cd /opt/actions-runner
 curl -sSfL '{runner_url}' -o '{runner_pkg}'
