@@ -1007,6 +1007,9 @@ __all__ = [
     "_materialize_meta_buffers",
     "_EXPECTED_MISSING_TROCR",
     "_print_trocr_load_report",
+    # Canonical field assignment — import this instead of duplicating regex logic
+    "_assign_fields_heuristic",
+    "_extract_ocr_lines",
     # Patchable constants (micro/superfast mode sets these before calling train functions)
     "YOLO_BASE",
     "YOLO_EPOCHS",
@@ -1067,6 +1070,10 @@ TROCR_DATA_DIR = WORKSPACE / "data" / "trocr"
 
 # Pre-compiled regex patterns for field assignment heuristics — compiled once
 # at module load instead of on every call to assign_fields_heuristic().
+#
+# These are the CANONICAL patterns used by both train_trocr_yolo.py and
+# reporting.py (via _assign_fields_heuristic).  Do NOT duplicate field-
+# assignment regex patterns elsewhere — import this function instead.
 
 # Date: numeric (DD/MM/YYYY, YYYY-MM-DD, etc.) OR written month names
 _DATE_RE = re.compile(
@@ -1077,8 +1084,26 @@ _DATE_RE = re.compile(
     r"|\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{2,4}",  # 25 Dec 2023
     re.IGNORECASE,
 )
+# Date header keywords (Malay/Indonesian receipts): "date:", "tarikh:", "tanggal:"
+# followed by the actual date value.  Used as a secondary check when _DATE_RE
+# misses because the date is on the same line as the label keyword.
+_DATE_HEADER_RE = re.compile(
+    r"(?:date|tarikh|tanggal)\s*[:\-]?\s*(\S+)",
+    re.IGNORECASE,
+)
+# Total patterns — ordered from most specific to least.  Includes Malaysian
+# keywords (jumlah) alongside English variants.  Capture group extracts the
+# numeric value directly.
+_TOTAL_KEYWORD_RE = re.compile(
+    r"(?:total|subtotal|jumlah|amount\s+due|grand\s*total|nett\s*total|net\s*total"
+    r"|total\s+amount|amount|sum|due)"
+    r"\s*[:\-]?\s*(?:rm|myr|usd|\$|£|€)?\s*(\d[\d,]*\.\d{2})",
+    re.IGNORECASE,
+)
+# Legacy total pattern (no capture group) for backward-compatible match detection
 _TOTAL_RE = re.compile(
-    r"(?:total|subtotal|amount|sum|due|grand\s*total|nett\s*total|net\s*total)\s*[:\-]?\s*[\$\£\€RM]?\s*\d+[.,]\d{2}",
+    r"(?:total|subtotal|jumlah|amount|sum|due|grand\s*total|nett\s*total|net\s*total)"
+    r"\s*[:\-]?\s*[\$\£\€RM]?\s*\d+[.,]\d{2}",
     re.IGNORECASE,
 )
 # Matches a standalone monetary amount at end of line (last-resort total finder)
@@ -1089,7 +1114,8 @@ _NUMBER_RE = re.compile(r"[\d]+[.,][\d]{2}")
 _ADDRESS_RE = re.compile(
     r"\b(?:JALAN|JLN|LORONG|LRG|ROAD|STREET|ST|AVENUE|AVE|BOULEVARD|BLVD"
     r"|TAMAN|TMN|BANDAR|PUSAT|KOMPLEKS|NO\.?\s*\d|LOT\s*\d|\d{5}\s+[A-Z]"
-    r"|FLOOR|LEVEL|UNIT|BLOCK|BLK)"
+    r"|FLOOR|LEVEL|UNIT|BLOCK|BLK|LANE|DRIVE|PLAZA|MALL|PARK|BATU|KM|KILOMETER|MILE"
+    r"|TINGKAT)"
     r"|\b\d{5}\b"  # standalone 5-digit postcode
     r"|^\d+\s+[A-Z]",  # line starting with street number + word
     re.IGNORECASE | re.MULTILINE,
@@ -3145,15 +3171,24 @@ def train_trocr(
 def _assign_fields_heuristic(ocr_lines: list[dict[str, Any]]) -> dict[str, str]:
     """Assign OCR-extracted text lines to SROIE fields using heuristics.
 
-    This is the key weakness of the pipeline approach: rule-based field
-    assignment introduces another source of error on top of detection and
-    OCR errors (cascading error propagation).
+    This is the CANONICAL field assignment function used by both the training/
+    evaluation pipeline (train_trocr_yolo.py) and the benchmark pipeline
+    (reporting.py).  Do NOT create duplicate field-assignment implementations
+    elsewhere — import and use this function instead.
 
-    Heuristic rules:
-    - Total: line containing a dollar/number pattern near the bottom
-    - Date: line containing a date-like pattern (DD/MM/YYYY, etc.)
-    - Company: first non-date, non-total line (typically the store name)
-    - Address: remaining lines between company and total
+    The function accepts bbox-aware dicts (with keys 'text', 'x', 'y', 'x2',
+    'y2') and uses spatial position for address grouping.  When called with
+    plain-text dicts (only 'text' key, no bbox), it still works correctly but
+    spatial grouping degrades to sequential grouping.
+
+    Heuristic rules (priority order):
+    1. Total: line containing a keyword ("total", "jumlah", etc.) + monetary
+       value, falling back to the last monetary value in the bottom portion.
+    2. Date: line matching a date pattern (DD/MM/YYYY, named months, etc.),
+       falling back to date-header keywords ("date:", "tarikh:", "tanggal:").
+    3. Company: first 1–2 unused lines from the top (non-monetary, non-date).
+    4. Address: remaining unused non-monetary lines grouped by vertical
+       proximity; the largest contiguous cluster wins.
     """
     result = {f: "" for f in FIELDS}
 
@@ -3163,34 +3198,34 @@ def _assign_fields_heuristic(ocr_lines: list[dict[str, Any]]) -> dict[str, str]:
     # Sort lines by vertical position (top to bottom)
     sorted_lines = sorted(ocr_lines, key=lambda x: x.get("y", 0))
 
-    # Date pattern
-    # Total pattern: currency symbols or "total" keyword followed by numbers
-    # Generic money pattern
+    used: set[int] = set()
 
-    used = set()
-
-    # Find date — scan all lines (date can appear anywhere on receipt)
-    for i, line in enumerate(sorted_lines):
-        text = line.get("text", "")
-        m = _DATE_RE.search(text)
-        if m:
-            result["date"] = m.group(0).strip()
-            used.add(i)
-            break
-
-    # Find total — prefer explicit keyword match, fall back to last monetary
-    # value in the bottom half of the receipt (common receipt layout).
+    # ── 1. Find total — prefer keyword match with capture group ──────────
+    # Try _TOTAL_KEYWORD_RE first (extracts numeric value via capture group).
     for i in range(len(sorted_lines) - 1, -1, -1):
         if i in used:
             continue
         text = sorted_lines[i].get("text", "")
-        if _TOTAL_RE.search(text):
-            numbers = _NUMBER_RE.findall(text)
-            result["total"] = numbers[-1] if numbers else text.strip()
+        m = _TOTAL_KEYWORD_RE.search(text)
+        if m:
+            # Clean: keep digits, comma, dot
+            captured = re.sub(r"[^\d.,]", "", m.group(1))
+            result["total"] = captured
             used.add(i)
             break
+    # Fallback 1: legacy _TOTAL_RE (no capture group) + _NUMBER_RE extraction
     if not result["total"]:
-        # Fallback: last line in bottom 40% of receipt that contains a money amount
+        for i in range(len(sorted_lines) - 1, -1, -1):
+            if i in used:
+                continue
+            text = sorted_lines[i].get("text", "")
+            if _TOTAL_RE.search(text):
+                numbers = _NUMBER_RE.findall(text)
+                result["total"] = numbers[-1] if numbers else text.strip()
+                used.add(i)
+                break
+    # Fallback 2: last monetary value in bottom 40% of receipt
+    if not result["total"]:
         cutoff = max(0, len(sorted_lines) - max(1, len(sorted_lines) // 5 * 2))
         for i in range(len(sorted_lines) - 1, cutoff - 1, -1):
             if i in used:
@@ -3201,13 +3236,55 @@ def _assign_fields_heuristic(ocr_lines: list[dict[str, Any]]) -> dict[str, str]:
                 result["total"] = numbers[-1] if numbers else text.strip()
                 used.add(i)
                 break
+    # Fallback 3: largest monetary value anywhere on the receipt
+    if not result["total"]:
+        candidates: list[tuple[float, str, int]] = []
+        for i, line in enumerate(sorted_lines):
+            if i in used:
+                continue
+            text = line.get("text", "")
+            for m in re.finditer(r"\d[\d,]*\.\d{2}", text):
+                try:
+                    val = float(m.group(0).replace(",", ""))
+                    candidates.append((val, m.group(0), i))
+                except ValueError:
+                    pass
+        if candidates:
+            candidates.sort(reverse=True)
+            result["total"] = candidates[0][1]
+            used.add(candidates[0][2])
 
-    # Company: first 1-2 unused lines before any address/date/total line
-    company_parts = []
+    # ── 2. Find date — scan all lines ────────────────────────────────────
+    for i, line in enumerate(sorted_lines):
+        if i in used:
+            continue
+        text = line.get("text", "")
+        m = _DATE_RE.search(text)
+        if m:
+            result["date"] = m.group(0).strip()
+            used.add(i)
+            break
+    # Fallback: date-header keyword ("date:", "tarikh:", "tanggal:")
+    if not result["date"]:
+        for i, line in enumerate(sorted_lines):
+            if i in used:
+                continue
+            text = line.get("text", "")
+            m = _DATE_HEADER_RE.search(text)
+            if m:
+                result["date"] = m.group(1).strip()
+                used.add(i)
+                break
+
+    # ── 3. Company: first 1–2 unused lines from the top ──────────────────
+    company_parts: list[str] = []
     for i, line in enumerate(sorted_lines):
         if i not in used and len(company_parts) < 2:
             text = line.get("text", "").strip()
             if text and not _MONEY_RE.search(text) and not _DATE_RE.search(text):
+                # Skip lines that are purely numeric
+                if re.match(r"^[\d\s\.,:]+$", text):
+                    continue
                 company_parts.append(text)
                 used.add(i)
                 # Stop after first line unless second line also looks like a name
@@ -3215,14 +3292,11 @@ def _assign_fields_heuristic(ocr_lines: list[dict[str, Any]]) -> dict[str, str]:
                     break
     result["company"] = " ".join(company_parts)
 
-    # Address: collect all remaining unassigned non-monetary lines, group them
-    # by vertical proximity, and pick the largest consecutive cluster.
-    #
-    # Rationale: SROIE addresses span 1–3 lines between the company name (top)
-    # and the date/total lines. Any unassigned line that is not a pure monetary
-    # amount is a candidate. Grouping by proximity ensures we pick the
-    # contiguous block of address lines rather than scattered text fragments.
-    addr_candidates: list[tuple[float, float, str]] = []
+    # ── 4. Address: group remaining lines by vertical proximity ──────────
+    # Collect candidates: unused non-monetary lines with optional address
+    # keyword boost.  Uses bbox y-coordinates when available for spatial
+    # grouping; falls back to sequential ordering when bboxes are absent.
+    addr_candidates: list[tuple[float, float, str, bool]] = []
     for i, line in enumerate(sorted_lines):
         if i not in used:
             text = line.get("text", "").strip()
@@ -3230,36 +3304,43 @@ def _assign_fields_heuristic(ocr_lines: list[dict[str, Any]]) -> dict[str, str]:
                 continue
             y_top = float(line.get("y", 0))
             y_bot = float(line.get("y2", y_top + 20))
-            addr_candidates.append((y_top, y_bot, text))
+            has_addr_signal = bool(_ADDRESS_RE.search(text))
+            addr_candidates.append((y_top, y_bot, text, has_addr_signal))
 
     if addr_candidates:
         # Estimate typical line height as the median of (y2 - y) across candidates.
-        # statistics.median() handles both odd and even-length lists correctly.
-        _heights = [y2 - y for y, y2, _ in addr_candidates if y2 > y]
+        _heights = [y2 - y for y, y2, _, _ in addr_candidates if y2 > y]
         _typical_h = statistics.median(_heights) if _heights else 30.0
         # Two lines are "adjacent" if the gap between them is ≤ 1.5× typical height.
         _gap_thresh = max(5.0, _typical_h * 1.5)
 
         # Build consecutive groups.
-        groups: list[list[str]] = [[addr_candidates[0][2]]]
+        groups: list[list[tuple[str, bool]]] = [[(addr_candidates[0][2], addr_candidates[0][3])]]
         for j in range(1, len(addr_candidates)):
             prev_y2 = addr_candidates[j - 1][1]
             curr_y = addr_candidates[j][0]
             if curr_y - prev_y2 <= _gap_thresh:
-                groups[-1].append(addr_candidates[j][2])
+                groups[-1].append((addr_candidates[j][2], addr_candidates[j][3]))
             else:
-                groups.append([addr_candidates[j][2]])
+                groups.append([(addr_candidates[j][2], addr_candidates[j][3])])
 
-        # Pick the largest group; fall back to keyword-matching group if tied.
-        def _group_score(g: list[str]) -> tuple[int, int]:
-            kw_count = sum(1 for t in g if _ADDRESS_RE.search(t))
-            return (len(g), kw_count)
+        # Pick the best group.  Scoring priority:
+        #   1. Keyword count (address signals: JALAN, LOT, postcode, etc.)
+        #   2. Group size (number of contiguous lines)
+        # This intentionally prefers a single line with an address keyword
+        # (e.g. "NO 1 JALAN PUCHONG") over a 3-line group without keywords,
+        # because receipt content between company and total is often mixed
+        # (item lines, tax lines).  The keyword signal is more reliable than
+        # size alone for selecting the actual address block.
+        def _group_score(g: list[tuple[str, bool]]) -> tuple[int, int]:
+            kw_count = sum(1 for _, has_kw in g if has_kw)
+            return (kw_count, len(g))
 
         best_group = max(groups, key=_group_score)
         # Cap at 4 lines: SROIE addresses span 1–3 lines in practice; allowing
         # 4 avoids silently truncating rare 4-line addresses without risk of
         # including unrelated content (company and date/total are already removed).
-        result["address"] = " ".join(best_group[:4])
+        result["address"] = " ".join(text for text, _ in best_group[:4])
 
     return result
 
