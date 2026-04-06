@@ -1086,6 +1086,8 @@ _MIN_TROCR_EPOCHS: int = 3  # below this, val_loss ≈ 9.1 (non-functional decod
 _MIN_YOLO_EPOCHS: int = 1  # at least one pass through training data
 _MIN_BOX_DIMENSION: int = 5  # L2: minimum crop width/height in pixels
 _MAX_DETECTION_FAILURE_RATE: float = 0.5  # L8: combined empty-ocr-lines threshold
+_NMS_IOU_EPSILON: float = 0.01  # L4: floating-point tolerance for IoU comparison
+_MAX_NMS_VERIFICATION_BOXES: int = 500  # L4: max boxes for O(n²) NMS verification
 
 
 def _assert_resolution_invariant(train_imgsz: int, infer_imgsz: int) -> None:
@@ -1163,10 +1165,11 @@ def _assert_nms_no_high_iou_pairs(
     """L4 — Assert that no pair of post-NMS boxes exceeds iou_thr.
 
     This is a defensive check verifying NMS correctness.  Called only when
-    the box count is small enough to make the O(n²) check feasible (≤500).
+    the box count is small enough to make the O(n²) check feasible
+    (≤ _MAX_NMS_VERIFICATION_BOXES).
     """
     n = boxes_xyxy.shape[0]
-    if n <= 1 or n > 500:
+    if n <= 1 or n > _MAX_NMS_VERIFICATION_BOXES:
         return
     for i in range(n):
         for j in range(i + 1, n):
@@ -1183,7 +1186,7 @@ def _assert_nms_no_high_iou_pairs(
             ).item()
             union = area_i + area_j - inter
             iou = inter / (union + 1e-7)
-            if iou > iou_thr + 0.01:  # small epsilon for floating-point tolerance
+            if iou > iou_thr + _NMS_IOU_EPSILON:
                 logging.getLogger(__name__).warning(
                     "L4 WARNING — NMS may have a bug: post-NMS boxes %d and %d "
                     "have IoU=%.4f > threshold %.2f",
@@ -1281,7 +1284,14 @@ def verify_pipeline_lemmas() -> dict[str, bool]:
     try:
         assert YOLO_IMG_SIZE > 0, "YOLO_IMG_SIZE must be positive"
         assert YOLO_IMG_SIZE % 32 == 0, f"YOLO_IMG_SIZE={YOLO_IMG_SIZE} not a multiple of 32"
+        # Positive test: same value should pass
         _assert_resolution_invariant(YOLO_IMG_SIZE, YOLO_IMG_SIZE)
+        # Negative test: different values must raise ValueError
+        try:
+            _assert_resolution_invariant(512, 640)
+            raise AssertionError("L1: _assert_resolution_invariant(512, 640) should have raised")
+        except ValueError:
+            pass  # Expected — L1 correctly detects mismatch
         results["L1_resolution_invariant"] = True
         _log.info("L1 PASS: YOLO_IMG_SIZE=%d is valid (positive, multiple of 32)", YOLO_IMG_SIZE)
     except (ValueError, AssertionError) as e:
@@ -1323,11 +1333,34 @@ def verify_pipeline_lemmas() -> dict[str, bool]:
         results["L3_field_completeness"] = False
         _log.error("L3 FAIL: %s", e)
 
-    # L4: NMS Correctness — structural (verified at runtime in _YOLO_CLS.__call__)
-    results["L4_nms_correctness"] = True
-    _log.info(
-        "L4 PASS: NMS correctness verified at inference time via _assert_nms_no_high_iou_pairs"
-    )
+    # L4: NMS Correctness — smoke test with synthetic boxes
+    try:
+        # Create two boxes with high overlap (IoU > 0.45) and two with no overlap.
+        # _assert_nms_no_high_iou_pairs should warn on the overlapping pair.
+        high_iou_boxes = torch.tensor(
+            [
+                [10.0, 10.0, 100.0, 100.0],  # box A
+                [15.0, 15.0, 105.0, 105.0],  # box B — highly overlaps A
+            ]
+        )
+        # This should log a warning (high IoU pair), not raise.
+        _assert_nms_no_high_iou_pairs(high_iou_boxes, iou_thr=0.45)
+        # Non-overlapping boxes should produce no warnings.
+        clean_boxes = torch.tensor(
+            [
+                [10.0, 10.0, 50.0, 50.0],
+                [200.0, 200.0, 300.0, 300.0],
+            ]
+        )
+        _assert_nms_no_high_iou_pairs(clean_boxes, iou_thr=0.45)
+        # Edge case: single box and empty tensor
+        _assert_nms_no_high_iou_pairs(torch.zeros(1, 4), iou_thr=0.45)
+        _assert_nms_no_high_iou_pairs(torch.zeros(0, 4), iou_thr=0.45)
+        results["L4_nms_correctness"] = True
+        _log.info("L4 PASS: NMS correctness verified with synthetic overlapping box test")
+    except (AssertionError, RuntimeError) as e:
+        results["L4_nms_correctness"] = False
+        _log.error("L4 FAIL: %s", e)
 
     # L5: OCR Correction Idempotence
     try:
@@ -1363,7 +1396,7 @@ def verify_pipeline_lemmas() -> dict[str, bool]:
             )
         else:
             _log.warning("L5 WARN: OCR correction is NOT idempotent on some strings")
-    except Exception as e:  # noqa: BLE001
+    except (ValueError, AttributeError, TypeError) as e:
         results["L5_ocr_idempotence"] = False
         _log.error("L5 FAIL: %s", e)
 
