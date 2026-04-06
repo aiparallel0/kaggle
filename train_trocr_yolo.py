@@ -3551,7 +3551,9 @@ class FieldAttentionAssigner(torch.nn.Module):
                 # span 1–4 lines are captured correctly (the heuristic already
                 # handles this with proximity grouping capped at 4 lines;
                 # the learned assigner must not be structurally worse).
-                threshold = 1.0 / max(len(ocr_lines), 1)  # uniform baseline
+                threshold = 1.0 / max(
+                    len(ocr_lines), 1
+                )  # uniform-attention baseline: lines above this score above-equal probability
                 eligible = [
                     j
                     for j in range(len(ocr_lines))
@@ -3653,16 +3655,18 @@ def _make_synthetic_ocr_lines(
             mid = (len(parts) + 1) // 2
             addr_lines = [", ".join(parts[:mid]), ", ".join(parts[mid:])]
         else:
+            # Single pass: scan outward from the midpoint until a space is found.
             mid = len(address) // 2
             split_pos = mid
             for offset in range(len(address)):
+                found = False
                 for pos in (mid - offset, mid + offset):
                     if 0 < pos < len(address) and address[pos] == " ":
                         split_pos = pos
+                        found = True
                         break
-                else:
-                    continue
-                break
+                if found:
+                    break
             addr_lines = [address[:split_pos].strip(), address[split_pos:].strip()]
             addr_lines = [a for a in addr_lines if a]
 
@@ -3681,6 +3685,11 @@ def _make_synthetic_ocr_lines(
         lines.append({"text": total, "x": x1, "y": y, "x2": x2, "y2": y + line_h})
 
     return lines
+
+
+def _y_to_bin(y: float, img_h: float, n_bins: int) -> int:
+    """Map a y-coordinate to a vertical bin index in [0, n_bins-1]."""
+    return min(int(y / max(img_h, 1.0) * n_bins), n_bins - 1)
 
 
 def _compute_corpus_plausibility(
@@ -3717,6 +3726,13 @@ def _compute_corpus_plausibility(
     ]
 
     if len(hq) < min_hq_samples:
+        logging.getLogger(__name__).warning(
+            "[FieldAssigner] Only %d high-quality corpus entries (need %d); "
+            "corpus-derived plausibility prior falls back to uniform 0.5. "
+            "Consistency regulariser will have no positional bias.",
+            len(hq),
+            min_hq_samples,
+        )
         uniform = torch.full((n_bins,), 0.5, dtype=torch.float32)
         return {field: uniform.to(device) for field in FieldAttentionAssigner.FIELDS}
 
@@ -3728,10 +3744,10 @@ def _compute_corpus_plausibility(
             matched_idx = field_to_idx.get(field, -1)
             for li, line in enumerate(ocr_lines):
                 y = float(line.get("y", 0))
-                bin_idx = min(int(y / max(img_h, 1.0) * n_bins), n_bins - 1)
-                totals[field][bin_idx] += 1.0
+                b = _y_to_bin(y, img_h, n_bins)
+                totals[field][b] += 1.0
                 if li == matched_idx:
-                    counts[field][bin_idx] += 1.0
+                    counts[field][b] += 1.0
 
     result: dict[str, torch.Tensor] = {}
     for field in FieldAttentionAssigner.FIELDS:
@@ -3849,7 +3865,10 @@ def train_field_assigner(
                 device,
                 return_vision_feats=use_vision,
             )
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            logging.getLogger(__name__).debug(
+                "[FieldAssigner] YOLO+TrOCR failed for %s: %s", img_path.name, exc
+            )
             ocr_lines = []
             vis_feats = None
 
@@ -3941,12 +3960,7 @@ def train_field_assigner(
                     field_prior = corpus_plausibility[field]  # (n_bins,)
                     plaus = torch.stack(
                         [
-                            field_prior[
-                                min(
-                                    int(float(ln.get("y", 0)) / max(img_h, 1.0) * n_bins),
-                                    n_bins - 1,
-                                )
-                            ]
+                            field_prior[_y_to_bin(float(ln.get("y", 0)), img_h, n_bins)]
                             for ln in ocr_lines
                         ]
                     )  # (N,)
