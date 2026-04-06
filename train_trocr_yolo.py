@@ -1286,7 +1286,10 @@ def verify_pipeline_lemmas() -> dict[str, bool]:
         assert YOLO_IMG_SIZE % 32 == 0, f"YOLO_IMG_SIZE={YOLO_IMG_SIZE} not a multiple of 32"
         # Positive test: same value should pass
         _assert_resolution_invariant(YOLO_IMG_SIZE, YOLO_IMG_SIZE)
-        # Negative test: different values must raise ValueError
+        # Negative test: different values must raise ValueError.
+        # 512 (YOLO_IMG_SIZE default) vs 640 (ultralytics default) are the two
+        # most common YOLO inference resolutions — exactly the mismatch that
+        # caused Pattern 8 (CLAUDE.md §16).
         try:
             _assert_resolution_invariant(512, 640)
             raise AssertionError("L1: _assert_resolution_invariant(512, 640) should have raised")
@@ -1619,6 +1622,10 @@ def _correct_ocr_chars(text: str) -> str:
 
     This is a lightweight pre-processing step; the FieldAttentionAssigner
     additionally learns character-level confusion patterns from training data.
+
+    **L5 (OCR Correction Idempotence)**: This function is designed to be
+    idempotent — applying it twice yields the same result as once.  This is
+    enforced by a debug-mode assertion (only active when ``__debug__`` is True).
     """
     corrected = []
     for token in text.split():
@@ -1630,7 +1637,14 @@ def _correct_ocr_chars(text: str) -> str:
             corrected.append("".join(_OCR_D2L.get(c, c) for c in token))
         else:
             corrected.append(token)
-    return " ".join(corrected)
+    result = " ".join(corrected)
+
+    # L5: Debug-mode idempotence check — only runs with assertions enabled
+    # (python without -O flag).  Zero overhead in production (-O strips asserts).
+    if __debug__:
+        _assert_ocr_correction_idempotent(text, result)
+
+    return result
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -3673,6 +3687,7 @@ def _assign_fields_heuristic(ocr_lines: list[dict[str, Any]]) -> dict[str, str]:
             # Clean: keep digits, comma, dot
             captured = re.sub(r"[^\d.,]", "", m.group(1))
             result["total"] = captured
+            _assert_mutual_exclusion(used, i, "total")  # L6
             used.add(i)
             break
     # Fallback 1: legacy _TOTAL_RE (no capture group) + _NUMBER_RE extraction
@@ -3724,6 +3739,7 @@ def _assign_fields_heuristic(ocr_lines: list[dict[str, Any]]) -> dict[str, str]:
         m = _DATE_RE.search(text)
         if m:
             result["date"] = m.group(0).strip()
+            _assert_mutual_exclusion(used, i, "date")  # L6
             used.add(i)
             break
     # Fallback: date-header keyword ("date:", "tarikh:", "tanggal:")
@@ -3735,6 +3751,7 @@ def _assign_fields_heuristic(ocr_lines: list[dict[str, Any]]) -> dict[str, str]:
             m = _DATE_HEADER_RE.search(text)
             if m:
                 result["date"] = m.group(1).strip()
+                _assert_mutual_exclusion(used, i, "date")  # L6
                 used.add(i)
                 break
 
@@ -3748,6 +3765,7 @@ def _assign_fields_heuristic(ocr_lines: list[dict[str, Any]]) -> dict[str, str]:
                 if re.match(r"^[\d\s\.,:]+$", text):
                     continue
                 company_parts.append(text)
+                _assert_mutual_exclusion(used, i, "company")  # L6
                 used.add(i)
                 # Stop after first line unless second line also looks like a name
                 if len(company_parts) == 1 and not _ADDRESS_RE.search(text):
@@ -4622,6 +4640,10 @@ def _extract_ocr_lines(
             # Boxes smaller than _MIN_BOX_DIMENSION in either axis cannot
             # contain readable text; passing them to TrOCR wastes compute
             # and may produce hallucinated tokens from degenerate input.
+            # NOTE: This is intentionally inline rather than calling
+            # _assert_box_validity() because we operate on individual
+            # already-padded/clamped boxes within the loop (not a batch of
+            # raw tuples), and we need per-box discard counting.
             if x2 - x1 < _MIN_BOX_DIMENSION or y2 - y1 < _MIN_BOX_DIMENSION:
                 discarded_box_count += 1
                 continue
