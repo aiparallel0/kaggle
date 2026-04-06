@@ -3551,9 +3551,10 @@ class FieldAttentionAssigner(torch.nn.Module):
                 # span 1–4 lines are captured correctly (the heuristic already
                 # handles this with proximity grouping capped at 4 lines;
                 # the learned assigner must not be structurally worse).
-                threshold = 1.0 / max(
-                    len(ocr_lines), 1
-                )  # uniform-attention baseline: lines above this score above-equal probability
+                # Threshold = 1/N: the expected attention score under a uniform
+                # distribution.  Lines scoring above this are above-average
+                # candidates for the address field.
+                threshold = 1.0 / max(len(ocr_lines), 1)
                 eligible = [
                     j
                     for j in range(len(ocr_lines))
