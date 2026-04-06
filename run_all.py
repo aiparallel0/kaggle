@@ -2326,12 +2326,30 @@ def stage_trocr_experiments(args: argparse.Namespace) -> StageResult:
         else:
             _log.debug("YOLO weights cached at %s", yolo_weights)
 
+        # Stage 4a.1: Evaluate YOLO detection quality independently.
+        # This runs BEFORE TrOCR evaluation so operators immediately see whether
+        # YOLO is working (mAP, precision, recall) without waiting for the full
+        # end-to-end pipeline.  If detection quality is poor, the warning is
+        # visible in the log before TrOCR evaluation begins.
+        results_dir = Path("results")
+        results_dir.mkdir(exist_ok=True)
+        yolo_detection_metrics: dict = {}
+        if yolo_weights.exists():
+            _log.info("Evaluating YOLO detection quality on validation set ...")
+            yolo_detection_metrics = trocr_yolo.evaluate_yolo_detection(
+                yolo_weights=str(yolo_weights),
+            )
+            trocr_yolo.print_yolo_detection_metrics(yolo_detection_metrics)
+            # Save standalone detection metrics
+            yolo_det_path = results_dir / "yolo_detection_metrics.json"
+            with open(yolo_det_path, "w") as fh:
+                json.dump(yolo_detection_metrics, fh, indent=2)
+            _log.info("YOLO detection metrics saved → %s", yolo_det_path)
+
         # Explicit GPU cleanup between YOLO and TrOCR to prevent OOM.
         _gpu_cleanup()
         _log.debug("GPU memory freed between YOLO and TrOCR stages.")
 
-        results_dir = Path("results")
-        results_dir.mkdir(exist_ok=True)
         test_samples = eval_mod.load_test_samples()
 
         if trocr_single:
@@ -2372,6 +2390,7 @@ def stage_trocr_experiments(args: argparse.Namespace) -> StageResult:
                         "duplicated this result across keys 1-8 for structural consistency "
                         "with DONUT, but this was misleading."
                     ),
+                    "yolo_detection_metrics": yolo_detection_metrics,
                     "1": {
                         "name": "TrOCR+YOLO (single training run)",
                         "metrics": metrics,
@@ -2460,6 +2479,10 @@ def stage_trocr_experiments(args: argparse.Namespace) -> StageResult:
                     "metrics": exp_metrics,
                     "num_train_samples": trocr_history.get("num_train_samples", 0),
                 }
+
+            # Include shared YOLO detection metrics at top level of per-experiment results
+            if yolo_detection_metrics:
+                trocr_results["yolo_detection_metrics"] = yolo_detection_metrics
 
         # Save results
         out_path = results_dir / "trocr_yolo_results.json"

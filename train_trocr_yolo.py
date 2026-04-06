@@ -1006,6 +1006,8 @@ __all__ = [
     "train_trocr",
     "_build_experiment_trocr_metadata",
     "evaluate_trocr_yolo_on_test",
+    "evaluate_yolo_detection",
+    "print_yolo_detection_metrics",
     "run_trocr_yolo_inference",
     "_materialize_meta_buffers",
     "_EXPECTED_MISSING_TROCR",
@@ -2100,6 +2102,348 @@ def train_yolo(output_dir: Path | None = None, num_train_samples: int = 0) -> Pa
     _gpu_cleanup()
 
     return best_path
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# STAGE 1b: YOLO Detection Evaluation
+# ════════════════════════════════════════════════════════════════════════════
+
+
+def _compute_iou(box_a: tuple[float, ...], box_b: tuple[float, ...]) -> float:
+    """Compute IoU between two boxes in (x1, y1, x2, y2) format."""
+    x1 = max(box_a[0], box_b[0])
+    y1 = max(box_a[1], box_b[1])
+    x2 = min(box_a[2], box_b[2])
+    y2 = min(box_a[3], box_b[3])
+    inter = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+    area_a = max(0.0, box_a[2] - box_a[0]) * max(0.0, box_a[3] - box_a[1])
+    area_b = max(0.0, box_b[2] - box_b[0]) * max(0.0, box_b[3] - box_b[1])
+    union = area_a + area_b - inter
+    return inter / union if union > 0 else 0.0
+
+
+def _yolo_cx_cy_w_h_to_xyxy(
+    cx: float, cy: float, w: float, h: float, img_w: float, img_h: float
+) -> tuple[float, float, float, float]:
+    """Convert YOLO normalized (cx, cy, w, h) to absolute (x1, y1, x2, y2)."""
+    abs_cx = cx * img_w
+    abs_cy = cy * img_h
+    abs_w = w * img_w
+    abs_h = h * img_h
+    return (
+        abs_cx - abs_w / 2,
+        abs_cy - abs_h / 2,
+        abs_cx + abs_w / 2,
+        abs_cy + abs_h / 2,
+    )
+
+
+def _load_yolo_gt_boxes(
+    label_path: Path, img_w: float, img_h: float
+) -> list[tuple[float, float, float, float]]:
+    """Load ground truth bounding boxes from a YOLO-format label file.
+
+    Each line: ``class cx cy w h`` (normalised).  Returns list of (x1, y1, x2, y2).
+    """
+    boxes: list[tuple[float, float, float, float]] = []
+    if not label_path.exists():
+        return boxes
+    for line in label_path.read_text().strip().splitlines():
+        parts = line.strip().split()
+        if len(parts) < 5:
+            continue
+        cx, cy, w, h = float(parts[1]), float(parts[2]), float(parts[3]), float(parts[4])
+        boxes.append(_yolo_cx_cy_w_h_to_xyxy(cx, cy, w, h, img_w, img_h))
+    return boxes
+
+
+def _match_boxes_greedy(
+    pred_boxes: list[tuple[float, float, float, float]],
+    gt_boxes: list[tuple[float, float, float, float]],
+    iou_threshold: float = 0.5,
+) -> tuple[int, int, int]:
+    """Greedy match predicted boxes to ground truth at given IoU threshold.
+
+    Returns (true_positives, false_positives, false_negatives).
+    """
+    matched_gt: set[int] = set()
+    tp = 0
+    for pred in pred_boxes:
+        best_iou = 0.0
+        best_gt_idx = -1
+        for gi, gt in enumerate(gt_boxes):
+            if gi in matched_gt:
+                continue
+            iou = _compute_iou(pred, gt)
+            if iou > best_iou:
+                best_iou = iou
+                best_gt_idx = gi
+        if best_iou >= iou_threshold and best_gt_idx >= 0:
+            tp += 1
+            matched_gt.add(best_gt_idx)
+    fp = len(pred_boxes) - tp
+    fn = len(gt_boxes) - len(matched_gt)
+    return tp, fp, fn
+
+
+def evaluate_yolo_detection(
+    yolo_weights: str | Path,
+    data_yaml: str | Path | None = None,
+    imgsz: int | None = None,
+) -> dict[str, Any]:
+    """Evaluate YOLO detection quality on the validation set.
+
+    Uses the ultralytics ``model.val()`` API when available for full COCO-style
+    mAP computation.  Falls back to a manual greedy-matching evaluation against
+    ground truth YOLO labels when ultralytics is not installed.
+
+    Parameters
+    ----------
+    yolo_weights : str or Path
+        Path to YOLO best weights file (``best.pt``).
+    data_yaml : str or Path or None
+        Path to the dataset YAML file.  Defaults to ``YOLO_DATA_YAML``.
+    imgsz : int or None
+        Inference image size.  Defaults to ``YOLO_IMG_SIZE``.
+
+    Returns
+    -------
+    dict[str, Any]
+        Detection metrics with the following keys:
+
+        - ``yolo_map50``: mAP at IoU=0.50
+        - ``yolo_map``: mAP at IoU=0.50:0.95
+        - ``yolo_precision``: mean detection precision
+        - ``yolo_recall``: mean detection recall
+        - ``yolo_num_val_images``: number of validation images used
+        - ``yolo_backend``: ``"ultralytics"`` or ``"manual"``
+    """
+    _log = logging.getLogger(__name__)
+    if data_yaml is None:
+        data_yaml = YOLO_DATA_YAML
+    if imgsz is None:
+        imgsz = YOLO_IMG_SIZE
+
+    yolo_weights = Path(yolo_weights)
+    if not yolo_weights.exists():
+        _log.warning(
+            "evaluate_yolo_detection: weights file %s does not exist — returning empty metrics.",
+            yolo_weights,
+        )
+        return {}
+
+    result: dict[str, Any] = {}
+
+    # ── Ultralytics path: full COCO-style mAP ──────────────────────────────
+    if _ULTRALYTICS_AVAILABLE:
+        _log.info("Evaluating YOLO detection quality via ultralytics model.val() ...")
+        try:
+            from ultralytics import YOLO  # noqa: PLC0415
+
+            model = YOLO(str(yolo_weights))
+            metrics = model.val(data=str(data_yaml), imgsz=imgsz, verbose=False)
+
+            # Extract metrics from the DetMetrics object.
+            # Attribute names: .box.map, .box.map50, .box.map75, .box.mp, .box.mr
+            box = getattr(metrics, "box", None)
+            if box is not None:
+                result["yolo_map50"] = round(float(getattr(box, "map50", 0.0)), 4)
+                result["yolo_map"] = round(float(getattr(box, "map", 0.0)), 4)
+                result["yolo_precision"] = round(float(getattr(box, "mp", 0.0)), 4)
+                result["yolo_recall"] = round(float(getattr(box, "mr", 0.0)), 4)
+            else:
+                # Fallback: some ultralytics versions use different attribute layout
+                result["yolo_map50"] = round(float(getattr(metrics, "map50", 0.0)), 4)
+                result["yolo_map"] = round(float(getattr(metrics, "map", 0.0)), 4)
+                result["yolo_precision"] = round(float(getattr(metrics, "mp", 0.0)), 4)
+                result["yolo_recall"] = round(float(getattr(metrics, "mr", 0.0)), 4)
+
+            result["yolo_backend"] = "ultralytics"
+
+            # Try to read number of val images from the dataset YAML
+            try:
+                import yaml  # noqa: PLC0415
+
+                with open(data_yaml) as f:
+                    ds_cfg = yaml.safe_load(f)
+                val_dir = Path(ds_cfg.get("val", ""))
+                if not val_dir.is_absolute():
+                    val_dir = Path(data_yaml).parent / val_dir
+                result["yolo_num_val_images"] = sum(
+                    1 for p in val_dir.iterdir() if p.suffix.lower() in {".jpg", ".jpeg", ".png"}
+                )
+            except (OSError, KeyError, TypeError, ValueError):
+                result["yolo_num_val_images"] = 0
+
+            del model
+            _gpu_cleanup()
+
+            _log.info(
+                "YOLO detection eval (ultralytics): "
+                "mAP50=%.4f  mAP50-95=%.4f  precision=%.4f  recall=%.4f",
+                result.get("yolo_map50", 0),
+                result.get("yolo_map", 0),
+                result.get("yolo_precision", 0),
+                result.get("yolo_recall", 0),
+            )
+            return result
+
+        except Exception as exc:
+            _log.warning(
+                "ultralytics model.val() failed (%s: %s) — falling back to manual evaluation.",
+                type(exc).__name__,
+                exc,
+            )
+            # Fall through to manual evaluation
+
+    # ── Manual path: greedy IoU matching against ground truth labels ────────
+    _log.info(
+        "Evaluating YOLO detection quality via manual IoU matching (ultralytics not available) ..."
+    )
+
+    # Load dataset YAML to find val image/label directories
+    val_images_dir: Path | None = None
+    val_labels_dir: Path | None = None
+    try:
+        import yaml  # noqa: PLC0415
+
+        with open(data_yaml) as f:
+            ds_cfg = yaml.safe_load(f)
+        val_path = ds_cfg.get("val", "")
+        val_images_dir = (
+            Path(val_path) if Path(val_path).is_absolute() else Path(data_yaml).parent / val_path
+        )
+        # YOLO label dir mirrors image dir: images/val → labels/val
+        val_labels_dir = Path(str(val_images_dir).replace("/images/", "/labels/"))
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        _log.warning("Could not parse dataset YAML %s: %s", data_yaml, exc)
+
+    if val_images_dir is None or not val_images_dir.exists():
+        _log.warning(
+            "YOLO validation image directory not found — cannot run manual detection eval."
+        )
+        return {"yolo_backend": "manual", "yolo_error": "val images dir not found"}
+
+    # Collect validation images
+    image_exts = {".jpg", ".jpeg", ".png", ".bmp", ".tiff"}
+    val_images = sorted(p for p in val_images_dir.iterdir() if p.suffix.lower() in image_exts)
+    if not val_images:
+        _log.warning("No validation images found in %s", val_images_dir)
+        return {"yolo_backend": "manual", "yolo_num_val_images": 0}
+
+    # Load YOLO model
+    yolo_model = _YOLO_CLS(str(yolo_weights))
+
+    total_tp = 0
+    total_fp = 0
+    total_fn = 0
+    num_images_with_detections = 0
+
+    for img_path in _progress(val_images, desc="YOLO detection eval"):
+        # Load image to get dimensions
+        img = _load_image(img_path)
+        img_w = float(img.size[0]) if _PIL_AVAILABLE else float(img.shape[1])  # type: ignore[union-attr]
+        img_h = float(img.size[1]) if _PIL_AVAILABLE else float(img.shape[0])  # type: ignore[union-attr]
+
+        # Run YOLO inference (L1: pass YOLO_IMG_SIZE)
+        yolo_results = yolo_model(img, verbose=False, imgsz=imgsz)
+
+        # Extract predicted boxes as (x1, y1, x2, y2)
+        pred_boxes: list[tuple[float, float, float, float]] = []
+        if yolo_results and len(yolo_results[0].boxes) > 0:
+            for box in yolo_results[0].boxes:
+                xyxy = box.xyxy[0].cpu().tolist()
+                pred_boxes.append((xyxy[0], xyxy[1], xyxy[2], xyxy[3]))
+
+        if pred_boxes:
+            num_images_with_detections += 1
+
+        # Load ground truth boxes
+        label_path = val_labels_dir / (img_path.stem + ".txt") if val_labels_dir else None
+        gt_boxes: list[tuple[float, float, float, float]] = []
+        if label_path is not None:
+            gt_boxes = _load_yolo_gt_boxes(label_path, img_w, img_h)
+
+        # Match at IoU=0.5
+        tp, fp, fn = _match_boxes_greedy(pred_boxes, gt_boxes, iou_threshold=0.5)
+        total_tp += tp
+        total_fp += fp
+        total_fn += fn
+
+    del yolo_model
+    _gpu_cleanup()
+
+    precision = total_tp / (total_tp + total_fp) if (total_tp + total_fp) > 0 else 0.0
+    recall = total_tp / (total_tp + total_fn) if (total_tp + total_fn) > 0 else 0.0
+    # F1 as a proxy for mAP50 (not a true mAP but a reasonable single-threshold estimate)
+    detection_f1 = (
+        2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+    )
+    detection_rate = num_images_with_detections / len(val_images) if val_images else 0.0
+
+    result = {
+        "yolo_map50": round(detection_f1, 4),  # F1@IoU=0.5 as mAP50 proxy
+        "yolo_map": 0.0,  # not available in manual mode
+        "yolo_precision": round(precision, 4),
+        "yolo_recall": round(recall, 4),
+        "yolo_detection_rate": round(detection_rate, 4),
+        "yolo_num_val_images": len(val_images),
+        "yolo_total_tp": total_tp,
+        "yolo_total_fp": total_fp,
+        "yolo_total_fn": total_fn,
+        "yolo_backend": "manual",
+    }
+
+    _log.info(
+        "YOLO detection eval (manual): "
+        "precision=%.4f  recall=%.4f  F1@IoU50=%.4f  detection_rate=%.1f%%  "
+        "(%d val images, TP=%d FP=%d FN=%d)",
+        precision,
+        recall,
+        detection_f1,
+        detection_rate * 100,
+        len(val_images),
+        total_tp,
+        total_fp,
+        total_fn,
+    )
+    return result
+
+
+def print_yolo_detection_metrics(metrics: dict[str, Any]) -> None:
+    """Print YOLO detection metrics in a clear, readable table."""
+    if not metrics:
+        print("  [YOLO] No detection metrics available.")
+        return
+
+    backend = metrics.get("yolo_backend", "unknown")
+    print("=" * 60)
+    print(f"  YOLO Detection Quality  (backend: {backend})")
+    print("=" * 60)
+    print(f"  mAP@50:          {metrics.get('yolo_map50', 'N/A')}")
+    print(f"  mAP@50-95:       {metrics.get('yolo_map', 'N/A')}")
+    print(f"  Precision:       {metrics.get('yolo_precision', 'N/A')}")
+    print(f"  Recall:          {metrics.get('yolo_recall', 'N/A')}")
+    if "yolo_detection_rate" in metrics:
+        print(f"  Detection Rate:  {metrics['yolo_detection_rate']:.1%}")
+    print(f"  Val Images:      {metrics.get('yolo_num_val_images', 'N/A')}")
+    if metrics.get("yolo_total_tp") is not None:
+        print(
+            f"  TP/FP/FN:        {metrics['yolo_total_tp']}"
+            f" / {metrics['yolo_total_fp']}"
+            f" / {metrics['yolo_total_fn']}"
+        )
+
+    # Quality gate: warn if detection quality is poor
+    map50 = metrics.get("yolo_map50", 0.0)
+    if isinstance(map50, (int, float)) and map50 < 0.3:
+        print("  ⚠️  WARNING: mAP@50 is below 0.30 — YOLO detection quality is poor.")
+        print("     This will degrade TrOCR+YOLO end-to-end F1 significantly.")
+        print(
+            "     Consider: more YOLO training epochs, verify data preparation, "
+            "or install ultralytics for real detection."
+        )
+    print("=" * 60)
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -4959,6 +5303,15 @@ def evaluate_trocr_yolo_on_test(
     metrics["mean_latency_ms"] = round(sum(latencies) / len(latencies), 1) if latencies else 0.0
     if field_assigner is not None:
         metrics["field_assigner_backend"] = getattr(field_assigner, "backend", "unknown")
+
+    # Include detection-level statistics so operators can distinguish YOLO
+    # failures from TrOCR failures without re-running evaluation.
+    metrics["yolo_zero_detection_count"] = yolo_zero_count
+    metrics["trocr_empty_decode_count"] = trocr_empty_count
+    total = len(test_samples)
+    metrics["yolo_detection_rate"] = (
+        round((total - yolo_zero_count) / total, 4) if total > 0 else 0.0
+    )
 
     # GPU cleanup
     _gpu_cleanup(yolo_model, trocr_model, trocr_processor)
