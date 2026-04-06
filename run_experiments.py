@@ -60,7 +60,7 @@ import zlib
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Protocol, runtime_checkable
 
 # Ensure sibling modules are importable regardless of CWD.
 _SCRIPT_DIR = str(Path(__file__).resolve().parent)
@@ -79,10 +79,48 @@ from transformers import DonutProcessor, VisionEncoderDecoderModel  # noqa: E402
 # ---------------------------------------------------------------------------
 _SROIE_TASK_PROMPT_PREFIX = "<s_sroie"
 
+
+def _is_sroie_task_prompt(task_prompt: str) -> bool:
+    """Return True if *task_prompt* targets the SROIE extraction schema.
+
+    OCP-3 fix: centralises the ``task_prompt.startswith(_SROIE_TASK_PROMPT_PREFIX)``
+    check so that adding a new task-prompt format requires a change in only one
+    place instead of 6+ branching sites spread across the module.
+    """
+    return task_prompt.startswith(_SROIE_TASK_PROMPT_PREFIX)
+
+
 # ---------------------------------------------------------------------------
-# DIP-3 / DIP-4 fix: type aliases for model abstraction — allows swapping
-# architectures (e.g. to a different VisionEncoder) in a single place.
+# DIP-3 / DIP-4 fix: Protocol-based type aliases for model/processor
+# abstraction — allows swapping architectures (e.g. to a different
+# VisionEncoder) without editing every type annotation in the file.
 # ---------------------------------------------------------------------------
+
+
+@runtime_checkable
+class ModelProtocol(Protocol):
+    """Structural protocol for encoder-decoder models used in the pipeline."""
+
+    config: Any
+    decoder: Any
+
+    def generate(self, **kwargs: Any) -> Any: ...
+
+    def forward(self, **kwargs: Any) -> Any: ...
+
+
+@runtime_checkable
+class ProcessorProtocol(Protocol):
+    """Structural protocol for DONUT-style processors (tokenizer + image processor)."""
+
+    tokenizer: Any
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
+
+    def token2json(self, tokens: str) -> Any: ...
+
+
+# Concrete type aliases — existing code references these.
 ModelType = VisionEncoderDecoderModel
 ProcessorType = DonutProcessor
 
@@ -166,6 +204,9 @@ __all__ = [
     "save_summary",
     "_apply_resolution_sync",
     "SelfTestFailedError",
+    # DIP-3/DIP-4: Protocol-based type aliases
+    "ModelProtocol",
+    "ProcessorProtocol",
 ]
 
 # ---------------------------------------------------------------------------
@@ -2141,7 +2182,7 @@ def _select_parser(task_prompt: str, processor: ProcessorType) -> Callable[[str]
     (``_parse_prediction``, ``run_inference``, ``_self_test``) no longer
     duplicate the branching logic.
     """
-    if task_prompt.startswith(_SROIE_TASK_PROMPT_PREFIX):
+    if _is_sroie_task_prompt(task_prompt):
         return _parse_sroie_output
     return processor.token2json
 
@@ -2570,7 +2611,7 @@ class DonutEvaluator:
         cleaned = cleaned.replace(self.processor.tokenizer.pad_token, "").strip()
 
         # For SROIE, use custom parser; for CORD, use token2json
-        if self.task_prompt.startswith(_SROIE_TASK_PROMPT_PREFIX):
+        if _is_sroie_task_prompt(self.task_prompt):
             try:
                 parsed = _parse_sroie_output(cleaned)
             except Exception as exc:  # intentional broad catch: parser error boundary
@@ -2727,7 +2768,7 @@ class DonutEvaluator:
             return EMPTY_GT.copy()
 
         # For SROIE output, use the custom parser that understands SROIE tags
-        if getattr(self, "task_prompt", "").startswith(_SROIE_TASK_PROMPT_PREFIX):
+        if _is_sroie_task_prompt(getattr(self, "task_prompt", "")):
             try:
                 result = _parse_sroie_output(tokens)
                 if result and any(v for v in result.values()):  # At least one non-empty field
@@ -2825,7 +2866,7 @@ def _unwrap_prediction(parsed: dict[str, Any], task_prompt: str) -> dict[str, st
 
     # Unwrap {"sroie": {...}} for SROIE task prompts
     if (
-        task_prompt.startswith(_SROIE_TASK_PROMPT_PREFIX)
+        _is_sroie_task_prompt(task_prompt)
         and "sroie" in parsed
         and isinstance(parsed["sroie"], dict)
     ):
@@ -2905,7 +2946,7 @@ def run_inference(
         )
 
     # Check for task prompt mismatch (model outputting CORD schema for SROIE task)
-    if task_prompt.startswith(_SROIE_TASK_PROMPT_PREFIX) and sequence.startswith("<s_cord-v2>"):
+    if _is_sroie_task_prompt(task_prompt) and sequence.startswith("<s_cord-v2>"):
         logger.warning(
             "Task prompt mismatch for %s: asked for <s_sroie> but model output starts with "
             "<s_cord-v2>. Model has not learned SROIE task format (CORD pretraining dominates). "
@@ -2914,7 +2955,7 @@ def run_inference(
         )
 
     # For SROIE output, use custom parser; for CORD, use token2json
-    if task_prompt.startswith(_SROIE_TASK_PROMPT_PREFIX):
+    if _is_sroie_task_prompt(task_prompt):
         try:
             result = _parse_sroie_output(sequence)
             return result if result and any(v for v in result.values()) else {}
@@ -3498,11 +3539,26 @@ def _apply_resolution_sync(
 
 
 class _TrainerCompatMixin:
-    """Adapter properties that make ExperimentConfig duck-type compatible with DonutTrainer.
+    """Adapter properties for duck-typed DonutTrainer compatibility.
 
-    DonutTrainer reads hyperparameters via attribute access using names like
-    max_epochs, learning_rate, num_train_epochs, etc.  This mixin provides
-    those aliases, keeping the parameter storage (ExperimentConfig) clean.
+    **Why this mixin exists:**
+
+    ``DonutTrainer`` (in ``train.py``) reads hyperparameters via attribute
+    access using HuggingFace-style names such as ``max_epochs``,
+    ``learning_rate``, ``per_device_train_batch_size``, and ``num_train_epochs``.
+    ``ExperimentConfig`` stores the same values under shorter canonical names
+    (``epochs``, ``lr``, ``batch_size``).  Rather than duplicating fields or
+    renaming them everywhere, this mixin bridges the two naming conventions
+    with read-only ``@property`` aliases.
+
+    ``DonutTrainer`` never type-checks its config argument — it relies on
+    duck-typing (``getattr``), so any object that exposes these properties
+    is a valid config.  This means ``ExperimentConfig`` satisfies
+    ``DonutTrainer``'s implicit interface purely through this mixin.
+
+    Additional aliases (``id``, ``dataset_names``, ``base_checkpoint``) are
+    consumed by ``dag_scheduler.py``, ``run_all.py``, and
+    ``experiment_config_loader.py`` respectively.
     """
 
     @property
@@ -3786,268 +3842,241 @@ def _config_to_dict(config: ExperimentConfig) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def train_experiment(
-    exp_id: int,
+def _build_model_and_datasets(
+    config: ExperimentConfig,
     samples: list[tuple[Path, dict]],
-    output_dir: Path,
-    val_samples: list[tuple[Path, dict]] | None = None,
-    base_processor: DonutProcessor | None = None,
-    base_model: VisionEncoderDecoderModel | None = None,
-    config: ExperimentConfig | None = None,
-    sample_sources: list[str] | None = None,
-) -> list[dict[str, Any]]:
-    """Fine-tune DONUT on *samples* and save the model to *output_dir*.
+    val_samples: list[tuple[Path, dict]] | None,
+    base_processor: DonutProcessor | None,
+    base_model: VisionEncoderDecoderModel | None,
+    sample_sources: list[str] | None,
+) -> tuple[Any, Any, Any, Any]:
+    """Build a fresh model, processor, and train/val datasets from scratch.
 
-    All hyperparameters come from *config* if supplied, otherwise from
-    ``EXPERIMENTS[exp_id]``.  Pass a custom ExperimentConfig for sweeps.
-    Training is delegated to ``DonutTrainer`` from ``train.py``, which reads
-    hyperparameters from the config via duck-typed attributes.
+    Called once at the start of ``train_experiment()`` and again on each OOM
+    retry so that GPU-resident tensors from the failed attempt are never
+    referenced on the retry.
 
-    When *base_processor* and *base_model* are supplied (pre-loaded by the
-    caller), they are deep-copied from RAM instead of re-deserializing 800 MB
-    of safetensors from disk — reducing ~4–6 s of ``from_pretrained`` overhead
-    per experiment to a fast in-memory copy.
+    Returns ``(processor, model, train_dataset, val_dataset)``.
+    """
+    if base_processor is not None and base_model is not None:
+        _proc = copy.deepcopy(base_processor)
+        _mdl = copy.deepcopy(base_model)
+    else:
+        _proc = DonutProcessor.from_pretrained(config.base_model)
+        # Attempt Flash Attention 2 (requires flash-attn package; speeds up
+        # decoder attention and reduces VRAM, enabling larger batch sizes).
+        # Falls back silently to eager attention if unavailable or unsupported.
+        if FLASH_ATTN_AVAILABLE:
+            try:
+                _mdl = VisionEncoderDecoderModel.from_pretrained(
+                    config.base_model, attn_implementation="flash_attention_2"
+                )
+                logger.info("[Model] Flash Attention 2 enabled for decoder")
+            except Exception as _fa2_err:
+                logger.info(
+                    "[Model] Flash Attention 2 load failed (%s: %s), using default attention",
+                    type(_fa2_err).__name__,
+                    _fa2_err,
+                )
+                _mdl = VisionEncoderDecoderModel.from_pretrained(config.base_model)
+        else:
+            logger.info("[Model] flash-attn not installed — using default attention (run fine)")
+            _mdl = VisionEncoderDecoderModel.from_pretrained(config.base_model)
 
-    Returns the trainer log history (list of per-step dicts) for convergence
-    plot generation.
+    # v2: Synchronise processor and encoder image sizes when resolution fields
+    # are set (non-default values trigger the sync; default _FINETUNE_H/_FINETUNE_W
+    # values always apply the sync for correctness).
+    _apply_resolution_sync(
+        _proc,
+        _mdl,
+        height=config.finetune_height,
+        width=config.finetune_width,
+    )
+
+    # Add SROIE special tokens with diagnostic logging (Phase 0a)
+    logger.debug("[Pre-resize] Tokenizer vocab size: %d", len(_proc.tokenizer))
+    logger.debug(
+        "[Pre-resize] Decoder embed_tokens shape: %s",
+        _mdl.decoder.model.decoder.embed_tokens.weight.shape,
+    )
+
+    _proc.tokenizer.add_special_tokens({"additional_special_tokens": NEW_TOKENS})
+    _mdl.decoder.resize_token_embeddings(len(_proc.tokenizer))
+
+    logger.debug("[Post-resize] Tokenizer vocab size: %d", len(_proc.tokenizer))
+    logger.debug(
+        "[Post-resize] Decoder embed_tokens shape: %s",
+        _mdl.decoder.model.decoder.embed_tokens.weight.shape,
+    )
+    logger.debug("[Post-resize] Decoder lm_head shape: %s", _mdl.decoder.lm_head.weight.shape)
+
+    # Semantic initialisation: replace random embeddings for new SROIE tokens
+    # with vectors derived from semantically similar existing tokens.
+    # This dramatically reduces the optimizer steps required to learn the
+    # correct <s_company>VALUE</s_company> XML structure, which would
+    # otherwise need ~1500+ steps from a random start (vs. ~630 available
+    # in the baseline Exp 1 with 500 samples × 10 epochs × batch=8).
+    _initialize_new_token_embeddings(_mdl, _proc.tokenizer)
+
+    # Verify NEW_TOKENS were added to tokenizer (Phase 0a diagnostic)
+    for token in NEW_TOKENS:
+        token_ids = _proc.tokenizer.encode(token, add_special_tokens=False)
+        if not token_ids or len(token_ids) > 1:
+            logger.error(
+                "CRITICAL: Token %s not in vocab or tokenizes to multiple IDs: %s",
+                token,
+                token_ids,
+            )
+            raise RuntimeError(f"Token addition failed for {token}; vocab may be corrupted")
+    logger.debug("[Token-verify] All %d SROIE tokens successfully added to vocab", len(NEW_TOKENS))
+
+    # After resize, embed_tokens and lm_head are separate tensors with
+    # independent random init for the new tokens.  Set tie_word_embeddings=False
+    # so save_pretrained() saves BOTH weights independently.  Without this,
+    # the saved checkpoint omits lm_head (or tie_weights() overwrites the
+    # learned lm_head with embed_tokens), causing F1=0 on reload.
+    _ensure_dual_config(_mdl, "tie_word_embeddings", False)
+
+    _ensure_dual_config(_mdl, "pad_token_id", _proc.tokenizer.pad_token_id)
+    _sroie_start_id = _proc.tokenizer.convert_tokens_to_ids(["<s_sroie>"])[0]
+    _ensure_dual_config(_mdl, "decoder_start_token_id", _sroie_start_id)
+    # ── Guardrail: verify decoder_start_token_id decodes back to the task token ──
+    _decoded = _proc.tokenizer.decode([_mdl.config.decoder_start_token_id])
+    if _decoded != "<s_sroie>":
+        raise RuntimeError(
+            f"decoder_start_token_id={_mdl.config.decoder_start_token_id} decodes to "
+            f"'{_decoded}', not '<s_sroie>'. Token was not added to vocab before "
+            f"convert_tokens_to_ids was called, or the list-wrapping syntax is missing. "
+            f"Use: tokenizer.convert_tokens_to_ids(['<s_sroie>'])[0]"
+        )
+    # FIX: max_length must live on generation_config, NOT model.config.
+    # Newer transformers (>=4.37) raises ValueError at save_pretrained if
+    # generation parameters are found on model.config.
+    # FIX: Do NOT set both max_new_tokens and max_length — transformers 5.x
+    # raises ValueError("Both 'max_new_tokens' and 'max_length' have been set").
+    # max_new_tokens alone is sufficient and preferred.
+    if hasattr(_mdl, "generation_config"):
+        _mdl.generation_config.max_new_tokens = MAX_LENGTH
+        # Explicitly unset max_length to avoid the transformers 5.x conflict.
+        # GenerationConfig stores max_length=20 by default; clear it.
+        if hasattr(_mdl.generation_config, "max_length"):
+            _mdl.generation_config.max_length = None
+        # Set decoder_start_token_id on generation_config (not just model.config)
+        # so generate() uses the correct start token without needing a prompt.
+        _mdl.generation_config.decoder_start_token_id = _sroie_start_id
+
+    # Only enable gradient checkpointing when VRAM is constrained (< 24 GB).
+    # 24 GB covers RTX 3090/4090 (24 GB) and below, where activation memory
+    # during DONUT's backward pass (~3.5 GB at batch_size=8) is a real constraint.
+    # On high-VRAM cards (RTX PRO 6000 = 95.6 GB, A100 = 80 GB, RTX 4090 = 24 GB
+    # boundary) gradient checkpointing adds ~30-40% backward-pass overhead for
+    # zero memory benefit — so disable it there.
+    _GRAD_CKPT_VRAM_THRESHOLD_GB = 24.0
+    _enable_grad_ckpt = True  # default: enable for safety on unknown hardware
+    if torch.cuda.is_available():
+        try:
+            _vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+            if _vram_gb > _GRAD_CKPT_VRAM_THRESHOLD_GB:
+                _enable_grad_ckpt = False
+                logger.info(
+                    "[GradCkpt] Disabled — VRAM=%.1f GB > %.0f GB threshold "
+                    "(saves ~35%% backward time at no memory cost)",
+                    _vram_gb,
+                    _GRAD_CKPT_VRAM_THRESHOLD_GB,
+                )
+            else:
+                logger.info(
+                    "[GradCkpt] Enabled — VRAM=%.1f GB <= %.0f GB threshold",
+                    _vram_gb,
+                    _GRAD_CKPT_VRAM_THRESHOLD_GB,
+                )
+        except Exception as exc:
+            logger.warning("[GradCkpt] VRAM detection failed (%s) — defaulting to enabled", exc)
+
+    if _enable_grad_ckpt:
+        _mdl.config.use_cache = False  # Required with gradient_checkpointing
+        _mdl.decoder.config.use_cache = False
+        _mdl.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+    else:
+        # use_cache=True is the default and correct when not using grad checkpointing
+        _mdl.config.use_cache = True
+        _mdl.decoder.config.use_cache = True
+
+    # v2: freeze only Swin stage-0 (v1 froze stages 0+1).
+    # Freezing fewer encoder layers lets the model adapt more freely to
+    # SROIE's Southeast Asian receipt layouts while still preserving the
+    # low-level patch embeddings from pre-training.
+    frozen_count = 0
+    for name, param in _mdl.encoder.named_parameters():
+        if "layers.0" in name:
+            param.requires_grad = False
+            frozen_count += 1
+    if frozen_count:
+        logger.info("[FreezeEncoder] Frozen Swin stage-0 only (%d parameters)", frozen_count)
+
+    # Move model to the training device (GPU when available).
+    # Without this explicit call the model stays on CPU even when CUDA is
+    # present, causing GPU Load 0% and ~20× slower training.
+    _mdl = _mdl.to(DEVICE)
+    _actual_device = next(_mdl.parameters()).device.type
+    # Compare type-only strings (e.g. "cuda" == "cuda" when DEVICE="cuda",
+    # even if the physical device is "cuda:0").
+    if _actual_device != str(DEVICE).split(":")[0]:
+        raise RuntimeError(
+            f"Model.to({DEVICE!r}) failed — parameters still on {_actual_device!r}. "
+            f"Check CUDA installation and torch device availability."
+        )
+    logger.info("[Device] Model moved to %s", DEVICE)
+
+    # Build PyTorch datasets
+    _aux_w = getattr(config, "aux_loss_weight", 1.0)
+    _train_ds = MultiDataset(
+        samples,
+        _proc,
+        max_length=config.max_length,
+        sample_sources=sample_sources,
+        aux_loss_weight=_aux_w,
+    )
+    _val_ds = (
+        MultiDataset(
+            val_samples,
+            _proc,
+            max_length=config.max_length,
+            precompute_tensors=False,  # val set never needs pixel tensor precompute
+        )
+        if val_samples
+        else None
+    )
+
+    return _proc, _mdl, _train_ds, _val_ds
+
+
+def _attempt_training_with_oom_recovery(
+    exp_id: int,
+    config: ExperimentConfig,
+    processor: Any,
+    model: Any,
+    train_ds: Any,
+    val_ds: Any,
+    *,
+    samples: list[tuple[Path, dict]],
+    val_samples: list[tuple[Path, dict]] | None,
+    base_processor: DonutProcessor | None,
+    base_model: VisionEncoderDecoderModel | None,
+    sample_sources: list[str] | None,
+) -> tuple[Any, ExperimentConfig, Any, Any, Any, Any]:
+    """Run the training loop with progressive OOM recovery.
+
+    On each CUDA OOM, halves ``batch_size`` (8→4→2→1), doubles
+    ``gradient_accumulation_steps`` to preserve the effective batch size,
+    then fully rebuilds the model and datasets from scratch so the retry
+    starts on a clean, defragmented GPU.
+
+    Returns ``(train_result, config, trainer, model, processor, train_ds,
+    val_ds)`` — the caller needs the objects for saving and cleanup.
     """
     from train import DonutTrainer
 
-    if config is None:
-        config = EXPERIMENTS[exp_id]
-
-    set_seed(config.seed)
-    logger.debug("[Exp %d] Training on %d samples -> %s", exp_id, len(samples), output_dir)
-    logger.debug(
-        "[Exp %d] Hyperparams: epochs=%s, lr=%s, batch_size=%s, warmup=%s, wd=%s",
-        exp_id,
-        config.epochs,
-        config.lr,
-        config.batch_size,
-        config.warmup_steps,
-        config.weight_decay,
-    )
-    if val_samples:
-        logger.debug("[Exp %d] Validation set: %d samples", exp_id, len(val_samples))
-
-    # ---------------------------------------------------------------------------
-    # Inner helper: build a fresh model, processor, and datasets.
-    # Called once initially and again on each OOM retry so that GPU-resident
-    # tensors from the failed attempt are never referenced on the retry.
-    # ---------------------------------------------------------------------------
-    def _build_model_and_datasets() -> tuple[Any, Any, Any, Any]:
-        if base_processor is not None and base_model is not None:
-            _proc = copy.deepcopy(base_processor)
-            _mdl = copy.deepcopy(base_model)
-        else:
-            _proc = DonutProcessor.from_pretrained(config.base_model)
-            # Attempt Flash Attention 2 (requires flash-attn package; speeds up
-            # decoder attention and reduces VRAM, enabling larger batch sizes).
-            # Falls back silently to eager attention if unavailable or unsupported.
-            if FLASH_ATTN_AVAILABLE:
-                try:
-                    _mdl = VisionEncoderDecoderModel.from_pretrained(
-                        config.base_model, attn_implementation="flash_attention_2"
-                    )
-                    logger.info("[Model] Flash Attention 2 enabled for decoder")
-                except Exception as _fa2_err:
-                    logger.info(
-                        "[Model] Flash Attention 2 load failed (%s: %s), using default attention",
-                        type(_fa2_err).__name__,
-                        _fa2_err,
-                    )
-                    _mdl = VisionEncoderDecoderModel.from_pretrained(config.base_model)
-            else:
-                logger.info("[Model] flash-attn not installed — using default attention (run fine)")
-                _mdl = VisionEncoderDecoderModel.from_pretrained(config.base_model)
-
-        # v2: Synchronise processor and encoder image sizes when resolution fields
-        # are set (non-default values trigger the sync; default _FINETUNE_H/_FINETUNE_W
-        # values always apply the sync for correctness).
-        _apply_resolution_sync(
-            _proc,
-            _mdl,
-            height=config.finetune_height,
-            width=config.finetune_width,
-        )
-
-        # Add SROIE special tokens with diagnostic logging (Phase 0a)
-        logger.debug("[Pre-resize] Tokenizer vocab size: %d", len(_proc.tokenizer))
-        logger.debug(
-            "[Pre-resize] Decoder embed_tokens shape: %s",
-            _mdl.decoder.model.decoder.embed_tokens.weight.shape,
-        )
-
-        _proc.tokenizer.add_special_tokens({"additional_special_tokens": NEW_TOKENS})
-        _mdl.decoder.resize_token_embeddings(len(_proc.tokenizer))
-
-        logger.debug("[Post-resize] Tokenizer vocab size: %d", len(_proc.tokenizer))
-        logger.debug(
-            "[Post-resize] Decoder embed_tokens shape: %s",
-            _mdl.decoder.model.decoder.embed_tokens.weight.shape,
-        )
-        logger.debug("[Post-resize] Decoder lm_head shape: %s", _mdl.decoder.lm_head.weight.shape)
-
-        # Semantic initialisation: replace random embeddings for new SROIE tokens
-        # with vectors derived from semantically similar existing tokens.
-        # This dramatically reduces the optimizer steps required to learn the
-        # correct <s_company>VALUE</s_company> XML structure, which would
-        # otherwise need ~1500+ steps from a random start (vs. ~630 available
-        # in the baseline Exp 1 with 500 samples × 10 epochs × batch=8).
-        _initialize_new_token_embeddings(_mdl, _proc.tokenizer)
-
-        # Verify NEW_TOKENS were added to tokenizer (Phase 0a diagnostic)
-        for token in NEW_TOKENS:
-            token_ids = _proc.tokenizer.encode(token, add_special_tokens=False)
-            if not token_ids or len(token_ids) > 1:
-                logger.error(
-                    "CRITICAL: Token %s not in vocab or tokenizes to multiple IDs: %s",
-                    token,
-                    token_ids,
-                )
-                raise RuntimeError(f"Token addition failed for {token}; vocab may be corrupted")
-        logger.debug(
-            "[Token-verify] All %d SROIE tokens successfully added to vocab", len(NEW_TOKENS)
-        )
-
-        # After resize, embed_tokens and lm_head are separate tensors with
-        # independent random init for the new tokens.  Set tie_word_embeddings=False
-        # so save_pretrained() saves BOTH weights independently.  Without this,
-        # the saved checkpoint omits lm_head (or tie_weights() overwrites the
-        # learned lm_head with embed_tokens), causing F1=0 on reload.
-        _ensure_dual_config(_mdl, "tie_word_embeddings", False)
-
-        _ensure_dual_config(_mdl, "pad_token_id", _proc.tokenizer.pad_token_id)
-        _sroie_start_id = _proc.tokenizer.convert_tokens_to_ids(["<s_sroie>"])[0]
-        _ensure_dual_config(_mdl, "decoder_start_token_id", _sroie_start_id)
-        # ── Guardrail: verify decoder_start_token_id decodes back to the task token ──
-        _decoded = _proc.tokenizer.decode([_mdl.config.decoder_start_token_id])
-        if _decoded != "<s_sroie>":
-            raise RuntimeError(
-                f"decoder_start_token_id={_mdl.config.decoder_start_token_id} decodes to "
-                f"'{_decoded}', not '<s_sroie>'. Token was not added to vocab before "
-                f"convert_tokens_to_ids was called, or the list-wrapping syntax is missing. "
-                f"Use: tokenizer.convert_tokens_to_ids(['<s_sroie>'])[0]"
-            )
-        # FIX: max_length must live on generation_config, NOT model.config.
-        # Newer transformers (>=4.37) raises ValueError at save_pretrained if
-        # generation parameters are found on model.config.
-        # FIX: Do NOT set both max_new_tokens and max_length — transformers 5.x
-        # raises ValueError("Both 'max_new_tokens' and 'max_length' have been set").
-        # max_new_tokens alone is sufficient and preferred.
-        if hasattr(_mdl, "generation_config"):
-            _mdl.generation_config.max_new_tokens = MAX_LENGTH
-            # Explicitly unset max_length to avoid the transformers 5.x conflict.
-            # GenerationConfig stores max_length=20 by default; clear it.
-            if hasattr(_mdl.generation_config, "max_length"):
-                _mdl.generation_config.max_length = None
-            # Set decoder_start_token_id on generation_config (not just model.config)
-            # so generate() uses the correct start token without needing a prompt.
-            _mdl.generation_config.decoder_start_token_id = _sroie_start_id
-
-        # Only enable gradient checkpointing when VRAM is constrained (< 24 GB).
-        # 24 GB covers RTX 3090/4090 (24 GB) and below, where activation memory
-        # during DONUT's backward pass (~3.5 GB at batch_size=8) is a real constraint.
-        # On high-VRAM cards (RTX PRO 6000 = 95.6 GB, A100 = 80 GB, RTX 4090 = 24 GB
-        # boundary) gradient checkpointing adds ~30-40% backward-pass overhead for
-        # zero memory benefit — so disable it there.
-        _GRAD_CKPT_VRAM_THRESHOLD_GB = 24.0
-        _enable_grad_ckpt = True  # default: enable for safety on unknown hardware
-        if torch.cuda.is_available():
-            try:
-                _vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-                if _vram_gb > _GRAD_CKPT_VRAM_THRESHOLD_GB:
-                    _enable_grad_ckpt = False
-                    logger.info(
-                        "[GradCkpt] Disabled — VRAM=%.1f GB > %.0f GB threshold "
-                        "(saves ~35%% backward time at no memory cost)",
-                        _vram_gb,
-                        _GRAD_CKPT_VRAM_THRESHOLD_GB,
-                    )
-                else:
-                    logger.info(
-                        "[GradCkpt] Enabled — VRAM=%.1f GB <= %.0f GB threshold",
-                        _vram_gb,
-                        _GRAD_CKPT_VRAM_THRESHOLD_GB,
-                    )
-            except Exception as exc:
-                logger.warning("[GradCkpt] VRAM detection failed (%s) — defaulting to enabled", exc)
-
-        if _enable_grad_ckpt:
-            _mdl.config.use_cache = False  # Required with gradient_checkpointing
-            _mdl.decoder.config.use_cache = False
-            _mdl.gradient_checkpointing_enable(
-                gradient_checkpointing_kwargs={"use_reentrant": False}
-            )
-        else:
-            # use_cache=True is the default and correct when not using grad checkpointing
-            _mdl.config.use_cache = True
-            _mdl.decoder.config.use_cache = True
-
-        # v2: freeze only Swin stage-0 (v1 froze stages 0+1).
-        # Freezing fewer encoder layers lets the model adapt more freely to
-        # SROIE's Southeast Asian receipt layouts while still preserving the
-        # low-level patch embeddings from pre-training.
-        frozen_count = 0
-        for name, param in _mdl.encoder.named_parameters():
-            if "layers.0" in name:
-                param.requires_grad = False
-                frozen_count += 1
-        if frozen_count:
-            logger.info("[FreezeEncoder] Frozen Swin stage-0 only (%d parameters)", frozen_count)
-
-        # Move model to the training device (GPU when available).
-        # Without this explicit call the model stays on CPU even when CUDA is
-        # present, causing GPU Load 0% and ~20× slower training.
-        _mdl = _mdl.to(DEVICE)
-        _actual_device = next(_mdl.parameters()).device.type
-        # Compare type-only strings (e.g. "cuda" == "cuda" when DEVICE="cuda",
-        # even if the physical device is "cuda:0").
-        if _actual_device != str(DEVICE).split(":")[0]:
-            raise RuntimeError(
-                f"Model.to({DEVICE!r}) failed — parameters still on {_actual_device!r}. "
-                f"Check CUDA installation and torch device availability."
-            )
-        logger.info("[Device] Model moved to %s", DEVICE)
-
-        # Build PyTorch datasets
-        _aux_w = getattr(config, "aux_loss_weight", 1.0)
-        _train_ds = MultiDataset(
-            samples,
-            _proc,
-            max_length=config.max_length,
-            sample_sources=sample_sources,
-            aux_loss_weight=_aux_w,
-        )
-        _val_ds = (
-            MultiDataset(
-                val_samples,
-                _proc,
-                max_length=config.max_length,
-                precompute_tensors=False,  # val set never needs pixel tensor precompute
-            )
-            if val_samples
-            else None
-        )
-
-        return _proc, _mdl, _train_ds, _val_ds
-
-    processor, model, train_ds, val_ds = _build_model_and_datasets()
-
-    # Verify single source of truth: ExperimentConfig properties map correctly
-    assert config.epochs == config.max_epochs, (
-        f"Single source of truth violation: epochs={config.epochs} "
-        f"!= max_epochs={config.max_epochs}"
-    )
-    assert config.lr == config.learning_rate, (
-        f"Single source of truth violation: lr={config.lr} != learning_rate={config.learning_rate}"
-    )
-    assert config.batch_size == config.per_device_train_batch_size, (
-        f"Single source of truth violation: batch_size={config.batch_size} "
-        f"!= per_device_train_batch_size={config.per_device_train_batch_size}"
-    )
-
-    # Create DonutTrainer — it reads all hyperparams from config
     trainer = DonutTrainer(
         config=config,
         processor=processor,
@@ -4111,7 +4140,9 @@ def train_experiment(
                 torch.cuda.empty_cache()
                 # Re-create everything from the base model to avoid inheriting
                 # any gradient state from the failed attempt.
-                processor, model, train_ds, val_ds = _build_model_and_datasets()
+                processor, model, train_ds, val_ds = _build_model_and_datasets(
+                    config, samples, val_samples, base_processor, base_model, sample_sources
+                )
                 trainer = DonutTrainer(
                     config=config,
                     processor=processor,
@@ -4125,6 +4156,22 @@ def train_experiment(
                     "cannot recover without further hardware constraints"
                 ) from e
 
+    return result, config, trainer, model, processor, train_ds, val_ds
+
+
+def _save_trained_model(
+    exp_id: int,
+    trainer: Any,
+    output_dir: Path,
+    result: Any,
+    train_ds: Any,
+    val_ds: Any,
+) -> list[dict[str, Any]]:
+    """Save the trained model, verify processor serialisation, and release GPU memory.
+
+    Returns the trainer log history (list of per-step dicts) for convergence
+    plot generation.
+    """
     # Save model with tied weights
     trainer.save(output_dir)
 
@@ -4172,9 +4219,7 @@ def train_experiment(
         train_ds.clear_caches()
     if val_ds is not None and hasattr(val_ds, "clear_caches"):
         val_ds.clear_caches()
-    del trainer, model, processor, train_ds
-    if val_ds is not None:
-        del val_ds
+    del trainer
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.synchronize()  # Ensure all CUDA ops complete before freeing
@@ -4182,6 +4227,87 @@ def train_experiment(
     logger.debug("[Exp %d] GPU memory released", exp_id)
 
     return log_history
+
+
+def train_experiment(
+    exp_id: int,
+    samples: list[tuple[Path, dict]],
+    output_dir: Path,
+    val_samples: list[tuple[Path, dict]] | None = None,
+    base_processor: DonutProcessor | None = None,
+    base_model: VisionEncoderDecoderModel | None = None,
+    config: ExperimentConfig | None = None,
+    sample_sources: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Fine-tune DONUT on *samples* and save the model to *output_dir*.
+
+    All hyperparameters come from *config* if supplied, otherwise from
+    ``EXPERIMENTS[exp_id]``.  Pass a custom ExperimentConfig for sweeps.
+    Training is delegated to ``DonutTrainer`` from ``train.py``, which reads
+    hyperparameters from the config via duck-typed attributes.
+
+    When *base_processor* and *base_model* are supplied (pre-loaded by the
+    caller), they are deep-copied from RAM instead of re-deserializing 800 MB
+    of safetensors from disk — reducing ~4–6 s of ``from_pretrained`` overhead
+    per experiment to a fast in-memory copy.
+
+    Returns the trainer log history (list of per-step dicts) for convergence
+    plot generation.
+    """
+    if config is None:
+        config = EXPERIMENTS[exp_id]
+
+    set_seed(config.seed)
+    logger.debug("[Exp %d] Training on %d samples -> %s", exp_id, len(samples), output_dir)
+    logger.debug(
+        "[Exp %d] Hyperparams: epochs=%s, lr=%s, batch_size=%s, warmup=%s, wd=%s",
+        exp_id,
+        config.epochs,
+        config.lr,
+        config.batch_size,
+        config.warmup_steps,
+        config.weight_decay,
+    )
+    if val_samples:
+        logger.debug("[Exp %d] Validation set: %d samples", exp_id, len(val_samples))
+
+    # Build model, processor, and datasets from scratch
+    processor, model, train_ds, val_ds = _build_model_and_datasets(
+        config, samples, val_samples, base_processor, base_model, sample_sources
+    )
+
+    # Verify single source of truth: ExperimentConfig properties map correctly
+    assert config.epochs == config.max_epochs, (
+        f"Single source of truth violation: epochs={config.epochs} "
+        f"!= max_epochs={config.max_epochs}"
+    )
+    assert config.lr == config.learning_rate, (
+        f"Single source of truth violation: lr={config.lr} != learning_rate={config.learning_rate}"
+    )
+    assert config.batch_size == config.per_device_train_batch_size, (
+        f"Single source of truth violation: batch_size={config.batch_size} "
+        f"!= per_device_train_batch_size={config.per_device_train_batch_size}"
+    )
+
+    # Run training with OOM recovery
+    result, config, trainer, model, processor, train_ds, val_ds = (
+        _attempt_training_with_oom_recovery(
+            exp_id,
+            config,
+            processor,
+            model,
+            train_ds,
+            val_ds,
+            samples=samples,
+            val_samples=val_samples,
+            base_processor=base_processor,
+            base_model=base_model,
+            sample_sources=sample_sources,
+        )
+    )
+
+    # Save model and release GPU resources
+    return _save_trained_model(exp_id, trainer, output_dir, result, train_ds, val_ds)
 
 
 # ---------------------------------------------------------------------------
@@ -4356,6 +4482,335 @@ def _check_disk_space_before_experiment(exp_id: int) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def _validate_experiment_prerequisites(
+    exp_id: int,
+    config: ExperimentConfig,
+) -> dict[str, Any] | None:
+    """Validate config, disk space, and oversample guard before an experiment.
+
+    Returns an error-result dict if the experiment should be skipped, or
+    ``None`` if all prerequisites pass.
+    """
+    # Disk space pre-flight check — skip experiment if < 1 GB free to avoid OS error 28
+    if not _check_disk_space_before_experiment(exp_id):
+        result = {
+            "experiment_id": exp_id,
+            "name": config.name,
+            "datasets": config.datasets,
+            "config": _config_to_dict(EXPERIMENTS[exp_id]),
+            "num_train_samples": 0,
+            "metrics": {},
+            "error": "Skipped: insufficient disk space (< 1 GB free)",
+        }
+        result_file = RESULTS_DIR / f"experiment_{exp_id}.json"
+        result_file.write_text(json.dumps(result, indent=2))
+        return result
+
+    # Validate that multi-dataset runs use sroie_oversample >= 2.
+    # Without 2× oversampling, auxiliary data dilutes the SROIE training signal
+    # and causes F1 to fall at or below the single-dataset baseline (CLAUDE.md §8).
+    # skip_oversample_guard=True is set only for intentional naïve control experiments
+    # (Exps 2–4) that deliberately use sroie_oversample=1 to prove dilution.
+    validate_sroie_oversample(
+        config.datasets,
+        config.sroie_oversample,
+        skip_guard=getattr(config, "skip_oversample_guard", False),
+    )
+    return None
+
+
+def _check_cache_validity(
+    exp_id: int,
+    config: ExperimentConfig,
+    result_file: Path,
+    original_config_dict: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Check if a cached result exists and is still valid.
+
+    Returns the cached result dict if valid, or ``None`` if a re-run is needed.
+    Deletes stale result files as a side-effect.
+    """
+    if result_file.exists():
+        with open(result_file) as fh:
+            cached = json.load(fh)
+        if (
+            cached.get("datasets") != config.datasets
+            or cached.get("config") != original_config_dict
+        ):
+            # NOTE: JSON round-trip preserves numeric equality for floats like 5e-5,
+            # so this comparison is safe (5e-5 == 5e-05 after json.load).
+            print(
+                f"[Exp {exp_id}] STALE result detected (datasets or config mismatch). "
+                "Deleting and re-running."
+            )
+            result_file.unlink()
+        else:
+            print(f"[Exp {exp_id}] Valid cached result found - skipping.")
+            return cached
+    return None
+
+
+def _load_experiment_data(
+    exp_id: int,
+    config: ExperimentConfig,
+    result_file: Path,
+) -> (
+    tuple[list[tuple[Path, dict]], list[tuple[Path, dict]] | None, list[str] | None]
+    | dict[str, Any]
+):
+    """Load training/validation data and apply optional subsampling.
+
+    Returns ``(train_samples, val_samples, train_sources)`` on success, or an
+    error-result dict if no samples could be loaded.
+    """
+    # Load data — request source labels when aux_loss_weight is active
+    _aux_w = getattr(config, "aux_loss_weight", 1.0)
+    _need_sources = _aux_w < 1.0
+    if _need_sources:
+        train_samples, val_samples, train_sources = dataset_loaders.get_combined_dataset(
+            config.datasets, sroie_oversample=config.sroie_oversample, return_sources=True
+        )
+    else:
+        train_samples, val_samples = dataset_loaders.get_combined_dataset(
+            config.datasets, sroie_oversample=config.sroie_oversample
+        )
+        train_sources = None
+
+    # Micro/mini subsample — deterministic RNG so repeated runs give the same split
+    if getattr(config, "subsample_train", 0) > 0 and len(train_samples) > config.subsample_train:
+        import random as _rnd
+
+        _rng = _rnd.Random(config.seed)
+        _indices = _rng.sample(range(len(train_samples)), config.subsample_train)
+        train_samples = [train_samples[i] for i in _indices]
+        if train_sources is not None:
+            train_sources = [train_sources[i] for i in _indices]
+        print(f"[Exp {exp_id}] subsample_train: using {len(train_samples)} samples")
+
+    if len(train_samples) == 0:
+        print(f"[Exp {exp_id}] WARNING: No samples loaded.")
+        result = {
+            "experiment_id": exp_id,
+            "name": config.name,
+            "datasets": config.datasets,
+            "config": _config_to_dict(config),
+            "num_train_samples": 0,
+            "metrics": {},
+            "error": "No training samples available",
+        }
+        result_file.write_text(json.dumps(result, indent=2))
+        return result
+
+    return train_samples, val_samples, train_sources
+
+
+def _run_training_phase(
+    exp_id: int,
+    config: ExperimentConfig,
+    train_samples: list[tuple[Path, dict]],
+    val_samples: list[tuple[Path, dict]] | None,
+    train_sources: list[str] | None,
+    base_processor: DonutProcessor | None,
+    base_model: VisionEncoderDecoderModel | None,
+) -> tuple[list[dict[str, Any]], float]:
+    """Invoke training and return ``(log_history, train_duration_sec)``."""
+    model_dir = WORKSPACE / "models" / f"experiment_{exp_id}"
+    model_dir.mkdir(parents=True, exist_ok=True)
+    _t_train_start = time.monotonic()
+    log_history = train_experiment(
+        exp_id,
+        train_samples,
+        model_dir,
+        val_samples=val_samples,
+        base_processor=base_processor,
+        base_model=base_model,
+        config=config,
+        sample_sources=train_sources,
+    )
+    _train_duration_sec = time.monotonic() - _t_train_start
+    return log_history, _train_duration_sec
+
+
+def _run_evaluation_phase(
+    exp_id: int,
+    model_dir: Path,
+    _train_duration_sec: float,
+) -> dict[str, Any]:
+    """Run evaluation and return metrics, handling undertrained-model errors.
+
+    On evaluation failure (undertrained model, self-test failure, parse-failure
+    threshold), returns zero-metric results instead of propagating.
+    """
+    try:
+        metrics = evaluate_experiment(exp_id, model_dir)
+        metrics["training_time_sec"] = _train_duration_sec
+    except EvaluationUndertrainedError as exc:
+        # Catch self-test failures and parse-failure-threshold errors for any
+        # run type (not just micro/mini).  An undertrained full-run model that
+        # hasn't converged to the SROIE tag format should record F1=0.0 and
+        # let the remaining experiments continue, not crash the pipeline.
+        # ROBUSTNESS: using EvaluationUndertrainedError (not bare RuntimeError +
+        # string matching) ensures only genuine undertrained-model errors are
+        # caught here.  Real RuntimeErrors (CUDA error, shape mismatch, etc.)
+        # propagate to the caller as intended.
+        print(
+            f"[Exp {exp_id}] WARNING: evaluation failed (undertrained model) — "
+            f"saving zero-metric result. Error: {exc}"
+        )
+        metrics = _zero_metrics(str(exc), _train_duration_sec)
+    except (SelfTestFailedError, RuntimeError) as exc:
+        # Fix: issue_report_summary high #7 — catch SelfTestFailedError explicitly.
+        # The old string-match "Self-test FAILED" in str(exc) was brittle; any
+        # capitalisation change or unrelated RuntimeError would silently become F1=0.0.
+        # SelfTestFailedError is caught unconditionally; other RuntimeErrors are only
+        # caught when they match the parse-failure-threshold message.
+        _is_self_test_failure = isinstance(exc, SelfTestFailedError)
+        _is_parse_failure = not _is_self_test_failure and "Parse failure threshold exceeded" in str(
+            exc
+        )
+        if _is_self_test_failure or _is_parse_failure:
+            print(
+                f"[Exp {exp_id}] WARNING: evaluation failed (undertrained model) — "
+                f"saving zero-metric result. Error: {exc}"
+            )
+            metrics = _zero_metrics(str(exc), _train_duration_sec)
+        else:
+            raise
+
+    # Runtime diagnostic check — detect known F1 anomalies post-evaluation
+    global_f1 = metrics.get("global_f1", 0.0)
+    try:
+        from diagnostics import RuntimeCheckpoint, ai_diagnose
+
+        _diag_cp = RuntimeCheckpoint(  # noqa: F841 — checkpoint for diagnostics context
+            timestamp=time.time(),
+            stage="post_evaluation",
+            experiment_id=exp_id,
+            eval_f1=global_f1,
+            metrics=metrics,
+        )
+        # Check for known F1 collapse patterns
+        _diag_issues: list[dict[str, str]] = []
+        if 0.40 < global_f1 < 0.44:
+            _diag_issues.append(
+                {
+                    "pattern": "lm_head_dedup",
+                    "severity": "critical",
+                    "evidence": f"F1={global_f1:.4f} in safetensors danger zone (0.40-0.44)",
+                }
+            )
+        elif 0 < global_f1 < 0.02:
+            _diag_issues.append(
+                {
+                    "pattern": "token2json_list",
+                    "severity": "critical",
+                    "evidence": f"F1={global_f1:.4f} — likely token2json returning list",
+                }
+            )
+        elif global_f1 == 0.0 and not metrics.get("self_test_failed"):
+            _diag_issues.append(
+                {
+                    "pattern": "total_f1_collapse",
+                    "severity": "critical",
+                    "evidence": "F1=0.0000 — complete prediction failure",
+                }
+            )
+        if _diag_issues:
+            for _issue in _diag_issues:
+                logger.warning(
+                    "[Diagnostics] Exp %d | PATTERN: %s (%s)  %s",
+                    exp_id,
+                    _issue["pattern"],
+                    _issue["severity"],
+                    _issue["evidence"],
+                )
+            # AI diagnosis if enabled
+            if os.environ.get("AI_DIAGNOSE", "0") == "1":
+                _dx = ai_diagnose(
+                    {"experiment_id": exp_id, "metrics": metrics, "issues": _diag_issues},
+                    provider=os.environ.get("AI_DIAGNOSE_PROVIDER", "auto"),
+                )
+                if _dx:
+                    logger.info("[AI Diagnosis] Exp %d:\n%s", exp_id, _dx)
+    except ImportError:
+        pass  # diagnostics.py not present
+
+    return metrics
+
+
+def _zero_metrics(error_msg: str, training_time_sec: float) -> dict[str, Any]:
+    """Build a zero-valued metrics dict for failed evaluations."""
+    metrics: dict[str, Any] = {f: 0.0 for f in ["global_f1", "global_precision", "global_recall"]}
+    # Include per-field zeros so downstream paper-generation code doesn't KeyError
+    for _field in FIELDS:
+        metrics[f"{_field}_f1"] = 0.0
+        metrics[f"{_field}_ned"] = 1.0  # NED=1.0 means maximum edit distance
+    metrics["error"] = error_msg
+    metrics["self_test_failed"] = True
+    metrics["training_time_sec"] = training_time_sec
+    return metrics
+
+
+def _save_experiment_results(
+    exp_id: int,
+    config: ExperimentConfig,
+    metrics: dict[str, Any],
+    log_history: list[dict[str, Any]],
+    original_config_dict: dict[str, Any],
+    num_train_samples: int,
+    result_file: Path,
+    model_dir: Path,
+    *,
+    keep_model: bool,
+    no_disk_cleanup: bool,
+    audit_logger: TrainingAuditLogger,
+) -> dict[str, Any]:
+    """Serialise experiment results to JSON, print summary, and clean up checkpoints.
+
+    Returns the result dict.
+    """
+    global_f1 = metrics.get("global_f1", 0.0)
+
+    # Phase 5: Log training result to audit trail
+    audit_logger.log_training_result(
+        experiment_id=exp_id,
+        global_f1=global_f1,
+        training_time_sec=metrics.get("training_time_sec", 0.0),
+        tokens_per_second=metrics.get("tokens_per_second"),
+        early_stopping_epoch=metrics.get("early_stopping_epoch"),
+        baseline_f1=None,  # Could set to pretrained F1 for comparison
+    )
+
+    # Save result — use the *original* (unoptimized) experiment config dict for cache
+    # staleness comparison so future runs can correctly detect stale results.
+    # The resource-optimized values (batch_size, encoder_lr, etc.) are hardware-dependent
+    # and would cause spurious cache misses on different hardware.
+    result = {
+        "experiment_id": exp_id,
+        "name": config.name,
+        "datasets": config.datasets,
+        "config": original_config_dict,
+        "num_train_samples": num_train_samples,
+        "metrics": _sanitize_metrics(metrics),
+        "training_log": log_history,
+    }
+    result_file.write_text(json.dumps(result, indent=2))
+    logger.debug("[Exp %d] Results saved -> %s", exp_id, result_file)
+    print(f"[Exp {exp_id}] Global F1 = {metrics.get('global_f1', 'N/A')}")
+    _print_experiment_summary(
+        exp_id, config, metrics, elapsed_sec=metrics.get("training_time_sec", 0.0)
+    )
+
+    # Disk cleanup — remove model checkpoints after evaluation to free space.
+    # Default: remove entire model directory (only the result JSON is needed).
+    # Disabled by no_disk_cleanup=True (--no-disk-cleanup flag) or
+    # preserved to keep_model=True (--keep-models flag).
+    if not no_disk_cleanup:
+        cleanup_checkpoints_after_eval(model_dir, keep_model=keep_model)
+
+    return result
+
+
 def run_experiment(
     exp_id: int,
     base_processor: DonutProcessor | None = None,
@@ -4398,96 +4853,24 @@ def run_experiment(
         logger.debug("[Exp %d] --param overrides applied: %s", exp_id, overrides)
     logger.debug("[Exp %d] %s | datasets=%s", exp_id, config.name, config.datasets)
 
-    # Disk space pre-flight check — skip experiment if < 1 GB free to avoid OS error 28
-    if not _check_disk_space_before_experiment(exp_id):
-        result = {
-            "experiment_id": exp_id,
-            "name": config.name,
-            "datasets": config.datasets,
-            "config": _config_to_dict(EXPERIMENTS[exp_id]),
-            "num_train_samples": 0,
-            "metrics": {},
-            "error": "Skipped: insufficient disk space (< 1 GB free)",
-        }
-        result_file = RESULTS_DIR / f"experiment_{exp_id}.json"
-        result_file.write_text(json.dumps(result, indent=2))
-        return result
-
-    # Validate that multi-dataset runs use sroie_oversample >= 2.
-    # Without 2× oversampling, auxiliary data dilutes the SROIE training signal
-    # and causes F1 to fall at or below the single-dataset baseline (CLAUDE.md §8).
-    # skip_oversample_guard=True is set only for intentional naïve control experiments
-    # (Exps 2–4) that deliberately use sroie_oversample=1 to prove dilution.
-    validate_sroie_oversample(
-        config.datasets,
-        config.sroie_oversample,
-        skip_guard=getattr(config, "skip_oversample_guard", False),
-    )
+    # --- Pre-flight checks: disk space & oversample guard ---
+    skip_result = _validate_experiment_prerequisites(exp_id, config)
+    if skip_result is not None:
+        return skip_result
 
     result_file = RESULTS_DIR / f"experiment_{exp_id}.json"
 
-    # Check if already done — validate cached result matches current experiment
-    # definition (datasets AND hyperparameters) before reusing.
-    # Compare against the original (unoptimized) experiment config so that
-    # cache hits are hardware-independent: resource optimization is deterministic
-    # for the same hardware, so if the experiment definition hasn't changed the
-    # cached result is still valid.
+    # --- Cache validity check ---
     original_config_dict = _config_to_dict(EXPERIMENTS[exp_id])
-    if result_file.exists():
-        with open(result_file) as fh:
-            cached = json.load(fh)
-        if (
-            cached.get("datasets") != config.datasets
-            or cached.get("config") != original_config_dict
-        ):
-            # NOTE: JSON round-trip preserves numeric equality for floats like 5e-5,
-            # so this comparison is safe (5e-5 == 5e-05 after json.load).
-            print(
-                f"[Exp {exp_id}] STALE result detected (datasets or config mismatch). "
-                "Deleting and re-running."
-            )
-            result_file.unlink()
-        else:
-            print(f"[Exp {exp_id}] Valid cached result found - skipping.")
-            return cached
+    cached = _check_cache_validity(exp_id, config, result_file, original_config_dict)
+    if cached is not None:
+        return cached
 
-    # Load data — request source labels when aux_loss_weight is active
-    _aux_w = getattr(config, "aux_loss_weight", 1.0)
-    _need_sources = _aux_w < 1.0
-    if _need_sources:
-        train_samples, val_samples, train_sources = dataset_loaders.get_combined_dataset(
-            config.datasets, sroie_oversample=config.sroie_oversample, return_sources=True
-        )
-    else:
-        train_samples, val_samples = dataset_loaders.get_combined_dataset(
-            config.datasets, sroie_oversample=config.sroie_oversample
-        )
-        train_sources = None
-
-    # Micro/mini subsample — deterministic RNG so repeated runs give the same split
-    if getattr(config, "subsample_train", 0) > 0 and len(train_samples) > config.subsample_train:
-        import random as _rnd
-
-        _rng = _rnd.Random(config.seed)
-        _indices = _rng.sample(range(len(train_samples)), config.subsample_train)
-        train_samples = [train_samples[i] for i in _indices]
-        if train_sources is not None:
-            train_sources = [train_sources[i] for i in _indices]
-        print(f"[Exp {exp_id}] subsample_train: using {len(train_samples)} samples")
-
-    if len(train_samples) == 0:
-        print(f"[Exp {exp_id}] WARNING: No samples loaded.")
-        result = {
-            "experiment_id": exp_id,
-            "name": config.name,
-            "datasets": config.datasets,
-            "config": _config_to_dict(config),
-            "num_train_samples": 0,
-            "metrics": {},
-            "error": "No training samples available",
-        }
-        result_file.write_text(json.dumps(result, indent=2))
-        return result
+    # --- Load data ---
+    data_result = _load_experiment_data(exp_id, config, result_file)
+    if isinstance(data_result, dict):
+        return data_result  # error result (no samples)
+    train_samples, val_samples, train_sources = data_result
 
     # Phase 5: Dynamic resource optimization (Phase 3-5)
     # Detect available hardware and optimize hyperparameters accordingly
@@ -4565,173 +4948,35 @@ def run_experiment(
     else:
         logger.debug("[Exp %d] step-count validation skipped (micro/mini mode)", exp_id)
 
-    # Train — pass config explicitly so train_experiment uses the optimized values
+    # --- Train ---
     model_dir = WORKSPACE / "models" / f"experiment_{exp_id}"
-    model_dir.mkdir(parents=True, exist_ok=True)
-    _t_train_start = time.monotonic()
-    log_history = train_experiment(
+    log_history, _train_duration_sec = _run_training_phase(
         exp_id,
+        config,
         train_samples,
-        model_dir,
-        val_samples=val_samples,
-        base_processor=base_processor,
-        base_model=base_model,
-        config=config,
-        sample_sources=train_sources,
-    )
-    _train_duration_sec = time.monotonic() - _t_train_start
-
-    # Evaluate
-    try:
-        metrics = evaluate_experiment(exp_id, model_dir)
-        metrics["training_time_sec"] = _train_duration_sec
-    except EvaluationUndertrainedError as exc:
-        # Catch self-test failures and parse-failure-threshold errors for any
-        # run type (not just micro/mini).  An undertrained full-run model that
-        # hasn't converged to the SROIE tag format should record F1=0.0 and
-        # let the remaining experiments continue, not crash the pipeline.
-        # ROBUSTNESS: using EvaluationUndertrainedError (not bare RuntimeError +
-        # string matching) ensures only genuine undertrained-model errors are
-        # caught here.  Real RuntimeErrors (CUDA error, shape mismatch, etc.)
-        # propagate to the caller as intended.
-        print(
-            f"[Exp {exp_id}] WARNING: evaluation failed (undertrained model) — "
-            f"saving zero-metric result. Error: {exc}"
-        )
-        metrics = {f: 0.0 for f in ["global_f1", "global_precision", "global_recall"]}
-        # Include per-field zeros so downstream paper-generation code doesn't KeyError
-        from constants import FIELDS as _FIELDS
-
-        for _field in _FIELDS:
-            metrics[f"{_field}_f1"] = 0.0
-            metrics[f"{_field}_ned"] = 1.0  # NED=1.0 means maximum edit distance
-        metrics["error"] = str(exc)
-        metrics["self_test_failed"] = True
-        metrics["training_time_sec"] = _train_duration_sec
-    except (SelfTestFailedError, RuntimeError) as exc:
-        # Fix: issue_report_summary high #7 — catch SelfTestFailedError explicitly.
-        # The old string-match "Self-test FAILED" in str(exc) was brittle; any
-        # capitalisation change or unrelated RuntimeError would silently become F1=0.0.
-        # SelfTestFailedError is caught unconditionally; other RuntimeErrors are only
-        # caught when they match the parse-failure-threshold message.
-        _is_self_test_failure = isinstance(exc, SelfTestFailedError)
-        _is_parse_failure = not _is_self_test_failure and "Parse failure threshold exceeded" in str(
-            exc
-        )
-        if _is_self_test_failure or _is_parse_failure:
-            print(
-                f"[Exp {exp_id}] WARNING: evaluation failed (undertrained model) — "
-                f"saving zero-metric result. Error: {exc}"
-            )
-            metrics = {f: 0.0 for f in ["global_f1", "global_precision", "global_recall"]}
-            # Include per-field zeros so downstream paper-generation code doesn't KeyError
-            from constants import FIELDS as _FIELDS
-
-            for _field in _FIELDS:
-                metrics[f"{_field}_f1"] = 0.0
-                metrics[f"{_field}_ned"] = 1.0  # NED=1.0 means maximum edit distance
-            metrics["error"] = str(exc)
-            metrics["self_test_failed"] = True
-            metrics["training_time_sec"] = _train_duration_sec
-        else:
-            raise
-
-    # Phase 5: Log training result to audit trail
-    global_f1 = metrics.get("global_f1", 0.0)
-    audit_logger.log_training_result(
-        experiment_id=exp_id,
-        global_f1=global_f1,
-        training_time_sec=metrics.get("training_time_sec", 0.0),
-        tokens_per_second=metrics.get("tokens_per_second"),
-        early_stopping_epoch=metrics.get("early_stopping_epoch"),
-        baseline_f1=None,  # Could set to pretrained F1 for comparison
+        val_samples,
+        train_sources,
+        base_processor,
+        base_model,
     )
 
-    # Runtime diagnostic check — detect known F1 anomalies post-evaluation
-    try:
-        from diagnostics import RuntimeCheckpoint, ai_diagnose
+    # --- Evaluate ---
+    metrics = _run_evaluation_phase(exp_id, model_dir, _train_duration_sec)
 
-        _diag_cp = RuntimeCheckpoint(
-            timestamp=time.time(),
-            stage="post_evaluation",
-            experiment_id=exp_id,
-            eval_f1=global_f1,
-            metrics=metrics,
-        )
-        # Check for known F1 collapse patterns
-        _diag_issues = []
-        if 0.40 < global_f1 < 0.44:
-            _diag_issues.append(
-                {
-                    "pattern": "lm_head_dedup",
-                    "severity": "critical",
-                    "evidence": f"F1={global_f1:.4f} in safetensors danger zone (0.40-0.44)",
-                }
-            )
-        elif 0 < global_f1 < 0.02:
-            _diag_issues.append(
-                {
-                    "pattern": "token2json_list",
-                    "severity": "critical",
-                    "evidence": f"F1={global_f1:.4f} — likely token2json returning list",
-                }
-            )
-        elif global_f1 == 0.0 and not metrics.get("self_test_failed"):
-            _diag_issues.append(
-                {
-                    "pattern": "total_f1_collapse",
-                    "severity": "critical",
-                    "evidence": "F1=0.0000 — complete prediction failure",
-                }
-            )
-        if _diag_issues:
-            for _issue in _diag_issues:
-                logger.warning(
-                    "[Diagnostics] Exp %d | PATTERN: %s (%s)  %s",
-                    exp_id,
-                    _issue["pattern"],
-                    _issue["severity"],
-                    _issue["evidence"],
-                )
-            # AI diagnosis if enabled
-            if os.environ.get("AI_DIAGNOSE", "0") == "1":
-                _dx = ai_diagnose(
-                    {"experiment_id": exp_id, "metrics": metrics, "issues": _diag_issues},
-                    provider=os.environ.get("AI_DIAGNOSE_PROVIDER", "auto"),
-                )
-                if _dx:
-                    logger.info("[AI Diagnosis] Exp %d:\n%s", exp_id, _dx)
-    except ImportError:
-        pass  # diagnostics.py not present
-
-    # Save result — use the *original* (unoptimized) experiment config dict for cache
-    # staleness comparison so future runs can correctly detect stale results.
-    # The resource-optimized values (batch_size, encoder_lr, etc.) are hardware-dependent
-    # and would cause spurious cache misses on different hardware.
-    result = {
-        "experiment_id": exp_id,
-        "name": config.name,
-        "datasets": config.datasets,
-        "config": original_config_dict,
-        "num_train_samples": len(train_samples),
-        "metrics": _sanitize_metrics(metrics),
-        "training_log": log_history,
-    }
-    result_file.write_text(json.dumps(result, indent=2))
-    logger.debug("[Exp %d] Results saved -> %s", exp_id, result_file)
-    print(f"[Exp {exp_id}] Global F1 = {metrics.get('global_f1', 'N/A')}")
-    _print_experiment_summary(
-        exp_id, config, metrics, elapsed_sec=metrics.get("training_time_sec", 0.0)
+    # --- Save results ---
+    return _save_experiment_results(
+        exp_id,
+        config,
+        metrics,
+        log_history,
+        original_config_dict,
+        num_train_samples=len(train_samples),
+        result_file=result_file,
+        model_dir=model_dir,
+        keep_model=keep_model,
+        no_disk_cleanup=no_disk_cleanup,
+        audit_logger=audit_logger,
     )
-
-    # Disk cleanup — remove model checkpoints after evaluation to free space.
-    # Default: remove entire model directory (only the result JSON is needed).
-    # Disabled by no_disk_cleanup=True (--no-disk-cleanup flag) or
-    # preserved to keep_model=True (--keep-models flag).
-    if not no_disk_cleanup:
-        cleanup_checkpoints_after_eval(model_dir, keep_model=keep_model)
-
-    return result
 
 
 def run_custom_experiment(config: ExperimentConfig, result_file: Path) -> dict[str, Any]:
