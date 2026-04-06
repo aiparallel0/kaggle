@@ -4219,7 +4219,9 @@ def _save_trained_model(
         train_ds.clear_caches()
     if val_ds is not None and hasattr(val_ds, "clear_caches"):
         val_ds.clear_caches()
-    del trainer
+    del trainer, train_ds
+    if val_ds is not None:
+        del val_ds
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.synchronize()  # Ensure all CUDA ops complete before freeing
