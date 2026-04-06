@@ -3547,13 +3547,28 @@ class FieldAttentionAssigner(torch.nn.Module):
                 scores[u] = -1.0  # mask already-claimed lines
 
             if field == "address":
-                k = min(2, len(ocr_lines) - len(used))
-                if k <= 0:
+                # Use attention-threshold selection so SROIE addresses that
+                # span 1–4 lines are captured correctly (the heuristic already
+                # handles this with proximity grouping capped at 4 lines;
+                # the learned assigner must not be structurally worse).
+                # Threshold = 1/N: the expected attention score under a uniform
+                # distribution.  Lines scoring above this are above-average
+                # candidates for the address field.
+                threshold = 1.0 / max(len(ocr_lines), 1)
+                eligible = [
+                    j
+                    for j in range(len(ocr_lines))
+                    if j not in used and scores[j].item() > threshold
+                ]
+                # Sort top-to-bottom for correct multi-line reading order.
+                eligible_sorted = sorted(eligible, key=lambda j: ocr_lines[j].get("y", 0))
+                # Cap at 4 lines — consistent with _assign_fields_heuristic().
+                selected = eligible_sorted[:4]
+                if not selected:
                     continue
-                top_idxs = scores.topk(k).indices.tolist()
-                parts = [ocr_lines[i].get("text", "").strip() for i in sorted(top_idxs)]
+                parts = [ocr_lines[j].get("text", "").strip() for j in selected]
                 result[field] = " ".join(p for p in parts if p)
-                used.update(top_idxs)
+                used.update(selected)
             else:
                 idx = int(scores.argmax().item())
                 result[field] = ocr_lines[idx].get("text", "").strip()
@@ -3606,6 +3621,148 @@ def _match_ocr_to_gt(
     return field_to_idx
 
 
+def _make_synthetic_ocr_lines(
+    gt: dict[str, str],
+    img_w: float = 960.0,
+    img_h: float = 1280.0,
+) -> list[dict[str, Any]]:
+    """Create synthetic OCR lines from GT text using SROIE receipt layout.
+
+    Used as a quality-gate fallback when YOLO+TrOCR output has fewer than
+    3 matched fields.  Positions reflect the consistent Malaysian receipt
+    structure in SROIE:
+        company  → y ≈  5% of height
+        address  → y ≈ 15% / 23% of height (up to 2 lines)
+        date     → y ≈ 35% of height
+        total    → y ≈ 85% of height
+
+    Returns a list of dicts with keys: text, x, y, x2, y2.
+    """
+    lines: list[dict[str, Any]] = []
+    x1 = 0.05 * img_w
+    x2 = 0.95 * img_w
+    line_h = 0.06 * img_h
+
+    company = gt.get("company", "").strip()
+    if company:
+        y = 0.05 * img_h
+        lines.append({"text": company, "x": x1, "y": y, "x2": x2, "y2": y + line_h})
+
+    address = gt.get("address", "").strip()
+    if address:
+        # Split at commas; if no commas, split at the space nearest the midpoint.
+        parts = [p.strip() for p in address.split(",") if p.strip()]
+        if len(parts) >= 2:
+            mid = (len(parts) + 1) // 2
+            addr_lines = [", ".join(parts[:mid]), ", ".join(parts[mid:])]
+        else:
+            # Single pass: scan outward from the midpoint until a space is found.
+            mid = len(address) // 2
+            split_pos = mid
+            for offset in range(len(address)):
+                found = False
+                for pos in (mid - offset, mid + offset):
+                    if 0 < pos < len(address) and address[pos] == " ":
+                        split_pos = pos
+                        found = True
+                        break
+                if found:
+                    break
+            addr_lines = [address[:split_pos].strip(), address[split_pos:].strip()]
+            addr_lines = [a for a in addr_lines if a]
+
+        for i, addr_line in enumerate(addr_lines[:2]):
+            y = (0.15 + i * 0.08) * img_h
+            lines.append({"text": addr_line, "x": x1, "y": y, "x2": x2, "y2": y + line_h})
+
+    date = gt.get("date", "").strip()
+    if date:
+        y = 0.35 * img_h
+        lines.append({"text": date, "x": x1, "y": y, "x2": x2, "y2": y + line_h})
+
+    total = gt.get("total", "").strip()
+    if total:
+        y = 0.85 * img_h
+        lines.append({"text": total, "x": x1, "y": y, "x2": x2, "y2": y + line_h})
+
+    return lines
+
+
+def _y_to_bin(y: float, img_h: float, n_bins: int) -> int:
+    """Map a y-coordinate to a vertical bin index in [0, n_bins-1]."""
+    return min(int(y / max(img_h, 1.0) * n_bins), n_bins - 1)
+
+
+def _compute_corpus_plausibility(
+    corpus: list[tuple],
+    n_bins: int = 10,
+    min_hq_samples: int = 20,
+    device: str = "cpu",
+) -> dict[str, "torch.Tensor"]:
+    """Compute empirical field plausibility from high-quality corpus entries.
+
+    For each field, scores each vertical-position bin (y / img_h × n_bins)
+    by how often it was the correct match in high-quality (real YOLO+TrOCR,
+    3+ matched fields) corpus entries.
+
+    Parameters
+    ----------
+    corpus          : list of 7-tuples
+                      (ocr_lines, field_to_idx, gt, img_w, img_h, vis_feats, is_hq).
+                      Only entries where is_hq=True contribute to the prior.
+    n_bins          : number of vertical position bins.
+    min_hq_samples  : minimum high-quality entries required; falls back to
+                      uniform 0.5 prior when corpus is too small.
+    device          : torch device string for output tensors.
+
+    Returns
+    -------
+    Dict mapping field name → float tensor of shape (n_bins,) in [0.1, 1.0].
+    """
+    # Filter to high-quality entries only.
+    hq = [
+        (ocr_lines, field_to_idx, img_h)
+        for ocr_lines, field_to_idx, _gt, _img_w, img_h, _vis, is_hq in corpus
+        if is_hq
+    ]
+
+    if len(hq) < min_hq_samples:
+        logging.getLogger(__name__).warning(
+            "[FieldAssigner] Only %d high-quality corpus entries (need %d); "
+            "corpus-derived plausibility prior falls back to uniform 0.5. "
+            "Consistency regulariser will have no positional bias.",
+            len(hq),
+            min_hq_samples,
+        )
+        uniform = torch.full((n_bins,), 0.5, dtype=torch.float32)
+        return {field: uniform.to(device) for field in FieldAttentionAssigner.FIELDS}
+
+    counts: dict[str, list[float]] = {f: [0.0] * n_bins for f in FieldAttentionAssigner.FIELDS}
+    totals: dict[str, list[float]] = {f: [0.0] * n_bins for f in FieldAttentionAssigner.FIELDS}
+
+    for ocr_lines, field_to_idx, img_h in hq:
+        for field in FieldAttentionAssigner.FIELDS:
+            matched_idx = field_to_idx.get(field, -1)
+            for li, line in enumerate(ocr_lines):
+                y = float(line.get("y", 0))
+                b = _y_to_bin(y, img_h, n_bins)
+                totals[field][b] += 1.0
+                if li == matched_idx:
+                    counts[field][b] += 1.0
+
+    result: dict[str, torch.Tensor] = {}
+    for field in FieldAttentionAssigner.FIELDS:
+        plaus = torch.zeros(n_bins, dtype=torch.float32)
+        for b in range(n_bins):
+            if totals[field][b] > 0:
+                plaus[b] = max(0.1, min(1.0, counts[field][b] / totals[field][b]))
+            else:
+                plaus[b] = 0.5  # uninformative prior for unseen bins
+        result[field] = plaus.to(device)
+
+    return result
+
+
 def train_field_assigner(
     sroie_dir: Path,
     yolo_model,
@@ -3623,13 +3780,21 @@ def train_field_assigner(
     Pipeline
     --------
     1. For each training image, run YOLO+TrOCR to build a cached corpus.
-    2. Weakly label each OCR line to the GT field with lowest NED.
-    3. Train with cross-entropy over which line to select per field.
-    4. Backend "lm+vision" additionally:
+    2. Quality-gate: call _match_ocr_to_gt() at corpus-build time.
+       - If 3+ GT fields were matched → keep real YOLO+TrOCR output (is_hq=True).
+         Realistic OCR noise in the corpus is valuable training signal.
+       - If fewer than 3 fields matched → YOLO+TrOCR output is too noisy.
+         Replace the OCR lines with synthetic lines derived from GT text using
+         SROIE's consistent Malaysian receipt layout (is_hq=False).  This
+         ensures every corpus entry has clean labels while YOLO remains the
+         preferred source when it works well.
+    3. Compute a corpus-derived plausibility prior from the high-quality subset.
+    4. Train with cross-entropy over which line to select per field.
+    5. Backend "lm+vision" additionally:
        - Caches TrOCR encoder features (vision feats) per crop.
        - Adds a consistency regulariser (λ=consistency_lambda): penalises
-         attention weight on lines that don't match the field's expected
-         regex pattern (e.g. a non-date line selected for the 'date' field).
+         attention weight on lines that disagree with the corpus-derived
+         positional prior (avoids the circular regex-regulariser problem).
 
     Parameters
     ----------
@@ -3670,12 +3835,16 @@ def train_field_assigner(
         return assigner
 
     # ── Build corpus (run YOLO+TrOCR once; cache for all epochs) ─────────
+    # Corpus tuple: (ocr_lines, field_to_idx, gt, img_w, img_h, vis_feats, is_hq)
+    # is_hq=True  → real YOLO+TrOCR output with ≥3 matched fields (preferred)
+    # is_hq=False → synthetic GT-derived lines (quality-gate fallback)
     print(
         f"[FieldAssigner] Building corpus from {len(image_paths)} images "
         f"(backend={effective_backend})…"
     )
-    # Each entry: (ocr_lines, gt, img_w, img_h, vision_feats_or_None)
     corpus: list[tuple] = []
+    n_hq = 0
+    n_synthetic = 0
     for img_path in image_paths:
         key_path = key_dir / (img_path.stem + ".txt")
         if not key_path.exists():
@@ -3697,35 +3866,77 @@ def train_field_assigner(
                 device,
                 return_vision_feats=use_vision,
             )
-        except Exception:
-            continue
-        if not ocr_lines:
-            continue
+        except Exception as exc:  # noqa: BLE001
+            logging.getLogger(__name__).debug(
+                "[FieldAssigner] YOLO+TrOCR failed for %s: %s", img_path.name, exc
+            )
+            ocr_lines = []
+            vis_feats = None
 
+        # Load image dimensions (needed for both real and synthetic paths).
         img = _load_image(img_path)
         img_w = float(img.size[0]) if _PIL_AVAILABLE else float(img.shape[1])  # type: ignore[union-attr]
         img_h = float(img.size[1]) if _PIL_AVAILABLE else float(img.shape[0])  # type: ignore[union-attr]
-        corpus.append((ocr_lines, gt, img_w, img_h, vis_feats))
+
+        # ── Quality gate ─────────────────────────────────────────────────
+        # Check how many GT fields were matched by the real YOLO+TrOCR output.
+        is_hq = False
+        field_to_idx: dict[str, int] = {}
+        if ocr_lines:
+            texts = [_correct_ocr_chars(ln.get("text", "")) for ln in ocr_lines]
+            field_to_idx = _match_ocr_to_gt(texts, gt, ned_threshold)
+            if len(field_to_idx) >= 3:
+                is_hq = True  # Keep real output — realistic OCR noise is useful.
+
+        if not is_hq:
+            # Fewer than 3 fields matched (or no OCR lines at all).
+            # Fall back to synthetic GT-derived lines so the corpus has clean
+            # labels instead of noise.  YOLO is still used when it works well.
+            ocr_lines = _make_synthetic_ocr_lines(gt, img_w=img_w, img_h=img_h)
+            vis_feats = None  # vision features are not meaningful for synthetic lines
+            if not ocr_lines:
+                continue
+            synth_texts = [ln.get("text", "") for ln in ocr_lines]
+            field_to_idx = _match_ocr_to_gt(synth_texts, gt, ned_threshold)
+            n_synthetic += 1
+        else:
+            n_hq += 1
+
+        if not field_to_idx:
+            continue
+
+        corpus.append((ocr_lines, field_to_idx, gt, img_w, img_h, vis_feats, is_hq))
 
     if not corpus:
         print("[FieldAssigner] Corpus is empty — skipping training.")
         return assigner
+
+    print(
+        f"[FieldAssigner] Corpus built: {len(corpus)} samples "
+        f"({n_hq} high-quality, {n_synthetic} synthetic fallback)"
+    )
+
+    # ── Compute corpus-derived plausibility prior (Bug-3 fix) ────────────
+    # Replaces static regex _FIELD_PLAUSIBILITY with empirical positional
+    # distribution from high-quality corpus entries.  Falls back to uniform
+    # 0.5 when too few high-quality entries exist (≥20 required).
+    corpus_plausibility = _compute_corpus_plausibility(corpus, device=device)
 
     print(f"[FieldAssigner] Training {len(corpus)} samples × {effective_epochs} epochs…")
     assigner.train()
     for epoch in range(effective_epochs):
         total_loss = 0.0
         n_examples = 0
-        for ocr_lines, gt, img_w, img_h, vis_feats in corpus:
+        for ocr_lines, field_to_idx, _gt, img_w, img_h, vis_feats, _is_hq in corpus:
+            # field_to_idx was computed at corpus-build time — no re-matching.
+            if not field_to_idx:
+                continue
+
             texts = [_correct_ocr_chars(ln.get("text", "")) for ln in ocr_lines]
             bboxes = [
                 [ln.get("x", 0.0), ln.get("y", 0.0), ln.get("x2", img_w), ln.get("y2", img_h)]
                 for ln in ocr_lines
             ]
-            field_to_idx = _match_ocr_to_gt(texts, gt, ned_threshold)
-            if not field_to_idx:
-                continue
-
             attn = assigner.forward(texts, bboxes, img_w, img_h, vis_feats)  # (4, N)
 
             # ── Primary loss: cross-entropy over line selection ──────────
@@ -3737,19 +3948,23 @@ def train_field_assigner(
                 loss = loss + ce_loss(attn[fi].unsqueeze(0), target)
                 n_examples += 1
 
-            # ── Backend-3 consistency regulariser ───────────────────────
-            # Penalise attending to lines that don't match the field's
-            # expected pattern (e.g. a non-date line for the 'date' field).
-            # Loss = λ × sum_f sum_i( p(i|f) × (1 − plausibility(f, line_i)) )
+            # ── Backend-3 consistency regulariser (corpus-derived prior) ─
+            # Penalises attending to lines at vertical positions that
+            # empirically correspond to other fields.  Uses positional bins
+            # computed from the high-quality corpus subset rather than the
+            # regex patterns that made the regulariser circular.
+            # Loss = λ × Σ_f Σ_i p(i|f) × (1 − plausibility(f, bin_i))
             if use_consistency:
+                n_bins = corpus_plausibility[FieldAttentionAssigner.FIELDS[0]].shape[0]
                 cons = torch.tensor(0.0, device=device, requires_grad=True)
                 for fi, field in enumerate(FieldAttentionAssigner.FIELDS):
-                    validator = _FIELD_PLAUSIBILITY[field]
-                    plaus = torch.tensor(
-                        [float(validator(t)) for t in texts],  # type: ignore[operator]
-                        dtype=torch.float32,
-                        device=device,
-                    )
+                    field_prior = corpus_plausibility[field]  # (n_bins,)
+                    plaus = torch.stack(
+                        [
+                            field_prior[_y_to_bin(float(ln.get("y", 0)), img_h, n_bins)]
+                            for ln in ocr_lines
+                        ]
+                    )  # (N,)
                     probs = attn[fi].softmax(-1)
                     cons = cons + (probs * (1.0 - plaus)).sum()
                 loss = loss + consistency_lambda * cons
