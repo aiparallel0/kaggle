@@ -102,6 +102,7 @@ __all__ = [
     "CodeRepairOrchestrator",
     "MLTrainingOrchestrator",
     "RetroUIFormatter",
+    "VastAIProvisioner",
     # stats helpers (used by tests)
     "_norm_ppf",
     "_two_proportion_mdd",
@@ -1468,6 +1469,14 @@ class CloudConfig:
     skip_pretrained_baseline: bool = False
     experiments_to_run: list[int] = field(default_factory=lambda: list(range(1, 9)))
 
+    # ====== Vast.ai Provisioner Settings ======
+    vastai_api_key: str = ""
+    vastai_gpu_name: str = "RTX 4090"
+    vastai_max_price: float = 0.50
+    vastai_min_vram: int = 24
+    vastai_disk_gb: int = 40
+    vastai_image: str = "pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime"
+
     # ====== Cloud Storage Settings ======
     s3_bucket: str | None = None
     s3_region: str | None = None
@@ -1536,6 +1545,12 @@ class CloudConfig:
             skip_pretrained_baseline=os.getenv("SKIP_PRETRAINED_BASELINE", "false").lower()
             == "true",
             experiments_to_run=experiments,
+            vastai_api_key=os.getenv("VASTAI_API_KEY", ""),
+            vastai_gpu_name=os.getenv("VASTAI_GPU_NAME", "RTX 4090"),
+            vastai_max_price=float(os.getenv("VASTAI_MAX_PRICE", "0.50")),
+            vastai_min_vram=int(os.getenv("VASTAI_MIN_VRAM", "24")),
+            vastai_disk_gb=int(os.getenv("VASTAI_DISK_GB", "40")),
+            vastai_image=os.getenv("VASTAI_IMAGE", "pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime"),
             s3_bucket=os.getenv("AWS_S3_BUCKET"),
             s3_region=os.getenv("AWS_S3_REGION"),
             gcs_bucket=os.getenv("GCS_BUCKET"),
@@ -2387,6 +2402,503 @@ class MLTrainingOrchestrator:
 
 
 # ---------------------------------------------------------------------------
+# VastAIProvisioner — Vast.ai GPU instance lifecycle management
+# ---------------------------------------------------------------------------
+
+
+class VastAIProvisioner:
+    """Provision a Vast.ai GPU instance and register it as a GitHub Actions runner.
+
+    Uses the ``vastai`` CLI (``pip install vastai``) via :mod:`subprocess`.
+    All methods log progress and handle missing-CLI gracefully.
+
+    Parameters
+    ----------
+    config : CloudConfig
+        Pipeline configuration.  The following fields are read:
+        - ``vastai_api_key``  — Vast.ai API key (falls back to ``VASTAI_API_KEY`` env var)
+        - ``vastai_gpu_name`` — GPU model filter (default: ``"RTX 4090"``)
+        - ``vastai_max_price``— Maximum price in $/hr (default: ``0.50``)
+        - ``github_repo``     — ``owner/repo`` slug for runner registration
+        - ``git_branch``      — branch to check out on the instance
+
+    Example
+    -------
+    >>> provisioner = VastAIProvisioner(config)
+    >>> provisioner.provision_and_run()
+    """
+
+    #: Timeout (seconds) waiting for an instance to become SSH-accessible.
+    BOOT_TIMEOUT: int = 600
+    #: Polling interval (seconds) while waiting.
+    POLL_INTERVAL: int = 15
+    #: Docker image used for the instance.
+    DEFAULT_IMAGE: str = "pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime"
+    #: Root disk size in GB.
+    DEFAULT_DISK_GB: int = 40
+    #: GitHub Actions runner version to download.
+    RUNNER_VERSION: str = "2.316.1"
+
+    def __init__(self, config: CloudConfig) -> None:
+        self.config = config
+        self.logger = logging.getLogger(__name__ + ".VastAIProvisioner")
+        self._instance_id: str | None = None
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _api_key(self) -> str:
+        """Return Vast.ai API key from config or environment."""
+        key = getattr(self.config, "vastai_api_key", None) or os.getenv("VASTAI_API_KEY", "")
+        if not key:
+            raise PipelineConfigError(
+                "Vast.ai API key not set. "
+                "Provide it via the VASTAI_API_KEY environment variable or config.vastai_api_key."
+            )
+        return key
+
+    def _gpu_name(self) -> str:
+        return getattr(self.config, "vastai_gpu_name", None) or "RTX 4090"
+
+    def _max_price(self) -> float:
+        return float(getattr(self.config, "vastai_max_price", None) or 0.50)
+
+    def _run_vastai(self, *args: str, check: bool = True) -> subprocess.CompletedProcess:
+        """Run a ``vastai`` CLI sub-command and return the result.
+
+        Raises :exc:`PipelineConfigError` when the ``vastai`` binary is not found.
+        """
+        cmd = ["vastai", *args]
+        self.logger.debug("vastai command: %s", " ".join(cmd))
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+        except FileNotFoundError:
+            raise PipelineConfigError(
+                "vastai CLI not found. Install it with: pip install vastai"
+            ) from None
+        if check and result.returncode != 0:
+            raise RuntimeError(
+                f"vastai {args[0]} failed (exit {result.returncode}): {result.stderr.strip()}"
+            )
+        return result
+
+    def _parse_json(self, text: str) -> Any:
+        """Parse JSON text, returning an empty dict/list on failure."""
+        try:
+            return json.loads(text or "null") or {}
+        except json.JSONDecodeError:
+            return {}
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def search_offers(self) -> list[dict[str, Any]]:
+        """Search for available Vast.ai GPU offers matching the config.
+
+        Returns
+        -------
+        list[dict]
+            List of offer objects sorted by price (cheapest first).
+            Empty list when no matching offers are found or vastai is unavailable.
+        """
+        gpu_name = self._gpu_name()
+        max_price = self._max_price()
+        min_vram = getattr(self.config, "vastai_min_vram", 24)
+
+        self.logger.info(
+            "Searching Vast.ai offers: GPU=%r ≥%d GB VRAM max $%.2f/hr",
+            gpu_name,
+            min_vram,
+            max_price,
+        )
+        query = f"gpu_name='{gpu_name}' gpu_ram>={min_vram} dph<={max_price} rentable=True"
+        try:
+            result = self._run_vastai("search", "offers", query, "--order", "dph asc", "--raw")
+            offers = self._parse_json(result.stdout)
+            if isinstance(offers, list):
+                self.logger.info("  Found %d matching offer(s)", len(offers))
+                return offers
+        except (PipelineConfigError, RuntimeError) as exc:
+            self.logger.warning("Vast.ai offer search failed: %s", exc)
+        return []
+
+    def create_instance(self, offer_id: str | int) -> str:
+        """Create a Vast.ai instance from *offer_id* and return the instance ID.
+
+        Parameters
+        ----------
+        offer_id:
+            Vast.ai offer identifier (integer or string).
+
+        Returns
+        -------
+        str
+            The new instance ID.
+
+        Raises
+        ------
+        RuntimeError
+            When instance creation fails or the response cannot be parsed.
+        """
+        image = getattr(self.config, "vastai_image", self.DEFAULT_IMAGE) or self.DEFAULT_IMAGE
+        disk_gb = (
+            getattr(self.config, "vastai_disk_gb", self.DEFAULT_DISK_GB) or self.DEFAULT_DISK_GB
+        )
+
+        self.logger.info("Creating Vast.ai instance from offer %s (image=%s)...", offer_id, image)
+        result = self._run_vastai(
+            "create",
+            "instance",
+            str(offer_id),
+            "--image",
+            image,
+            "--disk",
+            str(disk_gb),
+            "--raw",
+        )
+        data = self._parse_json(result.stdout)
+        instance_id = str(data.get("new_contract", ""))
+        if not instance_id:
+            raise RuntimeError(
+                f"Could not parse instance ID from create response: {result.stdout[:200]}"
+            )
+        self._instance_id = instance_id
+        self.logger.info("  Instance created: ID=%s", instance_id)
+        return instance_id
+
+    def wait_until_ready(self, instance_id: str) -> dict[str, Any]:
+        """Poll until the instance is running and SSH-accessible.
+
+        Parameters
+        ----------
+        instance_id:
+            Vast.ai instance ID returned by :meth:`create_instance`.
+
+        Returns
+        -------
+        dict
+            The instance info dict containing ``ssh_host`` and ``ssh_port``.
+
+        Raises
+        ------
+        TimeoutError
+            When the instance does not become accessible within :attr:`BOOT_TIMEOUT` seconds.
+        """
+        import time
+
+        self.logger.info(
+            "Waiting for instance %s to boot (timeout %ds)...", instance_id, self.BOOT_TIMEOUT
+        )
+        elapsed = 0
+        status = "unknown"
+        while elapsed < self.BOOT_TIMEOUT:
+            try:
+                result = self._run_vastai("show", "instance", instance_id, "--raw", check=False)
+                info = self._parse_json(result.stdout)
+                status = info.get("actual_status", "unknown")
+                if status == "running":
+                    ssh_host = info.get("ssh_host") or info.get("public_ipaddr", "")
+                    ssh_port = info.get("ssh_port", 22)
+                    if ssh_host:
+                        self.logger.info("  Instance running — SSH: %s:%s", ssh_host, ssh_port)
+                        return info
+            except RuntimeError as exc:
+                self.logger.debug("Poll error: %s", exc)
+
+            self.logger.debug(
+                "  Status: %s — waiting %ds (%d/%d s elapsed)...",
+                status,
+                self.POLL_INTERVAL,
+                elapsed,
+                self.BOOT_TIMEOUT,
+            )
+            time.sleep(self.POLL_INTERVAL)
+            elapsed += self.POLL_INTERVAL
+
+        raise TimeoutError(
+            f"Instance {instance_id} did not become SSH-accessible after {self.BOOT_TIMEOUT}s."
+        )
+
+    def get_ssh_command(self, instance_info: dict[str, Any]) -> str:
+        """Return an SSH command string for connecting to the instance.
+
+        Parameters
+        ----------
+        instance_info:
+            Instance info dict as returned by :meth:`wait_until_ready`.
+
+        Returns
+        -------
+        str
+            A ready-to-run SSH command, e.g.
+            ``"ssh -o StrictHostKeyChecking=no -p 12345 root@1.2.3.4"``.
+        """
+        host = instance_info.get("ssh_host") or instance_info.get("public_ipaddr", "")
+        port = instance_info.get("ssh_port", 22)
+        return f"ssh -o StrictHostKeyChecking=no -o BatchMode=yes -p {port} root@{host}"
+
+    def setup_runner(self, instance_info: dict[str, Any], registration_token: str) -> bool:
+        """Clone the repo and configure an ephemeral GitHub Actions runner on the instance.
+
+        Steps executed remotely via SSH:
+        1. Clone ``config.github_repo``.
+        2. Install Python dependencies (``pip install -r requirements.txt``).
+        3. Download and configure the Actions runner binary (ephemeral mode).
+        4. Start the runner in the background.
+
+        Parameters
+        ----------
+        instance_info:
+            Instance info dict as returned by :meth:`wait_until_ready`.
+        registration_token:
+            GitHub Actions runner registration token (short-lived, ~60 min).
+
+        Returns
+        -------
+        bool
+            True when the remote setup commands succeed.
+        """
+        host = instance_info.get("ssh_host") or instance_info.get("public_ipaddr", "")
+        port = instance_info.get("ssh_port", 22)
+        repo = self.config.github_repo
+        branch = self.config.git_branch
+        runner_url = (
+            f"https://github.com/actions/runner/releases/download/"
+            f"v{self.RUNNER_VERSION}/actions-runner-linux-x64-{self.RUNNER_VERSION}.tar.gz"
+        )
+        runner_pkg = f"actions-runner-linux-x64-{self.RUNNER_VERSION}.tar.gz"
+        runner_name = f"vastai-{self._instance_id or 'runner'}"
+        runner_labels = "self-hosted,gpu,vast-ai"
+
+        remote_script = f"""
+set -euo pipefail
+echo '[remote] Cloning https://github.com/{repo} ...'
+git clone --depth 1 --branch {branch} https://github.com/{repo}.git /workspace/repo || \
+    git clone --depth 1 https://github.com/{repo}.git /workspace/repo
+cd /workspace/repo
+echo '[remote] Installing Python dependencies...'
+pip install --quiet -r requirements.txt || true
+pip install --quiet ruff pyyaml
+for pkg in torch transformers; do
+    python3 -c "import $pkg" 2>/dev/null || \
+        echo "[remote] WARNING: $pkg not importable — GPU extras may be missing"
+done
+# constants.py MUST be importable without torch (hard fail — do not add || true)
+python3 -c "from constants import FIELDS, BASE_MODEL, SEED; print('[remote] Import chain OK')"
+echo '[remote] Downloading Actions runner...'
+mkdir -p /opt/actions-runner && cd /opt/actions-runner
+curl -sSfL '{runner_url}' -o '{runner_pkg}'
+tar xzf '{runner_pkg}'
+echo '[remote] Configuring runner...'
+./config.sh \\
+    --url 'https://github.com/{repo}' \\
+    --token '{registration_token}' \\
+    --name '{runner_name}' \\
+    --labels '{runner_labels}' \\
+    --ephemeral \\
+    --unattended \\
+    --work /workspace/runner-work
+echo '[remote] Starting runner...'
+nohup ./run.sh >/tmp/runner.log 2>&1 &
+echo $! > /tmp/runner.pid
+echo "[remote] Runner started (PID $(cat /tmp/runner.pid))"
+"""
+        ssh_cmd = [
+            "ssh",
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "BatchMode=yes",
+            "-p",
+            str(port),
+            f"root@{host}",
+            "bash",
+            "-s",
+        ]
+        self.logger.info("Executing remote setup on %s:%s...", host, port)
+        try:
+            result = subprocess.run(
+                ssh_cmd,
+                input=remote_script,
+                capture_output=True,
+                text=True,
+                timeout=600,
+            )
+            if result.stdout:
+                for line in result.stdout.splitlines():
+                    self.logger.info("  %s", line)
+            if result.returncode != 0:
+                self.logger.error(
+                    "Remote setup failed (exit %d): %s", result.returncode, result.stderr
+                )
+                return False
+            self.logger.info("  Remote setup complete.")
+            return True
+        except subprocess.TimeoutExpired:
+            self.logger.error("Remote setup timed out after 600s.")
+            return False
+        except OSError as exc:
+            self.logger.error("SSH error during remote setup: %s", exc)
+            return False
+
+    def destroy_instance(self, instance_id: str) -> bool:
+        """Destroy a Vast.ai instance to stop billing.
+
+        Parameters
+        ----------
+        instance_id:
+            Vast.ai instance ID.
+
+        Returns
+        -------
+        bool
+            True when the destroy command succeeds.
+        """
+        self.logger.info("Destroying instance %s...", instance_id)
+        try:
+            self._run_vastai("destroy", "instance", instance_id, "--raw")
+            self.logger.info("  Instance %s destroyed.", instance_id)
+            return True
+        except (PipelineConfigError, RuntimeError) as exc:
+            self.logger.error("Failed to destroy instance %s: %s", instance_id, exc)
+            return False
+
+    def _get_runner_registration_token(self) -> str:
+        """Fetch a GitHub Actions runner registration token via the GitHub API.
+
+        Uses the same ``_github_request``-style pattern as ``diagnostics.py``.
+
+        Returns
+        -------
+        str
+            A short-lived registration token (~60 min validity).
+
+        Raises
+        ------
+        PipelineConfigError
+            When GITHUB_TOKEN is not set or the API call fails.
+        """
+        import urllib.error
+        import urllib.request
+
+        token = os.getenv("GITHUB_TOKEN", "")
+        if not token:
+            raise PipelineConfigError(
+                "GITHUB_TOKEN environment variable is not set. "
+                "A token with 'repo' scope is required to register a GitHub Actions runner."
+            )
+        repo = self.config.github_repo
+        url = f"https://api.github.com/repos/{repo}/actions/runners/registration-token"
+        req = urllib.request.Request(
+            url,
+            data=b"",
+            headers={
+                "Accept": "application/vnd.github+json",
+                "Authorization": f"Bearer {token}",
+                "X-GitHub-Api-Version": "2022-11-28",
+                "User-Agent": "donut-vastai-provisioner/1.0",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                data = json.loads(resp.read().decode())
+            reg_token = data.get("token", "")
+            if not reg_token:
+                raise PipelineConfigError(f"GitHub API returned no token: {data}")
+            self.logger.info("  Runner registration token obtained.")
+            return reg_token
+        except (urllib.error.URLError, urllib.error.HTTPError) as exc:
+            raise PipelineConfigError(
+                f"GitHub API call failed: {exc}. Check GITHUB_TOKEN scope and network connectivity."
+            ) from exc
+
+    def provision_and_run(self) -> bool:
+        """Orchestrate the full Vast.ai lifecycle: search → create → wait → setup → destroy.
+
+        This is the top-level convenience method.  It:
+        1. Searches for a suitable GPU offer.
+        2. Creates the instance.
+        3. Waits for SSH accessibility.
+        4. Fetches a GitHub Actions runner registration token.
+        5. Clones the repo and configures an ephemeral runner on the instance.
+        6. Destroys the instance regardless of outcome (billing protection).
+
+        Returns
+        -------
+        bool
+            True when the runner was successfully set up (job execution is asynchronous).
+        """
+        self.logger.info("=" * 70)
+        self.logger.info("VastAIProvisioner: starting full provisioning lifecycle")
+        self.logger.info("  Repo: %s | Branch: %s", self.config.github_repo, self.config.git_branch)
+        self.logger.info("  GPU: %s | Max price: $%.2f/hr", self._gpu_name(), self._max_price())
+        self.logger.info("=" * 70)
+
+        # Authenticate
+        try:
+            api_key = self._api_key()
+            self._run_vastai("set", "api-key", api_key)
+            self.logger.info("Vast.ai authentication configured.")
+        except PipelineConfigError as exc:
+            self.logger.error("Authentication failed: %s", exc)
+            return False
+
+        # Search for an offer
+        offers = self.search_offers()
+        if not offers:
+            self.logger.error("No suitable Vast.ai offers found. Aborting.")
+            return False
+        offer_id = offers[0]["id"]
+
+        # Create instance
+        try:
+            instance_id = self.create_instance(offer_id)
+        except RuntimeError as exc:
+            self.logger.error("Instance creation failed: %s", exc)
+            return False
+
+        success = False
+        try:
+            # Wait for boot
+            instance_info = self.wait_until_ready(instance_id)
+
+            # Get registration token
+            reg_token = self._get_runner_registration_token()
+
+            # Set up runner
+            success = self.setup_runner(instance_info, reg_token)
+            if success:
+                self.logger.info(
+                    "✓ Ephemeral runner started on instance %s. "
+                    "It will auto-deregister after one job.",
+                    instance_id,
+                )
+            else:
+                self.logger.error("Runner setup failed on instance %s.", instance_id)
+        except (TimeoutError, PipelineConfigError, RuntimeError) as exc:
+            self.logger.error("Provisioning error: %s", exc)
+        finally:
+            # Always destroy — protect against billing runaway
+            self.destroy_instance(instance_id)
+
+        self.logger.info("=" * 70)
+        self.logger.info(
+            "VastAIProvisioner: lifecycle complete — %s",
+            "SUCCESS" if success else "FAILED",
+        )
+        self.logger.info("=" * 70)
+        return success
+
+
+# ---------------------------------------------------------------------------
 # CloudPipelineOrchestrator — top-level router
 # ---------------------------------------------------------------------------
 
@@ -2524,8 +3036,25 @@ Examples:
     parser.add_argument("--workspace", help="Workspace directory")
     parser.add_argument("--s3-bucket", help="AWS S3 bucket for results (optional)")
     parser.add_argument("--gcs-bucket", help="Google Cloud Storage bucket (optional)")
+    parser.add_argument(
+        "--provision-vastai",
+        action="store_true",
+        help=(
+            "Provision a Vast.ai GPU instance, register it as an ephemeral GitHub Actions "
+            "self-hosted runner, and trigger the training workflow. "
+            "Requires VASTAI_API_KEY, GITHUB_TOKEN, and GITHUB_REPO env vars."
+        ),
+    )
 
     args = parser.parse_args()
+
+    # --provision-vastai: short-circuit before the normal pipeline
+    if getattr(args, "provision_vastai", False):
+        config = CloudConfig.from_args_and_env(args)
+        provisioner = VastAIProvisioner(config)
+        success = provisioner.provision_and_run()
+        sys.exit(0 if success else 1)
+
     config = CloudConfig.from_args_and_env(args)
 
     logger.info(f"Configuration loaded: {config.mode.value} mode")
