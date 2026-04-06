@@ -27,6 +27,7 @@ import json
 import logging
 import math
 import re
+import statistics
 import struct
 import time
 import zlib
@@ -3233,8 +3234,9 @@ def _assign_fields_heuristic(ocr_lines: list[dict[str, Any]]) -> dict[str, str]:
 
     if addr_candidates:
         # Estimate typical line height as the median of (y2 - y) across candidates.
+        # statistics.median() handles both odd and even-length lists correctly.
         _heights = [y2 - y for y, y2, _ in addr_candidates if y2 > y]
-        _typical_h = sorted(_heights)[len(_heights) // 2] if _heights else 30.0
+        _typical_h = statistics.median(_heights) if _heights else 30.0
         # Two lines are "adjacent" if the gap between them is ≤ 1.5× typical height.
         _gap_thresh = max(5.0, _typical_h * 1.5)
 
@@ -3254,7 +3256,10 @@ def _assign_fields_heuristic(ocr_lines: list[dict[str, Any]]) -> dict[str, str]:
             return (len(g), kw_count)
 
         best_group = max(groups, key=_group_score)
-        result["address"] = " ".join(best_group[:4])  # cap at 4 lines
+        # Cap at 4 lines: SROIE addresses span 1–3 lines in practice; allowing
+        # 4 avoids silently truncating rare 4-line addresses without risk of
+        # including unrelated content (company and date/total are already removed).
+        result["address"] = " ".join(best_group[:4])
 
     return result
 
