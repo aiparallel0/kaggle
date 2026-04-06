@@ -2160,7 +2160,10 @@ def _load_yolo_gt_boxes(
         parts = line.strip().split()
         if len(parts) < 5:
             continue
-        cx, cy, w, h = float(parts[1]), float(parts[2]), float(parts[3]), float(parts[4])
+        try:
+            cx, cy, w, h = float(parts[1]), float(parts[2]), float(parts[3]), float(parts[4])
+        except ValueError:
+            continue  # skip malformed lines with non-numeric coordinates
         boxes.append(_yolo_cx_cy_w_h_to_xyxy(cx, cy, w, h, img_w, img_h))
     return boxes
 
@@ -2322,7 +2325,8 @@ def evaluate_yolo_detection(
             Path(val_path) if Path(val_path).is_absolute() else Path(data_yaml).parent / val_path
         )
         # YOLO label dir mirrors image dir: images/val → labels/val
-        val_labels_dir = Path(str(val_images_dir).replace("/images/", "/labels/"))
+        # Use Path manipulation for cross-platform safety.
+        val_labels_dir = val_images_dir.parent.parent / "labels" / val_images_dir.name
     except (ImportError, OSError, KeyError, TypeError, ValueError) as exc:
         _log.warning(
             "Could not parse dataset YAML %s: %s — cannot run manual detection eval.",
@@ -2388,15 +2392,16 @@ def evaluate_yolo_detection(
 
     precision = total_tp / (total_tp + total_fp) if (total_tp + total_fp) > 0 else 0.0
     recall = total_tp / (total_tp + total_fn) if (total_tp + total_fn) > 0 else 0.0
-    # F1 as a proxy for mAP50 (not a true mAP but a reasonable single-threshold estimate)
-    detection_f1 = (
-        2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
-    )
+    # F1@IoU=0.5 as a proxy for mAP50 — not a true multi-threshold mAP, but
+    # the best single-number approximation available without ultralytics.
+    map50_proxy = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
     detection_rate = num_images_with_detections / len(val_images) if val_images else 0.0
 
     result = {
-        "yolo_map50": round(detection_f1, 4),  # F1@IoU=0.5 as mAP50 proxy
-        "yolo_map": 0.0,  # not available in manual mode
+        # NOTE: in manual mode, yolo_map50 stores F1@IoU=0.5 (a proxy for true mAP50).
+        # True mAP50 requires multi-threshold PR curve computation (available via ultralytics).
+        "yolo_map50": round(map50_proxy, 4),
+        "yolo_map": 0.0,  # multi-threshold mAP not available in manual mode
         "yolo_precision": round(precision, 4),
         "yolo_recall": round(recall, 4),
         "yolo_detection_rate": round(detection_rate, 4),
@@ -2413,7 +2418,7 @@ def evaluate_yolo_detection(
         "(%d val images, TP=%d FP=%d FN=%d)",
         precision,
         recall,
-        detection_f1,
+        map50_proxy,
         detection_rate * 100,
         len(val_images),
         total_tp,
