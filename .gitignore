@@ -104,6 +104,7 @@ paper/paper_micro.tex
 # Secrets — never commit
 hf_token.txt
 *_token.txt
+*_api_key.txt
 *.secret
 .env
 

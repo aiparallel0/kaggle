@@ -3800,9 +3800,11 @@ def train_trocr(
                     if (step + 1) % grad_accum == 0:
                         scaler.unscale_(optimizer)
                         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                        _scale_before_recovery = scaler.get_scale()
                         scaler.step(optimizer)
                         scaler.update()
-                        scheduler.step()
+                        if scaler.get_scale() >= _scale_before_recovery:
+                            scheduler.step()
                         optimizer.zero_grad()
                     _consecutive_batch_failures = 0  # reset on success
                 except Exception as _batch_exc:
@@ -3924,76 +3926,41 @@ def train_trocr(
         # Always free GPU memory even if training raised an exception.
         # Without this, a mid-training crash leaves TrOCR (246M params) on the
         # GPU and causes CUDA OOM when the next stage (DONUT) loads its model.
-        # ROBUSTNESS: each variable is deleted in its own try/except so that a
-        # NameError (variable never assigned due to an earlier exception) does
-        # not abort the block and skip _gpu_cleanup().
-        try:
-            del model
-        except Exception:
-            pass
-        try:
-            del optimizer
-        except Exception:
-            pass
-        try:
-            del scheduler
-        except Exception:
-            pass
-        try:
-            del scaler
-        except Exception:
-            pass
-        try:
-            del train_ds
-        except Exception:
-            pass
-        try:
-            del val_ds
-        except Exception:
-            pass
-        try:
-            del train_loader
-        except Exception:
-            pass
-        try:
-            del val_loader
-        except Exception:
-            pass
         # Fix: issue_report_summary medium #9 — wrap each `del` in its own try/except
         # so a NameError on one variable (e.g. model was never assigned because training
         # crashed during setup) does not abort the finally block before _gpu_cleanup() runs,
         # which would leave TrOCR (246M params) on the GPU and OOM the next stage.
         try:
             del model
-        except NameError:
+        except Exception:
             pass
         try:
             del optimizer
-        except NameError:
+        except Exception:
             pass
         try:
             del scheduler
-        except NameError:
+        except Exception:
             pass
         try:
             del scaler
-        except NameError:
+        except Exception:
             pass
         try:
             del train_ds
-        except NameError:
+        except Exception:
             pass
         try:
             del val_ds
-        except NameError:
+        except Exception:
             pass
         try:
             del train_loader
-        except NameError:
+        except Exception:
             pass
         try:
             del val_loader
-        except NameError:
+        except Exception:
             pass
         # _gpu_cleanup() is ALWAYS called last — even if every del above raised.
         _gpu_cleanup()
