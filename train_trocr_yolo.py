@@ -3324,7 +3324,14 @@ def _assign_fields_heuristic(ocr_lines: list[dict[str, Any]]) -> dict[str, str]:
             else:
                 groups.append([(addr_candidates[j][2], addr_candidates[j][3])])
 
-        # Pick the best group: prefer groups with address keywords, then size.
+        # Pick the best group.  Scoring priority:
+        #   1. Keyword count (address signals: JALAN, LOT, postcode, etc.)
+        #   2. Group size (number of contiguous lines)
+        # This intentionally prefers a single line with an address keyword
+        # (e.g. "NO 1 JALAN PUCHONG") over a 3-line group without keywords,
+        # because receipt content between company and total is often mixed
+        # (item lines, tax lines).  The keyword signal is more reliable than
+        # size alone for selecting the actual address block.
         def _group_score(g: list[tuple[str, bool]]) -> tuple[int, int]:
             kw_count = sum(1 for _, has_kw in g if has_kw)
             return (kw_count, len(g))

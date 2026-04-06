@@ -826,6 +826,7 @@ class TrOCRYOLOPipeline:
 
         # _extract_ocr_lines expects a Path, not a PIL Image.
         # If we received a PIL Image (from run_benchmark), save to a temp file.
+        _tmp_path: Path | None = None
         if isinstance(image_or_path, Path):
             img_path = image_or_path
         else:
@@ -834,15 +835,22 @@ class TrOCRYOLOPipeline:
             with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as _tmpf:
                 image_or_path.save(_tmpf.name)
                 img_path = Path(_tmpf.name)
+                _tmp_path = img_path
 
-        ocr_lines, _vision_feats, _yolo_box_count = self._extract_ocr_lines(
-            img_path,
-            self.yolo,
-            self.trocr_model,
-            self.trocr_processor,
-            device=self.device,
-        )
-        pred = self._assign_fields_heuristic(ocr_lines)
+        try:
+            ocr_lines, _vision_feats, _yolo_box_count = self._extract_ocr_lines(
+                img_path,
+                self.yolo,
+                self.trocr_model,
+                self.trocr_processor,
+                device=self.device,
+            )
+            pred = self._assign_fields_heuristic(ocr_lines)
+        finally:
+            # Clean up temporary file to avoid orphaned PNG files.
+            if _tmp_path is not None:
+                _tmp_path.unlink(missing_ok=True)
+
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
         return pred, elapsed_ms
 
