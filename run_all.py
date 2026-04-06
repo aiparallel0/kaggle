@@ -2363,12 +2363,21 @@ def stage_trocr_experiments(args: argparse.Namespace) -> StageResult:
                 eval_mod.print_metrics("TrOCR+YOLO", metrics)
                 trocr_yolo._save_trocr_eval_plots(metrics, results_dir)
                 num_samples = trocr_history.get("num_train_samples", 0)
-                for exp_id in range(1, 9):
-                    trocr_results[str(exp_id)] = {
-                        "name": f"TrOCR+YOLO Exp {exp_id}",
+                trocr_results = {
+                    "_note": (
+                        "IMPORTANT: TrOCR+YOLO was trained ONCE (single training run on "
+                        f"{num_samples} SROIE samples). Unlike DONUT which has 8 distinct "
+                        "experiment configurations, TrOCR+YOLO has only one result. "
+                        "The single result is stored under key '1'. Previous versions "
+                        "duplicated this result across keys 1-8 for structural consistency "
+                        "with DONUT, but this was misleading."
+                    ),
+                    "1": {
+                        "name": "TrOCR+YOLO (single training run)",
                         "metrics": metrics,
                         "num_train_samples": num_samples,
-                    }
+                    },
+                }
                 _log.info("TrOCR+YOLO F1=%s (single model)", metrics.get("global_f1", "N/A"))
             else:
                 w = "YOLO or TrOCR model weights missing — skipping evaluation."
