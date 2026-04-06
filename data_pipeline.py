@@ -625,6 +625,87 @@ def _hf_write_and_mark(
     log.info("[inline-hf] Download complete: %d rows saved to %s", len(all_rows), jsonl_path.parent)
 
 
+def _hf_acquire_lock_and_check_cache(cache_dir: Path, marker: Path) -> bool:
+    """Acquire the in-process threading lock and check whether *marker* exists.
+
+    Uses a lazily-initialised ``threading.Lock`` stored on the module-level
+    ``_hf_download_dataset_inline`` function object to prevent a TOCTOU race
+    when two threads both see ``marker.exists() == False`` and both start
+    downloading.
+
+    Returns ``True`` when the cache is already populated (caller should
+    short-circuit) or ``False`` when the download is still needed.
+    """
+    import threading as _threading
+
+    _hf_download_lock = getattr(_hf_download_dataset_inline, "_lock", None)
+    if _hf_download_lock is None:
+        _hf_download_lock = _threading.Lock()
+        _hf_download_dataset_inline._lock = _hf_download_lock  # type: ignore[attr-defined]
+
+    with _hf_download_lock:
+        # Re-check inside the lock — another thread may have finished while we waited.
+        return marker.exists()
+
+
+def _hf_fetch_row_count(
+    repo_id: str, split: str, hf_token: str | None = None, fallback: int = 1000
+) -> int:
+    """Query the HuggingFace datasets-server ``/size`` endpoint for *split*.
+
+    Returns the number of rows when the API call succeeds, or *fallback*
+    when the request fails or the response is malformed.
+    """
+    try:
+        size_info = _hf_api_get(
+            f"https://datasets-server.huggingface.co/size?dataset={repo_id}",
+            hf_token,
+        )
+        for s in size_info.get("size", {}).get("splits", []):
+            if s.get("split") == split:
+                return int(s.get("num_rows", fallback))
+    except (urllib.error.URLError, KeyError, ValueError, json.JSONDecodeError):
+        pass
+    return fallback
+
+
+def _hf_download_rows_batch(
+    repo_id: str,
+    config: str,
+    split: str,
+    hf_token: str | None,
+    total_rows: int,
+) -> list[dict]:
+    """Download all rows for *split* in batches of 100.
+
+    Uses :func:`_hf_fetch_rows_batch` for each page and stops on the
+    first failure or when *total_rows* have been collected.
+
+    Returns the accumulated list of row dicts.
+    """
+    log = logging.getLogger(__name__)
+    batch_size = 100
+    all_rows: list[dict] = []
+    for offset in range(0, total_rows + batch_size, batch_size):
+        try:
+            rows = _hf_fetch_rows_batch(repo_id, config, split, offset, batch_size, hf_token)
+        except (
+            urllib.error.URLError,
+            urllib.error.HTTPError,
+            OSError,
+            json.JSONDecodeError,
+        ) as exc:
+            log.warning("[inline-hf] Batch offset=%d failed: %s — stopping early.", offset, exc)
+            break
+        if not rows:
+            break
+        all_rows.extend(rows)
+        log.info("[inline-hf] %d/%d rows fetched …", len(all_rows), total_rows)
+        if len(all_rows) >= total_rows:
+            break
+    return all_rows
+
+
 def _hf_download_dataset_inline(
     repo_id: str,
     dest_dir: Path,
@@ -644,40 +725,28 @@ def _hf_download_dataset_inline(
         ds = load_dataset(repo_id); ds.save_to_disk(...)
 
     Delegates to:
+    - :func:`_hf_acquire_lock_and_check_cache` — in-process threading lock + marker check
     - :func:`_hf_discover_config` — HF API config discovery
-    - :func:`_hf_fetch_rows_batch` — paginated row fetching
+    - :func:`_hf_fetch_row_count` — total row count via size endpoint
+    - :func:`_hf_download_rows_batch` — paginated batch download loop
+    - :func:`_hf_fetch_rows_batch` — single-page row fetching
     - :func:`_hf_write_and_mark` — JSONL + image writing and marker creation
     """
     cache_dir = dest_dir / "hf_cache_inline"
     cache_dir.mkdir(parents=True, exist_ok=True)
     marker = cache_dir / f".done_{split}"
-    # ROBUSTNESS: use an in-process lock to prevent a TOCTOU race when two
-    # threads or processes both see marker.exists() == False and both start
-    # downloading.  The lock file approach gives best-effort protection for
-    # multi-process scenarios; the threading lock prevents races within one
-    # process (the common case with parallel dataset downloads).
-    import threading as _threading
 
-    _hf_download_lock = getattr(_hf_download_dataset_inline, "_lock", None)
-    if _hf_download_lock is None:
-        _hf_download_lock = _threading.Lock()
-        _hf_download_dataset_inline._lock = _hf_download_lock  # type: ignore[attr-defined]
+    # ROBUSTNESS: in-process lock prevents a TOCTOU race when two threads
+    # both see marker.exists() == False and both start downloading.
+    if _hf_acquire_lock_and_check_cache(cache_dir, marker):
+        return cache_dir
 
-    with _hf_download_lock:
-        # Re-check inside the lock — another thread may have finished while we waited.
-        if marker.exists():
-            return cache_dir
-
-    img_dir = cache_dir / "images"
-    img_dir.mkdir(exist_ok=True)
-    jsonl_path = cache_dir / f"data_{split}.jsonl"
-    # Fix: issue_report_summary medium #8 — replace TOCTOU existence-check + create
-    # with an atomic file lock so two concurrent processes cannot both start downloading
-    # and corrupt the cache.
+    # Fix: issue_report_summary medium #8 — atomic file lock so two concurrent
+    # processes cannot both start downloading and corrupt the cache.
     lock_path = cache_dir / f".lock_{split}"
     with _file_lock(lock_path):
-        # Re-check inside the lock: another process may have completed the download
-        # while we were waiting.
+        # Re-check inside the file lock: another process may have completed
+        # the download while we were waiting.
         if marker.exists():
             return cache_dir
 
@@ -688,45 +757,9 @@ def _hf_download_dataset_inline(
         log = logging.getLogger(__name__)
         log.info("[inline-hf] Downloading %s/%s from HuggingFace datasets-server …", repo_id, split)
 
-        # ── Discover config name ──────────────────────────────────────────────────
         config = _hf_discover_config(repo_id, hf_token)
-
-        # ── Get total row count ───────────────────────────────────────────────────
-        total_rows = 1000  # fallback estimate
-        try:
-            size_info = _hf_api_get(
-                f"https://datasets-server.huggingface.co/size?dataset={repo_id}",
-                hf_token,
-            )
-            for s in size_info.get("size", {}).get("splits", []):
-                if s.get("split") == split:
-                    total_rows = int(s.get("num_rows", total_rows))
-                    break
-        except (urllib.error.URLError, KeyError, ValueError, json.JSONDecodeError):
-            pass
-
-        # ── Download rows in batches of 100 ──────────────────────────────────────
-        batch_size = 100
-        all_rows: list[dict] = []
-        for offset in range(0, total_rows + batch_size, batch_size):
-            try:
-                rows = _hf_fetch_rows_batch(repo_id, config, split, offset, batch_size, hf_token)
-            except (
-                urllib.error.URLError,
-                urllib.error.HTTPError,
-                OSError,
-                json.JSONDecodeError,
-            ) as exc:
-                log.warning("[inline-hf] Batch offset=%d failed: %s — stopping early.", offset, exc)
-                break
-            if not rows:
-                break
-            all_rows.extend(rows)
-            log.info("[inline-hf] %d/%d rows fetched …", len(all_rows), total_rows)
-            if len(all_rows) >= total_rows:
-                break
-
-        # ── Process rows: save images, write JSONL, create marker ─────────────────
+        total_rows = _hf_fetch_row_count(repo_id, split, hf_token)
+        all_rows = _hf_download_rows_batch(repo_id, config, split, hf_token, total_rows)
         _hf_write_and_mark(all_rows, img_dir, jsonl_path, split, marker, hf_token)
         return cache_dir
 
@@ -2388,6 +2421,34 @@ def _load_and_merge_datasets(
     return combined_train, combined_val, combined_train_sources, per_loader_counts
 
 
+def _shuffle_with_sources(
+    samples: list[Sample],
+    sources: list[str],
+    val_samples: list[Sample],
+    seed: int,
+    return_sources: bool = False,
+) -> None:
+    """Shuffle *samples* (and optionally *sources*) in place with a fixed seed.
+
+    When *return_sources* is ``True``, samples and sources are shuffled as
+    aligned pairs so that ``sources[i]`` still corresponds to ``samples[i]``
+    after the shuffle.  *val_samples* is shuffled afterwards using a
+    continuation of the same RNG to preserve the original interleaving
+    behaviour.
+    """
+    rng = random.Random(seed)
+    if return_sources:
+        # Shuffle (sample, source) pairs together to keep alignment.
+        paired = list(zip(samples, sources))
+        rng.shuffle(paired)
+        samples[:] = [p[0] for p in paired]
+        sources[:] = [p[1] for p in paired]
+    else:
+        rng.shuffle(samples)
+    # Val shuffle uses a continuation of the same RNG (preserves original behavior).
+    rng.shuffle(val_samples)
+
+
 @overload
 def get_combined_dataset(
     dataset_names: list[str],
@@ -2424,6 +2485,7 @@ def get_combined_dataset(
     - :func:`_load_and_merge_datasets` — per-dataset loading and merging
     - :func:`_apply_oversampling` — SROIE duplication
     - :func:`_split_auxiliary_data` — 70/15/15 auxiliary splitting
+    - :func:`_shuffle_with_sources` — paired shuffle for source alignment
 
     Parameters
     ----------
@@ -2453,19 +2515,9 @@ def get_combined_dataset(
     )
 
     # Fixed-seed shuffle to interleave samples from different datasets.
-    # Use the same RNG state for both combined_train and combined_train_sources
-    # so that sources[i] still maps to samples[i] after shuffling.
-    rng = random.Random(SEED)
-    if return_sources:
-        # Shuffle (sample, source) pairs together to keep alignment.
-        paired = list(zip(combined_train, combined_train_sources))
-        rng.shuffle(paired)
-        combined_train[:] = [p[0] for p in paired]
-        combined_train_sources[:] = [p[1] for p in paired]
-    else:
-        rng.shuffle(combined_train)
-    # Val shuffle uses a continuation of the same RNG (preserves original behavior).
-    rng.shuffle(combined_val)
+    _shuffle_with_sources(
+        combined_train, combined_train_sources, combined_val, SEED, return_sources
+    )
 
     if return_sources:
         return combined_train, combined_val, combined_train_sources
