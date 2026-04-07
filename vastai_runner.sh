@@ -329,34 +329,16 @@ curl -sSfL "${RUNNER_URL}" -o "/tmp/${RUNNER_PKG}"
 tar xzf "/tmp/${RUNNER_PKG}" -C /workspace/actions-runner
 chown -R runner:runner /workspace/actions-runner
 
-# ---------------------------------------------------------------------------
-# Install system dependencies required by the .NET-based GitHub Actions runner.
-# The runner package ships bin/installdependencies.sh which installs libicu,
-# libssl, and other system libraries.  Without this step the runner process
-# crashes within seconds of starting (runner.log ≈ 26 bytes, no "Listening
-# for Jobs" message) — the root cause of 10+ failed PRs (#209-#219).
-# ---------------------------------------------------------------------------
-# REPLACE the installdependencies.sh block with this:
-log_r "Installing runner system dependencies (minimal, no reboot)..."
+log_r "Installing runner system dependencies (safe — no liblttng, no reboot)..."
 apt-get update -qq 2>/dev/null || true
+# Try versioned packages first (Ubuntu 22.04), fall back to -dev names for other distros.
+# NEVER install liblttng-ust* — it triggers a container restart on Vast.ai.
 DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
     libicu70 libssl3 libkrb5-3 zlib1g 2>/dev/null \
   || DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
     libicu-dev libssl-dev libkrb5-3 zlib1g 2>/dev/null \
   || true
-log_r "  Runner dependencies installed (no liblttng — avoids container restart)."
-  # Manual fallback: install the most critical .NET runtime deps
-  log_r "  installdependencies.sh not found — installing deps manually..."
-  apt-get update -qq 2>/dev/null || true
-  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
-    libicu-dev libssl-dev libkrb5-3 zlib1g liblttng-ust1 2>/dev/null
-  APT_RC=$?
-  if [[ $APT_RC -ne 0 ]]; then
-    log_r "  WARNING: Manual dependency install exited with $APT_RC — runner may crash."
-  else
-    log_r "  Manual dependency install done."
-  fi
-fi
+log_r "  Runner system dependencies installed."
 
 log_r "Configuring runner (name=${RUNNER_NAME}, labels=${RUNNER_LABELS})..."
 # Use 'su -s /bin/bash runner' (no '-' = no login shell) to avoid
