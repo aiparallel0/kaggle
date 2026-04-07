@@ -53,7 +53,8 @@ VASTAI_DISK_GB="${VASTAI_DISK_GB:-40}"
 VASTAI_IMAGE="${VASTAI_IMAGE:-pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime}"
 RUNNER_LABELS="${RUNNER_LABELS:-self-hosted,gpu,vast-ai}"
 RUNNER_NAME="${RUNNER_NAME:-vastai-gpu-$(date +%s)}"
-# Strip embedded ANSI/control characters that corrupt GitHub Actions runner registration
+# GitHub Actions runner names allow only alphanumerics, hyphens, and underscores.
+# Strip all other characters (including any embedded ANSI/control chars).
 RUNNER_NAME="$(printf '%s' "${RUNNER_NAME}" | tr -cd '[:alnum:]-_')"
 RUNNER_VERSION="${RUNNER_VERSION:-2.316.1}"
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/id_vastai}"
@@ -63,11 +64,16 @@ if [[ ! -f "$SSH_KEY" ]]; then
     mkdir -p "$(dirname "$SSH_KEY")"
     ssh-keygen -t ed25519 -f "$SSH_KEY" -N "" -C "vastai-runner" -q
     chmod 600 "$SSH_KEY"
-    echo "[setup] Generated $SSH_KEY — add ${SSH_KEY}.pub to your Vast.ai account SSH keys."
+    echo "[setup] Generated $SSH_KEY (no passphrase — required for unattended automation)."
+    echo "[setup] Add ${SSH_KEY}.pub to your Vast.ai account SSH keys."
 fi
 BOOT_TIMEOUT="${BOOT_TIMEOUT:-600}"
 POLL_INTERVAL=15
 JOB_TIMEOUT="${JOB_TIMEOUT:-7200}"
+# SSH_ARGS/SCP_ARGS are populated after SSH is ready (Step 6); initialise
+# here so the cleanup trap can safely reference them at any point.
+SSH_ARGS=()
+SCP_ARGS=()
 
 # ---------------------------------------------------------------------------
 # Parse command-line flags
@@ -177,10 +183,9 @@ log "  Instance: $INSTANCE_ID"
 # Destroy instance on any exit
 cleanup() {
     local code=$?
-    if [[ -n "${SSH_HOST:-}" ]]; then
+    if [[ -n "${SSH_HOST:-}" ]] && [[ ${#SCP_ARGS[@]} -gt 0 ]]; then
         log "Cleanup: retrieving remote logs..."
-        if scp -i "$SSH_KEY" -o StrictHostKeyChecking=no -o BatchMode=yes \
-                -P "${SSH_PORT:-22}" "root@${SSH_HOST}:/workspace/runner.log" \
+        if scp "${SCP_ARGS[@]}" "root@${SSH_HOST}:/workspace/runner.log" \
                 "./runner-${INSTANCE_ID}.log" 2>/dev/null; then
             log "  Saved runner.log to ./runner-${INSTANCE_ID}.log"
         else
