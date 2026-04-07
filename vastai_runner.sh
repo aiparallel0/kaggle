@@ -75,21 +75,32 @@ require_env GITHUB_TOKEN
 require_env GITHUB_REPO
 
 # ---------------------------------------------------------------------------
-# Step 1: Install vastai CLI if not already present
+# Step 1: Detect Python binary and install vastai CLI if not already present
 # ---------------------------------------------------------------------------
 log "Step 1: Installing vastai CLI..."
-if ! python3 -m vast --help &>/dev/null 2>&1; then
-    pip install --quiet vastai
+
+# Detect Python binary (Windows Git Bash has `python` not `python3`)
+if command -v python3 &>/dev/null && python3 -c "import sys; sys.exit(0)" 2>/dev/null; then
+    PYTHON_CMD="python3"
+elif command -v python &>/dev/null && python -c "import sys; sys.exit(0)" 2>/dev/null; then
+    PYTHON_CMD="python"
+else
+    die "No working Python found. Install Python 3.11+ from https://python.org"
+fi
+
+log "  Using Python: $PYTHON_CMD ($($PYTHON_CMD --version 2>&1))"
+
+# Install vastai if not present
+if ! $PYTHON_CMD -m vast --help &>/dev/null 2>&1; then
+    $PYTHON_CMD -m pip install --quiet vastai
 fi
 
 # Detect correct invocation.
 # NOTE: `pip install vastai` installs the module as `vast` (not `vastai`).
 if command -v vastai &>/dev/null; then
     VASTAI_CMD="vastai"
-elif python3 -m vast --help &>/dev/null 2>&1; then
-    VASTAI_CMD="python3 -m vast"
-elif python -m vast --help &>/dev/null 2>&1; then
-    VASTAI_CMD="python -m vast"
+elif $PYTHON_CMD -m vast --help &>/dev/null 2>&1; then
+    VASTAI_CMD="$PYTHON_CMD -m vast"
 else
     die "vastai CLI not found after install. Run: pip install vastai"
 fi
@@ -112,13 +123,13 @@ log "Step 3: Searching for GPU instances (GPU: '${VASTAI_GPU_NAME}', ≥${VASTAI
 # The `search offers` command returns JSON when --raw is specified.
 SEARCH_RESULT=$(
     $VASTAI_CMD search offers \
-        "gpu_name='${VASTAI_GPU_NAME}' gpu_ram>=${VASTAI_MIN_VRAM} dph<=${VASTAI_MAX_PRICE} rentable=True" \
+        "rentable=true num_gpus=1 gpu_name=${VASTAI_GPU_NAME// /_} gpu_ram>=${VASTAI_MIN_VRAM} dph<=${VASTAI_MAX_PRICE}" \
         --order "dph asc" \
         --raw 2>/dev/null
 ) || die "vastai search offers failed. Check your API key and network connectivity."
 
 # Extract the cheapest offer's ID using Python (already available on the host)
-OFFER_ID=$(python3 - <<'PYEOF'
+OFFER_ID=$($PYTHON_CMD - <<'PYEOF'
 import json, sys
 data = json.loads(sys.stdin.read() or "[]")
 if not data:
@@ -143,7 +154,7 @@ CREATE_RESULT=$(
         --raw 2>/dev/null
 ) || die "vastai create instance failed."
 
-INSTANCE_ID=$(python3 - <<'PYEOF'
+INSTANCE_ID=$($PYTHON_CMD - <<'PYEOF'
 import json, sys
 data = json.loads(sys.stdin.read() or "{}")
 iid = data.get("new_contract")
@@ -176,7 +187,7 @@ SSH_PORT=""
 
 while [[ $elapsed -lt $BOOT_TIMEOUT ]]; do
     INSTANCE_JSON=$($VASTAI_CMD show instance "$INSTANCE_ID" --raw 2>/dev/null || echo "{}")
-    STATUS=$(python3 - <<'PYEOF'
+    STATUS=$($PYTHON_CMD - <<'PYEOF'
 import json, sys
 data = json.loads(sys.stdin.read() or "{}")
 print(data.get("actual_status", "unknown"))
@@ -185,13 +196,13 @@ PYEOF
 
     if [[ "$STATUS" == "running" ]]; then
         # Extract SSH host and port
-        SSH_HOST=$(python3 - <<'PYEOF'
+        SSH_HOST=$($PYTHON_CMD - <<'PYEOF'
 import json, sys
 data = json.loads(sys.stdin.read() or "{}")
 print(data.get("ssh_host", "") or data.get("public_ipaddr", ""))
 PYEOF
 <<< "$INSTANCE_JSON")
-        SSH_PORT=$(python3 - <<'PYEOF'
+        SSH_PORT=$($PYTHON_CMD - <<'PYEOF'
 import json, sys
 data = json.loads(sys.stdin.read() or "{}")
 print(data.get("ssh_port", 22))
@@ -221,7 +232,7 @@ SSH_OPTS="-o StrictHostKeyChecking=no -o BatchMode=yes -p ${SSH_PORT}"
 log "Step 6: Fetching GitHub Actions runner registration token..."
 
 # Get a fresh registration token from GitHub API
-REG_TOKEN=$(python3 - <<PYEOF
+REG_TOKEN=$($PYTHON_CMD - <<PYEOF
 import json, sys, urllib.request
 token = "${GITHUB_TOKEN}"
 repo  = "${GITHUB_REPO}"
