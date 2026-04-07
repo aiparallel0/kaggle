@@ -1085,8 +1085,8 @@ bash vastai_runner.sh
 3. Click **Run workflow** (green button)
 4. Pick a training mode:
    - `micro` — ~10 min, tests full pipeline (recommended for iteration)
-   - `instant` — &lt;30 seconds after first run (uses cached weights)
-   - `superfast` — &lt;5 min, TrOCR+YOLO only (no DONUT)
+   - `instant` — <30 seconds after first run (uses cached weights)
+   - `superfast` — <5 min, TrOCR+YOLO only (no DONUT)
    - `mini` — ~20 min, one full experiment
 5. Click **Run workflow**
 
@@ -1123,8 +1123,8 @@ This is the part that eliminates copy-pasting forever:
 
 | Mode | Flag | Time | What trains | Best for |
 |---|---|---|---|---|
-| **Instant** | `--instant` | &lt;30 sec* | TrOCR+YOLO (cached) | Rapid iteration after first run |
-| **Superfast** | `--superfast` | &lt;5 min | TrOCR+YOLO only | Quick TrOCR/YOLO check |
+| **Instant** | `--instant` | <30 sec* | TrOCR+YOLO (cached) | Rapid iteration after first run |
+| **Superfast** | `--superfast` | <5 min | TrOCR+YOLO only | Quick TrOCR/YOLO check |
 | **Micro** | `--micro` | ~10 min | DONUT + YOLO + TrOCR | **Recommended for CI** |
 | **Mini** | `--mini` | ~20 min | 1 DONUT + 1 YOLO/TrOCR | Thorough single-experiment test |
 | **Quick** | `--quick` | ~30 min | Exp 1 + TrOCR+YOLO | Pre-merge validation |
@@ -1160,7 +1160,7 @@ This is the part that eliminates copy-pasting forever:
 | `.github/copilot-instructions.md` | Gives Copilot context about the project and known bugs |
 | `cloud_orchestration.py` | Python-level Vast.ai provisioner (`VastAIProvisioner` class) |
 
-> **All these files are being added in PR #XXX.** After merging, the full automated loop is ready to use.
+> **Note:** These files are added as part of the automated cloud training setup. After adding them to your repo, the full automated loop is ready to use.
 
 ---
 
