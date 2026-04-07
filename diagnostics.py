@@ -1510,13 +1510,27 @@ if __name__ == "__main__":
             ai_provider=args.ai_provider,
         )
         if not ok and (args.github_notify or _get_github_token()):
-            github_report_failure(
-                stage="smoke_test",
-                error_type="SmokeTestFailure",
-                error_message="One or more preflight checks failed — see console output.",
+            # Cross-process dedup: search for an already-open issue before creating
+            # a new one.  _REPORTED_ISSUES (in-process dedup) is reset on each
+            # invocation, so without this check repeated `python diagnostics.py
+            # --smoke-test` calls flood GitHub with identical issues (#150–#154).
+            existing = github_search_open_issues(
+                "[DONUT Pipeline] smoke_test: SmokeTestFailure",
                 repo=args.github_repo,
-                issue_number=args.github_issue,
             )
+            if not existing:
+                github_report_failure(
+                    stage="smoke_test",
+                    error_type="SmokeTestFailure",
+                    error_message="One or more preflight checks failed — see console output.",
+                    repo=args.github_repo,
+                    issue_number=args.github_issue,
+                )
+            else:
+                print(
+                    f"  [GitHub] Suppressed duplicate — "
+                    f"{len(existing)} open issue(s) already exist"
+                )
         raise SystemExit(0 if ok else 1)
 
     # Default: just run smoke test

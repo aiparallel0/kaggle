@@ -26,6 +26,7 @@
 PYTHON ?= python3
 
 .PHONY: all run setup check fix sync clean help
+.PHONY: test test-fast lint
 .PHONY: $(addprefix exp-,1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17)
 
 # Default: full pipeline
@@ -48,8 +49,20 @@ p.write_text(json.dumps({'image_processor': {'size': {'height': 1280, 'width': 9
 print('processor_config.json ready')"
 
 ## check: run CI test suite (lint + imports + smoke test)
-check:
-	$(PYTHON) autonomous_ci.py --no-merge --no-auto-fix
+check: lint test
+
+## test: run fast CPU-only pytest suite
+test:
+	pytest tests/ -v --tb=short
+
+## test-fast: run pytest and stop on first failure
+test-fast:
+	pytest tests/ -v --tb=short -x
+
+## lint: run ruff linter and format check
+lint:
+	ruff check . --select E,F,W --ignore E501
+	ruff format --check .
 
 ## fix: run autonomous CI auto-fix loop (AI rewrites broken files, max 5 attempts)
 fix:
