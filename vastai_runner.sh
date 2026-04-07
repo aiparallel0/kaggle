@@ -271,7 +271,7 @@ SETUP_VARS
 
 # Block 3: bash logic — single-quoted so no expansion needed
 cat >> "$SETUP_TMP" << 'SETUP_BODY'
-trap 'rm -f /tmp/runner_setup.sh' EXIT
+trap 'rm -f /tmp/runner_setup.sh /tmp/start_runner.sh' EXIT
 log_r() { echo "[remote $(date -u +%H:%M:%S)] $*"; }
 
 log_r "Creating non-root runner user..."
@@ -290,7 +290,11 @@ tar xzf "/tmp/${RUNNER_PKG}" -C /workspace/actions-runner
 chown -R runner:runner /workspace/actions-runner
 
 log_r "Configuring runner (name=${RUNNER_NAME}, labels=${RUNNER_LABELS})..."
-su - runner -c "
+# set +e: Vast.ai containers emit harmless "/root/.bash_profile: Permission denied"
+# which would abort under set -e. We check exit code manually instead.
+set +e
+su - runner -s /bin/bash -c "
+  set -e
   cd /workspace/actions-runner
   ./config.sh \
     --url 'https://github.com/${GITHUB_REPO}' \
@@ -299,23 +303,42 @@ su - runner -c "
     --labels '${RUNNER_LABELS}' \
     --ephemeral --unattended \
     --work /workspace/runner-work
-"
+" 2>&1
+CONFIG_RC=$?
+set -e
+if [[ $CONFIG_RC -ne 0 ]]; then
+  echo "[remote] ERROR: config.sh failed with exit code $CONFIG_RC" >&2
+  exit $CONFIG_RC
+fi
 
 log_r "Starting runner..."
-su - runner -c "
-  cd /workspace/actions-runner
-  nohup ./run.sh > /workspace/runner.log 2>&1 &
-echo \\$! > /tmp/runner.pid
-  disown
-"
+# Write launcher as a separate script so $! is captured in the same shell that forks.
+# This avoids all "su -c" quoting and $! scoping issues under set -u.
+cat > /tmp/start_runner.sh << 'LAUNCHER_EOF'
+#!/bin/bash
+set -euo pipefail
+cd /workspace/actions-runner
+nohup ./run.sh >> /workspace/runner.log 2>&1 &
+RUNNER_PID=$!
+echo "${RUNNER_PID}" > /tmp/runner.pid
+disown "${RUNNER_PID}"
+echo "Runner started: PID=${RUNNER_PID}"
+LAUNCHER_EOF
+chmod 755 /tmp/start_runner.sh
+chown runner:runner /tmp/start_runner.sh
+su - runner -s /bin/bash -c "bash /tmp/start_runner.sh"
+rm -f /tmp/start_runner.sh
 
-sleep 3
-echo "Runner PID: $(cat /tmp/runner.pid 2>/dev/null || echo unknown)"
+sleep 5
+if [[ -f /tmp/runner.pid ]]; then
+  RPID=$(cat /tmp/runner.pid)
+  echo "Runner PID: ${RPID}"
+  kill -0 "${RPID}" 2>/dev/null && echo "Runner process is alive." || echo "WARNING: runner PID not found (may have already picked up a job)"
+else
+  echo "WARNING: /tmp/runner.pid not created — runner may not have started"
+fi
 echo "--- runner.log tail ---"
-tail -15 /workspace/runner.log 2>/dev/null || echo "(log not yet available)"
-
-# Clean up setup script (contains GITHUB_TOKEN)
-rm -f /tmp/runner_setup.sh || true
+tail -20 /workspace/runner.log 2>/dev/null || echo "(log not yet available)"
 SETUP_BODY
 
 log "  Copying setup script to instance..."
