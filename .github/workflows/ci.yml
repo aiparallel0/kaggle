@@ -1,0 +1,39 @@
+# ci.yml — Lightweight CI: lint + fast unit tests on every PR.
+#
+# Runs on ubuntu-latest with no GPU and no model downloads.
+# All tests in tests/ are CPU-only and complete in under 60 seconds.
+#
+# Complements the existing experiments_sroie.yml (YAML validation) and
+# gpu_training.yml (full GPU training runs) without replacing them.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Lint + pytest (CPU-only)
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install test deps (no torch/GPU)
+        run: pip install pytest ruff pyyaml
+
+      - name: Ruff lint
+        run: ruff check . --select E,F,W --ignore E501
+
+      - name: Run pytest
+        run: pytest tests/ -v --tb=short
