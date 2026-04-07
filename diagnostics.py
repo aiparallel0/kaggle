@@ -1528,8 +1528,7 @@ if __name__ == "__main__":
                 )
             else:
                 print(
-                    f"  [GitHub] Suppressed duplicate — "
-                    f"{len(existing)} open issue(s) already exist"
+                    f"  [GitHub] Suppressed duplicate — {len(existing)} open issue(s) already exist"
                 )
         raise SystemExit(0 if ok else 1)
 
