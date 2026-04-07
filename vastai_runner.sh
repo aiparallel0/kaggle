@@ -290,8 +290,11 @@ tar xzf "/tmp/${RUNNER_PKG}" -C /workspace/actions-runner
 chown -R runner:runner /workspace/actions-runner
 
 log_r "Configuring runner (name=${RUNNER_NAME}, labels=${RUNNER_LABELS})..."
+# Disable -e around config.sh: Vast.ai containers emit harmless
+# "/root/.bash_profile: Permission denied" which would abort set -e
+set +e
 su - runner -c "
-  cd /workspace/actions-runner
+  cd /workspace/actions-runner && \
   ./config.sh \
     --url 'https://github.com/${GITHUB_REPO}' \
     --token '${REG_TOKEN}' \
@@ -299,20 +302,43 @@ su - runner -c "
     --labels '${RUNNER_LABELS}' \
     --ephemeral --unattended \
     --work /workspace/runner-work
-"
+" 2>&1
+CONFIG_EXIT=$?
+set -e
+if [[ $CONFIG_EXIT -ne 0 ]]; then
+  echo "[remote] ERROR: config.sh exited with $CONFIG_EXIT" >&2
+  exit $CONFIG_EXIT
+fi
 
 log_r "Starting runner..."
-su - runner -c "
-  cd /workspace/actions-runner
-  nohup ./run.sh > /workspace/runner.log 2>&1 &
-echo \\$! > /tmp/runner.pid
-  disown
-"
+# Write a launcher script as runner user — avoids all su -c quoting/PID issues
+cat > /tmp/start_runner.sh << 'LAUNCHER'
+#!/bin/bash
+cd /workspace/actions-runner
+nohup ./run.sh >> /workspace/runner.log 2>&1 &
+echo $! > /tmp/runner.pid
+disown $!
+echo "Runner started with PID $(cat /tmp/runner.pid)"
+LAUNCHER
+chmod +x /tmp/start_runner.sh
+chown runner:runner /tmp/start_runner.sh
+su - runner -s /bin/bash -c "bash /tmp/start_runner.sh"
+rm -f /tmp/start_runner.sh
 
-sleep 3
-echo "Runner PID: $(cat /tmp/runner.pid 2>/dev/null || echo unknown)"
+sleep 5
+if [[ -f /tmp/runner.pid ]]; then
+  RPID=$(cat /tmp/runner.pid)
+  echo "Runner PID: ${RPID}"
+  if kill -0 "${RPID}" 2>/dev/null; then
+    echo "Runner process is alive."
+  else
+    echo "WARNING: Runner process not found — may have already picked up a job or crashed."
+  fi
+else
+  echo "WARNING: /tmp/runner.pid not found"
+fi
 echo "--- runner.log tail ---"
-tail -15 /workspace/runner.log 2>/dev/null || echo "(log not yet available)"
+tail -20 /workspace/runner.log 2>/dev/null || echo "(log not yet available)"
 
 # Clean up setup script (contains GITHUB_TOKEN)
 rm -f /tmp/runner_setup.sh || true
