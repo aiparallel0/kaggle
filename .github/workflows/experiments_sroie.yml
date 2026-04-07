@@ -32,12 +32,14 @@ on:
       - "scripts/validate_yaml_experiments.py"
       - "requirements.txt"
       - "**.py"
+      - "**.sh"
   pull_request:
     paths:
       - "experiments/**"
       - "scripts/validate_yaml_experiments.py"
       - "requirements.txt"
       - "**.py"
+      - "**.sh"
 
 jobs:
   lint:
@@ -119,3 +121,22 @@ jobs:
         env:
           PYTHONPATH: .
         run: python -c "import validation; print('validation OK')"
+
+  shellcheck:
+    name: Shell script lint (shellcheck)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: sudo apt-get install -y shellcheck
+
+      - name: Run shellcheck on all shell scripts
+        # Finds every .sh file in the repo (excluding .git) and lints them.
+        # SC1090 (non-constant source) is suppressed repo-wide because .env.cloud
+        # is an intentionally dynamic path annotated with a per-line directive.
+        run: |
+          find . -name '*.sh' -not -path './.git/*' -print0 \
+            | xargs -0 shellcheck --exclude=SC1090

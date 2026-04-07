@@ -35,6 +35,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="${SCRIPT_DIR}/.env.cloud"
 if [[ -f "$ENV_FILE" ]]; then
     set -a
+    # shellcheck source=/dev/null
     source "$ENV_FILE"
     set +a
     echo "[env] Loaded secrets from $ENV_FILE"
@@ -51,12 +52,38 @@ VASTAI_MIN_VRAM="${VASTAI_MIN_VRAM:-24}"
 VASTAI_DISK_GB="${VASTAI_DISK_GB:-40}"
 VASTAI_IMAGE="${VASTAI_IMAGE:-pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime}"
 RUNNER_LABELS="${RUNNER_LABELS:-self-hosted,gpu,vast-ai}"
-RUNNER_NAME="${RUNNER_NAME:-vastai-gpu-$(date +%s)}"
+RUNNER_NAME="${RUNNER_NAME:-vastai-gpu-$(date +%s)}"
+# GitHub Actions runner names allow only alphanumerics, hyphens, and underscores.
+# Strip all other characters (including any embedded ANSI/control chars).
+RUNNER_NAME="$(printf '%s' "${RUNNER_NAME}" | tr -cd '[:alnum:]-_')"
 RUNNER_VERSION="${RUNNER_VERSION:-2.316.1}"
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/id_vastai}"
+# Auto-generate SSH key if it does not exist
+if [[ ! -f "$SSH_KEY" ]]; then
+    echo "[setup] SSH key not found at $SSH_KEY — generating new ed25519 key..."
+    mkdir -p "$(dirname "$SSH_KEY")"
+    ssh-keygen -t ed25519 -f "$SSH_KEY" -N "" -C "vastai-runner" -q
+    chmod 600 "$SSH_KEY"
+    echo "[setup] Generated $SSH_KEY (no passphrase — required for unattended automation)."
+    echo "[setup] Add ${SSH_KEY}.pub to your Vast.ai account SSH keys."
+fi
 BOOT_TIMEOUT="${BOOT_TIMEOUT:-600}"
 POLL_INTERVAL=15
 JOB_TIMEOUT="${JOB_TIMEOUT:-7200}"
+# SSH_ARGS/SCP_ARGS are populated after SSH is ready (Step 6); initialise
+# here so the cleanup trap can safely reference them at any point.
+SSH_ARGS=()
+SCP_ARGS=()
+
+# ---------------------------------------------------------------------------
+# Parse command-line flags
+# ---------------------------------------------------------------------------
+DRY_RUN=false
+for arg in "$@"; do
+    case "$arg" in
+        --dry-run) DRY_RUN=true ;;
+    esac
+done
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -65,7 +92,7 @@ log() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*"; }
 die() { log "ERROR: $*" >&2; exit 1; }
 require_env() {
     local var="$1"
-    [[ -n "{!var:-}" ]] || die "Required env var \\$$var is not set. Add it to .env.cloud or export it."
+    [[ -n "${!var:-}" ]] || die "Required env var \\$$var is not set. Add it to .env.cloud or export it."
 }
 
 # ---------------------------------------------------------------------------
@@ -124,6 +151,15 @@ print(data[0]['id'])
 log "  Offer: $OFFER_ID"
 
 # ---------------------------------------------------------------------------
+# --dry-run: exit before spending money
+# ---------------------------------------------------------------------------
+if [[ "$DRY_RUN" == true ]]; then
+    log "--dry-run: found offer $OFFER_ID — not creating instance."
+    log "--dry-run: all validations passed successfully."
+    exit 0
+fi
+
+# ---------------------------------------------------------------------------
 # Step 5: Create instance
 # ---------------------------------------------------------------------------
 log "Step 5: Creating instance..."
@@ -147,6 +183,15 @@ log "  Instance: $INSTANCE_ID"
 # Destroy instance on any exit
 cleanup() {
     local code=$?
+    if [[ -n "${SSH_HOST:-}" ]] && [[ ${#SCP_ARGS[@]} -gt 0 ]]; then
+        log "Cleanup: retrieving remote logs..."
+        if scp "${SCP_ARGS[@]}" "root@${SSH_HOST}:/workspace/runner.log" \
+                "./runner-${INSTANCE_ID}.log" 2>/dev/null; then
+            log "  Saved runner.log to ./runner-${INSTANCE_ID}.log"
+        else
+            log "  (no remote log to retrieve)"
+        fi
+    fi
     log "Cleanup: destroying instance $INSTANCE_ID..."
     $VASTAI_CMD destroy instance "$INSTANCE_ID" --raw 2>/dev/null || true
     log "  Instance $INSTANCE_ID destroyed."
@@ -181,7 +226,8 @@ while [[ $elapsed -lt $BOOT_TIMEOUT ]]; do
 done
 [[ -n "$SSH_HOST" ]] || die "Instance never became SSH-accessible after ${BOOT_TIMEOUT}s."
 
-SSH_OPTS="-i $SSH_KEY -o StrictHostKeyChecking=no -o BatchMode=yes -p ${SSH_PORT}"
+SSH_ARGS=(-i "$SSH_KEY" -o StrictHostKeyChecking=no -o BatchMode=yes -p "$SSH_PORT")
+SCP_ARGS=(-i "$SSH_KEY" -o StrictHostKeyChecking=no -o BatchMode=yes -P "$SSH_PORT")
 
 # ---------------------------------------------------------------------------
 # Step 7: Get GitHub Actions runner registration token
@@ -267,11 +313,11 @@ tail -15 /workspace/runner.log 2>/dev/null || echo "(log not yet available)"
 SETUP_BODY
 
 log "  Copying setup script to instance..."
-scp $SSH_OPTS "$SETUP_TMP" "root@${SSH_HOST}:/tmp/runner_setup.sh"
+scp "${SCP_ARGS[@]}" "$SETUP_TMP" "root@${SSH_HOST}:/tmp/runner_setup.sh"
 rm -f "$SETUP_TMP"
 
 log "  Running setup script on instance..."
-ssh $SSH_OPTS "root@${SSH_HOST}" "bash /tmp/runner_setup.sh"
+ssh "${SSH_ARGS[@]}" "root@${SSH_HOST}" "bash /tmp/runner_setup.sh"
 log "  Remote setup complete."
 
 # ---------------------------------------------------------------------------
@@ -280,7 +326,7 @@ log "  Remote setup complete."
 log "Step 9: Waiting for job to complete (timeout ${JOB_TIMEOUT}s)..."
 job_elapsed=0
 while [[ $job_elapsed -lt $JOB_TIMEOUT ]]; do
-    ALIVE=$(ssh $SSH_OPTS "root@${SSH_HOST}" \
+    ALIVE=$(ssh "${SSH_ARGS[@]}" "root@${SSH_HOST}" \
         "kill -0 \\$\(cat /tmp/runner.pid 2>/dev/null\) 2>/dev/null && echo alive || echo gone" \
         2>/dev/null || echo "gone")
     if [[ "$ALIVE" == "gone" ]]; then
