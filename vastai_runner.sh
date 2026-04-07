@@ -21,6 +21,7 @@
 #   VASTAI_IMAGE     default "pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime"
 #   RUNNER_LABELS    default "self-hosted,gpu,vast-ai"
 #   RUNNER_VERSION   default "2.316.1"
+#   TRAINING_MODE    default "micro" (passed to gpu_training.yml dispatch)
 #   SSH_KEY          default "$HOME/.ssh/id_vastai"
 #   BOOT_TIMEOUT     default "600"
 #   JOB_TIMEOUT      default "7200"
@@ -189,7 +190,15 @@ cleanup() {
                 "./runner-${INSTANCE_ID}.log" 2>/dev/null; then
             log "  Saved runner.log to ./runner-${INSTANCE_ID}.log"
         else
-            log "  (no remote log to retrieve)"
+            log "  (no remote runner.log to retrieve)"
+        fi
+        # Also retrieve .NET diagnostics if available (helps debug runner crashes)
+        if ssh "${SSH_ARGS[@]}" "root@${SSH_HOST}" \
+                "tar czf /tmp/runner-diag.tar.gz /workspace/actions-runner/_diag/ 2>/dev/null" 2>/dev/null; then
+            if scp "${SCP_ARGS[@]}" "root@${SSH_HOST}:/tmp/runner-diag.tar.gz" \
+                    "./runner-diag-${INSTANCE_ID}.tar.gz" 2>/dev/null; then
+                log "  Saved runner diagnostics to ./runner-diag-${INSTANCE_ID}.tar.gz"
+            fi
         fi
     fi
     log "Cleanup: destroying instance $INSTANCE_ID..."
@@ -243,6 +252,37 @@ REG_TOKEN=$(curl -sSfX POST \
 log "  Token: ${REG_TOKEN:0:8}..."
 
 # ---------------------------------------------------------------------------
+# Step 7.5: Dispatch the GPU training workflow
+#
+# The runner is ephemeral — it waits for exactly one job.  We trigger
+# the gpu_training.yml workflow now so the job is queued in GitHub
+# Actions BEFORE the runner comes online.  This eliminates the race
+# condition where the runner starts, finds no pending job, and idles
+# until the 7200 s timeout.
+# ---------------------------------------------------------------------------
+log "Step 7.5: Dispatching GPU training workflow..."
+TRAINING_MODE="${TRAINING_MODE:-micro}"
+DISPATCH_STATUS=$(curl -sSo /dev/null -w "%{http_code}" -X POST \
+    -H "Accept: application/vnd.github+json" \
+    -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+    -H "X-GitHub-Api-Version: 2022-11-28" \
+    "https://api.github.com/repos/${GITHUB_REPO}/actions/workflows/gpu_training.yml/dispatches" \
+    -d "{\"ref\":\"main\",\"inputs\":{\"training_mode\":\"${TRAINING_MODE}\"}}" \
+    2>/dev/null) || true
+if [[ "$DISPATCH_STATUS" == "204" ]]; then
+    log "  Workflow dispatched (mode=${TRAINING_MODE}). Job will be queued for the runner."
+elif [[ "$DISPATCH_STATUS" == "404" ]]; then
+    log "  WARNING: gpu_training.yml not found — workflow may not exist yet."
+    log "  Runner will wait for a manually triggered job."
+elif [[ "$DISPATCH_STATUS" == "422" ]]; then
+    log "  WARNING: Workflow dispatch failed (422) — may already be running or ref invalid."
+    log "  Runner will wait for any queued job."
+else
+    log "  WARNING: Workflow dispatch returned HTTP ${DISPATCH_STATUS:-unknown}."
+    log "  Runner will wait for a manually triggered job."
+fi
+
+# ---------------------------------------------------------------------------
 # Step 8: Write setup script to temp file, scp it, run it remotely
 # ---------------------------------------------------------------------------
 log "Step 8: Preparing remote setup script..."
@@ -289,11 +329,37 @@ curl -sSfL "${RUNNER_URL}" -o "/tmp/${RUNNER_PKG}"
 tar xzf "/tmp/${RUNNER_PKG}" -C /workspace/actions-runner
 chown -R runner:runner /workspace/actions-runner
 
+# ---------------------------------------------------------------------------
+# Install system dependencies required by the .NET-based GitHub Actions runner.
+# The runner package ships bin/installdependencies.sh which installs libicu,
+# libssl, and other system libraries.  Without this step the runner process
+# crashes within seconds of starting (runner.log ≈ 26 bytes, no "Listening
+# for Jobs" message) — the root cause of 10+ failed PRs (#209-#219).
+# ---------------------------------------------------------------------------
+log_r "Installing runner system dependencies..."
+if [[ -x /workspace/actions-runner/bin/installdependencies.sh ]]; then
+  /workspace/actions-runner/bin/installdependencies.sh 2>&1 | tail -5
+  log_r "  System dependencies installed."
+else
+  # Manual fallback: install the most critical .NET runtime deps
+  log_r "  installdependencies.sh not found — installing deps manually..."
+  apt-get update -qq 2>/dev/null || true
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+    libicu-dev libssl-dev libkrb5-3 zlib1g liblttng-ust1 2>/dev/null
+  APT_RC=$?
+  if [[ $APT_RC -ne 0 ]]; then
+    log_r "  WARNING: Manual dependency install exited with $APT_RC — runner may crash."
+  else
+    log_r "  Manual dependency install done."
+  fi
+fi
+
 log_r "Configuring runner (name=${RUNNER_NAME}, labels=${RUNNER_LABELS})..."
-# set +e: Vast.ai containers emit harmless "/root/.bash_profile: Permission denied"
-# which would abort under set -e. We check exit code manually instead.
+# Use 'su -s /bin/bash runner' (no '-' = no login shell) to avoid
+# Vast.ai's harmless but noisy "/root/.bash_profile: Permission denied".
+# We still wrap in set +e and check exit code manually for safety.
 set +e
-su - runner -s /bin/bash -c "
+HOME=/home/runner su -s /bin/bash runner -c "
   set -e
   cd /workspace/actions-runner
   ./config.sh \
@@ -312,13 +378,15 @@ if [[ $CONFIG_RC -ne 0 ]]; then
 fi
 
 log_r "Starting runner..."
-# Write launcher as a separate script so $! is captured in the same shell that forks.
-# This avoids all "su -c" quoting and $! scoping issues under set -u.
+# Write launcher as a separate script so $! is captured in the same shell
+# that forks.  Uses setsid to create a new session — the runner process
+# survives SSH disconnect even in Docker environments where nohup alone
+# is insufficient (the process is no longer in the SSH session's pgroup).
 cat > /tmp/start_runner.sh << 'LAUNCHER_EOF'
 #!/bin/bash
 set -euo pipefail
 cd /workspace/actions-runner
-nohup ./run.sh >> /workspace/runner.log 2>&1 &
+setsid nohup ./run.sh >> /workspace/runner.log 2>&1 &
 RUNNER_PID=$!
 echo "${RUNNER_PID}" > /tmp/runner.pid
 disown "${RUNNER_PID}"
@@ -326,17 +394,49 @@ echo "Runner started: PID=${RUNNER_PID}"
 LAUNCHER_EOF
 chmod 755 /tmp/start_runner.sh
 chown runner:runner /tmp/start_runner.sh
-su - runner -s /bin/bash -c "bash /tmp/start_runner.sh"
+HOME=/home/runner su -s /bin/bash runner -c "bash /tmp/start_runner.sh"
 rm -f /tmp/start_runner.sh
 
-sleep 5
-if [[ -f /tmp/runner.pid ]]; then
-  RPID=$(cat /tmp/runner.pid)
-  echo "Runner PID: ${RPID}"
-  kill -0 "${RPID}" 2>/dev/null && echo "Runner process is alive." || echo "WARNING: runner PID not found (may have already picked up a job)"
-else
-  echo "WARNING: /tmp/runner.pid not created — runner may not have started"
+# ---------------------------------------------------------------------------
+# Runner health check: wait up to 60s for "Listening for Jobs" in the log.
+# If the runner crashes (missing deps, bad config), detect it immediately
+# instead of waiting 7200s in Step 9.
+# ---------------------------------------------------------------------------
+log_r "Waiting for runner to become ready (up to 60s)..."
+HEALTH_OK=false
+for i in $(seq 1 12); do
+  sleep 5
+  # Check if PID is still alive
+  if [[ -f /tmp/runner.pid ]]; then
+    RPID=$(cat /tmp/runner.pid)
+    if ! kill -0 "${RPID}" 2>/dev/null; then
+      log_r "ERROR: Runner process (PID ${RPID}) exited after $((i * 5))s!"
+      log_r "--- Full runner.log ---"
+      cat /workspace/runner.log 2>/dev/null || echo "(empty)"
+      log_r "Runner crashed before accepting jobs. Check dependencies."
+      exit 1
+    fi
+  else
+    log_r "ERROR: /tmp/runner.pid not created — runner failed to start."
+    exit 1
+  fi
+  # Check for the "Listening for Jobs" marker
+  if grep -q "Listening for Jobs" /workspace/runner.log 2>/dev/null; then
+    log_r "Runner is listening for jobs (took $((i * 5))s)."
+    HEALTH_OK=true
+    break
+  fi
+  log_r "  ...waiting ($((i * 5))/60s)"
+done
+
+if [[ "$HEALTH_OK" != "true" ]]; then
+  log_r "WARNING: Runner still alive but 'Listening for Jobs' not seen after 60s."
+  log_r "--- runner.log tail ---"
+  tail -30 /workspace/runner.log 2>/dev/null || echo "(empty)"
+  log_r "Continuing anyway — runner may be slow to connect."
 fi
+
+echo "Runner PID: $(cat /tmp/runner.pid 2>/dev/null || echo 'unknown')"
 echo "--- runner.log tail ---"
 tail -20 /workspace/runner.log 2>/dev/null || echo "(log not yet available)"
 SETUP_BODY
@@ -350,16 +450,26 @@ ssh "${SSH_ARGS[@]}" "root@${SSH_HOST}" "bash /tmp/runner_setup.sh"
 log "  Remote setup complete."
 
 # ---------------------------------------------------------------------------
-# Step 9: Wait for runner job to finish
+# Step 9: Wait for runner job to finish (with crash detection)
 # ---------------------------------------------------------------------------
 log "Step 9: Waiting for job to complete (timeout ${JOB_TIMEOUT}s)..."
 job_elapsed=0
 while [[ $job_elapsed -lt $JOB_TIMEOUT ]]; do
     ALIVE=$(ssh "${SSH_ARGS[@]}" "root@${SSH_HOST}" \
-        "kill -0 \\$\(cat /tmp/runner.pid 2>/dev/null\) 2>/dev/null && echo alive || echo gone" \
+        "kill -0 \$(cat /tmp/runner.pid 2>/dev/null) 2>/dev/null && echo alive || echo gone" \
         2>/dev/null || echo "gone")
     if [[ "$ALIVE" == "gone" ]]; then
-        log "  Runner exited — job complete."
+        if [[ $job_elapsed -lt 60 ]]; then
+            # Runner exited suspiciously fast — likely crashed, not job complete
+            log "  WARNING: Runner exited after only ${job_elapsed}s!"
+            log "  Fetching remote runner.log for diagnosis..."
+            ssh "${SSH_ARGS[@]}" "root@${SSH_HOST}" \
+                "echo '=== runner.log ===' && cat /workspace/runner.log 2>/dev/null && echo '=== diag logs ===' && find /workspace/actions-runner/_diag -name '*.log' -exec cat {} + 2>/dev/null | tail -50" \
+                2>/dev/null || true
+            log "  Runner exited too quickly — possible crash (not job completion)."
+        else
+            log "  Runner exited — job complete (ran for ${job_elapsed}s)."
+        fi
         break
     fi
     log "  Runner running (${job_elapsed}/${JOB_TIMEOUT}s)..."

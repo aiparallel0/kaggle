@@ -15,6 +15,7 @@ import math
 import os
 import subprocess
 import sys
+import time
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -2438,6 +2439,8 @@ class VastAIProvisioner:
     DEFAULT_DISK_GB: int = 40
     #: GitHub Actions runner version to download.
     RUNNER_VERSION: str = "2.316.1"
+    #: If the runner exits in fewer seconds than this, it's a crash, not job completion.
+    RUNNER_CRASH_THRESHOLD_S: int = 60
 
     def __init__(self, config: CloudConfig) -> None:
         self.config = config
@@ -2648,10 +2651,13 @@ class VastAIProvisioner:
         """Clone the repo and configure an ephemeral GitHub Actions runner on the instance.
 
         Steps executed remotely via SSH:
-        1. Clone ``config.github_repo``.
-        2. Install Python dependencies (``pip install -r requirements.txt``).
-        3. Download and configure the Actions runner binary (ephemeral mode).
-        4. Start the runner in the background.
+        1. Create non-root ``runner`` user.
+        2. Clone ``config.github_repo``.
+        3. Download and extract the Actions runner binary.
+        4. Install system dependencies via ``bin/installdependencies.sh``.
+        5. Configure the runner (ephemeral mode).
+        6. Start the runner in a new session (``setsid``) for SSH-disconnect survival.
+        7. Wait up to 60 s for "Listening for Jobs" in the runner log.
 
         Parameters
         ----------
@@ -2663,12 +2669,13 @@ class VastAIProvisioner:
         Returns
         -------
         bool
-            True when the remote setup commands succeed.
+            True when the remote setup commands succeed and the runner is healthy.
         """
         host = instance_info.get("ssh_host") or instance_info.get("public_ipaddr", "")
         port = instance_info.get("ssh_port", 22)
         repo = self.config.github_repo
         branch = self.config.git_branch
+        github_token = os.getenv("GITHUB_TOKEN", "")
         runner_url = (
             f"https://github.com/actions/runner/releases/download/"
             f"v{self.RUNNER_VERSION}/actions-runner-linux-x64-{self.RUNNER_VERSION}.tar.gz"
@@ -2677,12 +2684,26 @@ class VastAIProvisioner:
         runner_name = f"vastai-{self._instance_id or 'runner'}"
         runner_labels = "self-hosted,gpu,vast-ai"
 
+        # Build the clone URL — use token auth if available for private repos
+        if github_token:
+            clone_url = f"https://x-access-token:{github_token}@github.com/{repo}.git"
+        else:
+            clone_url = f"https://github.com/{repo}.git"
+
         remote_script = f"""
 set -euo pipefail
 export GIT_TERMINAL_PROMPT=0
+
+echo '[remote] Creating non-root runner user...'
+useradd -m -s /bin/bash runner 2>/dev/null || true
+mkdir -p /workspace/actions-runner /workspace/runner-work /workspace/repo
+chown -R runner:runner /workspace
+
 echo '[remote] Cloning https://github.com/{repo} ...'
-git -c credential.helper='' clone --depth 1 --branch {branch} https://github.com/{repo}.git /workspace/repo || \
-    git -c credential.helper='' clone --depth 1 https://github.com/{repo}.git /workspace/repo
+git -c credential.helper='' clone --depth 1 --branch {branch} {clone_url} /workspace/repo || \
+    git -c credential.helper='' clone --depth 1 {clone_url} /workspace/repo
+chown -R runner:runner /workspace/repo
+
 cd /workspace/repo
 echo '[remote] Installing Python dependencies...'
 pip install --quiet -r requirements.txt || true
@@ -2691,25 +2712,76 @@ for pkg in torch transformers; do
     python3 -c "import $pkg" 2>/dev/null || \
         echo "[remote] WARNING: $pkg not importable — GPU extras may be missing"
 done
-# constants.py MUST be importable without torch (hard fail — do not add || true)
 python3 -c "from constants import FIELDS, BASE_MODEL, SEED; print('[remote] Import chain OK')"
+
 echo '[remote] Downloading Actions runner...'
-mkdir -p /opt/actions-runner && cd /opt/actions-runner
-curl -sSfL '{runner_url}' -o '{runner_pkg}'
-tar xzf '{runner_pkg}'
+mkdir -p /workspace/actions-runner && cd /workspace/actions-runner
+curl -sSfL '{runner_url}' -o '/tmp/{runner_pkg}'
+tar xzf '/tmp/{runner_pkg}' -C /workspace/actions-runner
+chown -R runner:runner /workspace/actions-runner
+
+echo '[remote] Installing runner system dependencies...'
+if [ -x /workspace/actions-runner/bin/installdependencies.sh ]; then
+    /workspace/actions-runner/bin/installdependencies.sh 2>&1 | tail -5
+else
+    apt-get update -qq 2>/dev/null || true
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+        libicu-dev libssl-dev libkrb5-3 zlib1g liblttng-ust1 2>/dev/null
+    APT_RC=$?
+    if [ "$APT_RC" -ne 0 ]; then
+        echo "[remote] WARNING: Manual dependency install exited with $APT_RC — runner may crash."
+    fi
+fi
+
 echo '[remote] Configuring runner...'
-./config.sh \\
-    --url 'https://github.com/{repo}' \\
-    --token '{registration_token}' \\
-    --name '{runner_name}' \\
-    --labels '{runner_labels}' \\
-    --ephemeral \\
-    --unattended \\
-    --work /workspace/runner-work
+HOME=/home/runner su -s /bin/bash runner -c "
+  set -e
+  cd /workspace/actions-runner
+  ./config.sh \\
+      --url 'https://github.com/{repo}' \\
+      --token '{registration_token}' \\
+      --name '{runner_name}' \\
+      --labels '{runner_labels}' \\
+      --ephemeral \\
+      --unattended \\
+      --work /workspace/runner-work
+" 2>&1
+
 echo '[remote] Starting runner...'
-nohup ./run.sh >/tmp/runner.log 2>&1 &
-echo $! > /tmp/runner.pid
-echo "[remote] Runner started (PID $(cat /tmp/runner.pid))"
+cat > /tmp/start_runner.sh << 'LAUNCHER'
+#!/bin/bash
+set -euo pipefail
+cd /workspace/actions-runner
+setsid nohup ./run.sh >> /workspace/runner.log 2>&1 &
+RPID=$!
+echo "${{RPID}}" > /tmp/runner.pid
+disown "${{RPID}}"
+echo "Runner started: PID=${{RPID}}"
+LAUNCHER
+chmod 755 /tmp/start_runner.sh
+chown runner:runner /tmp/start_runner.sh
+HOME=/home/runner su -s /bin/bash runner -c "bash /tmp/start_runner.sh"
+rm -f /tmp/start_runner.sh
+
+echo '[remote] Waiting for runner to become ready...'
+for i in $(seq 1 12); do
+    sleep 5
+    if [ -f /tmp/runner.pid ]; then
+        RPID=$(cat /tmp/runner.pid)
+        if ! kill -0 "${{RPID}}" 2>/dev/null; then
+            echo "[remote] ERROR: Runner crashed after $((i * 5))s"
+            cat /workspace/runner.log 2>/dev/null
+            exit 1
+        fi
+    fi
+    if grep -q 'Listening for Jobs' /workspace/runner.log 2>/dev/null; then
+        echo "[remote] Runner is listening for jobs (took $((i * 5))s)."
+        break
+    fi
+    echo "[remote]   ...waiting ($((i * 5))/60s)"
+done
+echo "[remote] Runner PID: $(cat /tmp/runner.pid 2>/dev/null)"
+tail -10 /workspace/runner.log 2>/dev/null || true
 """
         ssh_cmd = [
             "ssh",
@@ -2821,6 +2893,153 @@ echo "[remote] Runner started (PID $(cat /tmp/runner.pid))"
                 f"GitHub API call failed: {exc}. Check GITHUB_TOKEN scope and network connectivity."
             ) from exc
 
+    def dispatch_workflow(
+        self, workflow: str = "gpu_training.yml", training_mode: str = "micro"
+    ) -> bool:
+        """Dispatch a GitHub Actions workflow via the REST API.
+
+        Triggers ``workflow_dispatch`` so the ephemeral runner has a job waiting
+        when it comes online — eliminating the race condition between runner
+        registration and job queuing.
+
+        Parameters
+        ----------
+        workflow:
+            Workflow filename inside ``.github/workflows/``.
+        training_mode:
+            Value passed as the ``training_mode`` input to the workflow.
+
+        Returns
+        -------
+        bool
+            True if the dispatch succeeds (HTTP 204).
+        """
+        import urllib.error
+        import urllib.request
+
+        token = os.getenv("GITHUB_TOKEN", "")
+        if not token:
+            self.logger.warning("GITHUB_TOKEN not set — cannot dispatch workflow.")
+            return False
+
+        repo = self.config.github_repo
+        url = f"https://api.github.com/repos/{repo}/actions/workflows/{workflow}/dispatches"
+        body = json.dumps(
+            {"ref": self.config.git_branch, "inputs": {"training_mode": training_mode}}
+        ).encode()
+        req = urllib.request.Request(
+            url,
+            data=body,
+            headers={
+                "Accept": "application/vnd.github+json",
+                "Authorization": f"Bearer {token}",
+                "X-GitHub-Api-Version": "2022-11-28",
+                "Content-Type": "application/json",
+                "User-Agent": "donut-vastai-provisioner/1.0",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                status = resp.status
+            if status == 204:
+                self.logger.info("  Workflow %s dispatched (mode=%s).", workflow, training_mode)
+                return True
+            self.logger.warning("  Workflow dispatch returned HTTP %d.", status)
+            return False
+        except urllib.error.HTTPError as exc:
+            self.logger.warning("  Workflow dispatch failed (HTTP %d): %s", exc.code, exc.reason)
+            return False
+        except (urllib.error.URLError, OSError) as exc:
+            self.logger.warning("  Workflow dispatch error: %s", exc)
+            return False
+
+    def _wait_for_runner_job(
+        self,
+        instance_info: dict[str, Any],
+        timeout: int = 7200,
+        poll_interval: int = 15,
+    ) -> bool:
+        """Poll the remote instance until the runner process exits.
+
+        Parameters
+        ----------
+        instance_info:
+            Instance info dict (needs ``ssh_host`` and ``ssh_port``).
+        timeout:
+            Maximum seconds to wait before giving up.
+        poll_interval:
+            Seconds between each SSH poll.
+
+        Returns
+        -------
+        bool
+            True if the runner exited after running long enough to have
+            completed a job (>= ``RUNNER_CRASH_THRESHOLD_S``).  False if
+            the runner exited too quickly (probable crash) or on timeout.
+        """
+        host = instance_info.get("ssh_host") or instance_info.get("public_ipaddr", "")
+        port = instance_info.get("ssh_port", 22)
+        crash_threshold = self.RUNNER_CRASH_THRESHOLD_S
+        ssh_base = [
+            "ssh",
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "BatchMode=yes",
+            "-p",
+            str(port),
+            f"root@{host}",
+        ]
+
+        elapsed = 0
+        while elapsed < timeout:
+            try:
+                result = subprocess.run(
+                    [
+                        *ssh_base,
+                        "kill -0 $(cat /tmp/runner.pid 2>/dev/null) 2>/dev/null "
+                        "&& echo alive || echo gone",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                status = result.stdout.strip()
+            except (subprocess.TimeoutExpired, OSError):
+                status = "gone"
+
+            if status == "gone":
+                if elapsed < crash_threshold:
+                    self.logger.warning(
+                        "Runner exited after only %ds (<%ds) — possible crash.",
+                        elapsed,
+                        crash_threshold,
+                    )
+                    # Retrieve log for diagnosis
+                    try:
+                        log_result = subprocess.run(
+                            [*ssh_base, "cat /workspace/runner.log 2>/dev/null"],
+                            capture_output=True,
+                            text=True,
+                            timeout=15,
+                        )
+                        if log_result.stdout:
+                            for line in log_result.stdout.splitlines()[-30:]:
+                                self.logger.info("  runner.log: %s", line)
+                    except (subprocess.TimeoutExpired, OSError):
+                        pass
+                    return False  # Crash — not a successful job
+                self.logger.info("Runner exited — job complete (ran for %ds).", elapsed)
+                return True  # Normal job completion
+
+            self.logger.info("  Runner running (%d/%ds)...", elapsed, timeout)
+            time.sleep(poll_interval)
+            elapsed += poll_interval
+
+        self.logger.warning("Job timed out after %ds.", timeout)
+        return False
+
     def provision_and_run(self) -> bool:
         """Orchestrate the full Vast.ai lifecycle: search → create → wait → setup → destroy.
 
@@ -2829,13 +3048,15 @@ echo "[remote] Runner started (PID $(cat /tmp/runner.pid))"
         2. Creates the instance.
         3. Waits for SSH accessibility.
         4. Fetches a GitHub Actions runner registration token.
-        5. Clones the repo and configures an ephemeral runner on the instance.
-        6. Destroys the instance regardless of outcome (billing protection).
+        5. Dispatches the GPU training workflow so a job is queued.
+        6. Clones the repo and configures an ephemeral runner on the instance.
+        7. Waits for the runner to finish executing the job.
+        8. Destroys the instance regardless of outcome (billing protection).
 
         Returns
         -------
         bool
-            True when the runner was successfully set up (job execution is asynchronous).
+            True when the runner executed a job successfully.
         """
         self.logger.info("=" * 70)
         self.logger.info("VastAIProvisioner: starting full provisioning lifecycle")
@@ -2867,6 +3088,7 @@ echo "[remote] Runner started (PID $(cat /tmp/runner.pid))"
             return False
 
         success = False
+        instance_info: dict[str, Any] = {}
         try:
             # Wait for boot
             instance_info = self.wait_until_ready(instance_id)
@@ -2874,14 +3096,18 @@ echo "[remote] Runner started (PID $(cat /tmp/runner.pid))"
             # Get registration token
             reg_token = self._get_runner_registration_token()
 
+            # Dispatch workflow so a job is queued BEFORE the runner comes online
+            self.dispatch_workflow()
+
             # Set up runner
-            success = self.setup_runner(instance_info, reg_token)
-            if success:
+            runner_ok = self.setup_runner(instance_info, reg_token)
+            if runner_ok:
                 self.logger.info(
-                    "✓ Ephemeral runner started on instance %s. "
-                    "It will auto-deregister after one job.",
+                    "✓ Ephemeral runner started on instance %s. Waiting for job to complete...",
                     instance_id,
                 )
+                # Wait for the runner to finish executing the job
+                success = self._wait_for_runner_job(instance_info)
             else:
                 self.logger.error("Runner setup failed on instance %s.", instance_id)
         except (TimeoutError, PipelineConfigError, RuntimeError) as exc:
