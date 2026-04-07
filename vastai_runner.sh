@@ -336,11 +336,15 @@ chown -R runner:runner /workspace/actions-runner
 # crashes within seconds of starting (runner.log ≈ 26 bytes, no "Listening
 # for Jobs" message) — the root cause of 10+ failed PRs (#209-#219).
 # ---------------------------------------------------------------------------
-log_r "Installing runner system dependencies..."
-if [[ -x /workspace/actions-runner/bin/installdependencies.sh ]]; then
-  /workspace/actions-runner/bin/installdependencies.sh 2>&1 | tail -5
-  log_r "  System dependencies installed."
-else
+# REPLACE the installdependencies.sh block with this:
+log_r "Installing runner system dependencies (minimal, no reboot)..."
+apt-get update -qq 2>/dev/null || true
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+    libicu70 libssl3 libkrb5-3 zlib1g 2>/dev/null \
+  || DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+    libicu-dev libssl-dev libkrb5-3 zlib1g 2>/dev/null \
+  || true
+log_r "  Runner dependencies installed (no liblttng — avoids container restart)."
   # Manual fallback: install the most critical .NET runtime deps
   log_r "  installdependencies.sh not found — installing deps manually..."
   apt-get update -qq 2>/dev/null || true
