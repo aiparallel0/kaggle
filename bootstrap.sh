@@ -46,11 +46,13 @@ done
 
 # 4. Read tokens from files into env vars if not already set
 if [ -z "${GITHUB_TOKEN:-}" ] && [ -f "$SCRIPT_DIR/github_token.txt" ]; then
-    export GITHUB_TOKEN="$(tr -d '\r\n' < "$SCRIPT_DIR/github_token.txt")"
+    GITHUB_TOKEN="$(tr -d '\r\n' < "$SCRIPT_DIR/github_token.txt")"
+    export GITHUB_TOKEN
     echo "[bootstrap] Loaded GITHUB_TOKEN from github_token.txt"
 fi
 if [ -z "${HF_TOKEN:-}" ] && [ -f "$SCRIPT_DIR/hf_token.txt" ]; then
-    export HF_TOKEN="$(tr -d '\r\n' < "$SCRIPT_DIR/hf_token.txt")"
+    HF_TOKEN="$(tr -d '\r\n' < "$SCRIPT_DIR/hf_token.txt")"
+    export HF_TOKEN
     echo "[bootstrap] Loaded HF_TOKEN from hf_token.txt"
 fi
 
