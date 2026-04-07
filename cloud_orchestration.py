@@ -2438,7 +2438,7 @@ class VastAIProvisioner:
     #: Root disk size in GB.
     DEFAULT_DISK_GB: int = 40
     #: GitHub Actions runner version to download.
-    RUNNER_VERSION: str = "2.316.1"
+    RUNNER_VERSION: str = "2.333.1"
     #: If the runner exits in fewer seconds than this, it's a crash, not job completion.
     RUNNER_CRASH_THRESHOLD_S: int = 60
 
@@ -2744,6 +2744,7 @@ HOME=/home/runner su -s /bin/bash runner -c "
       --labels '{runner_labels}' \\
       --ephemeral \\
       --unattended \\
+      --disableupdate \\
       --work /workspace/runner-work
 " 2>&1
 
