@@ -125,10 +125,10 @@ jobs:
           FLAG=""
           case "$MODE" in
             instant)   FLAG="--instant" ;; 
-            superfast) FLAG="--superfast" ;; 
-            micro)     FLAG="--micro" ;; 
-            mini)      FLAG="--mini" ;; 
-            "")        FLAG="" ;; 
+            superfast) FLAG="--superfast" ;;
+            micro)     FLAG="--micro" ;;
+            mini)      FLAG="--mini" ;;
+            "")        FLAG="" ;;
           esac
 
           echo "Training mode: ${MODE} (flag: ${FLAG:-none})"
@@ -180,7 +180,33 @@ jobs:
               '## GPU Training Failure',
               '',
               `**Commit:** \
-              ... # Continuing from above omitted for brevity...
+                ${context.sha}`,
+              `**Branch:** \${context.ref.replace('refs/heads/', '')}`,
+              `**Training mode:** \${mode}`,
+              `**Workflow run:** [View logs](\${runUrl})`,
+              '',
+              '### Tail of `training.log`',
+              '```',
+              logContent,
+              '```',
+              '',
+              '### Context',
+              'This repo implements DONUT + TrOCR + YOLOv8 for receipt KIE (SROIE dataset).',
+              '',
+              '### Known failure patterns (check these first)',
+              '- **F1 ≈ 0.42** → `lm_head.weight` dropped by safetensors (fix: `LmHeadCloneCallback` + `tie_word_embeddings=False`)',
+              '- **F1 = 0.00** → wrong `decoder_start_token_id` (use list form: `tokenizer.convert_tokens_to_ids(["<s_sroie>"])[0]`)',
+              '- **F1 ≈ 0.008** → `token2json` returned list due to `<sep/>` tokens (merge page-list in `_parse_prediction()`)',
+              '- **Loss = NaN** → fp16 overflow; switch to bf16',
+              '- **Import error** → run `python -c "from constants import FIELDS, BASE_MODEL, SEED"`',
+              '',
+              '### Validation commands',
+              '```bash',
+              'python diagnostics.py --smoke-test',
+              'ruff check . && ruff format --check .',
+              'python -c "from constants import FIELDS, BASE_MODEL, SEED"',
+              '```',
+              '',
               '### Instructions for fix',
               '1. Run `python run_all.py --micro --verify` locally to reproduce.',
               '2. Check `diagnostics.py --smoke-test` output for known patterns.',
