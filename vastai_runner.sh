@@ -121,6 +121,8 @@ log "Step 3: Searching for GPU instances (GPU: '${VASTAI_GPU_NAME}', ≥${VASTAI
 
 # Build a query that filters by GPU RAM and price, then sort by price ascending.
 # The `search offers` command returns JSON when --raw is specified.
+# Note: ${VASTAI_GPU_NAME// /_} converts spaces to underscores as required by the
+# vastai query syntax (e.g. "RTX 4090" → "RTX_4090"). rentable=true must be lowercase.
 SEARCH_RESULT=$(
     $VASTAI_CMD search offers \
         "rentable=true num_gpus=1 gpu_name=${VASTAI_GPU_NAME// /_} gpu_ram>=${VASTAI_MIN_VRAM} dph<=${VASTAI_MAX_PRICE}" \
