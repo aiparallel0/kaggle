@@ -20,7 +20,7 @@
 #   VASTAI_DISK_GB   default "40"
 #   VASTAI_IMAGE     default "pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime"
 #   RUNNER_LABELS    default "self-hosted,gpu,vast-ai"
-#   RUNNER_VERSION   default "2.316.1"
+#   RUNNER_VERSION   default "2.333.1"
 #   TRAINING_MODE    default "micro" (passed to gpu_training.yml dispatch)
 #   SSH_KEY          default "$HOME/.ssh/id_vastai"
 #   BOOT_TIMEOUT     default "600"
@@ -57,7 +57,7 @@ RUNNER_NAME="${RUNNER_NAME:-vastai-gpu-$(date +%s)}"
 # GitHub Actions runner names allow only alphanumerics, hyphens, and underscores.
 # Strip all other characters (including any embedded ANSI/control chars).
 RUNNER_NAME="$(printf '%s' "${RUNNER_NAME}" | tr -cd '[:alnum:]-_')"
-RUNNER_VERSION="${RUNNER_VERSION:-2.316.1}"
+RUNNER_VERSION="${RUNNER_VERSION:-2.333.1}"
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/id_vastai}"
 # Auto-generate SSH key if it does not exist
 if [[ ! -f "$SSH_KEY" ]]; then
@@ -367,7 +367,7 @@ HOME=/home/runner su -s /bin/bash runner -c "
     --token '${REG_TOKEN}' \
     --name '${RUNNER_NAME}' \
     --labels '${RUNNER_LABELS}' \
-    --ephemeral --unattended \
+    --ephemeral --unattended --disableupdate \
     --work /workspace/runner-work
 " 2>&1
 CONFIG_RC=$?
