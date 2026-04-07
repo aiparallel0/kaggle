@@ -80,16 +80,22 @@ require_env GITHUB_REPO
 log "Step 1: Installing vastai CLI..."
 if ! command -v vastai &>/dev/null; then
     pip install --quiet vastai
-    log "  vastai CLI installed: $(vastai --version 2>/dev/null || echo 'unknown version')"
-else
-    log "  vastai CLI already present: $(vastai --version 2>/dev/null || echo 'unknown version')"
 fi
+
+# Detect vastai command: prefer the shell command, fall back to python -m vastai
+if command -v vastai &>/dev/null; then
+    VASTAI_CMD="vastai"
+else
+    VASTAI_CMD="python -m vastai"
+fi
+
+log "  vastai CLI ready (cmd: ${VASTAI_CMD}): $($VASTAI_CMD --version 2>/dev/null || echo 'unknown version')"
 
 # ---------------------------------------------------------------------------
 # Step 2: Authenticate with Vast.ai
 # ---------------------------------------------------------------------------
 log "Step 2: Authenticating with Vast.ai..."
-vastai set api-key "$VASTAI_API_KEY"
+$VASTAI_CMD set api-key "$VASTAI_API_KEY"
 log "  Authentication configured."
 
 # ---------------------------------------------------------------------------
@@ -100,7 +106,7 @@ log "Step 3: Searching for GPU instances (GPU: '${VASTAI_GPU_NAME}', ≥${VASTAI
 # Build a query that filters by GPU RAM and price, then sort by price ascending.
 # The `search offers` command returns JSON when --raw is specified.
 SEARCH_RESULT=$(
-    vastai search offers \
+    $VASTAI_CMD search offers \
         "gpu_name='${VASTAI_GPU_NAME}' gpu_ram>=${VASTAI_MIN_VRAM} dph<=${VASTAI_MAX_PRICE} rentable=True" \
         --order "dph asc" \
         --raw 2>/dev/null
@@ -125,7 +131,7 @@ log "  Found offer ID: $OFFER_ID"
 log "Step 4: Creating instance from offer $OFFER_ID..."
 
 CREATE_RESULT=$(
-    vastai create instance "$OFFER_ID" \
+    $VASTAI_CMD create instance "$OFFER_ID" \
         --image "$VASTAI_IMAGE" \
         --disk "$VASTAI_DISK_GB" \
         --label "$RUNNER_NAME" \
@@ -148,7 +154,7 @@ log "  Instance created: ID=$INSTANCE_ID"
 cleanup() {
     local exit_code=$?
     log "Cleanup: destroying instance $INSTANCE_ID..."
-    vastai destroy instance "$INSTANCE_ID" --raw 2>/dev/null || true
+    $VASTAI_CMD destroy instance "$INSTANCE_ID" --raw 2>/dev/null || true
     log "  Instance $INSTANCE_ID destroyed."
     exit $exit_code
 }
@@ -164,7 +170,7 @@ SSH_HOST=""
 SSH_PORT=""
 
 while [[ $elapsed -lt $BOOT_TIMEOUT ]]; do
-    INSTANCE_JSON=$(vastai show instance "$INSTANCE_ID" --raw 2>/dev/null || echo "{}")
+    INSTANCE_JSON=$($VASTAI_CMD show instance "$INSTANCE_ID" --raw 2>/dev/null || echo "{}")
     STATUS=$(python3 - <<'PYEOF'
 import json, sys
 data = json.loads(sys.stdin.read() or "{}")
