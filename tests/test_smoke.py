@@ -397,9 +397,7 @@ class TestCliDedupPath:
 
         with (
             patch.object(diagnostics, "_get_github_token", return_value="fake-token"),
-            patch.object(
-                diagnostics, "github_search_open_issues", return_value=[]
-            ) as mock_search,
+            patch.object(diagnostics, "github_search_open_issues", return_value=[]) as mock_search,
             patch.object(diagnostics, "github_report_failure") as mock_report,
         ):
             ok = False

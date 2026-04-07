@@ -68,6 +68,15 @@ jobs:
 
     steps:
       # -----------------------------------------------------------------------
+      # 0. Configure git safe.directory (workaround for EACCES on /root/.gitconfig
+      #    when the self-hosted runner executes as root)
+      # -----------------------------------------------------------------------
+      - name: Configure git safe directory
+        run: git config --global --add safe.directory '*'
+        env:
+          HOME: /root
+
+      # -----------------------------------------------------------------------
       # 1. Checkout
       # -----------------------------------------------------------------------
       - name: Checkout repository
