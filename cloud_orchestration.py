@@ -2679,9 +2679,10 @@ class VastAIProvisioner:
 
         remote_script = f"""
 set -euo pipefail
+export GIT_TERMINAL_PROMPT=0
 echo '[remote] Cloning https://github.com/{repo} ...'
-git clone --depth 1 --branch {branch} https://github.com/{repo}.git /workspace/repo || \
-    git clone --depth 1 https://github.com/{repo}.git /workspace/repo
+git -c credential.helper='' clone --depth 1 --branch {branch} https://github.com/{repo}.git /workspace/repo || \
+    git -c credential.helper='' clone --depth 1 https://github.com/{repo}.git /workspace/repo
 cd /workspace/repo
 echo '[remote] Installing Python dependencies...'
 pip install --quiet -r requirements.txt || true
