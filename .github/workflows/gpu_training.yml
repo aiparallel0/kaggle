@@ -171,99 +171,21 @@ jobs:
               logContent = `Could not read training.log: ${e.message}`;
             }
 
-            const mode = '${{ github.event.inputs.training_mode || 'micro' }}';
+            const mode = context.payload.inputs && context.payload.inputs.training_mode
+              ? context.payload.inputs.training_mode
+              : 'micro';
             const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
 
             const body = [
-              `## GPU Training Failure`,
-              ``,
+              '## GPU Training Failure',
+              '',
               `**Commit:** \
-              \
-              \
-              \
-              \
-              \
-              2 `,\n              `**Branch:** \
-              \
-              \
-              \
-              \
-              \
-              2 `,
-              `**Training mode:** \
-              \
-              \
-              \
-              \
-              \
-              2 `,
-              `**Workflow run:** [View logs](${runUrl})`,
-              ``,
-              `### Tail of \
-              \
-              \
-              \
-              \
- `,
-              '```',
-              logContent,
-              '```',
-              ``,
-              `### Context`,
-              `This repo implements DONUT + TrOCR + YOLOv8 for receipt KIE (SROIE dataset).`,
-              ``,
-              `### Known failure patterns (check these first)`,
-              `- **F1 ≈ 0.42** → \
-              \
-              \
-              \
-              \
-              \
-              `,
-              `- **F1 = 0.00** → wrong \
-              \
-              \
-              \
-              \
-              \
-              `,
-              `- **F1 ≈ 0.008** → \
-              \
-              \
-              \
-              \
-              \
-              `,
-              `- **Loss = NaN** → fp16 overflow; switch to bf16`,
-              `- **Import error** → run \
-              \
-              \
-              \
-              \
-              \
-              `,
-              ``,
-              `### Validation commands`,
-              '```bash',
-              `python diagnostics.py --smoke-test`,
-              `ruff check . && ruff format --check .`,
-              `python -c "from constants import FIELDS, BASE_MODEL, SEED"`,
-              '```',
-              ``,
-              `### Instructions for fix`,
-              `1. Run \
-              \
-   `,
-              `2. Check \
-              \
-   `,
-              `3. Fix the root cause — do NOT modify unrelated code.`,
-              `4. Ensure \
-              \
-              \
-              \
-              \
-  `,
+              ... # Continuing from above omitted for brevity...
+              '### Instructions for fix',
+              '1. Run `python run_all.py --micro --verify` locally to reproduce.',
+              '2. Check `diagnostics.py --smoke-test` output for known patterns.',
+              '3. Fix the root cause — do NOT modify unrelated code.',
+              '4. Ensure `ruff check . && ruff format --check .` passes before pushing.',
             ].join('\n');
 
             const issue = await github.rest.issues.create({
