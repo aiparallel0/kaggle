@@ -130,16 +130,14 @@ SEARCH_RESULT=$(
         --raw 2>/dev/null
 ) || die "vastai search offers failed. Check your API key and network connectivity."
 
-# Extract the cheapest offer's ID using Python (already available on the host)
-OFFER_ID=$($PYTHON_CMD - <<'PYEOF'
+# Extract the cheapest offer's ID using Python (already available on the host).
+# Uses pipe instead of heredoc+herestring for Windows Git Bash compatibility.
+OFFER_ID=$(echo "$SEARCH_RESULT" | $PYTHON_CMD -c "
 import json, sys
-data = json.loads(sys.stdin.read() or "[]")
-if not data:
-    sys.exit(1)
-# data is a list of offer dicts; pick the cheapest (already sorted by dph asc)
-print(data[0]["id"])
-PYEOF
-<<< "$SEARCH_RESULT") || die "No matching GPU offers found. Try relaxing VASTAI_GPU_NAME or VASTAI_MAX_PRICE."
+data = json.loads(sys.stdin.read() or '[]')
+if not data: sys.exit(1)
+print(data[0]['id'])
+") || die "No matching GPU offers found. Try relaxing VASTAI_GPU_NAME or VASTAI_MAX_PRICE."
 
 log "  Found offer ID: $OFFER_ID"
 
@@ -156,15 +154,13 @@ CREATE_RESULT=$(
         --raw 2>/dev/null
 ) || die "vastai create instance failed."
 
-INSTANCE_ID=$($PYTHON_CMD - <<'PYEOF'
+INSTANCE_ID=$(echo "$CREATE_RESULT" | $PYTHON_CMD -c "
 import json, sys
-data = json.loads(sys.stdin.read() or "{}")
-iid = data.get("new_contract")
-if not iid:
-    sys.exit(1)
+data = json.loads(sys.stdin.read() or '{}')
+iid = data.get('new_contract')
+if not iid: sys.exit(1)
 print(iid)
-PYEOF
-<<< "$CREATE_RESULT") || die "Could not parse instance ID from create response: $CREATE_RESULT"
+") || die "Could not parse instance ID from create response: $CREATE_RESULT"
 
 log "  Instance created: ID=$INSTANCE_ID"
 
@@ -189,27 +185,12 @@ SSH_PORT=""
 
 while [[ $elapsed -lt $BOOT_TIMEOUT ]]; do
     INSTANCE_JSON=$($VASTAI_CMD show instance "$INSTANCE_ID" --raw 2>/dev/null || echo "{}")
-    STATUS=$($PYTHON_CMD - <<'PYEOF'
-import json, sys
-data = json.loads(sys.stdin.read() or "{}")
-print(data.get("actual_status", "unknown"))
-PYEOF
-<<< "$INSTANCE_JSON")
+    STATUS=$(echo "$INSTANCE_JSON" | $PYTHON_CMD -c "import json, sys; print(json.loads(sys.stdin.read()).get('actual_status', 'unknown'))")
 
     if [[ "$STATUS" == "running" ]]; then
         # Extract SSH host and port
-        SSH_HOST=$($PYTHON_CMD - <<'PYEOF'
-import json, sys
-data = json.loads(sys.stdin.read() or "{}")
-print(data.get("ssh_host", "") or data.get("public_ipaddr", ""))
-PYEOF
-<<< "$INSTANCE_JSON")
-        SSH_PORT=$($PYTHON_CMD - <<'PYEOF'
-import json, sys
-data = json.loads(sys.stdin.read() or "{}")
-print(data.get("ssh_port", 22))
-PYEOF
-<<< "$INSTANCE_JSON")
+        SSH_HOST=$(echo "$INSTANCE_JSON" | $PYTHON_CMD -c "import json, sys; d=json.loads(sys.stdin.read()); print(d.get('ssh_host', '') or d.get('public_ipaddr', ''))")
+        SSH_PORT=$(echo "$INSTANCE_JSON" | $PYTHON_CMD -c "import json, sys; print(json.loads(sys.stdin.read()).get('ssh_port', 22))")
 
         # Probe SSH connectivity
         if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes \
@@ -233,27 +214,27 @@ SSH_OPTS="-o StrictHostKeyChecking=no -o BatchMode=yes -p ${SSH_PORT}"
 # ---------------------------------------------------------------------------
 log "Step 6: Fetching GitHub Actions runner registration token..."
 
-# Get a fresh registration token from GitHub API
-REG_TOKEN=$($PYTHON_CMD - <<PYEOF
+# Get a fresh registration token from GitHub API.
+# Uses pipe instead of heredoc for Windows Git Bash compatibility.
+REG_TOKEN=$(echo "" | $PYTHON_CMD -c "
 import json, sys, urllib.request
-token = "${GITHUB_TOKEN}"
-repo  = "${GITHUB_REPO}"
-url   = f"https://api.github.com/repos/{repo}/actions/runners/registration-token"
-req = urllib.request.Request(url, data=b"", headers={
-    "Accept": "application/vnd.github+json",
-    "Authorization": f"Bearer {token}",
-    "X-GitHub-Api-Version": "2022-11-28",
-    "User-Agent": "vastai-runner/1.0",
-}, method="POST")
+token = '${GITHUB_TOKEN}'
+repo  = '${GITHUB_REPO}'
+url   = f'https://api.github.com/repos/{repo}/actions/runners/registration-token'
+req = urllib.request.Request(url, data=b'', headers={
+    'Accept': 'application/vnd.github+json',
+    'Authorization': f'Bearer {token}',
+    'X-GitHub-Api-Version': '2022-11-28',
+    'User-Agent': 'vastai-runner/1.0',
+}, method='POST')
 try:
     with urllib.request.urlopen(req, timeout=20) as resp:
         data = json.loads(resp.read())
-    print(data["token"])
+    print(data['token'])
 except Exception as e:
-    print(f"ERROR: {e}", file=sys.stderr)
+    print(f'ERROR: {e}', file=sys.stderr)
     sys.exit(1)
-PYEOF
-) || die "Could not obtain GitHub Actions runner registration token. Check GITHUB_TOKEN and GITHUB_REPO."
+") || die "Could not obtain GitHub Actions runner registration token. Check GITHUB_TOKEN and GITHUB_REPO."
 
 log "  Registration token obtained."
 
