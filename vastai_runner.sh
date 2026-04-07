@@ -2,14 +2,14 @@
 # =============================================================================
 # vastai_runner.sh — Vast.ai GPU provisioner + ephemeral GitHub Actions runner
 #
-# One-liner (loads .env.cloud from repo root automatically):
+# One-liner from repo root (auto-loads .env.cloud):
 #   bash vastai_runner.sh
 #
-# Or from anywhere:
+# Or from anywhere without cloning:
 #   bash <(curl -sSfL https://raw.githubusercontent.com/aiparallel0/kaggle/main/vastai_runner.sh)
 #
-# Required env vars (auto-loaded from .env.cloud if the file exists):
-#   VASTAI_API_KEY   — Vast.ai API key  (https://vast.ai/console/account/)
+# Required env vars (auto-loaded from .env.cloud if present):
+#   VASTAI_API_KEY   — Vast.ai API key
 #   GITHUB_TOKEN     — GitHub PAT with "repo" scope
 #   GITHUB_REPO      — e.g. "aiparallel0/kaggle"
 #
@@ -21,7 +21,7 @@
 #   VASTAI_IMAGE     default "pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime"
 #   RUNNER_LABELS    default "self-hosted,gpu,vast-ai"
 #   RUNNER_VERSION   default "2.316.1"
-#   SSH_KEY          default "~/.ssh/id_vastai"
+#   SSH_KEY          default "$HOME/.ssh/id_vastai"
 #   BOOT_TIMEOUT     default "600"
 #   JOB_TIMEOUT      default "7200"
 # =============================================================================
@@ -29,13 +29,12 @@
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
-# 0. Auto-load .env.cloud (gitignored secrets — never committed)
+# 0. Auto-load .env.cloud (gitignored — never committed)
 # ---------------------------------------------------------------------------
-SCRIPT_DIR="")(cd "")(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname ""${BASH_SOURCE[0]}"")" && pwd)"
 ENV_FILE="${SCRIPT_DIR}/.env.cloud"
 if [[ -f "$ENV_FILE" ]]; then
     set -a
-    # shellcheck disable=SC1090
     source "$ENV_FILE"
     set +a
     echo "[env] Loaded secrets from $ENV_FILE"
@@ -50,7 +49,7 @@ VASTAI_MIN_VRAM="${VASTAI_MIN_VRAM:-24}"
 VASTAI_DISK_GB="${VASTAI_DISK_GB:-40}"
 VASTAI_IMAGE="${VASTAI_IMAGE:-pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime}"
 RUNNER_LABELS="${RUNNER_LABELS:-self-hosted,gpu,vast-ai}"
-RUNNER_NAME="${RUNNER_NAME:-vastai-gpu-$(date +%s)}"
+RUNNER_NAME="${RUNNER_NAME:-vastai-gpu-[3m$(date +%s)[0m}"
 RUNNER_VERSION="${RUNNER_VERSION:-2.316.1}"
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/id_vastai}"
 BOOT_TIMEOUT="${BOOT_TIMEOUT:-600}"
@@ -64,8 +63,7 @@ log() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*"; }
 die() { log "ERROR: $*" >&2; exit 1; }
 require_env() {
     local var="$1"
-    [[ -n "
-${!var:-}" ]] || die "Required env var \\$var is not set. Add it to .env.cloud or export it."
+    [[ -n "${!var:-}" ]] || die "Required env var \\$var is not set. Add it to .env.cloud or export it."
 }
 
 # ---------------------------------------------------------------------------
@@ -81,8 +79,7 @@ for candidate in python3 python; do
     fi
 done
 [[ -n "$PYEXE" ]] || die "No working Python 3.8+ found. Install from https://python.org"
-log "  Python: $PYEXE (
-$($PYEXE --version 2>&1))"
+log "  Python: $PYEXE ([3m$($PYEXE --version 2>&1)[0m)"
 
 # ---------------------------------------------------------------------------
 # Step 2: Install vastai CLI if needed
@@ -109,7 +106,7 @@ log "  Authenticated."
 # ---------------------------------------------------------------------------
 # Step 4: Find cheapest matching offer
 # ---------------------------------------------------------------------------
-log "Step 4: Searching offers (${VASTAI_GPU_NAME}, max \$${VASTAI_MAX_PRICE}/hr)..."
+log "Step 4: Searching offers (${VASTAI_GPU_NAME}, max \\$${VASTAI_MAX_PRICE}/hr)..."
 SEARCH_RESULT=$(
     $VASTAI_CMD search offers \
         "rentable=true num_gpus=1 gpu_name=${VASTAI_GPU_NAME// /_} gpu_ram>=${VASTAI_MIN_VRAM} dph<=${VASTAI_MAX_PRICE}" \
@@ -164,8 +161,8 @@ SSH_PORT=""
 elapsed=0
 while [[ $elapsed -lt $BOOT_TIMEOUT ]]; do
     INFO=
-($VASTAI_CMD show instance "$INSTANCE_ID" --raw 2>/dev/null || echo "{}").
-sSTATUS=$(echo "$INFO" | $PYEXE -c "import json,sys; print(json.loads(sys.stdin.read()).get('actual_status','?'))")
+    $VASTAI_CMD show instance "$INSTANCE_ID" --raw 2>/dev/null || echo "{}"
+    STATUS=$(echo "$INFO" | $PYEXE -c "import json,sys; print(json.loads(sys.stdin.read()).get('actual_status','?'))")
     SSH_HOST=$(echo "$INFO" | $PYEXE -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('ssh_host','') or d.get('public_ipaddr',''))")
     SSH_PORT=$(echo "$INFO" | $PYEXE -c "import json,sys; print(json.loads(sys.stdin.read()).get('ssh_port',22))")
 
@@ -183,8 +180,7 @@ sSTATUS=$(echo "$INFO" | $PYEXE -c "import json,sys; print(json.loads(sys.stdin.
 done
 [[ -n "$SSH_HOST" ]] || die "Instance never became SSH-accessible after ${BOOT_TIMEOUT}s."
 
-SSH="ssh -i $SSH_KEY -o StrictHostKeyChecking=no -o BatchMode=yes -p ${SSH_PORT} root@${SSH_HOST}"
-SCP="scp -i $SSH_KEY -o StrictHostKeyChecking=no -P ${SSH_PORT}"
+SSH_OPTS="-i $SSH_KEY -o StrictHostKeyChecking=no -o BatchMode=yes -p ${SSH_PORT}"
 
 # ---------------------------------------------------------------------------
 # Step 7: Get GitHub Actions runner registration token
@@ -200,18 +196,34 @@ REG_TOKEN=$(curl -sSfX POST \
 log "  Token: ${REG_TOKEN:0:8}..."
 
 # ---------------------------------------------------------------------------
-# Step 8: Write setup script to temp file, scp it, run it
-#         (avoids ALL heredoc/herestring variable-expansion bugs on Windows Git Bash)
+# Step 8: Write setup script to temp file, scp it, run it remotely
+#         (avoids all heredoc/variable-expansion bugs on Windows Git Bash)
 # ---------------------------------------------------------------------------
 log "Step 8: Preparing remote setup script..."
 RUNNER_PKG="actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz"
 RUNNER_URL="https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/${RUNNER_PKG}"
 
-SETUP_TMP=$(mktemp)
-cat > "$SETUP_TMP" << SETUP_SCRIPT
+SETUP_TMP=$(mktemp /tmp/vastai_setup_XXXXX.sh)
+
+# Variables expand on the CLIENT side here — remote script is plain bash
+cat > "$SETUP_TMP" << 'SETUP_EOF'
 #!/bin/bash
 set -euo pipefail
-log_r() { echo "[remote \\$(date -u +%H:%M:%S)] \\$*"; }
+SETUP_EOF
+
+# Append lines with client-side variable expansion
+cat >> "$SETUP_TMP" << SETUP_VARS
+GITHUB_REPO="${GITHUB_REPO}"
+RUNNER_VERSION="${RUNNER_VERSION}"
+RUNNER_URL="${RUNNER_URL}"
+RUNNER_PKG="${RUNNER_PKG}"
+REG_TOKEN="${REG_TOKEN}"
+RUNNER_NAME="${RUNNER_NAME}"
+RUNNER_LABELS="${RUNNER_LABELS}"
+SETUP_VARS
+
+cat >> "$SETUP_TMP" << 'SETUP_BODY'
+log_r() { echo "[remote $(date -u +%H:%M:%S)] $*"; }
 
 log_r "Creating non-root runner user..."
 useradd -m -s /bin/bash runner 2>/dev/null || true
@@ -229,7 +241,7 @@ chown -R runner:runner /workspace/actions-runner
 
 log_r "Configuring runner (name=${RUNNER_NAME}, labels=${RUNNER_LABELS})..."
 su - runner -c "
-  cd /workspace/actions-runner && \
+  cd /workspace/actions-runner
   ./config.sh \
     --url 'https://github.com/${GITHUB_REPO}' \
     --token '${REG_TOKEN}' \
@@ -248,35 +260,34 @@ su - runner -c "
 "
 
 sleep 3
-echo "Runner PID: \
-$(cat /tmp/runner.pid 2>/dev/null || echo unknown)"
+echo "Runner PID: $(cat /tmp/runner.pid 2>/dev/null || echo unknown)"
 echo "--- runner.log tail ---"
 tail -15 /workspace/runner.log 2>/dev/null || echo "(log not yet available)"
-SETUP_SCRIPT
+SETUP_BODY
 
 log "  Copying setup script to instance..."
-$SCP "$SETUP_TMP" "root@${SSH_HOST}:/tmp/runner_setup.sh"
+scp $SSH_OPTS "$SETUP_TMP" "root@${SSH_HOST}:/tmp/runner_setup.sh"
 rm -f "$SETUP_TMP"
 
 log "  Running setup script on instance..."
-$SSH "bash /tmp/runner_setup.sh"
+ssh $SSH_OPTS "root@${SSH_HOST}" "bash /tmp/runner_setup.sh"
 log "  Remote setup complete."
 
 # ---------------------------------------------------------------------------
-# Step 9: Wait for job to finish
+# Step 9: Wait for runner job to finish
 # ---------------------------------------------------------------------------
 log "Step 9: Waiting for job to complete (timeout ${JOB_TIMEOUT}s)..."
 job_elapsed=0
 while [[ $job_elapsed -lt $JOB_TIMEOUT ]]; do
-    ALIVE=
-($SSH "kill -0 \
-$(cat /tmp/runner.pid 2>/dev/null) 2>/dev/null && echo alive || echo gone" 2>/dev/null || echo "gone")
+    ALIVE=$(ssh $SSH_OPTS "root@${SSH_HOST}" \
+        "kill -0 \\$(cat /tmp/runner.pid 2>/dev/null) 2>/dev/null && echo alive || echo gone" \
+        2>/dev/null || echo "gone")
     if [[ "$ALIVE" == "gone" ]]; then
         log "  Runner exited — job complete."
         break
     fi
     log "  Runner running (${job_elapsed}/${JOB_TIMEOUT}s)..."
-sleep "$POLL_INTERVAL"
+    sleep "$POLL_INTERVAL"
     job_elapsed=$((job_elapsed + POLL_INTERVAL))
 done
 [[ $job_elapsed -lt $JOB_TIMEOUT ]] || log "WARNING: Job timed out — destroying instance anyway."
