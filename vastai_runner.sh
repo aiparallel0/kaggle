@@ -294,7 +294,7 @@ log_r "Configuring runner (name=${RUNNER_NAME}, labels=${RUNNER_LABELS})..."
 # "/root/.bash_profile: Permission denied" which would abort set -e
 set +e
 su - runner -c "
-  cd /workspace/actions-runner && \
+  cd /workspace/actions-runner
   ./config.sh \
     --url 'https://github.com/${GITHUB_REPO}' \
     --token '${REG_TOKEN}' \
@@ -302,7 +302,7 @@ su - runner -c "
     --labels '${RUNNER_LABELS}' \
     --ephemeral --unattended \
     --work /workspace/runner-work
-" 2>&1
+"
 CONFIG_EXIT=$?
 set -e
 if [[ $CONFIG_EXIT -ne 0 ]]; then
@@ -317,7 +317,6 @@ cat > /tmp/start_runner.sh << 'LAUNCHER'
 cd /workspace/actions-runner
 nohup ./run.sh >> /workspace/runner.log 2>&1 &
 echo $! > /tmp/runner.pid
-disown $!
 echo "Runner started with PID $(cat /tmp/runner.pid)"
 LAUNCHER
 chmod +x /tmp/start_runner.sh
