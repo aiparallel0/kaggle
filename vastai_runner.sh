@@ -78,15 +78,20 @@ require_env GITHUB_REPO
 # Step 1: Install vastai CLI if not already present
 # ---------------------------------------------------------------------------
 log "Step 1: Installing vastai CLI..."
-if ! command -v vastai &>/dev/null; then
+if ! python3 -m vast --help &>/dev/null 2>&1; then
     pip install --quiet vastai
 fi
 
-# Detect vastai command: prefer the shell command, fall back to python -m vastai
+# Detect correct invocation.
+# NOTE: `pip install vastai` installs the module as `vast` (not `vastai`).
 if command -v vastai &>/dev/null; then
     VASTAI_CMD="vastai"
+elif python3 -m vast --help &>/dev/null 2>&1; then
+    VASTAI_CMD="python3 -m vast"
+elif python -m vast --help &>/dev/null 2>&1; then
+    VASTAI_CMD="python -m vast"
 else
-    VASTAI_CMD="python -m vastai"
+    die "vastai CLI not found after install. Run: pip install vastai"
 fi
 
 log "  vastai CLI ready (cmd: ${VASTAI_CMD}): $($VASTAI_CMD --version 2>/dev/null || echo 'unknown version')"
