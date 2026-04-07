@@ -2439,6 +2439,8 @@ class VastAIProvisioner:
     DEFAULT_DISK_GB: int = 40
     #: GitHub Actions runner version to download.
     RUNNER_VERSION: str = "2.316.1"
+    #: If the runner exits in fewer seconds than this, it's a crash, not job completion.
+    RUNNER_CRASH_THRESHOLD_S: int = 60
 
     def __init__(self, config: CloudConfig) -> None:
         self.config = config
@@ -2724,7 +2726,11 @@ if [ -x /workspace/actions-runner/bin/installdependencies.sh ]; then
 else
     apt-get update -qq 2>/dev/null || true
     DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
-        libicu-dev libssl-dev libkrb5-3 zlib1g liblttng-ust1 2>/dev/null || true
+        libicu-dev libssl-dev libkrb5-3 zlib1g liblttng-ust1 2>/dev/null
+    APT_RC=$?
+    if [ "$APT_RC" -ne 0 ]; then
+        echo "[remote] WARNING: Manual dependency install exited with $APT_RC — runner may crash."
+    fi
 fi
 
 echo '[remote] Configuring runner...'
@@ -2968,10 +2974,13 @@ tail -10 /workspace/runner.log 2>/dev/null || true
         Returns
         -------
         bool
-            True if the runner exited normally (job complete), False on timeout.
+            True if the runner exited after running long enough to have
+            completed a job (>= ``RUNNER_CRASH_THRESHOLD_S``).  False if
+            the runner exited too quickly (probable crash) or on timeout.
         """
         host = instance_info.get("ssh_host") or instance_info.get("public_ipaddr", "")
         port = instance_info.get("ssh_port", 22)
+        crash_threshold = self.RUNNER_CRASH_THRESHOLD_S
         ssh_base = [
             "ssh",
             "-o",
@@ -3001,8 +3010,12 @@ tail -10 /workspace/runner.log 2>/dev/null || true
                 status = "gone"
 
             if status == "gone":
-                if elapsed < 60:
-                    self.logger.warning("Runner exited after only %ds — possible crash.", elapsed)
+                if elapsed < crash_threshold:
+                    self.logger.warning(
+                        "Runner exited after only %ds (<%ds) — possible crash.",
+                        elapsed,
+                        crash_threshold,
+                    )
                     # Retrieve log for diagnosis
                     try:
                         log_result = subprocess.run(
@@ -3016,9 +3029,9 @@ tail -10 /workspace/runner.log 2>/dev/null || true
                                 self.logger.info("  runner.log: %s", line)
                     except (subprocess.TimeoutExpired, OSError):
                         pass
-                else:
-                    self.logger.info("Runner exited — job complete (ran for %ds).", elapsed)
-                return elapsed >= 60  # <60s is a crash, not job completion
+                    return False  # Crash — not a successful job
+                self.logger.info("Runner exited — job complete (ran for %ds).", elapsed)
+                return True  # Normal job completion
 
             self.logger.info("  Runner running (%d/%ds)...", elapsed, timeout)
             time.sleep(poll_interval)

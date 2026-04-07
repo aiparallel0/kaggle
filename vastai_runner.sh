@@ -345,8 +345,13 @@ else
   log_r "  installdependencies.sh not found — installing deps manually..."
   apt-get update -qq 2>/dev/null || true
   DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
-    libicu-dev libssl-dev libkrb5-3 zlib1g liblttng-ust1 2>/dev/null || true
-  log_r "  Manual dependency install done."
+    libicu-dev libssl-dev libkrb5-3 zlib1g liblttng-ust1 2>/dev/null
+  APT_RC=$?
+  if [[ $APT_RC -ne 0 ]]; then
+    log_r "  WARNING: Manual dependency install exited with $APT_RC — runner may crash."
+  else
+    log_r "  Manual dependency install done."
+  fi
 fi
 
 log_r "Configuring runner (name=${RUNNER_NAME}, labels=${RUNNER_LABELS})..."
@@ -449,18 +454,17 @@ log "  Remote setup complete."
 # ---------------------------------------------------------------------------
 log "Step 9: Waiting for job to complete (timeout ${JOB_TIMEOUT}s)..."
 job_elapsed=0
-FIRST_CHECK=true
 while [[ $job_elapsed -lt $JOB_TIMEOUT ]]; do
     ALIVE=$(ssh "${SSH_ARGS[@]}" "root@${SSH_HOST}" \
         "kill -0 \$(cat /tmp/runner.pid 2>/dev/null) 2>/dev/null && echo alive || echo gone" \
         2>/dev/null || echo "gone")
     if [[ "$ALIVE" == "gone" ]]; then
-        if [[ "$FIRST_CHECK" == "true" ]] || [[ $job_elapsed -lt 60 ]]; then
+        if [[ $job_elapsed -lt 60 ]]; then
             # Runner exited suspiciously fast — likely crashed, not job complete
             log "  WARNING: Runner exited after only ${job_elapsed}s!"
             log "  Fetching remote runner.log for diagnosis..."
             ssh "${SSH_ARGS[@]}" "root@${SSH_HOST}" \
-                "echo '=== runner.log ===' && cat /workspace/runner.log 2>/dev/null && echo '=== diag.txt ===' && cat /workspace/actions-runner/_diag/*.log 2>/dev/null | tail -50" \
+                "echo '=== runner.log ===' && cat /workspace/runner.log 2>/dev/null && echo '=== diag logs ===' && find /workspace/actions-runner/_diag -name '*.log' -exec cat {} + 2>/dev/null | tail -50" \
                 2>/dev/null || true
             log "  Runner exited too quickly — possible crash (not job completion)."
         else
@@ -468,7 +472,6 @@ while [[ $job_elapsed -lt $JOB_TIMEOUT ]]; do
         fi
         break
     fi
-    FIRST_CHECK=false
     log "  Runner running (${job_elapsed}/${JOB_TIMEOUT}s)..."
     sleep "$POLL_INTERVAL"
     job_elapsed=$((job_elapsed + POLL_INTERVAL))
