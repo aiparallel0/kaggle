@@ -260,6 +260,7 @@ SETUP_EOF
 # Block 2: inject variables with client-side expansion
 cat >> "$SETUP_TMP" << SETUP_VARS
 GITHUB_REPO="${GITHUB_REPO}"
+GITHUB_TOKEN="${GITHUB_TOKEN}"
 RUNNER_VERSION="${RUNNER_VERSION}"
 RUNNER_URL="${RUNNER_URL}"
 RUNNER_PKG="${RUNNER_PKG}"
@@ -270,6 +271,7 @@ SETUP_VARS
 
 # Block 3: bash logic — single-quoted so no expansion needed
 cat >> "$SETUP_TMP" << 'SETUP_BODY'
+trap 'rm -f /tmp/runner_setup.sh' EXIT
 log_r() { echo "[remote $(date -u +%H:%M:%S)] $*"; }
 
 log_r "Creating non-root runner user..."
@@ -278,7 +280,8 @@ mkdir -p /workspace/actions-runner /workspace/runner-work /workspace/repo
 chown -R runner:runner /workspace
 
 log_r "Cloning https://github.com/${GITHUB_REPO}..."
-git clone --depth 1 "https://github.com/${GITHUB_REPO}.git" /workspace/repo
+export GIT_TERMINAL_PROMPT=0
+git clone --depth 1 "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPO}.git" /workspace/repo
 chown -R runner:runner /workspace/repo
 
 log_r "Downloading Actions runner v${RUNNER_VERSION}..."
@@ -310,6 +313,9 @@ sleep 3
 echo "Runner PID: $(cat /tmp/runner.pid 2>/dev/null || echo unknown)"
 echo "--- runner.log tail ---"
 tail -15 /workspace/runner.log 2>/dev/null || echo "(log not yet available)"
+
+# Clean up setup script (contains GITHUB_TOKEN)
+rm -f /tmp/runner_setup.sh || true
 SETUP_BODY
 
 log "  Copying setup script to instance..."
