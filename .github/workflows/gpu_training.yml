@@ -124,11 +124,11 @@ jobs:
           MODE="${{ github.event.inputs.training_mode || 'micro' }}"
           FLAG=""
           case "$MODE" in
-            instant)   FLAG="--instant" ;;
-            superfast) FLAG="--superfast" ;;
-            micro)     FLAG="--micro" ;;
-            mini)      FLAG="--mini" ;;
-            "")        FLAG="" ;;
+            instant)   FLAG="--instant" ;; 
+            superfast) FLAG="--superfast" ;; 
+            micro)     FLAG="--micro" ;; 
+            mini)      FLAG="--mini" ;; 
+            "")        FLAG="" ;; 
           esac
 
           echo "Training mode: ${MODE} (flag: ${FLAG:-none})"
@@ -171,18 +171,40 @@ jobs:
               logContent = `Could not read training.log: ${e.message}`;
             }
 
-            const mode = '${{ github.event.inputs.training_mode || "micro" }}';
+            const mode = '${{ github.event.inputs.training_mode || 'micro' }}';
             const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
 
             const body = [
               `## GPU Training Failure`,
               ``,
-              `**Commit:** \`${context.sha}\``,
-              `**Branch:** \`${context.ref.replace('refs/heads/', '')}\``,
-              `**Training mode:** \`${mode}\``,
+              `**Commit:** \
+              \
+              \
+              \
+              \
+              \
+              2 `,\n              `**Branch:** \
+              \
+              \
+              \
+              \
+              \
+              2 `,
+              `**Training mode:** \
+              \
+              \
+              \
+              \
+              \
+              2 `,
               `**Workflow run:** [View logs](${runUrl})`,
               ``,
-              `### Tail of \`training.log\``,
+              `### Tail of \
+              \
+              \
+              \
+              \
+ `,
               '```',
               logContent,
               '```',
@@ -191,11 +213,35 @@ jobs:
               `This repo implements DONUT + TrOCR + YOLOv8 for receipt KIE (SROIE dataset).`,
               ``,
               `### Known failure patterns (check these first)`,
-              `- **F1 ≈ 0.42** → \`lm_head.weight\` dropped by safetensors (Pattern 6 in CLAUDE.md §16)`,
-              `- **F1 = 0.00** → wrong \`decoder_start_token_id\` (use list form — GP-3 in CLAUDE.md §20)`,
-              `- **F1 ≈ 0.008** → \`token2json\` returned list due to \`<sep/>\` tokens (Pattern 5)`,
+              `- **F1 ≈ 0.42** → \
+              \
+              \
+              \
+              \
+              \
+              `,
+              `- **F1 = 0.00** → wrong \
+              \
+              \
+              \
+              \
+              \
+              `,
+              `- **F1 ≈ 0.008** → \
+              \
+              \
+              \
+              \
+              \
+              `,
               `- **Loss = NaN** → fp16 overflow; switch to bf16`,
-              `- **Import error** → run \`python -c "from constants import FIELDS, BASE_MODEL, SEED"\``,
+              `- **Import error** → run \
+              \
+              \
+              \
+              \
+              \
+              `,
               ``,
               `### Validation commands`,
               '```bash',
@@ -205,10 +251,19 @@ jobs:
               '```',
               ``,
               `### Instructions for fix`,
-              `1. Run \`python run_all.py --micro --verify\` locally to reproduce.`,
-              `2. Check \`diagnostics.py --smoke-test\` output for known patterns.`,
+              `1. Run \
+              \
+   `,
+              `2. Check \
+              \
+   `,
               `3. Fix the root cause — do NOT modify unrelated code.`,
-              `4. Ensure \`ruff check . && ruff format --check .\` passes before pushing.`,
+              `4. Ensure \
+              \
+              \
+              \
+              \
+  `,
             ].join('\n');
 
             const issue = await github.rest.issues.create({
