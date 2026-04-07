@@ -995,6 +995,175 @@ This project has undergone significant architectural refinement since its incept
 
 ---
 
+## ☁️ Automated Cloud Training (GPU CI/CD)
+
+> **What is this?** Right now, when you want to test training, you run it on a GPU machine, wait, read the errors, copy-paste them somewhere, figure out the fix, and repeat. This section sets up a system where **all of that happens automatically in the cloud** — you just push your code and go have coffee. ☕
+
+### 🧠 The Big Picture (How It Works)
+
+Think of it like a factory assembly line:
+
+```
+You push code to GitHub
+    ↓
+A GPU machine in the cloud wakes up automatically  ← (Vast.ai)
+    ↓
+It trains your model (~10 min with --micro mode)   ← (GitHub Actions)
+    ↓
+Training succeeds? → Results saved to your repo ✅
+Training fails?    → An Issue is created with the error log 🐛
+    ↓
+The Issue is assigned to @copilot (AI coding agent) 🤖
+    ↓
+Copilot reads the error, writes a fix, opens a Pull Request
+    ↓
+You review the fix on your phone and merge it 📱
+    ↓
+The GPU machine self-destructs (no more billing) 💰
+```
+
+**No copy-pasting. No SSH. No reading terminal logs. It just works.**
+
+### 📋 What You Need (Prerequisites)
+
+Before starting, you'll need these accounts and keys. All are either free or very cheap:
+
+| What | Where to get it | Cost | Why you need it |
+|---|---|---|---|
+| **GitHub account** | You already have this | Free | Where your code lives |
+| **Vast.ai account** | [vast.ai](https://vast.ai) → Sign Up | ~$0.30/hr for a GPU | Rents cheap cloud GPUs on demand |
+| **Vast.ai API key** | [vast.ai/account](https://vast.ai/account/) → API Keys | Free | Lets scripts rent GPUs automatically |
+| **GitHub Personal Access Token** | Settings → Developer settings → Personal access tokens → Fine-grained | Free | Lets the GPU machine register itself as a "runner" |
+| **Copilot Pro** (optional) | [github.com/features/copilot](https://github.com/features/copilot) | $10/month | AI agent that auto-fixes training failures |
+| **Anthropic or Mistral API key** (optional) | [console.anthropic.com](https://console.anthropic.com) | Pay-per-use | AI diagnosis of training errors |
+
+### 🔑 Step 1: Add Your Secrets to GitHub (5 minutes)
+
+Secrets are like passwords that GitHub Actions can use but nobody can see. Here's how to add them:
+
+1. Go to your repo: `github.com/YOUR_USERNAME/kaggle`
+2. Click **Settings** (top menu, far right)
+3. Left sidebar: **Secrets and variables** → **Actions**
+4. Click **New repository secret** for each:
+
+| Secret name | What to paste |
+|---|---|
+| `VASTAI_API_KEY` | Your Vast.ai API key from [vast.ai/account](https://vast.ai/account/) |
+| `ANTHROPIC_API_KEY` | Your Claude API key (optional — for AI error diagnosis) |
+| `MISTRAL_API_KEY` | Your Mistral API key (optional — alternative to Claude) |
+
+> **Note:** `GITHUB_TOKEN` is already provided automatically by GitHub Actions. You don't need to add it.
+
+> **Tip:** Your GitHub Personal Access Token (PAT) needs `repo` scope. When creating it, check the `repo` checkbox. This lets the Vast.ai script register a runner on your repo.
+
+### 🚀 Step 2: Start a Cloud GPU Training Run
+
+There are **two ways** to trigger a training run:
+
+#### Option A: One-Command from Your Terminal (Easiest)
+
+```bash
+# Set your keys (paste your actual keys)
+export VASTAI_API_KEY="your-vast-ai-api-key"
+export GITHUB_TOKEN="ghp_your-personal-access-token"
+export GITHUB_REPO="YOUR_USERNAME/kaggle"
+
+# This single command:
+# 1. Rents a GPU on Vast.ai (~$0.30/hr)
+# 2. Registers it as a GitHub Actions runner
+# 3. Waits for the training job to finish
+# 4. Destroys the GPU (stops billing)
+bash vastai_runner.sh
+```
+
+> **What's happening behind the scenes?** The script uses the `vastai` CLI tool to find the cheapest RTX 4090 (or similar GPU with ≥24GB VRAM), creates an instance, SSHes into it, installs the GitHub Actions runner software, and tells GitHub "hey, I'm ready to run jobs." Then it waits. When the job finishes, it tears everything down so you stop paying.
+
+#### Option B: Trigger from GitHub's Website
+
+1. Go to **Actions** tab in your repo
+2. Click **GPU Training + Auto-Diagnose** workflow (left sidebar)
+3. Click **Run workflow** (green button)
+4. Pick a training mode:
+   - `micro` — ~10 min, tests full pipeline (recommended for iteration)
+   - `instant` — <30 seconds after first run (uses cached weights)
+   - `superfast` — <5 min, TrOCR+YOLO only (no DONUT)
+   - `mini` — ~20 min, one full experiment
+5. Click **Run workflow**
+
+> **Important:** Option B only works if you already have a self-hosted GPU runner connected (via Option A or by setting up a persistent runner).
+
+### 🏗️ Step 3: What Happens When Training Fails (The Magic Part)
+
+This is the part that eliminates copy-pasting forever:
+
+1. **Training runs** and hits an error (e.g., `CUDA out of memory`, F1=0.0, import error)
+2. **The workflow automatically:**
+   - Captures the last 3000 characters of the training log
+   - Runs `diagnostics.py --smoke-test` to check for known failure patterns
+   - Calls Claude or Mistral AI to analyze the error (if you set up the API key)
+   - Creates a **GitHub Issue** with the full error context
+   - **Assigns the Issue to `@copilot`** (the Copilot coding agent)
+3. **Copilot reads the Issue**, explores your code, writes a fix, and opens a **Pull Request**
+4. **Your existing CI** (`self_healing_ci.yml` and `experiments_sroie.yml`) validates the fix
+5. **You review and merge** — from your phone, from bed, from the beach 🏖️
+
+### 💰 How Much Does This Cost?
+
+| Component | Cost | When you pay |
+|---|---|---|
+| Vast.ai GPU (RTX 4090) | ~$0.30–0.50/hr | Only while training runs (~10 min = ~$0.08) |
+| GitHub Actions | Free for public repos | — |
+| Copilot Pro | $10/month (optional) | Monthly subscription |
+| AI diagnosis (Claude/Mistral) | ~$0.01 per diagnosis | Only on failures |
+| **Total per training run** | **~$0.08–0.10** | — |
+
+> **The instance self-destructs after the job.** You'll never get a surprise $500 bill because you forgot to turn off a GPU.
+
+### 🔄 Speed Modes Comparison
+
+| Mode | Flag | Time | What trains | Best for |
+|---|---|---|---|---|
+| **Instant** | `--instant` | <30 sec* | TrOCR+YOLO (cached) | Rapid iteration after first run |
+| **Superfast** | `--superfast` | <5 min | TrOCR+YOLO only | Quick TrOCR/YOLO check |
+| **Micro** | `--micro` | ~10 min | DONUT + YOLO + TrOCR | **Recommended for CI** |
+| **Mini** | `--mini` | ~20 min | 1 DONUT + 1 YOLO/TrOCR | Thorough single-experiment test |
+| **Quick** | `--quick` | ~30 min | Exp 1 + TrOCR+YOLO | Pre-merge validation |
+| **Full** | (no flag) | 6–12 hrs | All 18 experiments | Final benchmark runs |
+
+*\*After first run builds caches (~3.5 min)*
+
+### 🛡️ Security Notes
+
+- **Secrets are never exposed** in logs. GitHub automatically masks them.
+- **The Vast.ai instance runs in ephemeral mode** — it auto-deregisters from GitHub after one job and is destroyed.
+- **Never put API keys directly in code or commit them.** Always use GitHub Secrets or gitignored `.txt` files.
+- **The runner only accepts jobs from your repo.** It's registered at the repository level, not organization level.
+
+### 🔧 Troubleshooting Cloud Training
+
+| Problem | Solution |
+|---|---|
+| `vastai_runner.sh` says "command not found: vastai" | Run `pip install vastai` first |
+| No GPU instances available on Vast.ai | Try different GPU types: edit `vastai_runner.sh` to search for RTX 3090 or A100 instead |
+| Runner shows as "offline" in GitHub Settings → Actions → Runners | The Vast.ai instance may have been interrupted. Run `vastai_runner.sh` again |
+| Training fails with OOM on rented GPU | Edit the workflow to use `--superfast` instead of `--micro`, or rent a GPU with more VRAM |
+| Copilot doesn't pick up the auto-created Issue | Make sure you have Copilot Pro and the coding agent is enabled in Settings → Copilot |
+| `GITHUB_TOKEN` permission error when registering runner | Your PAT needs `repo` scope. Regenerate it with the right permissions |
+
+### 📂 Files Involved
+
+| File | What it does |
+|---|---|
+| `vastai_runner.sh` | Rents GPU, registers runner, destroys after job |
+| `.github/workflows/gpu_training.yml` | CI workflow: train → diagnose → create Issue on failure |
+| `.github/workflows/copilot-setup-steps.yml` | Tells Copilot how to set up the dev environment |
+| `.github/copilot-instructions.md` | Gives Copilot context about the project and known bugs |
+| `cloud_orchestration.py` | Python-level Vast.ai provisioner (`VastAIProvisioner` class) |
+
+> **Note:** These files are added as part of the automated cloud training setup. After adding them to your repo, the full automated loop is ready to use.
+
+---
+
 ## Dependency Reference
 
 **5 direct dependencies** (down from 22). Install with `pip install -r requirements.txt`.
