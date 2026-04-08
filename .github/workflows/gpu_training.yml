@@ -7,7 +7,8 @@
 #   3. On failure: runs `python diagnostics.py --smoke-test --ai-diagnose` and
 #      creates a GitHub Issue with the log tail, assigned to @copilot so the
 #      Copilot coding agent can auto-fix it.
-#   4. On success: commits result files back to the branch.
+#   4. On success: commits result files back to the branch and resets the
+#      auto-fix iteration counter.
 #   5. Always: uploads results/ and training.log as workflow artifacts.
 #
 # Required secrets:
@@ -68,20 +69,36 @@ jobs:
 
     steps:
       # -----------------------------------------------------------------------
-      # 0. Configure git safe.directory (workaround for EACCES on /root/.gitconfig
-      #    when the self-hosted runner executes as root)
-      # -----------------------------------------------------------------------
-      - name: Configure git safe directory
-        run: git config --system --add safe.directory '*'
-
-      # -----------------------------------------------------------------------
-      # 1. Checkout
+      # 0. Checkout
+      #    actions/checkout@v4 handles safe.directory automatically via its
+      #    set-safe-directory: true default. The remote setup script in
+      #    vastai_runner.sh also runs `git config --system --add safe.directory '*'`
+      #    as root before dropping privileges to user `runner`, so no separate
+      #    git config step is needed here.
       # -----------------------------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
+
+      # -----------------------------------------------------------------------
+      # 1. Read auto-fix iteration state
+      # -----------------------------------------------------------------------
+      - name: Read auto-fix iteration state
+        id: state
+        run: |
+          STATE_FILE=".github/auto_fix_state.json"
+          if [[ -f "$STATE_FILE" ]]; then
+            ITER=$(python3 -c "import json; d=json.load(open('$STATE_FILE')); print(d.get('iteration', 0))")
+            MAX=$(python3 -c "import json; d=json.load(open('$STATE_FILE')); print(d.get('max_iterations', 5))")
+          else
+            ITER=0
+            MAX=5
+          fi
+          echo "iteration=$ITER" >> "$GITHUB_OUTPUT"
+          echo "max_iterations=$MAX" >> "$GITHUB_OUTPUT"
+          echo "Auto-fix iteration: $ITER / $MAX"
 
       # -----------------------------------------------------------------------
       # 2. Set up Python
@@ -131,7 +148,7 @@ jobs:
           MODE="${{ github.event.inputs.training_mode || 'micro' }}"
           FLAG=""
           case "$MODE" in
-            instant)   FLAG="--instant" ;; 
+            instant)   FLAG="--instant" ;;
             superfast) FLAG="--superfast" ;;
             micro)     FLAG="--micro" ;;
             mini)      FLAG="--mini" ;;
@@ -158,14 +175,82 @@ jobs:
             2>&1 | tee -a training.log || true
 
       # -----------------------------------------------------------------------
-      # 8. Create GitHub Issue assigned to @copilot (on failure)
+      # 8. Collect recent git log for failure context
+      # -----------------------------------------------------------------------
+      - name: Collect failure context
+        id: context_info
+        if: steps.train.outcome == 'failure'
+        run: |
+          # Last 5 commits with changed files (URL-encode newlines for GITHUB_OUTPUT)
+          RECENT_CHANGES="$(git log --oneline --name-only -5 2>/dev/null || echo 'unavailable')"
+          RECENT_CHANGES_ESCAPED="${RECENT_CHANGES//$'\n'/'%0A'}"
+          echo "recent_changes=$RECENT_CHANGES_ESCAPED" >> "$GITHUB_OUTPUT"
+
+      # -----------------------------------------------------------------------
+      # 9. Update iteration counter and commit state on failure
+      # -----------------------------------------------------------------------
+      - name: Update auto-fix state (on failure)
+        if: steps.train.outcome == 'failure'
+        run: |
+          STATE_FILE=".github/auto_fix_state.json"
+          python3 - <<'PYEOF'
+          import json, os, datetime
+
+          state_file = ".github/auto_fix_state.json"
+          try:
+              with open(state_file) as f:
+                  state = json.load(f)
+          except (OSError, json.JSONDecodeError):
+              state = {"iteration": 0, "max_iterations": 5, "last_failure_run_id": None,
+                       "last_failure_sha": None, "history": []}
+
+          state["iteration"] = state.get("iteration", 0) + 1
+          state["last_failure_run_id"] = os.environ.get("GITHUB_RUN_ID")
+          state["last_failure_sha"] = os.environ.get("GITHUB_SHA")
+          if not isinstance(state.get("history"), list):
+              state["history"] = []
+          state["history"].append({
+              "iteration": state["iteration"],
+              "run_id": state["last_failure_run_id"],
+              "sha": state["last_failure_sha"],
+              "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+          })
+          # Keep history bounded to last 20 entries
+          state["history"] = state["history"][-20:]
+
+          os.makedirs(".github", exist_ok=True)
+          with open(state_file, "w") as f:
+              json.dump(state, f, indent=2)
+          print(f"Updated iteration to {state['iteration']}")
+          PYEOF
+
+          git config user.email "gpu-training[bot]@users.noreply.github.com"
+          git config user.name "GPU Training Bot"
+          git add .github/auto_fix_state.json
+          git diff --cached --quiet || \
+            git commit -m "chore: increment auto-fix iteration to $(python3 -c "import json; print(json.load(open('.github/auto_fix_state.json'))['iteration'])")"
+          git push origin HEAD:"${{ github.ref_name }}" || true
+
+      # -----------------------------------------------------------------------
+      # 10. Create GitHub Issue assigned to @copilot (on failure)
+      #     If iteration >= max_iterations, escalate to human instead.
       # -----------------------------------------------------------------------
       - name: Create failure issue for Copilot
         if: steps.train.outcome == 'failure'
         uses: actions/github-script@v7
+        env:
+          ITERATION: ${{ steps.state.outputs.iteration }}
+          MAX_ITERATIONS: ${{ steps.state.outputs.max_iterations }}
+          RECENT_CHANGES: ${{ steps.context_info.outputs.recent_changes }}
         with:
           script: |
             const fs = require('fs');
+
+            const iteration = parseInt(process.env.ITERATION || '0', 10);
+            const maxIterations = parseInt(process.env.MAX_ITERATIONS || '5', 10);
+            const recentChanges = (process.env.RECENT_CHANGES || '').replace(/%0A/g, '\n');
+            const nextIteration = iteration + 1;
+            const atLimit = iteration >= maxIterations;
 
             // Read the last 4000 characters of the training log
             let logContent = '';
@@ -183,77 +268,152 @@ jobs:
               : 'micro';
             const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
 
-            const body = [
-              '## GPU Training Failure',
-              '',
-              `**Commit:** \
-                ${context.sha}`,
-              `**Branch:** \${context.ref.replace('refs/heads/', '')}`,
-              `**Training mode:** \${mode}`,
-              `**Workflow run:** [View logs](\${runUrl})`,
-              '',
-              '### Tail of `training.log`',
-              '```',
-              logContent,
-              '```',
-              '',
-              '### Context',
-              'This repo implements DONUT + TrOCR + YOLOv8 for receipt KIE (SROIE dataset).',
-              '',
-              '### Known failure patterns (check these first)',
-              '- **F1 ≈ 0.42** → `lm_head.weight` dropped by safetensors (fix: `LmHeadCloneCallback` + `tie_word_embeddings=False`)',
-              '- **F1 = 0.00** → wrong `decoder_start_token_id` (use list form: `tokenizer.convert_tokens_to_ids(["<s_sroie>"])[0]`)',
-              '- **F1 ≈ 0.008** → `token2json` returned list due to `<sep/>` tokens (merge page-list in `_parse_prediction()`)',
-              '- **Loss = NaN** → fp16 overflow; switch to bf16',
-              '- **Import error** → run `python -c "from constants import FIELDS, BASE_MODEL, SEED"`',
-              '',
-              '### Validation commands',
-              '```bash',
-              'python diagnostics.py --smoke-test',
-              'ruff check . && ruff format --check .',
-              'python -c "from constants import FIELDS, BASE_MODEL, SEED"',
-              '```',
-              '',
-              '### Instructions for fix',
-              '1. Run `python run_all.py --micro --verify` locally to reproduce.',
-              '2. Check `diagnostics.py --smoke-test` output for known patterns.',
-              '3. Fix the root cause — do NOT modify unrelated code.',
-              '4. Ensure `ruff check . && ruff format --check .` passes before pushing.',
-            ].join('\n');
+            if (atLimit) {
+              // Max auto-fix attempts reached — escalate to human
+              const body = [
+                '## 🛑 Human Intervention Required — Auto-Fix Loop Exhausted',
+                '',
+                `The autonomous GPU training + auto-fix loop has exhausted all **${maxIterations}** attempts without success.`,
+                'No further Copilot fixes will be attempted automatically.',
+                '',
+                `**Commit:** ${context.sha}`,
+                `**Branch:** ${context.ref.replace('refs/heads/', '')}`,
+                `**Training mode:** ${mode}`,
+                `**Workflow run:** [View logs](${runUrl})`,
+                `**Iterations exhausted:** ${iteration}/${maxIterations}`,
+                '',
+                '### Tail of `training.log`',
+                '```',
+                logContent,
+                '```',
+                '',
+                '### Recently changed files (last 5 commits)',
+                '```',
+                recentChanges,
+                '```',
+                '',
+                '### What to do',
+                '1. Review the training log above and the full workflow run logs.',
+                '2. Identify the root cause — the auto-fix loop could not resolve it.',
+                '3. Manually fix the issue and push a commit to main.',
+                '4. Reset the auto-fix counter: edit `.github/auto_fix_state.json` and set `"iteration": 0`.',
+              ].join('\n');
 
-            const issue = await github.rest.issues.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              title: `[Auto] GPU training failure — ${new Date().toISOString().slice(0, 10)} (${mode} mode)`,
-              body: body,
-              labels: ['bug', 'training-failure'],
-              assignees: ['copilot'],
-            });
+              const issue = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: `[HUMAN NEEDED] GPU training auto-fix exhausted after ${iteration} attempts — ${new Date().toISOString().slice(0, 10)}`,
+                body: body,
+                labels: ['bug', 'training-failure', 'needs-human'],
+              });
+              console.log(`Created human-escalation issue #${issue.data.number}: ${issue.data.html_url}`);
+            } else {
+              // Normal failure — create issue for Copilot auto-fix
+              const body = [
+                '## GPU Training Failure — Auto-Fix Request',
+                '',
+                `> **Auto-fix iteration ${nextIteration} of ${maxIterations}.** This issue was created automatically by the GPU training workflow.`,
+                '> When you open a PR to fix this, add the label `training-failure-fix` so the auto-merge loop (`auto_fix_loop.yml`) picks it up.',
+                '> **Do NOT modify** `.github/workflows/`, `vastai_runner.sh`, or unrelated code.',
+                '',
+                `**Commit:** ${context.sha}`,
+                `**Branch:** ${context.ref.replace('refs/heads/', '')}`,
+                `**Training mode:** ${mode}`,
+                `**Workflow run:** [View logs](${runUrl})`,
+                `**Auto-fix iteration:** ${nextIteration}/${maxIterations}`,
+                '',
+                '### Tail of `training.log`',
+                '```',
+                logContent,
+                '```',
+                '',
+                '### Recently changed files (last 5 commits — avoid re-breaking these)',
+                '```',
+                recentChanges,
+                '```',
+                '',
+                '### Context',
+                'This repo implements DONUT + TrOCR + YOLOv8 for receipt KIE (SROIE dataset).',
+                '',
+                '### Known failure patterns (check these first)',
+                '- **F1 ≈ 0.42** → `lm_head.weight` dropped by safetensors (fix: `LmHeadCloneCallback` + `tie_word_embeddings=False`)',
+                '- **F1 = 0.00** → wrong `decoder_start_token_id` (use list form: `tokenizer.convert_tokens_to_ids(["<s_sroie>"])[0]`)',
+                '- **F1 ≈ 0.008** → `token2json` returned list due to `<sep/>` tokens (merge page-list in `_parse_prediction()`)',
+                '- **Loss = NaN** → fp16 overflow; switch to bf16',
+                '- **Import error** → run `python -c "from constants import FIELDS, BASE_MODEL, SEED"`',
+                '',
+                '### Validation commands',
+                '```bash',
+                'python diagnostics.py --smoke-test',
+                'ruff check . && ruff format --check .',
+                'python -c "from constants import FIELDS, BASE_MODEL, SEED"',
+                '```',
+                '',
+                '### Instructions for fix',
+                '1. Run `python run_all.py --micro --verify` locally to reproduce.',
+                '2. Check `diagnostics.py --smoke-test` output for known patterns.',
+                '3. Fix the root cause — do NOT modify unrelated code.',
+                '4. Ensure `ruff check . && ruff format --check .` passes before pushing.',
+                '5. Open a PR targeting `main` and add the label `training-failure-fix`.',
+                '6. The `auto_fix_loop.yml` workflow will auto-merge if CI passes.',
+              ].join('\n');
 
-            console.log(`Created issue #${issue.data.number}: ${issue.data.html_url}`);
+              const issue = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: `[Auto] GPU training failure — ${new Date().toISOString().slice(0, 10)} (${mode} mode, attempt ${nextIteration}/${maxIterations})`,
+                body: body,
+                labels: ['bug', 'training-failure', 'training-failure-fix'],
+                assignees: ['copilot'],
+              });
+              console.log(`Created issue #${issue.data.number}: ${issue.data.html_url}`);
+            }
 
       # -----------------------------------------------------------------------
-      # 9. Commit and push result files back to branch (on success)
+      # 11. Commit and push result files + reset state on success
       # -----------------------------------------------------------------------
-      - name: Commit results to branch (on success)
+      - name: Commit results and reset auto-fix state (on success)
         if: steps.train.outcome == 'success'
         run: |
+          # Reset iteration counter to 0 on success
+          python3 - <<'PYEOF'
+          import json, os
+
+          state_file = ".github/auto_fix_state.json"
+          try:
+              with open(state_file) as f:
+                  state = json.load(f)
+          except (OSError, json.JSONDecodeError):
+              state = {}
+          state["iteration"] = 0
+          state["max_iterations"] = state.get("max_iterations", 5)
+          state["last_failure_run_id"] = None
+          state["last_failure_sha"] = None
+          if not isinstance(state.get("history"), list):
+              state["history"] = []
+
+          os.makedirs(".github", exist_ok=True)
+          with open(state_file, "w") as f:
+              json.dump(state, f, indent=2)
+          print("Reset auto-fix iteration counter to 0")
+          PYEOF
+
           git config user.email "gpu-training[bot]@users.noreply.github.com"
           git config user.name "GPU Training Bot"
-          git add results/ || true
+          git add results/ .github/auto_fix_state.json || true
           git diff --cached --quiet || \
-            git commit -m "chore: add training results from GPU run ${GITHUB_SHA::8}"
+            git commit -m "chore: training results + reset auto-fix counter [run ${GITHUB_SHA::8}]"
           git push origin HEAD:"${{ github.ref_name }}" || true
 
       # -----------------------------------------------------------------------
-      # 10. Clean up API key files (always)
+      # 12. Clean up API key files (always)
       # -----------------------------------------------------------------------
       - name: Clean up key files
         if: always()
         run: rm -f anthropic_api_key.txt mistral_api_key.txt
 
       # -----------------------------------------------------------------------
-      # 11. Upload artifacts (always)
+      # 13. Upload artifacts (always)
       # -----------------------------------------------------------------------
       - name: Upload training artifacts
         if: always()
