@@ -169,6 +169,7 @@ CREATE_RESULT=$(
         --image "$VASTAI_IMAGE" \
         --disk "$VASTAI_DISK_GB" \
         --label "$RUNNER_NAME" \
+        --ssh \
         --raw 2>/dev/null
 ) || die "vastai create instance failed."
 
@@ -222,7 +223,7 @@ while [[ $elapsed -lt $BOOT_TIMEOUT ]]; do
     SSH_PORT=$(echo "$INFO" | $PYEXE -c "import json,sys; print(json.loads(sys.stdin.read()).get('ssh_port',22))")
 
     if [[ "$STATUS" == "running" ]] && [[ -n "$SSH_HOST" ]]; then
-        if ssh -i "$SSH_KEY" -o ConnectTimeout=5 -o StrictHostKeyChecking=no \
+        if ssh -i "$SSH_KEY" -o ConnectTimeout=10 -o StrictHostKeyChecking=no \
                -o BatchMode=yes -p "$SSH_PORT" "root@${SSH_HOST}" "echo ok" 2>/dev/null | grep -q ok; then
             log "  SSH READY: ${SSH_HOST}:${SSH_PORT}"
             break
