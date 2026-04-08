@@ -72,9 +72,7 @@ jobs:
       #    when the self-hosted runner executes as root)
       # -----------------------------------------------------------------------
       - name: Configure git safe directory
-        run: git config --global --add safe.directory '*'
-        env:
-          HOME: /root
+        run: git config --system --add safe.directory '*'
 
       # -----------------------------------------------------------------------
       # 1. Checkout
