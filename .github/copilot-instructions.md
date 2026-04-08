@@ -137,3 +137,63 @@ python diagnostics.py --smoke-test --ai-diagnose --ai-provider auto
 # Fast end-to-end test:
 python run_all.py --micro --verify 2>&1 | tee training.log
 ```
+
+---
+
+## Autonomous GPU CI auto-fix loop
+
+This repository uses a fully autonomous training → diagnose → fix → re-train loop.
+**When you are assigned a `training-failure-fix` issue, follow these rules exactly.**
+
+### How the loop works
+
+```
+push to main
+  → gpu_training.yml runs on Vast.ai GPU runner
+    IF SUCCESS: commit results, reset iteration counter ✅
+    IF FAILURE:
+      1. AI diagnoses via diagnostics.py
+      2. Increments .github/auto_fix_state.json iteration counter
+      3. Creates GitHub Issue assigned to @copilot with:
+         - Full training log tail
+         - Recently changed files (to avoid re-breaking them)
+         - Iteration count (N of MAX)
+      4. Copilot (you) picks up the issue and opens a PR
+      5. PR must have label `training-failure-fix`
+      6. auto_fix_loop.yml detects the PR, runs CI checks
+      7. If CI passes: auto-merges (squash) → triggers gpu_training.yml again
+      8. If CI fails: closes PR, creates new issue for next attempt
+      9. After MAX_AUTO_FIX_ATTEMPTS (5): escalates to human
+```
+
+### Rules for Copilot when assigned a training-failure-fix issue
+
+1. **Focus only on the specific failure** described in the issue. Read the log tail carefully.
+2. **Do NOT modify** `.github/workflows/`, `vastai_runner.sh`, or `.github/auto_fix_state.json`.
+3. **Always run these validations** before pushing:
+   ```bash
+   python -c "from constants import FIELDS, BASE_MODEL, SEED"
+   ruff check . && ruff format --check .
+   ```
+4. **Check the iteration history** in the issue body — do not repeat a fix that was already tried.
+5. **Add the label `training-failure-fix`** to your PR (the auto-merge loop requires it).
+6. **Target `main`** — not any other branch.
+7. **Keep changes surgical** — fix the root cause, do not refactor unrelated code.
+
+### Auto-fix state file
+
+`.github/auto_fix_state.json` tracks the loop state:
+
+```json
+{
+  "iteration": 2,
+  "max_iterations": 5,
+  "last_failure_run_id": "12345678",
+  "last_failure_sha": "abc1234",
+  "history": [...]
+}
+```
+
+- `iteration` is auto-incremented by `gpu_training.yml` on every failure.
+- Reset to `0` automatically when training succeeds.
+- **Never modify this file manually** unless resetting after human intervention.

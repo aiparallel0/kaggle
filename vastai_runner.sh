@@ -320,6 +320,9 @@ useradd -m -s /bin/bash runner 2>/dev/null || true
 mkdir -p /workspace/actions-runner /workspace/runner-work /workspace/repo
 chown -R runner:runner /workspace
 
+log_r "Configuring git safe.directory system-wide (runs as root, before privilege drop)..."
+git config --system --add safe.directory '*'
+
 log_r "Cloning https://github.com/${GITHUB_REPO}..."
 export GIT_TERMINAL_PROMPT=0
 git clone --depth 1 "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPO}.git" /workspace/repo

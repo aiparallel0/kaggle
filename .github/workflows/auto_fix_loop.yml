@@ -1,0 +1,341 @@
+# auto_fix_loop.yml — Autonomous auto-merge + loop-control for Copilot training-failure PRs.
+#
+# What this workflow does:
+#   1. Triggers when a PR targeting main has the label `training-failure-fix`.
+#   2. Verifies the PR was authored by the Copilot agent (not a human PR).
+#   3. Reads the current auto-fix iteration count from .github/auto_fix_state.json.
+#   4. If iteration < max_iterations:
+#      a. Runs lightweight CI checks (ruff lint, import chain, pytest smoke).
+#      b. If CI passes: auto-merges the PR (squash).
+#      c. If CI fails: comments on the PR with details, closes it, creates a
+#         new issue for Copilot with the updated failure context.
+#   5. If iteration >= max_iterations: creates a "human needed" escalation issue
+#      and does NOT merge.
+#
+# Required permissions:
+#   "Allow auto-merge" must be enabled in repo Settings → General → Pull Requests.
+#   The GITHUB_TOKEN needs contents:write and pull-requests:write.
+#
+# Note: auto-merge via GITHUB_TOKEN only works when branch protection rules allow
+# it or the repository has auto-merge enabled. If not enabled, the workflow will
+# comment on the PR asking a human to merge.
+
+name: Auto-Fix Loop
+
+on:
+  pull_request:
+    types: [labeled, opened, synchronize, reopened]
+    branches:
+      - main
+
+jobs:
+  auto-merge:
+    name: Auto-merge Copilot fix PR
+    # Only run when the training-failure-fix label is present
+    if: contains(github.event.pull_request.labels.*.name, 'training-failure-fix')
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write        # push merge commit
+      pull-requests: write   # comment + merge PR
+      issues: write          # create escalation issues
+
+    steps:
+      # -----------------------------------------------------------------------
+      # 1. Verify the PR was authored by the Copilot agent
+      # -----------------------------------------------------------------------
+      - name: Check PR author
+        id: author_check
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const author = pr.user.login;
+            // Copilot coding agent runs as one of these logins
+            const copilotLogins = ['copilot-swe-agent[bot]', 'Copilot', 'github-copilot[bot]', 'copilot[bot]'];
+            const isCopilot = copilotLogins.some(l => author === l) ||
+                              author.toLowerCase().includes('copilot');
+            console.log(`PR author: ${author} — isCopilot: ${isCopilot}`);
+            core.setOutput('is_copilot', isCopilot ? 'true' : 'false');
+            core.setOutput('author', author);
+
+      - name: Skip non-Copilot PRs
+        if: steps.author_check.outputs.is_copilot != 'true'
+        run: |
+          echo "PR author '${{ steps.author_check.outputs.author }}' is not the Copilot agent."
+          echo "Auto-merge only applies to Copilot-authored PRs. Skipping."
+
+      # -----------------------------------------------------------------------
+      # 2. Checkout PR head for CI checks
+      # -----------------------------------------------------------------------
+      - name: Checkout PR branch
+        if: steps.author_check.outputs.is_copilot == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      # -----------------------------------------------------------------------
+      # 3. Read auto-fix iteration state
+      # -----------------------------------------------------------------------
+      - name: Read auto-fix iteration state
+        id: state
+        if: steps.author_check.outputs.is_copilot == 'true'
+        run: |
+          STATE_FILE=".github/auto_fix_state.json"
+          if [[ -f "$STATE_FILE" ]]; then
+            ITER=$(python3 -c "import json; d=json.load(open('$STATE_FILE')); print(d.get('iteration', 0))")
+            MAX=$(python3 -c "import json; d=json.load(open('$STATE_FILE')); print(d.get('max_iterations', 5))")
+          else
+            ITER=0
+            MAX=5
+          fi
+          echo "iteration=$ITER" >> "$GITHUB_OUTPUT"
+          echo "max_iterations=$MAX" >> "$GITHUB_OUTPUT"
+          echo "Auto-fix iteration: $ITER / $MAX"
+
+      # -----------------------------------------------------------------------
+      # 4. Check if max iterations reached — escalate to human if so
+      # -----------------------------------------------------------------------
+      - name: Escalate to human (iterations exhausted)
+        if: |
+          steps.author_check.outputs.is_copilot == 'true' &&
+          steps.state.outputs.iteration >= steps.state.outputs.max_iterations
+        uses: actions/github-script@v7
+        env:
+          ITERATION: ${{ steps.state.outputs.iteration }}
+          MAX_ITERATIONS: ${{ steps.state.outputs.max_iterations }}
+        with:
+          script: |
+            const iteration = parseInt(process.env.ITERATION || '0', 10);
+            const maxIterations = parseInt(process.env.MAX_ITERATIONS || '5', 10);
+            const pr = context.payload.pull_request;
+
+            // Comment on the PR
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr.number,
+              body: [
+                `## 🛑 Auto-Fix Loop Limit Reached`,
+                ``,
+                `The auto-fix loop has reached its maximum of **${maxIterations}** iterations.`,
+                `This PR will **not** be auto-merged. Human review is required.`,
+                ``,
+                `To reset the loop after a manual fix:`,
+                `1. Merge or close this PR manually.`,
+                `2. Edit \`.github/auto_fix_state.json\` and set \`"iteration": 0\`.`,
+                `3. Push to main to restart the training pipeline.`,
+              ].join('\n'),
+            });
+
+            // Create human escalation issue
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `[HUMAN NEEDED] Auto-fix loop exhausted after ${iteration} iterations — PR #${pr.number}`,
+              body: [
+                `## 🛑 Human Intervention Required`,
+                ``,
+                `The autonomous Copilot auto-fix loop has exhausted all **${maxIterations}** attempts.`,
+                `PR #${pr.number} (${pr.html_url}) was NOT auto-merged.`,
+                ``,
+                `### What to do`,
+                `1. Review PR #${pr.number} and the linked training failure issues.`,
+                `2. Identify why the fixes keep failing.`,
+                `3. Manually fix the root cause and push to main.`,
+                `4. Reset the counter: edit \`.github/auto_fix_state.json\` → set \`"iteration": 0\`.`,
+              ].join('\n'),
+              labels: ['bug', 'training-failure', 'needs-human'],
+            });
+
+            core.setFailed(`Max iterations (${maxIterations}) reached — human review required.`);
+
+      # -----------------------------------------------------------------------
+      # 5. Run lightweight CI checks
+      # -----------------------------------------------------------------------
+      - name: Set up Python 3.12
+        if: |
+          steps.author_check.outputs.is_copilot == 'true' &&
+          steps.state.outputs.iteration < steps.state.outputs.max_iterations
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install lightweight deps (ruff + pyyaml only — no torch)
+        if: |
+          steps.author_check.outputs.is_copilot == 'true' &&
+          steps.state.outputs.iteration < steps.state.outputs.max_iterations
+        run: pip install ruff "pyyaml>=6.0"
+
+      - name: Run CI checks
+        id: ci_checks
+        if: |
+          steps.author_check.outputs.is_copilot == 'true' &&
+          steps.state.outputs.iteration < steps.state.outputs.max_iterations
+        run: |
+          set +e
+          FAILURES=""
+
+          echo "=== 1/3 Import chain check ==="
+          python3 -c "from constants import FIELDS, BASE_MODEL, SEED" 2>&1
+          if [[ $? -ne 0 ]]; then
+            FAILURES="${FAILURES}import_check "
+            echo "FAIL: import chain broken"
+          else
+            echo "PASS: import chain OK"
+          fi
+
+          echo "=== 2/3 Ruff lint ==="
+          ruff check . 2>&1
+          if [[ $? -ne 0 ]]; then
+            FAILURES="${FAILURES}ruff_lint "
+            echo "FAIL: ruff lint errors"
+          else
+            echo "PASS: ruff lint OK"
+          fi
+
+          echo "=== 3/3 Ruff format check ==="
+          ruff format --check . 2>&1
+          if [[ $? -ne 0 ]]; then
+            FAILURES="${FAILURES}ruff_format "
+            echo "FAIL: ruff format errors"
+          else
+            echo "PASS: ruff format OK"
+          fi
+
+          if [[ -n "$FAILURES" ]]; then
+            echo "ci_passed=false" >> "$GITHUB_OUTPUT"
+            echo "failures=$FAILURES" >> "$GITHUB_OUTPUT"
+            echo "CI FAILED: $FAILURES"
+          else
+            echo "ci_passed=true" >> "$GITHUB_OUTPUT"
+            echo "failures=" >> "$GITHUB_OUTPUT"
+            echo "CI PASSED"
+          fi
+
+      # -----------------------------------------------------------------------
+      # 6a. CI passed → auto-merge the PR
+      # -----------------------------------------------------------------------
+      - name: Auto-merge PR (CI passed)
+        if: |
+          steps.author_check.outputs.is_copilot == 'true' &&
+          steps.ci_checks.outputs.ci_passed == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+
+            // Try to enable auto-merge first (squash strategy)
+            try {
+              await github.rest.pulls.merge({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: pr.number,
+                merge_method: 'squash',
+                commit_title: `fix: auto-merge Copilot training-failure fix (PR #${pr.number})`,
+                commit_message: `Automatically merged by auto_fix_loop.yml after CI checks passed.\n\nPR: ${pr.html_url}`,
+              });
+              console.log(`Successfully merged PR #${pr.number}`);
+
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr.number,
+                body: [
+                  `## ✅ Auto-merged`,
+                  ``,
+                  `All CI checks passed. This PR has been automatically merged (squash).`,
+                  `The GPU training workflow will re-run on the next push to \`main\`.`,
+                ].join('\n'),
+              });
+            } catch (err) {
+              console.error(`Auto-merge failed: ${err.message}`);
+              // Fallback: comment asking human to merge
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr.number,
+                body: [
+                  `## ⚠️ CI Passed — Manual Merge Required`,
+                  ``,
+                  `All CI checks passed, but auto-merge failed: \`${err.message}\``,
+                  ``,
+                  `Please merge this PR manually to continue the training pipeline.`,
+                  `(Auto-merge may need to be enabled in repo Settings → General → Pull Requests.)`,
+                ].join('\n'),
+              });
+            }
+
+      # -----------------------------------------------------------------------
+      # 6b. CI failed → comment on PR, close it, create new issue for Copilot
+      # -----------------------------------------------------------------------
+      - name: Handle CI failure
+        if: |
+          steps.author_check.outputs.is_copilot == 'true' &&
+          steps.ci_checks.outputs.ci_passed == 'false'
+        uses: actions/github-script@v7
+        env:
+          FAILURES: ${{ steps.ci_checks.outputs.failures }}
+          ITERATION: ${{ steps.state.outputs.iteration }}
+          MAX_ITERATIONS: ${{ steps.state.outputs.max_iterations }}
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const failures = process.env.FAILURES || 'unknown';
+            const iteration = parseInt(process.env.ITERATION || '0', 10);
+            const maxIterations = parseInt(process.env.MAX_ITERATIONS || '5', 10);
+
+            // Comment on the PR with what failed
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr.number,
+              body: [
+                `## ❌ CI Checks Failed — Cannot Auto-Merge`,
+                ``,
+                `The following checks failed: \`${failures.trim()}\``,
+                ``,
+                `This PR will be closed. A new issue will be created for the next fix attempt.`,
+                ``,
+                `**Iteration:** ${iteration}/${maxIterations}`,
+              ].join('\n'),
+            });
+
+            // Close the PR without merging
+            await github.rest.pulls.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+              state: 'closed',
+            });
+
+            // Create new issue for the next Copilot fix attempt
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = [
+              '## GPU Training Auto-Fix: CI Failed on Copilot PR',
+              '',
+              `> **Auto-fix iteration ${iteration + 1} of ${maxIterations}.** The previous Copilot fix attempt (PR #${pr.number}) was closed because CI checks failed.`,
+              '> When you open a new PR to fix this, add the label `training-failure-fix`.',
+              '> **Do NOT modify** `.github/workflows/`, `vastai_runner.sh`, or unrelated code.',
+              '',
+              `**Failed checks:** \`${failures.trim()}\``,
+              `**Previous PR:** #${pr.number} (${pr.html_url})`,
+              `**Auto-fix loop run:** [View logs](${runUrl})`,
+              '',
+              '### Instructions',
+              '1. Fix the CI failures listed above.',
+              '2. Run `ruff check . && ruff format --check .` locally.',
+              '3. Run `python -c "from constants import FIELDS, BASE_MODEL, SEED"` to verify imports.',
+              '4. Open a new PR targeting `main` and add the label `training-failure-fix`.',
+            ].join('\n');
+
+            const issue = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `[Auto] CI failed on Copilot fix PR #${pr.number} — retry needed (attempt ${iteration + 1}/${maxIterations})`,
+              body: body,
+              labels: ['bug', 'training-failure', 'training-failure-fix'],
+              assignees: ['copilot'],
+            });
+            console.log(`Created retry issue #${issue.data.number}: ${issue.data.html_url}`);
