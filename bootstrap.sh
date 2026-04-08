@@ -61,9 +61,35 @@ export AI_DIAGNOSE="${AI_DIAGNOSE:-1}"
 export AI_DIAGNOSE_PROVIDER="${AI_DIAGNOSE_PROVIDER:-auto}"
 export AUTOPUSH_RESULTS="${AUTOPUSH_RESULTS:-1}"
 
-# 6. Install minimal deps
+# 6. Install dependencies in three stages.
+# flash-attn's setup.py imports torch at build time, so a single
+# `pip install -r requirements.txt` may attempt to build flash-attn before
+# torch is present and fail with "ModuleNotFoundError: No module named 'torch'".
 echo "[bootstrap] Installing dependencies..."
-pip install -q -r requirements.txt
+
+# Stage 1: Install PyTorch first — required at build time by flash-attn.
+echo "[bootstrap]   Stage 1/3: Installing PyTorch (required before flash-attn)..."
+pip install -q "torch>=2.0.0" "torchvision>=0.15.0"
+
+# Stage 2: Install all remaining deps except flash-attn (and its comment lines).
+# We exclude flash-attn here because --no-build-isolation (stage 3) is needed.
+echo "[bootstrap]   Stage 2/3: Installing remaining dependencies (excluding flash-attn)..."
+_REQS_NO_FLASH="$(mktemp /tmp/requirements-no-flash-XXXXXX.txt)"
+grep -v 'flash-attn' requirements.txt > "$_REQS_NO_FLASH"
+pip install -q -r "$_REQS_NO_FLASH"
+rm -f "$_REQS_NO_FLASH"
+
+# Stage 3 (optional/best-effort): Install flash-attn with --no-build-isolation so
+# it can find the already-installed torch.  flash-attn is an optimisation only;
+# the pipeline falls back to PyTorch SDPA if it is absent.  A failure here must
+# NOT abort the bootstrap (hence the if/else rather than a bare pip call under
+# set -euo pipefail).
+echo "[bootstrap]   Stage 3/3: Installing flash-attn (optional, best-effort)..."
+if pip install -q "flash-attn>=2.0.0" --no-build-isolation 2>/dev/null; then
+    echo "[bootstrap]   flash-attn installed successfully."
+else
+    echo "[bootstrap]   WARNING: flash-attn could not be installed (non-fatal). Pipeline will use PyTorch SDPA attention fallback."
+fi
 
 # 7. Validate import chain
 echo "[bootstrap] Validating import chain..."
