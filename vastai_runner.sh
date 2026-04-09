@@ -64,8 +64,10 @@ _VALID_TRAINING_MODES="micro|nano|superfast|fast|full|cpu"
 if ! printf '%s' "${TRAINING_MODE:-micro}" | grep -qE "^(${_VALID_TRAINING_MODES})$"; then
     echo "[setup] WARNING: TRAINING_MODE='${TRAINING_MODE:-}' not in allowlist (${_VALID_TRAINING_MODES//|/,}) — defaulting to 'micro'." >&2
     TRAINING_MODE="micro"
+else
+    # Ensure TRAINING_MODE is set to its (possibly defaulted) validated value.
+    TRAINING_MODE="${TRAINING_MODE:-micro}"
 fi
-TRAINING_MODE="${TRAINING_MODE:-micro}"
 RUNNER_VERSION="${RUNNER_VERSION:-2.333.1}"
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/id_vastai}"
 # Auto-generate SSH key if it does not exist

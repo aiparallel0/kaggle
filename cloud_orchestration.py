@@ -2747,6 +2747,9 @@ if [ -x /workspace/actions-runner/bin/installdependencies.sh ]; then
 else
     apt-get update -qq 2>/dev/null || true
     # NEVER install liblttng-ust* — it triggers a container restart on Vast.ai.
+    # Try versioned packages first (Ubuntu 22.04: libicu70, libssl3).
+    # Fall back to -dev names (Ubuntu 20.04 / other distros).  Both attempts
+    # use || true so a missing package on one distro doesn't abort the script.
     DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
         libicu70 libssl3 libkrb5-3 zlib1g 2>/dev/null \
       || DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
@@ -2773,6 +2776,9 @@ echo '[remote] Starting runner...'
 cat > /tmp/start_runner.sh << 'LAUNCHER'
 #!/bin/bash
 set -euo pipefail
+# HOME must be re-exported here: the launcher runs in a new shell spawned by
+# 'su runner', which does NOT inherit the temporary HOME=/home/runner prefix
+# from the outer su invocation when the script is a separate file via 'bash'.
 export HOME=/home/runner
 cd /workspace/actions-runner
 setsid nohup ./run.sh >> /workspace/runner.log 2>&1 &
