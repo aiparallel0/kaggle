@@ -2496,6 +2496,10 @@ class VastAIProvisioner:
         try:
             return json.loads(text or "null") or {}
         except json.JSONDecodeError:
+            self.logger.warning(
+                "Failed to parse JSON from vastai output: %r",
+                (text or "")[:500],
+            )
             return {}
 
     # ------------------------------------------------------------------
@@ -2524,6 +2528,8 @@ class VastAIProvisioner:
         query = f"gpu_name='{gpu_name}' gpu_ram>={min_vram} dph<={max_price} rentable=True"
         try:
             result = self._run_vastai("search", "offers", query, "--order", "dph asc", "--raw")
+            if result.stderr and result.stderr.strip():
+                self.logger.warning("vastai search stderr: %s", result.stderr.strip())
             offers = self._parse_json(result.stdout)
             if isinstance(offers, list):
                 self.logger.info("  Found %d matching offer(s)", len(offers))
