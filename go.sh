@@ -163,12 +163,14 @@ fi
 # ---------------------------------------------------------------------------
 _get_remote_sha() {
     local branch="${1:-main}"
-    curl -sSf \
+    local sha
+    sha=$(curl -sSf \
         -H "Accept: application/vnd.github+json" \
         -H "Authorization: token ${GITHUB_TOKEN}" \
         "https://api.github.com/repos/${GITHUB_REPO}/commits/${branch}" 2>/dev/null \
-    | python3 -c "import json,sys; print(json.loads(sys.stdin.read()).get('sha',''))" 2>/dev/null \
-    || echo ""
+    | python3 -c "import json,sys; print(json.loads(sys.stdin.read()).get('sha',''))" 2>/dev/null) \
+    || { echo "[go] WARNING: GitHub API call failed for ${branch} SHA — check GITHUB_TOKEN" >&2; echo ""; return; }
+    echo "$sha"
 }
 
 # ---------------------------------------------------------------------------
@@ -264,10 +266,10 @@ while true; do
     fi
 
     echo ""
-    echo "┌──────────────────────────────────────────────────────────┐"
-    echo "│  GPU Run $ATTEMPT of $MAX_GPU_RERUNS                                     │"
-    echo "│  Elapsed: ${ELAPSED_HOURS}h of ${MAX_TOTAL_HOURS}h max                              │"
-    echo "└──────────────────────────────────────────────────────────┘"
+    echo "┌────────────────────────────────────────────────────────┐"
+    echo "│  GPU Run $ATTEMPT of $MAX_GPU_RERUNS"
+    echo "│  Elapsed: ${ELAPSED_HOURS}h of ${MAX_TOTAL_HOURS}h max"
+    echo "└────────────────────────────────────────────────────────┘"
 
     # ── Record main HEAD before this run ──────────────────────────────────
     PRE_RUN_SHA=$(_get_remote_sha main)
@@ -288,7 +290,8 @@ while true; do
     fi
 
     # ── Check if training succeeded ───────────────────────────────────────
-    # Give GitHub Actions a moment to update run status
+    # GitHub Actions API takes ~10-15s to update workflow run status after
+    # the runner exits.  Wait briefly before querying.
     sleep 15
     TRAINING_STATUS=$(_get_latest_training_status)
     echo "[go] Latest gpu_training.yml status: $TRAINING_STATUS"
@@ -303,7 +306,7 @@ while true; do
 
     # ── Check if auto-fix loop is exhausted ───────────────────────────────
     ITERATION=$(_get_remote_iteration)
-    MAX_ITER="${AUTO_FIX_MAX_ITERATIONS:-5}"
+    MAX_ITER="${MAX_AUTO_FIX_ITERATIONS:-5}"
     echo "[go] Auto-fix iteration: $ITERATION / $MAX_ITER"
 
     if [[ "$ITERATION" -ge "$MAX_ITER" ]]; then

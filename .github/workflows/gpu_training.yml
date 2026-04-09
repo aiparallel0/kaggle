@@ -188,6 +188,9 @@ jobs:
         continue-on-error: true
         run: |
           echo "=== Attempting local auto-fix (up to 3 attempts) ==="
+          # --skip-smoke-test: smoke test requires torch/transformers model loading
+          # which is slow and may itself be the failure.  The auto-fix targets lint
+          # and import errors that are quickly verifiable without a forward pass.
           python autonomous_ci.py \
             --skip-smoke-test \
             --no-merge \
