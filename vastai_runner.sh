@@ -136,17 +136,35 @@ log "  Authenticated."
 # ---------------------------------------------------------------------------
 # Step 4: Find cheapest matching offer
 # ---------------------------------------------------------------------------
-log "Step 4: Searching offers (${VASTAI_GPU_NAME}, max \\$${VASTAI_MAX_PRICE}/hr)..."
-SEARCH_RESULT=$(
-    $VASTAI_CMD search offers \
-        "rentable=true num_gpus=1 gpu_name=${VASTAI_GPU_NAME// /_} gpu_ram>=${VASTAI_MIN_VRAM} dph<=${VASTAI_MAX_PRICE}" \
-        --order "dph asc" --raw 2>/dev/null
-) || die "vastai search offers failed."
+# Bug fix: Use an intermediate variable to avoid MSYS2 misinterpreting \\$
+# (on Windows/Git Bash, \\$ followed by { confuses the shell and prevents
+# variable expansion, printing literal \1378{VASTAI_MAX_PRICE} in the log).
+_PRICE_DISPLAY="${VASTAI_MAX_PRICE}"
+log "Step 4: Searching offers (${VASTAI_GPU_NAME}, max \$${_PRICE_DISPLAY}/hr)..."
+
+# Bug fix: Write vastai output to a temp file instead of capturing via $().
+# On Windows/MSYS2, native Python executables (vastai CLI) do not flush
+# stdout into a bash $() pipe reliably, resulting in an empty SEARCH_RESULT
+# and a subsequent json.loads("") JSONDecodeError.  Writing to a file and
+# reading it back with `cat` bypasses the MSYS2 pipe-buffering issue while
+# remaining fully compatible with Linux.
+_SEARCH_TMP=$(mktemp)
+$VASTAI_CMD search offers \
+    "rentable=true num_gpus=1 gpu_name=${VASTAI_GPU_NAME// /_} gpu_ram>=${VASTAI_MIN_VRAM} dph<=${VASTAI_MAX_PRICE}" \
+    --order "dph asc" --raw > "$_SEARCH_TMP" 2>/dev/null \
+    || { rm -f "$_SEARCH_TMP"; die "vastai search offers failed."; }
+SEARCH_RESULT=$(cat "$_SEARCH_TMP")
+rm -f "$_SEARCH_TMP"
 
 OFFER_ID=$(echo "$SEARCH_RESULT" | $PYEXE -c "
 import json, sys
-data = json.loads(sys.stdin.read() or '[]')
-if not data: sys.exit(1)
+raw = sys.stdin.read().strip()
+if not raw:
+    print('ERROR: vastai returned empty response - check VASTAI_API_KEY and network', file=sys.stderr)
+    sys.exit(1)
+data = json.loads(raw)
+if not data:
+    sys.exit(1)
 print(data[0]['id'])
 ") || die "No matching GPU offers found. Try raising VASTAI_MAX_PRICE."
 log "  Offer: $OFFER_ID"
@@ -164,14 +182,18 @@ fi
 # Step 5: Create instance
 # ---------------------------------------------------------------------------
 log "Step 5: Creating instance..."
-CREATE_RESULT=$(
-    $VASTAI_CMD create instance "$OFFER_ID" \
-        --image "$VASTAI_IMAGE" \
-        --disk "$VASTAI_DISK_GB" \
-        --label "$RUNNER_NAME" \
-        --ssh \
-        --raw 2>/dev/null
-) || die "vastai create instance failed."
+
+# Bug fix: Use temp file (same MSYS2 pipe-buffering issue as Step 4).
+_CREATE_TMP=$(mktemp)
+$VASTAI_CMD create instance "$OFFER_ID" \
+    --image "$VASTAI_IMAGE" \
+    --disk "$VASTAI_DISK_GB" \
+    --label "$RUNNER_NAME" \
+    --ssh \
+    --raw > "$_CREATE_TMP" 2>/dev/null \
+    || { rm -f "$_CREATE_TMP"; die "vastai create instance failed."; }
+CREATE_RESULT=$(cat "$_CREATE_TMP")
+rm -f "$_CREATE_TMP"
 
 INSTANCE_ID=$(echo "$CREATE_RESULT" | $PYEXE -c "
 import json, sys
@@ -217,7 +239,13 @@ SSH_HOST=""
 SSH_PORT=""
 elapsed=0
 while [[ $elapsed -lt $BOOT_TIMEOUT ]]; do
-    INFO=$($VASTAI_CMD show instance "$INSTANCE_ID" --raw 2>/dev/null || echo "{}")
+    # Bug fix: Use temp file to capture `show instance` output.
+    # On MSYS2 the $() pipe may return empty for native Windows executables.
+    _INFO_TMP=$(mktemp)
+    $VASTAI_CMD show instance "$INSTANCE_ID" --raw > "$_INFO_TMP" 2>/dev/null \
+        || echo "{}" > "$_INFO_TMP"
+    INFO=$(cat "$_INFO_TMP")
+    rm -f "$_INFO_TMP"
     STATUS=$(echo "$INFO" | $PYEXE -c "import json,sys; print(json.loads(sys.stdin.read()).get('actual_status','?'))")
     SSH_HOST=$(echo "$INFO" | $PYEXE -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('ssh_host','') or d.get('public_ipaddr',''))")
     SSH_PORT=$(echo "$INFO" | $PYEXE -c "import json,sys; print(json.loads(sys.stdin.read()).get('ssh_port',22))")
