@@ -142,7 +142,39 @@ except ImportError:
 # Default workspace path — overridden by DONUT_WORKSPACE env var at import time.
 # run_all.py sets the env var before lazily importing sub-modules so this value
 # is correct by the time the sub-modules are first imported.
-WORKSPACE: Path = Path(os.environ.get("DONUT_WORKSPACE", "/workspace"))
+
+
+def _resolve_workspace() -> Path:
+    """Return a writable workspace directory.
+
+    Priority:
+    1. ``DONUT_WORKSPACE`` env var path (if it can be created / already exists).
+    2. ``<repo_dir>/workspace`` — fallback when the env-var path cannot be
+       created due to a permission error, e.g. Git Bash on Windows where
+       ``/workspace`` is translated by MSYS2 to
+       ``C:\\Program Files\\Git\\workspace`` (a system-protected directory).
+
+    This function is stdlib-only; it must never import torch or transformers.
+    """
+    _env_val = os.environ.get("DONUT_WORKSPACE", "/workspace")
+    _candidate = Path(_env_val)
+    try:
+        _candidate.mkdir(parents=True, exist_ok=True)
+        return _candidate
+    except OSError:
+        _fallback = Path(__file__).resolve().parent / "workspace"
+        try:
+            _fallback.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise RuntimeError(
+                f"Cannot create workspace at {_candidate!r} (primary) or "
+                f"{_fallback!r} (fallback). "
+                "Set the DONUT_WORKSPACE environment variable to a writable path."
+            ) from exc
+        return _fallback
+
+
+WORKSPACE: Path = _resolve_workspace()
 
 
 def _get_sroie_dir() -> Path:

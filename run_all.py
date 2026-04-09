@@ -2311,6 +2311,15 @@ def stage_trocr_experiments(args: argparse.Namespace) -> StageResult:
             # Guard: skip YOLO training if the images/val split is absent or empty
             yolo_images_val = workspace / "data" / "yolo" / "images" / "val"
             if not yolo_images_val.exists() or not any(yolo_images_val.iterdir()):
+                # Fallback: on Windows/MSYS2 the default /workspace is unwritable
+                # so the user's env may not set DONUT_WORKSPACE, causing Stage 3
+                # to write YOLO data relative to the current working directory
+                # while the workspace constant resolves to a different absolute
+                # path.  Check the CWD-relative location as a recovery path.
+                _yolo_local_val = Path("data") / "yolo" / "images" / "val"
+                if _yolo_local_val.exists() and any(_yolo_local_val.iterdir()):
+                    yolo_images_val = _yolo_local_val
+            if not yolo_images_val.exists() or not any(yolo_images_val.iterdir()):
                 w = (
                     "YOLO images/val directory is empty or missing — "
                     "skipping YOLO training. Ensure SROIE data is installed "
