@@ -15,6 +15,41 @@ A systematic study of multi-dataset fine-tuning for receipt key information extr
 
 ---
 
+## ☁️ Quick Start (Vast.ai GPU)
+
+Launch the full GPU training pipeline on Vast.ai with a single command from your local machine (Windows Git Bash, macOS, or Linux):
+
+```bash
+# 1. Copy and fill in your API keys:
+cp .env.cloud.example .env.cloud
+nano .env.cloud   # or any editor — add VASTAI_API_KEY and GITHUB_TOKEN
+
+# 2. Launch:
+bash go.sh
+```
+
+`go.sh` will:
+- Load your secrets from `.env.cloud` automatically.
+- Auto-detect `GITHUB_REPO` from your git remote if not set.
+- Prompt interactively for any missing keys if `.env.cloud` is absent.
+- Print a summary banner (GPU target, price cap, training mode).
+- Delegate to `vastai_runner.sh`, which provisions a GPU instance, registers it
+  as an ephemeral GitHub Actions runner, dispatches the training workflow, and
+  tears the instance down when done.
+
+**Optional flags** are forwarded directly to `vastai_runner.sh`:
+
+```bash
+bash go.sh --dry-run      # find a matching offer but do not spend money
+bash go.sh --experiment 6 # (vastai_runner.sh passes this to the workflow)
+```
+
+> **Windows / Git Bash note:** `go.sh` is MSYS2-safe — it uses
+> `"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"` for path resolution and
+> avoids `/workspace` paths that MSYS2 mangles.
+
+---
+
 ## 🚀 Quick Start
 
 ### Installation & Run (Recommended)

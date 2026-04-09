@@ -107,6 +107,7 @@ hf_token.txt
 *_api_key.txt
 *.secret
 .env
+.env.cloud
 
 # Dataset cache
 data/
