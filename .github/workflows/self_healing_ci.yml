@@ -37,7 +37,7 @@ jobs:
 
     steps:
       - name: Checkout PR branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           # Check out the actual PR head so we can push fixes back to it.
           ref: ${{ github.head_ref }}
