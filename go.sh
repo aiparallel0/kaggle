@@ -124,6 +124,15 @@ if [[ -z "${GITHUB_REPO:-}" ]]; then
     fi
 fi
 
+# Validate GITHUB_REPO is in the expected "owner/repo" format.
+# This prevents malformed values from being interpolated into API URLs or
+# shell commands (e.g. path traversal, URL injection).
+if ! printf '%s' "${GITHUB_REPO}" | grep -qE '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'; then
+    echo "[go] ERROR: GITHUB_REPO='${GITHUB_REPO}' is not a valid 'owner/repo' slug." >&2
+    echo "[go]   Expected format: e.g. 'aiparallel0/kaggle'." >&2
+    exit 1
+fi
+
 # ---------------------------------------------------------------------------
 # 4. Print a clear banner showing what we are about to do.
 # ---------------------------------------------------------------------------

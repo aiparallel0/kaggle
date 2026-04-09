@@ -57,6 +57,17 @@ RUNNER_NAME="${RUNNER_NAME:-vastai-gpu-$(date +%s)}"
 # GitHub Actions runner names allow only alphanumerics, hyphens, and underscores.
 # Strip all other characters (including any embedded ANSI/control chars).
 RUNNER_NAME="$(printf '%s' "${RUNNER_NAME}" | tr -cd '[:alnum:]-_')"
+# Validate TRAINING_MODE against the known-safe allowlist.
+# An attacker-controlled value injected into the JSON dispatch payload could
+# break JSON syntax or inject unexpected workflow inputs.
+_VALID_TRAINING_MODES="micro|nano|superfast|fast|full|cpu"
+if ! printf '%s' "${TRAINING_MODE:-micro}" | grep -qE "^(${_VALID_TRAINING_MODES})$"; then
+    echo "[setup] WARNING: TRAINING_MODE='${TRAINING_MODE:-}' not in allowlist (${_VALID_TRAINING_MODES//|/,}) — defaulting to 'micro'." >&2
+    TRAINING_MODE="micro"
+else
+    # Ensure TRAINING_MODE is set to its (possibly defaulted) validated value.
+    TRAINING_MODE="${TRAINING_MODE:-micro}"
+fi
 RUNNER_VERSION="${RUNNER_VERSION:-2.333.1}"
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/id_vastai}"
 # Auto-generate SSH key if it does not exist
@@ -128,6 +139,12 @@ log "  vastai CLI: $($VASTAI_CMD --version 2>/dev/null || echo 'unknown version'
 require_env VASTAI_API_KEY
 require_env GITHUB_TOKEN
 require_env GITHUB_REPO
+
+# Validate GITHUB_REPO is in the expected "owner/repo" format to prevent
+# malformed values from being interpolated into API URLs or shell commands.
+if ! printf '%s' "${GITHUB_REPO}" | grep -qE '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'; then
+    die "GITHUB_REPO='${GITHUB_REPO}' is not a valid 'owner/repo' slug (expected e.g. 'aiparallel0/kaggle')."
+fi
 
 log "Step 3: Authenticating with Vast.ai..."
 $VASTAI_CMD set api-key "$VASTAI_API_KEY"
@@ -261,7 +278,7 @@ while [[ $elapsed -lt $BOOT_TIMEOUT ]]; do
     SSH_PORT=$(echo "$INFO" | $PYEXE -c "import json,sys; print(json.loads(sys.stdin.read()).get('ssh_port',22))")
 
     if [[ "$STATUS" == "running" ]] && [[ -n "$SSH_HOST" ]]; then
-        if ssh -i "$SSH_KEY" -o ConnectTimeout=10 -o StrictHostKeyChecking=no \
+        if ssh -i "$SSH_KEY" -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new \
                -o BatchMode=yes -p "$SSH_PORT" "root@${SSH_HOST}" "echo ok" 2>/dev/null | grep -q ok; then
             log "  SSH READY: ${SSH_HOST}:${SSH_PORT}"
             break
@@ -274,8 +291,8 @@ while [[ $elapsed -lt $BOOT_TIMEOUT ]]; do
 done
 [[ -n "$SSH_HOST" ]] || die "Instance never became SSH-accessible after ${BOOT_TIMEOUT}s."
 
-SSH_ARGS=(-i "$SSH_KEY" -o StrictHostKeyChecking=no -o BatchMode=yes -p "$SSH_PORT")
-SCP_ARGS=(-i "$SSH_KEY" -o StrictHostKeyChecking=no -o BatchMode=yes -P "$SSH_PORT")
+SSH_ARGS=(-i "$SSH_KEY" -o StrictHostKeyChecking=accept-new -o BatchMode=yes -p "$SSH_PORT")
+SCP_ARGS=(-i "$SSH_KEY" -o StrictHostKeyChecking=accept-new -o BatchMode=yes -P "$SSH_PORT")
 
 # ---------------------------------------------------------------------------
 # Step 7: Get GitHub Actions runner registration token
@@ -300,13 +317,21 @@ log "  Token: ${REG_TOKEN:0:8}..."
 # until the 7200 s timeout.
 # ---------------------------------------------------------------------------
 log "Step 7.5: Dispatching GPU training workflow..."
-TRAINING_MODE="${TRAINING_MODE:-micro}"
+# Build the JSON payload via Python so that TRAINING_MODE (and any other
+# values) are safely serialised — no risk of shell-injection into the JSON
+# string even if the value contains quotes or backslashes.
+_DISPATCH_BODY=$($PYEXE -c "
+import json, sys
+body = {'ref': 'main', 'inputs': {'training_mode': sys.argv[1]}}
+print(json.dumps(body))
+" "${TRAINING_MODE}") || _DISPATCH_BODY="{\"ref\":\"main\",\"inputs\":{\"training_mode\":\"micro\"}}"
 DISPATCH_STATUS=$(curl -sSo /dev/null -w "%{http_code}" -X POST \
     -H "Accept: application/vnd.github+json" \
     -H "Authorization: Bearer ${GITHUB_TOKEN}" \
     -H "X-GitHub-Api-Version: 2022-11-28" \
+    -H "Content-Type: application/json" \
     "https://api.github.com/repos/${GITHUB_REPO}/actions/workflows/gpu_training.yml/dispatches" \
-    -d "{\"ref\":\"main\",\"inputs\":{\"training_mode\":\"${TRAINING_MODE}\"}}" \
+    -d "${_DISPATCH_BODY}" \
     2>/dev/null) || true
 if [[ "$DISPATCH_STATUS" == "204" ]]; then
     log "  Workflow dispatched (mode=${TRAINING_MODE}). Job will be queued for the runner."
@@ -336,17 +361,19 @@ cat > "$SETUP_TMP" << 'SETUP_EOF'
 set -euo pipefail
 SETUP_EOF
 
-# Block 2: inject variables with client-side expansion
-cat >> "$SETUP_TMP" << SETUP_VARS
-GITHUB_REPO="${GITHUB_REPO}"
-GITHUB_TOKEN="${GITHUB_TOKEN}"
-RUNNER_VERSION="${RUNNER_VERSION}"
-RUNNER_URL="${RUNNER_URL}"
-RUNNER_PKG="${RUNNER_PKG}"
-REG_TOKEN="${REG_TOKEN}"
-RUNNER_NAME="${RUNNER_NAME}"
-RUNNER_LABELS="${RUNNER_LABELS}"
-SETUP_VARS
+# Block 2: inject variables using printf '%q' so that any special characters
+# (quotes, backslashes, dollar signs) in the values are safely shell-escaped.
+# This prevents injection of shell metacharacters into the remote setup script.
+{
+    printf 'GITHUB_REPO=%q\n'    "${GITHUB_REPO}"
+    printf 'GITHUB_TOKEN=%q\n'   "${GITHUB_TOKEN}"
+    printf 'RUNNER_VERSION=%q\n' "${RUNNER_VERSION}"
+    printf 'RUNNER_URL=%q\n'     "${RUNNER_URL}"
+    printf 'RUNNER_PKG=%q\n'     "${RUNNER_PKG}"
+    printf 'REG_TOKEN=%q\n'      "${REG_TOKEN}"
+    printf 'RUNNER_NAME=%q\n'    "${RUNNER_NAME}"
+    printf 'RUNNER_LABELS=%q\n'  "${RUNNER_LABELS}"
+} >> "$SETUP_TMP"
 
 # Block 3: bash logic — single-quoted so no expansion needed
 cat >> "$SETUP_TMP" << 'SETUP_BODY'

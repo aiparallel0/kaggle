@@ -13,6 +13,7 @@ import json
 import logging
 import math
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -2651,7 +2652,7 @@ class VastAIProvisioner:
         """
         host = instance_info.get("ssh_host") or instance_info.get("public_ipaddr", "")
         port = instance_info.get("ssh_port", 22)
-        return f"ssh -o StrictHostKeyChecking=no -o BatchMode=yes -p {port} root@{host}"
+        return f"ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes -p {port} root@{host}"
 
     def setup_runner(self, instance_info: dict[str, Any], registration_token: str) -> bool:
         """Clone the repo and configure an ephemeral GitHub Actions runner on the instance.
@@ -2696,18 +2697,32 @@ class VastAIProvisioner:
         else:
             clone_url = f"https://github.com/{repo}.git"
 
-        remote_script = f"""
-set -euo pipefail
-export GIT_TERMINAL_PROMPT=0
+        # Build the remote script in two parts:
+        # 1. A variables section using shlex.quote() so any special characters
+        #    (quotes, backslashes, dollar signs) in the values are safely
+        #    shell-escaped — prevents injection of shell metacharacters.
+        # 2. A body section using $VAR references (not Python f-string values),
+        #    so the script logic is completely separated from the data.
+        var_section = "#!/bin/bash\nset -euo pipefail\nexport GIT_TERMINAL_PROMPT=0\n"
+        var_section += f"_CLONE_URL={shlex.quote(clone_url)}\n"
+        var_section += f"_BRANCH={shlex.quote(branch)}\n"
+        var_section += f"_RUNNER_URL={shlex.quote(runner_url)}\n"
+        var_section += f"_RUNNER_PKG={shlex.quote(runner_pkg)}\n"
+        var_section += f"_REG_TOKEN={shlex.quote(registration_token)}\n"
+        var_section += f"_REPO={shlex.quote(repo)}\n"
+        var_section += f"_RUNNER_NAME={shlex.quote(runner_name)}\n"
+        var_section += f"_RUNNER_LABELS={shlex.quote(runner_labels)}\n"
 
+        # Script body references $VAR variables — no f-string expansion here.
+        body_section = r"""
 echo '[remote] Creating non-root runner user...'
 useradd -m -s /bin/bash runner 2>/dev/null || true
 mkdir -p /workspace/actions-runner /workspace/runner-work /workspace/repo
 chown -R runner:runner /workspace
 
-echo '[remote] Cloning https://github.com/{repo} ...'
-git -c credential.helper='' clone --depth 1 --branch {branch} {clone_url} /workspace/repo || \
-    git -c credential.helper='' clone --depth 1 {clone_url} /workspace/repo
+echo "[remote] Cloning https://github.com/${_REPO} ..."
+git -c credential.helper='' clone --depth 1 --branch "${_BRANCH}" "${_CLONE_URL}" /workspace/repo || \
+    git -c credential.helper='' clone --depth 1 "${_CLONE_URL}" /workspace/repo
 chown -R runner:runner /workspace/repo
 
 cd /workspace/repo
@@ -2722,8 +2737,8 @@ python3 -c "from constants import FIELDS, BASE_MODEL, SEED; print('[remote] Impo
 
 echo '[remote] Downloading Actions runner...'
 mkdir -p /workspace/actions-runner && cd /workspace/actions-runner
-curl -sSfL '{runner_url}' -o '/tmp/{runner_pkg}'
-tar xzf '/tmp/{runner_pkg}' -C /workspace/actions-runner
+curl -sSfL "${_RUNNER_URL}" -o "/tmp/${_RUNNER_PKG}"
+tar xzf "/tmp/${_RUNNER_PKG}" -C /workspace/actions-runner
 chown -R runner:runner /workspace/actions-runner
 
 echo '[remote] Installing runner system dependencies...'
@@ -2731,26 +2746,29 @@ if [ -x /workspace/actions-runner/bin/installdependencies.sh ]; then
     /workspace/actions-runner/bin/installdependencies.sh 2>&1 | tail -5
 else
     apt-get update -qq 2>/dev/null || true
+    # NEVER install liblttng-ust* — it triggers a container restart on Vast.ai.
+    # Try versioned packages first (Ubuntu 22.04: libicu70, libssl3).
+    # Fall back to -dev names (Ubuntu 20.04 / other distros).  Both attempts
+    # use || true so a missing package on one distro doesn't abort the script.
     DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
-        libicu-dev libssl-dev libkrb5-3 zlib1g liblttng-ust1 2>/dev/null
-    APT_RC=$?
-    if [ "$APT_RC" -ne 0 ]; then
-        echo "[remote] WARNING: Manual dependency install exited with $APT_RC — runner may crash."
-    fi
+        libicu70 libssl3 libkrb5-3 zlib1g 2>/dev/null \
+      || DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+        libicu-dev libssl-dev libkrb5-3 zlib1g 2>/dev/null \
+      || true
 fi
 
 echo '[remote] Configuring runner...'
 HOME=/home/runner su -s /bin/bash runner -c "
   set -e
   cd /workspace/actions-runner
-  ./config.sh \\
-      --url 'https://github.com/{repo}' \\
-      --token '{registration_token}' \\
-      --name '{runner_name}' \\
-      --labels '{runner_labels}' \\
-      --ephemeral \\
-      --unattended \\
-      --disableupdate \\
+  ./config.sh \
+      --url \"https://github.com/${_REPO}\" \
+      --token \"${_REG_TOKEN}\" \
+      --name \"${_RUNNER_NAME}\" \
+      --labels \"${_RUNNER_LABELS}\" \
+      --ephemeral \
+      --unattended \
+      --disableupdate \
       --work /workspace/runner-work
 " 2>&1
 
@@ -2758,12 +2776,16 @@ echo '[remote] Starting runner...'
 cat > /tmp/start_runner.sh << 'LAUNCHER'
 #!/bin/bash
 set -euo pipefail
+# HOME must be re-exported here: the launcher runs in a new shell spawned by
+# 'su runner', which does NOT inherit the temporary HOME=/home/runner prefix
+# from the outer su invocation when the script is a separate file via 'bash'.
+export HOME=/home/runner
 cd /workspace/actions-runner
 setsid nohup ./run.sh >> /workspace/runner.log 2>&1 &
 RPID=$!
-echo "${{RPID}}" > /tmp/runner.pid
-disown "${{RPID}}"
-echo "Runner started: PID=${{RPID}}"
+echo "${RPID}" > /tmp/runner.pid
+disown "${RPID}"
+echo "Runner started: PID=${RPID}"
 LAUNCHER
 chmod 755 /tmp/start_runner.sh
 chown runner:runner /tmp/start_runner.sh
@@ -2771,11 +2793,12 @@ HOME=/home/runner su -s /bin/bash runner -c "bash /tmp/start_runner.sh"
 rm -f /tmp/start_runner.sh
 
 echo '[remote] Waiting for runner to become ready...'
+HEALTH_OK=false
 for i in $(seq 1 12); do
     sleep 5
     if [ -f /tmp/runner.pid ]; then
         RPID=$(cat /tmp/runner.pid)
-        if ! kill -0 "${{RPID}}" 2>/dev/null; then
+        if ! kill -0 "${RPID}" 2>/dev/null; then
             echo "[remote] ERROR: Runner crashed after $((i * 5))s"
             cat /workspace/runner.log 2>/dev/null
             exit 1
@@ -2783,17 +2806,22 @@ for i in $(seq 1 12); do
     fi
     if grep -q 'Listening for Jobs' /workspace/runner.log 2>/dev/null; then
         echo "[remote] Runner is listening for jobs (took $((i * 5))s)."
+        HEALTH_OK=true
         break
     fi
     echo "[remote]   ...waiting ($((i * 5))/60s)"
 done
-echo "[remote] Runner PID: $(cat /tmp/runner.pid 2>/dev/null)"
-tail -10 /workspace/runner.log 2>/dev/null || true
+if [ "$HEALTH_OK" != "true" ]; then
+    echo "[remote] WARNING: 'Listening for Jobs' not seen after 60s — continuing anyway."
+    tail -10 /workspace/runner.log 2>/dev/null || true
+fi
+echo "[remote] Runner PID: $(cat /tmp/runner.pid 2>/dev/null || echo unknown)"
 """
+        remote_script = var_section + body_section
         ssh_cmd = [
             "ssh",
             "-o",
-            "StrictHostKeyChecking=no",
+            "StrictHostKeyChecking=accept-new",
             "-o",
             "BatchMode=yes",
             "-p",
