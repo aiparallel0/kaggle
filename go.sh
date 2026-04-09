@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# go.sh — Single-line entry point for the Vast.ai GPU training pipeline.
+# go.sh — Fully autonomous GPU training pipeline with self-healing loop.
 #
 # Usage (from repo root — works on Windows Git Bash / MSYS2 and Linux/macOS):
 #   bash go.sh
@@ -12,8 +12,24 @@
 #   2. Export VASTAI_API_KEY and GITHUB_TOKEN before running.
 #   3. Let go.sh prompt you interactively (no file needed).
 #
-# go.sh does NOT modify vastai_runner.sh — it is a thin wrapper that handles
-# secret loading and interactive prompting, then delegates everything else.
+# Self-healing loop:
+#   go.sh provisions a GPU, runs training.  If training fails the GPU workflow
+#   creates a GitHub Issue for Copilot which opens a fix PR.  go.sh monitors
+#   the repo for new commits on main (indicating a merged fix) and automatically
+#   re-provisions a fresh GPU to re-run training — up to MAX_GPU_RERUNS times
+#   or MAX_TOTAL_HOURS wall-clock time.  No human intervention required.
+#
+# Loop flow:
+#   1. Provision Vast.ai GPU → register ephemeral runner → dispatch workflow
+#   2. Wait for job to finish → destroy GPU
+#   3. Check training outcome (via workflow run status)
+#   4. If success → exit 0
+#   5. If failure → wait for Copilot to merge a fix (poll main for new commits)
+#   6. On new commit detected → go to step 1 (re-provision fresh GPU)
+#   7. After MAX_GPU_RERUNS or MAX_TOTAL_HOURS → exit with summary
+#
+# go.sh does NOT modify vastai_runner.sh — it is a wrapper that handles
+# secret loading, interactive prompting, and the re-provisioning loop.
 # =============================================================================
 
 set -euo pipefail
@@ -128,12 +144,219 @@ echo "============================================================"
 echo ""
 
 # ---------------------------------------------------------------------------
-# 5. Delegate to vastai_runner.sh (same directory — no assumption about cwd).
+# 5. Self-healing loop configuration
 # ---------------------------------------------------------------------------
+MAX_GPU_RERUNS="${MAX_GPU_RERUNS:-5}"
+MAX_TOTAL_HOURS="${MAX_TOTAL_HOURS:-8}"
+REPROVISION_COOLDOWN="${REPROVISION_COOLDOWN:-60}"
+FIX_POLL_INTERVAL="${FIX_POLL_INTERVAL:-120}"
+FIX_POLL_TIMEOUT="${FIX_POLL_TIMEOUT:-3600}"
+
 RUNNER="${SCRIPT_DIR}/vastai_runner.sh"
 if [[ ! -f "$RUNNER" ]]; then
     echo "[go] ERROR: vastai_runner.sh not found at ${RUNNER}" >&2
     exit 1
 fi
 
-exec bash "$RUNNER" "$@"
+# ---------------------------------------------------------------------------
+# Helper: get HEAD SHA of a remote branch via GitHub API (no local git needed)
+# ---------------------------------------------------------------------------
+_get_remote_sha() {
+    local branch="${1:-main}"
+    curl -sSf \
+        -H "Accept: application/vnd.github+json" \
+        -H "Authorization: token ${GITHUB_TOKEN}" \
+        "https://api.github.com/repos/${GITHUB_REPO}/commits/${branch}" 2>/dev/null \
+    | python3 -c "import json,sys; print(json.loads(sys.stdin.read()).get('sha',''))" 2>/dev/null \
+    || echo ""
+}
+
+# ---------------------------------------------------------------------------
+# Helper: get the most recent workflow run status for gpu_training.yml
+# Returns: "success", "failure", "in_progress", or "unknown"
+# ---------------------------------------------------------------------------
+_get_latest_training_status() {
+    local response
+    response=$(curl -sSf \
+        -H "Accept: application/vnd.github+json" \
+        -H "Authorization: token ${GITHUB_TOKEN}" \
+        "https://api.github.com/repos/${GITHUB_REPO}/actions/workflows/gpu_training.yml/runs?per_page=1&branch=main" 2>/dev/null) || { echo "unknown"; return; }
+
+    python3 -c "
+import json, sys
+data = json.loads(sys.stdin.read())
+runs = data.get('workflow_runs', [])
+if not runs:
+    print('unknown')
+else:
+    r = runs[0]
+    if r.get('status') != 'completed':
+        print('in_progress')
+    else:
+        print(r.get('conclusion', 'unknown'))
+" <<< "$response" 2>/dev/null || echo "unknown"
+}
+
+# ---------------------------------------------------------------------------
+# Helper: read auto_fix_state.json from remote main branch
+# Returns iteration count (0 = no failures or reset)
+# ---------------------------------------------------------------------------
+_get_remote_iteration() {
+    local content
+    content=$(curl -sSf \
+        -H "Accept: application/vnd.github+json" \
+        -H "Authorization: token ${GITHUB_TOKEN}" \
+        "https://api.github.com/repos/${GITHUB_REPO}/contents/.github/auto_fix_state.json?ref=main" 2>/dev/null) || { echo "0"; return; }
+
+    python3 -c "
+import json, sys, base64
+data = json.loads(sys.stdin.read())
+content = base64.b64decode(data.get('content', '')).decode()
+state = json.loads(content)
+print(state.get('iteration', 0))
+" <<< "$content" 2>/dev/null || echo "0"
+}
+
+# ---------------------------------------------------------------------------
+# 6. Main self-healing loop
+#
+# Flow per iteration:
+#   a. Record current HEAD of main
+#   b. Run vastai_runner.sh (provisions GPU, runs training, destroys GPU)
+#   c. Check outcome: if training succeeded → exit 0
+#   d. If training failed → wait for Copilot to merge a fix
+#      (poll main branch for new commits past the recorded SHA)
+#   e. On new commit → re-provision GPU (next iteration)
+#   f. On timeout / max iterations → exit with summary
+# ---------------------------------------------------------------------------
+LOOP_START=$(date +%s)
+ATTEMPT=0
+DRY_RUN_FLAG=""
+for arg in "$@"; do [[ "$arg" == "--dry-run" ]] && DRY_RUN_FLAG="--dry-run"; done
+
+echo ""
+echo "[go] Self-healing loop: max ${MAX_GPU_RERUNS} GPU runs, ${MAX_TOTAL_HOURS}h wall-clock limit"
+echo "[go] Fix poll: every ${FIX_POLL_INTERVAL}s, timeout ${FIX_POLL_TIMEOUT}s"
+echo ""
+
+while true; do
+    ATTEMPT=$((ATTEMPT + 1))
+
+    # ── Check limits ──────────────────────────────────────────────────────
+    if [[ $ATTEMPT -gt $MAX_GPU_RERUNS ]]; then
+        echo ""
+        echo "[go] ════════════════════════════════════════════════════════"
+        echo "[go]  Max GPU re-provisions reached ($MAX_GPU_RERUNS)."
+        echo "[go]  The self-healing loop did not resolve the issue."
+        echo "[go]  Check GitHub Issues for the latest failure context."
+        echo "[go] ════════════════════════════════════════════════════════"
+        exit 1
+    fi
+
+    ELAPSED_HOURS=$(( ($(date +%s) - LOOP_START) / 3600 ))
+    if [[ $ELAPSED_HOURS -ge $MAX_TOTAL_HOURS ]]; then
+        echo ""
+        echo "[go] ════════════════════════════════════════════════════════"
+        echo "[go]  Wall-clock limit reached (${MAX_TOTAL_HOURS}h)."
+        echo "[go]  Exiting — check GitHub for current pipeline status."
+        echo "[go] ════════════════════════════════════════════════════════"
+        exit 1
+    fi
+
+    echo ""
+    echo "┌──────────────────────────────────────────────────────────┐"
+    echo "│  GPU Run $ATTEMPT of $MAX_GPU_RERUNS                                     │"
+    echo "│  Elapsed: ${ELAPSED_HOURS}h of ${MAX_TOTAL_HOURS}h max                              │"
+    echo "└──────────────────────────────────────────────────────────┘"
+
+    # ── Record main HEAD before this run ──────────────────────────────────
+    PRE_RUN_SHA=$(_get_remote_sha main)
+    echo "[go] main HEAD before run: ${PRE_RUN_SHA:0:12}"
+
+    # ── Run vastai_runner.sh ──────────────────────────────────────────────
+    set +e
+    bash "$RUNNER" "$@"
+    RUNNER_EXIT=$?
+    set -e
+
+    echo "[go] vastai_runner.sh exited with code $RUNNER_EXIT"
+
+    # ── Dry-run: exit immediately ─────────────────────────────────────────
+    if [[ -n "$DRY_RUN_FLAG" ]]; then
+        echo "[go] Dry-run mode — exiting after first run."
+        exit $RUNNER_EXIT
+    fi
+
+    # ── Check if training succeeded ───────────────────────────────────────
+    # Give GitHub Actions a moment to update run status
+    sleep 15
+    TRAINING_STATUS=$(_get_latest_training_status)
+    echo "[go] Latest gpu_training.yml status: $TRAINING_STATUS"
+
+    if [[ "$TRAINING_STATUS" == "success" ]]; then
+        echo ""
+        echo "[go] ════════════════════════════════════════════════════════"
+        echo "[go]  ✅ Training succeeded on attempt $ATTEMPT!"
+        echo "[go] ════════════════════════════════════════════════════════"
+        exit 0
+    fi
+
+    # ── Check if auto-fix loop is exhausted ───────────────────────────────
+    ITERATION=$(_get_remote_iteration)
+    MAX_ITER="${AUTO_FIX_MAX_ITERATIONS:-5}"
+    echo "[go] Auto-fix iteration: $ITERATION / $MAX_ITER"
+
+    if [[ "$ITERATION" -ge "$MAX_ITER" ]]; then
+        echo ""
+        echo "[go] ════════════════════════════════════════════════════════"
+        echo "[go]  Auto-fix loop exhausted ($ITERATION >= $MAX_ITER)."
+        echo "[go]  Human intervention required."
+        echo "[go] ════════════════════════════════════════════════════════"
+        exit 1
+    fi
+
+    # ── Wait for Copilot to merge a fix (poll for new commits on main) ────
+    echo ""
+    echo "[go] Training failed. Waiting for Copilot to merge a fix..."
+    echo "[go] Polling main branch every ${FIX_POLL_INTERVAL}s (timeout: ${FIX_POLL_TIMEOUT}s)"
+
+    FIX_WAIT_START=$(date +%s)
+    FIX_FOUND=false
+
+    while true; do
+        FIX_ELAPSED=$(( $(date +%s) - FIX_WAIT_START ))
+
+        if [[ $FIX_ELAPSED -ge $FIX_POLL_TIMEOUT ]]; then
+            echo "[go] Fix poll timeout (${FIX_POLL_TIMEOUT}s) — no new commits detected."
+            break
+        fi
+
+        CURRENT_SHA=$(_get_remote_sha main)
+
+        if [[ -n "$CURRENT_SHA" && "$CURRENT_SHA" != "$PRE_RUN_SHA" ]]; then
+            echo "[go] ✅ New commit on main: ${CURRENT_SHA:0:12} (was ${PRE_RUN_SHA:0:12})"
+            echo "[go] A fix was likely merged — will re-provision GPU."
+            FIX_FOUND=true
+            break
+        fi
+
+        # Show progress
+        REMAINING=$(( FIX_POLL_TIMEOUT - FIX_ELAPSED ))
+        echo "[go]   ...waiting (${FIX_ELAPSED}s / ${FIX_POLL_TIMEOUT}s, main still at ${CURRENT_SHA:0:12})"
+        sleep "$FIX_POLL_INTERVAL"
+    done
+
+    if [[ "$FIX_FOUND" != "true" ]]; then
+        echo ""
+        echo "[go] ════════════════════════════════════════════════════════"
+        echo "[go]  No fix merged within ${FIX_POLL_TIMEOUT}s."
+        echo "[go]  Copilot may still be working. Re-run 'bash go.sh' later"
+        echo "[go]  or check GitHub Issues for status."
+        echo "[go] ════════════════════════════════════════════════════════"
+        exit 1
+    fi
+
+    # ── Cool-down before re-provisioning ──────────────────────────────────
+    echo "[go] Cooling down ${REPROVISION_COOLDOWN}s before re-provisioning..."
+    sleep "$REPROVISION_COOLDOWN"
+done
