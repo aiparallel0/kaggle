@@ -169,7 +169,7 @@ _get_remote_sha() {
         -H "Authorization: token ${GITHUB_TOKEN}" \
         "https://api.github.com/repos/${GITHUB_REPO}/commits/${branch}" 2>/dev/null \
     | python3 -c "import json,sys; print(json.loads(sys.stdin.read()).get('sha',''))" 2>/dev/null) \
-    || { echo "[go] WARNING: GitHub API call failed for ${branch} SHA — check GITHUB_TOKEN" >&2; echo ""; return; }
+    || { echo "[go] WARNING: GitHub API call failed for ${branch} SHA — check GITHUB_TOKEN is valid and network is reachable" >&2; echo ""; return; }
     echo "$sha"
 }
 

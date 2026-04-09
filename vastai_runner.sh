@@ -155,7 +155,7 @@ _SEARCH_ERR=$(mktemp)
 $VASTAI_CMD search offers \
     "rentable=true num_gpus=1 gpu_name=${VASTAI_GPU_NAME// /_} gpu_ram>=${VASTAI_MIN_VRAM} dph<=${VASTAI_MAX_PRICE}" \
     --order "dph asc" --raw > "$_SEARCH_TMP" 2>"$_SEARCH_ERR" \
-    || { _search_err="$(cat "$_SEARCH_ERR" 2>/dev/null)"; log "  vastai stderr: ${_search_err:-<empty>}"; rm -f "$_SEARCH_TMP" "$_SEARCH_ERR"; die "vastai search offers failed — check VASTAI_API_KEY is valid and network is reachable. stderr: ${_search_err:-<none>}"; }
+    || { _search_err="$(cat "$_SEARCH_ERR" 2>/dev/null)"; log "  vastai stderr: ${_search_err:-<empty>}"; rm -f "$_SEARCH_TMP" "$_SEARCH_ERR"; die "vastai search offers failed — check VASTAI_API_KEY is valid and network is reachable. stderr: ${_search_err:-<empty>}"; }
 SEARCH_RESULT=$(cat "$_SEARCH_TMP")
 _SEARCH_ERR_CONTENT=$(cat "$_SEARCH_ERR")
 rm -f "$_SEARCH_TMP" "$_SEARCH_ERR"
