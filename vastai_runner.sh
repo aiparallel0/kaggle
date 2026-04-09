@@ -148,13 +148,18 @@ log "Step 4: Searching offers (${VASTAI_GPU_NAME}, max \$${_PRICE_DISPLAY}/hr)..
 # and a subsequent json.loads("") JSONDecodeError.  Writing to a file and
 # reading it back with `cat` bypasses the MSYS2 pipe-buffering issue while
 # remaining fully compatible with Linux.
+# Also capture stderr separately so we can surface Vast.ai error messages
+# (e.g. auth failures, rate limits) that were previously hidden by 2>/dev/null.
 _SEARCH_TMP=$(mktemp)
+_SEARCH_ERR=$(mktemp)
 $VASTAI_CMD search offers \
     "rentable=true num_gpus=1 gpu_name=${VASTAI_GPU_NAME// /_} gpu_ram>=${VASTAI_MIN_VRAM} dph<=${VASTAI_MAX_PRICE}" \
-    --order "dph asc" --raw > "$_SEARCH_TMP" 2>/dev/null \
-    || { rm -f "$_SEARCH_TMP"; die "vastai search offers failed."; }
+    --order "dph asc" --raw > "$_SEARCH_TMP" 2>"$_SEARCH_ERR" \
+    || { _search_err="$(cat "$_SEARCH_ERR" 2>/dev/null)"; log "  vastai stderr: ${_search_err:-<empty>}"; rm -f "$_SEARCH_TMP" "$_SEARCH_ERR"; die "vastai search offers failed — check VASTAI_API_KEY is valid and network is reachable. stderr: ${_search_err:-<empty>}"; }
 SEARCH_RESULT=$(cat "$_SEARCH_TMP")
-rm -f "$_SEARCH_TMP"
+_SEARCH_ERR_CONTENT=$(cat "$_SEARCH_ERR")
+rm -f "$_SEARCH_TMP" "$_SEARCH_ERR"
+[[ -z "$_SEARCH_ERR_CONTENT" ]] || log "  vastai stderr: $_SEARCH_ERR_CONTENT"
 
 OFFER_ID=$(echo "$SEARCH_RESULT" | $PYEXE -c "
 import json, sys
@@ -162,7 +167,12 @@ raw = sys.stdin.read().strip()
 if not raw:
     print('ERROR: vastai returned empty response - check VASTAI_API_KEY and network', file=sys.stderr)
     sys.exit(1)
-data = json.loads(raw)
+try:
+    data = json.loads(raw)
+except json.JSONDecodeError as e:
+    print(f'ERROR: vastai returned non-JSON output: {raw[:500]!r}', file=sys.stderr)
+    print(f'JSONDecodeError: {e}', file=sys.stderr)
+    sys.exit(1)
 if not data:
     sys.exit(1)
 print(data[0]['id'])

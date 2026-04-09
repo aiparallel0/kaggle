@@ -175,6 +175,46 @@ jobs:
             2>&1 | tee -a training.log || true
 
       # -----------------------------------------------------------------------
+      # 7.5 Local auto-fix attempt (fast-path before Copilot)
+      #
+      # Runs autonomous_ci.py directly on the GPU runner with up to 3 quick
+      # attempts.  If a fix is found, it is committed and pushed to main —
+      # the next gpu_training.yml trigger will re-run training with the fix.
+      # This is much faster than waiting for Copilot (~seconds vs ~minutes).
+      # -----------------------------------------------------------------------
+      - name: Local auto-fix attempt (fast-path)
+        id: local_fix
+        if: steps.train.outcome == 'failure'
+        continue-on-error: true
+        run: |
+          echo "=== Attempting local auto-fix (up to 3 attempts) ==="
+          # --skip-smoke-test: smoke test requires torch/transformers model loading
+          # which is slow and may itself be the failure.  The auto-fix targets lint
+          # and import errors that are quickly verifiable without a forward pass.
+          python autonomous_ci.py \
+            --skip-smoke-test \
+            --no-merge \
+            --max-fix-attempts 3 \
+            --ai-provider auto \
+            --repo "$GITHUB_REPO" \
+            2>&1 | tee -a training.log
+          FIX_EXIT=$?
+
+          if [[ $FIX_EXIT -eq 0 ]]; then
+            echo "local_fix_succeeded=true" >> "$GITHUB_OUTPUT"
+            echo "✅ Local auto-fix succeeded — committing and pushing..."
+            git config user.email "gpu-training[bot]@users.noreply.github.com"
+            git config user.name "GPU Training Bot"
+            git add -A
+            git diff --cached --quiet || \
+              git commit -m "fix: auto-fix applied by autonomous_ci.py on GPU runner [run ${{ github.run_id }}]"
+            git push origin HEAD:"${{ github.ref_name }}" || true
+          else
+            echo "local_fix_succeeded=false" >> "$GITHUB_OUTPUT"
+            echo "❌ Local auto-fix did not resolve the issue — escalating to Copilot."
+          fi
+
+      # -----------------------------------------------------------------------
       # 8. Collect recent git log for failure context
       # -----------------------------------------------------------------------
       - name: Collect failure context
@@ -188,9 +228,10 @@ jobs:
 
       # -----------------------------------------------------------------------
       # 9. Update iteration counter and commit state on failure
+      #    Skip if local auto-fix already resolved the issue.
       # -----------------------------------------------------------------------
       - name: Update auto-fix state (on failure)
-        if: steps.train.outcome == 'failure'
+        if: steps.train.outcome == 'failure' && steps.local_fix.outputs.local_fix_succeeded != 'true'
         run: |
           STATE_FILE=".github/auto_fix_state.json"
           python3 - <<'PYEOF'
@@ -234,9 +275,10 @@ jobs:
       # -----------------------------------------------------------------------
       # 10. Create GitHub Issue assigned to @copilot (on failure)
       #     If iteration >= max_iterations, escalate to human instead.
+      #     Skip if local auto-fix already resolved the issue.
       # -----------------------------------------------------------------------
       - name: Create failure issue for Copilot
-        if: steps.train.outcome == 'failure'
+        if: steps.train.outcome == 'failure' && steps.local_fix.outputs.local_fix_succeeded != 'true'
         uses: actions/github-script@v7
         env:
           ITERATION: ${{ steps.state.outputs.iteration }}
@@ -368,6 +410,52 @@ jobs:
               });
               console.log(`Created issue #${issue.data.number}: ${issue.data.html_url}`);
             }
+
+      # -----------------------------------------------------------------------
+      # 10.5 Reset auto-fix state after successful local fix
+      #      The local fix was committed and pushed in step 7.5.  The push
+      #      to main will trigger a new gpu_training.yml run that re-runs
+      #      training with the fix.  Reset the iteration counter so the new
+      #      run starts fresh.
+      # -----------------------------------------------------------------------
+      - name: Reset auto-fix state after local fix (on local fix success)
+        if: steps.local_fix.outputs.local_fix_succeeded == 'true'
+        run: |
+          python3 - <<'PYEOF'
+          import json, os
+
+          state_file = ".github/auto_fix_state.json"
+          try:
+              with open(state_file) as f:
+                  state = json.load(f)
+          except (OSError, json.JSONDecodeError):
+              state = {}
+          state["iteration"] = 0
+          state["max_iterations"] = state.get("max_iterations", 5)
+          state["last_failure_run_id"] = None
+          state["last_failure_sha"] = None
+          if not isinstance(state.get("history"), list):
+              state["history"] = []
+          state["history"].append({
+              "iteration": 0,
+              "run_id": os.environ.get("GITHUB_RUN_ID"),
+              "sha": os.environ.get("GITHUB_SHA"),
+              "note": "Reset after successful local auto-fix",
+          })
+          state["history"] = state["history"][-20:]
+
+          os.makedirs(".github", exist_ok=True)
+          with open(state_file, "w") as f:
+              json.dump(state, f, indent=2)
+          print("Reset auto-fix iteration counter after local fix")
+          PYEOF
+
+          git config user.email "gpu-training[bot]@users.noreply.github.com"
+          git config user.name "GPU Training Bot"
+          git add .github/auto_fix_state.json
+          git diff --cached --quiet || \
+            git commit -m "chore: reset auto-fix counter after local fix [run ${{ github.run_id }}]"
+          git push origin HEAD:"${{ github.ref_name }}" || true
 
       # -----------------------------------------------------------------------
       # 11. Commit and push result files + reset state on success

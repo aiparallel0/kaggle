@@ -33,9 +33,16 @@ bash go.sh
 - Auto-detect `GITHUB_REPO` from your git remote if not set.
 - Prompt interactively for any missing keys if `.env.cloud` is absent.
 - Print a summary banner (GPU target, price cap, training mode).
-- Delegate to `vastai_runner.sh`, which provisions a GPU instance, registers it
-  as an ephemeral GitHub Actions runner, dispatches the training workflow, and
-  tears the instance down when done.
+- **Run a fully autonomous self-healing loop:**
+  1. Provision a Vast.ai GPU → register ephemeral GitHub Actions runner → dispatch training workflow.
+  2. Wait for the training job to finish → destroy the GPU instance.
+  3. If training **succeeded** → exit 0. Done!
+  4. If training **failed** → the GPU workflow runs local auto-fix (`autonomous_ci.py`) and, if that fails, creates a GitHub Issue assigned to `@copilot`.
+  5. `go.sh` **polls main branch** for new commits (indicating Copilot merged a fix).
+  6. On new commit → **re-provisions a fresh GPU** and re-runs training automatically.
+  7. Repeats until success, max attempts (`MAX_GPU_RERUNS`, default 5), or wall-clock limit (`MAX_TOTAL_HOURS`, default 8h).
+
+**No human intervention required** — just `bash go.sh` and walk away.
 
 **Optional flags** are forwarded directly to `vastai_runner.sh`:
 
@@ -43,6 +50,16 @@ bash go.sh
 bash go.sh --dry-run      # find a matching offer but do not spend money
 bash go.sh --experiment 6 # (vastai_runner.sh passes this to the workflow)
 ```
+
+**Self-healing loop configuration** (set in `.env.cloud` or export before running):
+
+| Variable | Default | Description |
+|---|---|---|
+| `MAX_GPU_RERUNS` | `5` | Max GPU re-provisions per `go.sh` invocation |
+| `MAX_TOTAL_HOURS` | `8` | Wall-clock limit for the entire loop |
+| `FIX_POLL_INTERVAL` | `120` | Seconds between polls for Copilot fix merges |
+| `FIX_POLL_TIMEOUT` | `3600` | Max seconds to wait for a fix per attempt |
+| `REPROVISION_COOLDOWN` | `60` | Cool-down before re-provisioning |
 
 > **Windows / Git Bash note:** `go.sh` is MSYS2-safe — it uses
 > `"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"` for path resolution and
