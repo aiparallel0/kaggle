@@ -163,14 +163,23 @@ fi
 # ---------------------------------------------------------------------------
 _get_remote_sha() {
     local branch="${1:-main}"
-    local sha
-    sha=$(curl -sSf \
-        -H "Accept: application/vnd.github+json" \
-        -H "Authorization: token ${GITHUB_TOKEN}" \
-        "https://api.github.com/repos/${GITHUB_REPO}/commits/${branch}" 2>/dev/null \
-    | python3 -c "import json,sys; print(json.loads(sys.stdin.read()).get('sha',''))" 2>/dev/null) \
-    || { echo "[go] WARNING: GitHub API call failed for ${branch} SHA — check GITHUB_TOKEN is valid and network is reachable" >&2; echo ""; return; }
-    echo "$sha"
+    local sha=""
+    local attempt
+    for attempt in 1 2 3; do
+        sha=$(curl -sS \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: token ${GITHUB_TOKEN}" \
+            "https://api.github.com/repos/${GITHUB_REPO}/commits/${branch}" 2>/dev/null \
+        | python3 -c "import json,sys; print(json.loads(sys.stdin.read()).get('sha',''))" 2>/dev/null) \
+        || sha=""
+        if [[ -n "$sha" ]]; then
+            echo "$sha"
+            return
+        fi
+        [[ $attempt -lt 3 ]] && sleep 5
+    done
+    echo "[go] WARNING: GitHub API call failed for ${branch} SHA after 3 attempts — check GITHUB_TOKEN is valid and network is reachable" >&2
+    echo ""
 }
 
 # ---------------------------------------------------------------------------

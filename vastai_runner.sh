@@ -360,6 +360,9 @@ chown -R runner:runner /workspace
 
 log_r "Configuring git safe.directory system-wide (runs as root, before privilege drop)..."
 git config --system --add safe.directory '*'
+# Fix /root/.gitconfig permissions so the non-root runner user can read it.
+# actions/checkout tries to stat /root/.gitconfig and gets EACCES for non-root users.
+chmod 644 /root/.gitconfig 2>/dev/null || true
 
 log_r "Cloning https://github.com/${GITHUB_REPO}..."
 export GIT_TERMINAL_PROMPT=0
@@ -413,6 +416,7 @@ log_r "Starting runner..."
 cat > /tmp/start_runner.sh << 'LAUNCHER_EOF'
 #!/bin/bash
 set -euo pipefail
+export HOME=/home/runner
 cd /workspace/actions-runner
 setsid nohup ./run.sh >> /workspace/runner.log 2>&1 &
 RUNNER_PID=$!

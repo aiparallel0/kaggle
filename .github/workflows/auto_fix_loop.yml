@@ -46,7 +46,7 @@ jobs:
       # -----------------------------------------------------------------------
       - name: Check PR author
         id: author_check
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const pr = context.payload.pull_request;
@@ -70,7 +70,7 @@ jobs:
       # -----------------------------------------------------------------------
       - name: Checkout PR branch
         if: steps.author_check.outputs.is_copilot == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
@@ -101,7 +101,7 @@ jobs:
         if: |
           steps.author_check.outputs.is_copilot == 'true' &&
           steps.state.outputs.iteration >= steps.state.outputs.max_iterations
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         env:
           ITERATION: ${{ steps.state.outputs.iteration }}
           MAX_ITERATIONS: ${{ steps.state.outputs.max_iterations }}
@@ -221,7 +221,7 @@ jobs:
         if: |
           steps.author_check.outputs.is_copilot == 'true' &&
           steps.ci_checks.outputs.ci_passed == 'true'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const pr = context.payload.pull_request;
@@ -274,7 +274,7 @@ jobs:
         if: |
           steps.author_check.outputs.is_copilot == 'true' &&
           steps.ci_checks.outputs.ci_passed == 'false'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         env:
           FAILURES: ${{ steps.ci_checks.outputs.failures }}
           ITERATION: ${{ steps.state.outputs.iteration }}
