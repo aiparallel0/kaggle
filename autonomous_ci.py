@@ -146,7 +146,7 @@ def run_smoke_test() -> TestResult:
             output="",
             error="Timeout after 60s",
         )
-    except Exception as exc:
+    except OSError as exc:
         return TestResult(
             name="smoke_test",
             passed=False,
@@ -189,7 +189,7 @@ def run_ruff_lint() -> TestResult:
             output="ruff not installed — skipping lint check",
             error=None,
         )
-    except Exception as exc:
+    except (OSError, subprocess.SubprocessError) as exc:
         return TestResult(
             name="ruff_lint",
             passed=False,
@@ -226,7 +226,7 @@ def run_import_check() -> TestResult:
             output=output,
             error=None if passed else "Import failed",
         )
-    except Exception as exc:
+    except (OSError, subprocess.SubprocessError) as exc:
         return TestResult(
             name="import_check",
             passed=False,
@@ -371,7 +371,7 @@ def get_current_branch() -> str:
             timeout=5,
         )
         return result.stdout.strip()
-    except Exception as exc:
+    except (OSError, subprocess.SubprocessError) as exc:
         logger.error(f"Failed to get current branch: {exc}")
         return ""
 
@@ -648,7 +648,7 @@ def _validate_python_syntax(code: str) -> tuple[bool, str | None]:
         return True, None
     except SyntaxError as e:
         return False, f"SyntaxError: {e.msg} at line {e.lineno}"
-    except Exception as e:
+    except ValueError as e:
         return False, f"ParseError: {e}"
 
 
