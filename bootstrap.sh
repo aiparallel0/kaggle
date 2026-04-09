@@ -32,9 +32,29 @@ if [ -z "${GITHUB_REPO:-}" ]; then
     fi
 fi
 
-# 2. Set workspace (Vast.ai default: /workspace)
-export DONUT_WORKSPACE="${DONUT_WORKSPACE:-/workspace}"
-mkdir -p "$DONUT_WORKSPACE" 2>/dev/null || true
+# 2. Set workspace — default to $SCRIPT_DIR/workspace on Windows/MSYS/Cygwin
+# to avoid MSYS2 path translation of /workspace → C:\Program Files\Git\workspace.
+if [ -z "${DONUT_WORKSPACE:-}" ]; then
+    _UNAME_S="$(uname -s 2>/dev/null || echo unknown)"
+    case "$_UNAME_S" in
+        MINGW* | MSYS* | CYGWIN*)
+            # Windows with Git Bash / MSYS2 / Cygwin — use a local writable path
+            export DONUT_WORKSPACE="$SCRIPT_DIR/workspace"
+            echo "[bootstrap] Windows/MSYS detected ($_UNAME_S) — using local workspace: $DONUT_WORKSPACE"
+            ;;
+        *)
+            # Linux / macOS / Vast.ai — use /workspace (standard cloud GPU path)
+            export DONUT_WORKSPACE="/workspace"
+            ;;
+    esac
+fi
+if ! mkdir -p "$DONUT_WORKSPACE" 2>/dev/null; then
+    # Fallback: default path is not writable (e.g. /workspace on a system where
+    # the user lacks root); switch to a repo-local directory instead.
+    export DONUT_WORKSPACE="$SCRIPT_DIR/workspace"
+    mkdir -p "$DONUT_WORKSPACE"
+    echo "[bootstrap] WARNING: default workspace not writable; using $DONUT_WORKSPACE"
+fi
 
 # 3. Copy token files from /workspace if they exist (Vast.ai convention)
 for f in hf_token.txt anthropic_api_key.txt mistral_api_key.txt github_token.txt; do
