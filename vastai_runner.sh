@@ -549,6 +549,7 @@ log "Done. EXIT trap will destroy instance $INSTANCE_ID."
 # ---------------------------------------------------------------------------
 log "Step 10: Checking workflow conclusion via GitHub API..."
 sleep 10   # give GitHub API ~10s to finalise the run status
+# $PYEXE is set in Step 1 of this script and is always available here.
 JOB_STATUS=$($PYEXE -c "
 import json, sys, urllib.request, urllib.error
 url = 'https://api.github.com/repos/${GITHUB_REPO}/actions/workflows/gpu_training.yml/runs?per_page=1&branch=main'
@@ -565,7 +566,7 @@ try:
         print(runs[0].get('conclusion', 'unknown'))
     else:
         print('unknown')
-except Exception:
+except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, ValueError):
     print('unknown')
 " 2>/dev/null) || JOB_STATUS="unknown"
 log "  Workflow conclusion: ${JOB_STATUS}"

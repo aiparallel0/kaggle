@@ -326,9 +326,9 @@ while true; do
     fi
 
     # ── Check if training succeeded ───────────────────────────────────────
-    # GitHub Actions API takes 30-75s to finalize workflow run status after
-    # the runner exits.  Retry up to 3 times with 15s delays so we do not
-    # misread an in-progress run as unknown.
+    # GitHub Actions API can take up to 75s to finalize workflow run status
+    # after the runner exits.  Wait 30s initially, then retry up to 3 times
+    # with 20s delays (total up to ~100s) before accepting an unknown result.
     sleep 30
     TRAINING_STATUS="unknown"
     for _status_attempt in 1 2 3; do
@@ -337,7 +337,7 @@ while true; do
         if [[ "$TRAINING_STATUS" != "unknown" && "$TRAINING_STATUS" != "in_progress" ]]; then
             break
         fi
-        [[ $_status_attempt -lt 3 ]] && sleep 15
+        [[ $_status_attempt -lt 3 ]] && sleep 20
     done
 
     if [[ "$TRAINING_STATUS" == "success" ]]; then
