@@ -1,0 +1,11 @@
+# GPU-only optional accelerators.
+#
+# flash-attn's setup.py does `import torch` at build time.  It MUST be
+# installed AFTER torch — never via a flat `pip install -r` alongside torch.
+#
+# Install with:
+#   pip install -r requirements-gpu-optional.txt --no-build-isolation
+#
+# The pipeline falls back to PyTorch 2.x SDPA when flash-attn is absent;
+# for MAX_LENGTH=768 the speed difference is negligible.
+flash-attn>=2.0.0

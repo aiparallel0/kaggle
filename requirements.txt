@@ -28,6 +28,3 @@ pytest
 Pillow
 tensorboard>=2.14.0
 safetensors
-# flash-attn must be installed AFTER torch (its setup.py imports torch to detect CUDA version)
-# In Docker: install torch first, then: pip install flash-attn --no-build-isolation
-flash-attn>=2.0.0

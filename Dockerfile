@@ -25,25 +25,17 @@ RUN ln -sf /usr/bin/python3.10 /usr/bin/python3 && \
 
 WORKDIR /app
 
-# STEP 1: install torch + torchvision FIRST
-# flash-attn's setup.py does `import torch` to detect the CUDA version;
-# if torch is absent at build time, pip install flash-attn fails with
-# "ModuleNotFoundError: No module named 'torch'".
+# STEP 1: install torch + torchvision FIRST (required by flash-attn build)
 RUN pip install --upgrade pip && \
     pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
 
-# STEP 2: copy requirements and install everything except torch/torchvision/flash-attn
-COPY requirements.txt .
-RUN grep -v '^flash-attn' requirements.txt \
-    | grep -v '^torch' \
-    | grep -v '^torchvision' \
-    | grep -v '^#' \
-    | grep -v '^$' \
-    | pip install -r /dev/stdin
+# STEP 2: install all remaining deps — flash-attn is NOT in requirements.txt
+COPY requirements.txt requirements-gpu-optional.txt ./
+RUN pip install -r requirements.txt
 
-# STEP 3: install flash-attn last, with --no-build-isolation so the torch
-# already on sys.path is visible to setup.py during the source build.
-RUN pip install flash-attn --no-build-isolation
+# STEP 3: install flash-attn from the separate optional file, with
+# --no-build-isolation so the already-installed torch is visible to setup.py.
+RUN pip install -r requirements-gpu-optional.txt --no-build-isolation
 
 # STEP 4: copy application code
 COPY . .

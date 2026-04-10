@@ -189,7 +189,7 @@ class _InstallWatchdog:
                 self._warned = True
                 print(
                     "[setup] WARNING: Install taking >2 min — "
-                    "if this is flash-attn, it is compiling CUDA kernels (5–25 min normal). "
+                    "large packages (ultralytics, torch) can be slow on limited bandwidth. "
                     "Pre-install via: pip install -r requirements.txt",
                     flush=True,
                 )
@@ -203,20 +203,14 @@ def _install_dependencies() -> None:
 
     Strategy:
     1. Check if critical packages (torch, transformers) are all importable.
-    2. If any are missing, run ``pip install -r requirements.txt`` (with
-       flash-attn filtered out — it requires a pre-installed torch and can
-       take 5–25 minutes to compile from source on a GPU machine).
+    2. If any are missing, run ``pip install -r requirements.txt``.
+       flash-attn lives in a separate ``requirements-gpu-optional.txt`` and is
+       never auto-installed (PyTorch 2.x SDPA is equivalent for MAX_LENGTH=768).
     3. On success, restart the current process via ``os.execv()`` so the
        newly-installed packages are visible to the fresh Python process.
        A sentinel environment variable (``_DONUT_RESTARTED=1``) prevents
        infinite restart loops.
     4. Gracefully continue even if pip fails (packages may still be present).
-
-    flash-attn is intentionally **not** auto-installed.  PyTorch 2.x built-in
-    SDPA provides equivalent performance for MAX_LENGTH=768.  To install
-    flash-attn manually after the pipeline runs:
-        pip install flash-attn --no-build-isolation
-    or use a prebuilt wheel from https://flashattn.dev/wheel-finder/
     """
     try:
         req_file = Path(__file__).parent / "requirements.txt"
@@ -254,17 +248,12 @@ def _install_dependencies() -> None:
             "[setup] Missing packages: %s", ", ".join(missing_packages)
         )
 
-        # Build a filtered requirements list.  flash-attn is excluded because:
-        #  a) its build step requires torch to be importable (not true in the
-        #     isolated pip subprocess), and
-        #  b) on GPU machines the nvcc compilation takes 5–25 minutes with
-        #     capture_output=True, making the terminal appear completely frozen.
+        # flash-attn is no longer in requirements.txt (moved to
+        # requirements-gpu-optional.txt), so no filtering is needed.
         req_lines = [
             stripped
             for line in req_file.read_text().splitlines()
-            if (stripped := line.strip())
-            and not stripped.startswith("#")
-            and "flash-attn" not in stripped.lower()
+            if (stripped := line.strip()) and not stripped.startswith("#")
         ]
 
         logging.getLogger(__name__).debug(
@@ -327,9 +316,8 @@ def _install_dependencies() -> None:
                     os.unlink(tmp_path)
                 except OSError:
                     pass
-        # flash-attn is NOT auto-installed here.  To install it manually:
-        #   pip install flash-attn --no-build-isolation
-        # or use a prebuilt wheel: https://flashattn.dev/wheel-finder/
+        # flash-attn is NOT auto-installed.  It lives in requirements-gpu-optional.txt.
+        # To install manually: pip install -r requirements-gpu-optional.txt --no-build-isolation
     except RuntimeError:
         raise  # re-raise sentinel / loop-guard errors from above
     except Exception as _install_exc:
@@ -4728,7 +4716,7 @@ def main() -> None:
         print(
             f"[setup] FATAL: The following packages could not be installed: {', '.join(still_missing)}\n"
             f"[setup] Run manually: pip install {' '.join(still_missing)}\n"
-            f"[setup] For flash-attn: pip install flash-attn --no-build-isolation"
+            f"[setup] For flash-attn: pip install -r requirements-gpu-optional.txt --no-build-isolation"
         )
         sys.exit(2)
 
