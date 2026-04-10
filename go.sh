@@ -389,7 +389,7 @@ while true; do
 
         # Show progress
         REMAINING=$(( FIX_POLL_TIMEOUT - FIX_ELAPSED ))
-        echo "[go]   ...waiting (${FIX_ELAPSED}s / ${FIX_POLL_TIMEOUT}s, main still at ${CURRENT_SHA:0:12})"
+        echo "[go]   ...waiting (${FIX_ELAPSED}s elapsed, ${REMAINING}s remaining, main still at ${CURRENT_SHA:0:12})"
         sleep "$FIX_POLL_INTERVAL"
     done
 

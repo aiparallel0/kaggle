@@ -899,6 +899,112 @@ def github_post_comment(
     return result
 
 
+def github_close_issue(
+    issue_number: int,
+    comment: str | None = None,
+    repo: str | None = None,
+) -> dict[str, Any] | None:
+    """Close a GitHub issue, optionally leaving a comment first.
+
+    Parameters
+    ----------
+    issue_number : int
+        Issue number to close.
+    comment : str or None
+        Optional comment to post before closing (e.g. explaining why).
+    repo : str or None
+        ``owner/repo`` slug.  Falls back to ``GITHUB_REPO`` env var.
+
+    Returns
+    -------
+    dict or None
+        GitHub issue object on success, or None on failure.
+    """
+    token = _get_github_token()
+    if not token:
+        logger.debug("No GitHub token — skipping issue close")
+        return None
+    repo = repo or _get_github_repo()
+    if not repo:
+        logger.debug("No GITHUB_REPO set — skipping issue close")
+        return None
+
+    if comment:
+        github_post_comment(issue_number, comment, repo=repo)
+
+    result = _github_request(
+        "PATCH",
+        f"/repos/{repo}/issues/{issue_number}",
+        token,
+        {"state": "closed"},
+    )
+    if result and result.get("state") == "closed":
+        logger.info("GitHub issue #%d closed: %s", issue_number, result.get("html_url", ""))
+        print(f"  [GitHub] Issue #{issue_number} closed")
+    return result
+
+
+def github_close_duplicates(
+    title_prefix: str,
+    keep_oldest: bool = True,
+    repo: str | None = None,
+) -> list[int]:
+    """Find open issues matching *title_prefix* and close all but one.
+
+    This is the cleanup counterpart to the dedup guard in
+    :func:`github_create_issue`.  Use it to retroactively close issues that
+    were created before the guard was in place (e.g. #150–#154).
+
+    Parameters
+    ----------
+    title_prefix : str
+        Title prefix to search for (e.g. ``"[DONUT Pipeline] smoke_test"``).
+    keep_oldest : bool
+        When True (default), keep the oldest issue open and close the rest.
+        When False, close **all** matching issues.
+    repo : str or None
+        ``owner/repo`` slug.  Falls back to ``GITHUB_REPO`` env var.
+
+    Returns
+    -------
+    list[int]
+        Issue numbers that were closed.
+    """
+    existing = github_search_open_issues(title_prefix, repo=repo)
+    if not existing:
+        logger.info("No open issues matching %r — nothing to close.", title_prefix)
+        return []
+
+    # Sort by creation date ascending (oldest first).
+    existing.sort(key=lambda i: i.get("created_at", ""))
+
+    to_close = existing[1:] if keep_oldest else existing
+    closed: list[int] = []
+    for issue in to_close:
+        num = issue.get("number")
+        if num is None:
+            continue
+        result = github_close_issue(
+            num,
+            comment=(
+                "Closing as duplicate — dedup guards now prevent recurrence.  "
+                "See the canonical issue for any ongoing discussion."
+            ),
+            repo=repo,
+        )
+        if result:
+            closed.append(num)
+
+    n_kept = len(existing) - len(to_close)
+    logger.info(
+        "Duplicate cleanup: %d closed, %d kept for %r",
+        len(closed),
+        n_kept,
+        title_prefix,
+    )
+    return closed
+
+
 def github_report_failure(
     stage: str,
     error_type: str,
@@ -1468,6 +1574,15 @@ if __name__ == "__main__":
         action="store_true",
         help="Test GitHub API connectivity: create a test issue and immediately close it",
     )
+    parser.add_argument(
+        "--cleanup-duplicates",
+        action="store_true",
+        help=(
+            "Close duplicate open issues created before dedup guards were added "
+            "(e.g. #150–#154). Keeps the oldest issue for each unique title, "
+            "closes the rest with a comment."
+        ),
+    )
     args = parser.parse_args()
 
     # Override env var when --github-repo is supplied
@@ -1489,20 +1604,34 @@ if __name__ == "__main__":
         if result:
             print(f"[GitHub Test] PASS — issue created: {result.get('html_url')}")
             # Immediately close it
-            token = _get_github_token()
-            repo = _get_github_repo()
-            if token and repo:
-                issue_num = result.get("number")
-                _github_request(
-                    "PATCH",
-                    f"/repos/{repo}/issues/{issue_num}",
-                    token,
-                    {"state": "closed"},
-                )
-                print(f"[GitHub Test] Issue #{issue_num} closed.")
+            issue_num = result.get("number")
+            if issue_num is not None:
+                github_close_issue(issue_num)
         else:
             print("[GitHub Test] FAIL — check GITHUB_TOKEN and GITHUB_REPO")
         raise SystemExit(0 if result else 1)
+
+    # Duplicate issue cleanup
+    if args.cleanup_duplicates:
+        print("[Cleanup] Searching for duplicate open issues...")
+        # Known duplicate title prefixes to clean up
+        prefixes = [
+            "[DONUT Pipeline] smoke_test:",
+            "[DONUT Pipeline] training:",
+            "[DONUT Pipeline] evaluation:",
+            "[DONUT Pipeline] data_pipeline:",
+        ]
+        total_closed = 0
+        for prefix in prefixes:
+            closed = github_close_duplicates(prefix, keep_oldest=True, repo=args.github_repo)
+            if closed:
+                print(f"  [Cleanup] Closed {len(closed)} duplicate(s) for {prefix!r}: {closed}")
+                total_closed += len(closed)
+        if total_closed == 0:
+            print("[Cleanup] No duplicates found — all clean.")
+        else:
+            print(f"[Cleanup] Done — closed {total_closed} duplicate issue(s) total.")
+        raise SystemExit(0)
 
     if args.smoke_test:
         ok = run_preflight(
