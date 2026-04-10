@@ -110,11 +110,44 @@ jobs:
 
       # -----------------------------------------------------------------------
       # 3. Install dependencies
+      #
+      # flash-attn's setup.py imports torch at build time.  A single
+      # `pip install -r requirements.txt` may attempt to build flash-attn before
+      # torch is present, causing "ModuleNotFoundError: No module named 'torch'".
+      # Mirror the same 3-stage install used by Dockerfile and bootstrap.sh.
       # -----------------------------------------------------------------------
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install -r requirements.txt
+
+          # Stage 1: Install PyTorch + torchvision first (required at build time
+          # by flash-attn).  Use the CUDA 12.1 index to get GPU-enabled wheels;
+          # on CPU-only runners the packages install silently from the index as
+          # CPU-only wheels.
+          TORCH_SPEC="$(grep -m1 '^torch>=' requirements.txt || echo 'torch>=2.0.0')"
+          TV_SPEC="$(grep -m1 '^torchvision>=' requirements.txt || echo 'torchvision>=0.15.0')"
+          pip install "$TORCH_SPEC" "$TV_SPEC" \
+              --index-url https://download.pytorch.org/whl/cu121
+
+          # Stage 2: Install everything except flash-attn, torch, and torchvision
+          # (already installed above).  The grep strips those lines so pip does not
+          # try to reinstall or downgrade them.
+          grep -vE '^(flash-attn|torch|torchvision)' requirements.txt \
+              | grep -vE '^[[:space:]]*#' \
+              | grep -vE '^[[:space:]]*$' \
+              | pip install -r /dev/stdin
+
+          # Stage 3 (optional / best-effort): Install flash-attn with
+          # --no-build-isolation so its setup.py can import the already-installed
+          # torch.  flash-attn is an optimisation only; the pipeline falls back to
+          # PyTorch SDPA when it is absent.  A failure here must NOT abort the job.
+          FLASH_SPEC="$(grep -m1 '^flash-attn' requirements.txt || echo 'flash-attn>=2.0.0')"
+          if pip install "$FLASH_SPEC" --no-build-isolation; then
+              echo "flash-attn installed successfully."
+          else
+              echo "WARNING: flash-attn could not be installed (non-fatal). Pipeline will use PyTorch SDPA fallback."
+          fi
+
           # Ensure linting tools are always available
           pip install ruff pyyaml
 

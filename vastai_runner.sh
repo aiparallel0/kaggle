@@ -18,7 +18,7 @@
 #   VASTAI_MAX_PRICE default "0.80"
 #   VASTAI_MIN_VRAM  default "24"
 #   VASTAI_DISK_GB   default "40"
-#   VASTAI_IMAGE     default "pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime"
+#   VASTAI_IMAGE     default "vastai/pytorch:cuda-12.1.1-auto"
 #   RUNNER_LABELS    default "self-hosted,gpu,vast-ai"
 #   RUNNER_VERSION   default "2.333.1"
 #   TRAINING_MODE    default "micro" (passed to gpu_training.yml dispatch)
@@ -51,7 +51,7 @@ VASTAI_GPU_NAME="${VASTAI_GPU_NAME:-RTX 4090}"
 VASTAI_MAX_PRICE="${VASTAI_MAX_PRICE:-0.80}"
 VASTAI_MIN_VRAM="${VASTAI_MIN_VRAM:-24}"
 VASTAI_DISK_GB="${VASTAI_DISK_GB:-40}"
-VASTAI_IMAGE="${VASTAI_IMAGE:-pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime}"
+VASTAI_IMAGE="${VASTAI_IMAGE:-vastai/pytorch:cuda-12.1.1-auto}"
 RUNNER_LABELS="${RUNNER_LABELS:-self-hosted,gpu,vast-ai}"
 RUNNER_NAME="${RUNNER_NAME:-vastai-gpu-$(date +%s)}"
 # GitHub Actions runner names allow only alphanumerics, hyphens, and underscores.
@@ -538,3 +538,40 @@ done
 [[ $job_elapsed -lt $JOB_TIMEOUT ]] || log "WARNING: Job timed out — destroying instance anyway."
 
 log "Done. EXIT trap will destroy instance $INSTANCE_ID."
+
+# ---------------------------------------------------------------------------
+# Step 10: Check workflow conclusion so go.sh gets a reliable exit code.
+#
+# The ephemeral runner always exits 0 after completing any job (success or
+# failure).  Query the GitHub API for the most recent gpu_training.yml run
+# conclusion and exit 1 when it is "failure", so go.sh can distinguish a
+# failed training job from a successful one via $?.
+# ---------------------------------------------------------------------------
+log "Step 10: Checking workflow conclusion via GitHub API..."
+sleep 10   # give GitHub API ~10s to finalise the run status
+# $PYEXE is set in Step 1 of this script and is always available here.
+JOB_STATUS=$($PYEXE -c "
+import json, sys, urllib.request, urllib.error
+url = 'https://api.github.com/repos/${GITHUB_REPO}/actions/workflows/gpu_training.yml/runs?per_page=1&branch=main'
+req = urllib.request.Request(url, headers={
+    'Accept': 'application/vnd.github+json',
+    'Authorization': 'token ${GITHUB_TOKEN}',
+    'X-GitHub-Api-Version': '2022-11-28',
+})
+try:
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        data = json.loads(resp.read())
+    runs = data.get('workflow_runs', [])
+    if runs and runs[0].get('status') == 'completed':
+        print(runs[0].get('conclusion', 'unknown'))
+    else:
+        print('unknown')
+except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, ValueError):
+    print('unknown')
+" 2>/dev/null) || JOB_STATUS="unknown"
+log "  Workflow conclusion: ${JOB_STATUS}"
+
+if [[ "$JOB_STATUS" == "failure" ]]; then
+    log "Workflow job failed — exiting with code 1 so go.sh can detect the failure."
+    exit 1
+fi

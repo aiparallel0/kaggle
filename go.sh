@@ -168,6 +168,24 @@ if [[ ! -f "$RUNNER" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
+# Python detection — mirrors vastai_runner.sh Step 1.
+# On Windows/MSYS2 the binary is 'python', not 'python3'.
+# ---------------------------------------------------------------------------
+PYEXE=""
+for _candidate in python3 python; do
+    if command -v "$_candidate" &>/dev/null \
+       && "$_candidate" -c "import sys; sys.exit(0 if sys.version_info>=(3,8) else 1)" 2>/dev/null; then
+        PYEXE="$_candidate"
+        break
+    fi
+done
+if [[ -z "$PYEXE" ]]; then
+    echo "[go] ERROR: No working Python 3.8+ found on PATH. Install Python." >&2
+    exit 1
+fi
+echo "[go] Python: $PYEXE ($($PYEXE --version 2>&1))"
+
+# ---------------------------------------------------------------------------
 # Helper: get HEAD SHA of a remote branch via GitHub API (no local git needed)
 # ---------------------------------------------------------------------------
 _get_remote_sha() {
@@ -179,7 +197,7 @@ _get_remote_sha() {
             -H "Accept: application/vnd.github+json" \
             -H "Authorization: token ${GITHUB_TOKEN}" \
             "https://api.github.com/repos/${GITHUB_REPO}/commits/${branch}" 2>/dev/null \
-        | python3 -c "import json,sys; print(json.loads(sys.stdin.read()).get('sha',''))" 2>/dev/null) \
+        | $PYEXE -c "import json,sys; print(json.loads(sys.stdin.read()).get('sha',''))" 2>/dev/null) \
         || sha=""
         if [[ -n "$sha" ]]; then
             echo "$sha"
@@ -202,7 +220,7 @@ _get_latest_training_status() {
         -H "Authorization: token ${GITHUB_TOKEN}" \
         "https://api.github.com/repos/${GITHUB_REPO}/actions/workflows/gpu_training.yml/runs?per_page=1&branch=main" 2>/dev/null) || { echo "unknown"; return; }
 
-    python3 -c "
+    $PYEXE -c "
 import json, sys
 data = json.loads(sys.stdin.read())
 runs = data.get('workflow_runs', [])
@@ -228,7 +246,7 @@ _get_remote_iteration() {
         -H "Authorization: token ${GITHUB_TOKEN}" \
         "https://api.github.com/repos/${GITHUB_REPO}/contents/.github/auto_fix_state.json?ref=main" 2>/dev/null) || { echo "0"; return; }
 
-    python3 -c "
+    $PYEXE -c "
 import json, sys, base64
 data = json.loads(sys.stdin.read())
 content = base64.b64decode(data.get('content', '')).decode()
@@ -308,11 +326,19 @@ while true; do
     fi
 
     # ── Check if training succeeded ───────────────────────────────────────
-    # GitHub Actions API takes ~10-15s to update workflow run status after
-    # the runner exits.  Wait briefly before querying.
-    sleep 15
-    TRAINING_STATUS=$(_get_latest_training_status)
-    echo "[go] Latest gpu_training.yml status: $TRAINING_STATUS"
+    # GitHub Actions API can take up to 75s to finalize workflow run status
+    # after the runner exits.  Wait 30s initially, then retry up to 3 times
+    # with 20s delays (total up to ~100s) before accepting an unknown result.
+    sleep 30
+    TRAINING_STATUS="unknown"
+    for _status_attempt in 1 2 3; do
+        TRAINING_STATUS=$(_get_latest_training_status)
+        echo "[go] Latest gpu_training.yml status (attempt ${_status_attempt}): $TRAINING_STATUS"
+        if [[ "$TRAINING_STATUS" != "unknown" && "$TRAINING_STATUS" != "in_progress" ]]; then
+            break
+        fi
+        [[ $_status_attempt -lt 3 ]] && sleep 20
+    done
 
     if [[ "$TRAINING_STATUS" == "success" ]]; then
         echo ""
