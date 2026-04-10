@@ -285,6 +285,8 @@ while [[ $elapsed -lt $BOOT_TIMEOUT ]]; do
         fi
     fi
     log "  $((elapsed/POLL_INTERVAL+1)): $STATUS ${SSH_HOST}:${SSH_PORT} — waiting ${POLL_INTERVAL}s..."
+    log "  vastai show instance $INSTANCE_ID:"
+    echo "$INFO" | $PYEXE -m json.tool 2>/dev/null || echo "$INFO"
     sleep "$POLL_INTERVAL"
     elapsed=$((elapsed + POLL_INTERVAL))
     SSH_HOST=""
@@ -531,7 +533,16 @@ while [[ $job_elapsed -lt $JOB_TIMEOUT ]]; do
         fi
         break
     fi
-    log "  Runner running (${job_elapsed}/${JOB_TIMEOUT}s)..."
+    # Log instance state via `vastai show instance` every poll iteration
+    _JOB_INFO_TMP=$(mktemp)
+    $VASTAI_CMD show instance "$INSTANCE_ID" --raw > "$_JOB_INFO_TMP" 2>/dev/null \
+        || echo "{}" > "$_JOB_INFO_TMP"
+    _JOB_INFO=$(cat "$_JOB_INFO_TMP")
+    rm -f "$_JOB_INFO_TMP"
+    _INST_STATUS=$(echo "$_JOB_INFO" | $PYEXE -c "import json,sys; print(json.loads(sys.stdin.read()).get('actual_status','?'))" 2>/dev/null || echo "?")
+    log "  Runner running (${job_elapsed}/${JOB_TIMEOUT}s) — instance status: ${_INST_STATUS}"
+    log "  vastai show instance $INSTANCE_ID:"
+    echo "$_JOB_INFO" | $PYEXE -m json.tool 2>/dev/null || echo "$_JOB_INFO"
     sleep "$POLL_INTERVAL"
     job_elapsed=$((job_elapsed + POLL_INTERVAL))
 done
