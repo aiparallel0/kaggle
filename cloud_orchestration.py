@@ -2608,6 +2608,7 @@ class VastAIProvisioner:
         )
         elapsed = 0
         status = "unknown"
+        info: dict[str, Any] = {}
         while elapsed < self.BOOT_TIMEOUT:
             try:
                 result = self._run_vastai("show", "instance", instance_id, "--raw", check=False)
@@ -2622,13 +2623,19 @@ class VastAIProvisioner:
             except RuntimeError as exc:
                 self.logger.debug("Poll error: %s", exc)
 
-            self.logger.debug(
+            self.logger.info(
                 "  Status: %s — waiting %ds (%d/%d s elapsed)...",
                 status,
                 self.POLL_INTERVAL,
                 elapsed,
                 self.BOOT_TIMEOUT,
             )
+            if info:
+                self.logger.info(
+                    "  vastai show instance %s: %s",
+                    instance_id,
+                    json.dumps(info, default=str, separators=(",", ":")),
+                )
             time.sleep(self.POLL_INTERVAL)
             elapsed += self.POLL_INTERVAL
 
@@ -3074,6 +3081,20 @@ echo "[remote] Runner PID: $(cat /tmp/runner.pid 2>/dev/null || echo unknown)"
                 return True  # Normal job completion
 
             self.logger.info("  Runner running (%d/%ds)...", elapsed, timeout)
+            # Log instance state via `vastai show instance` every poll iteration
+            if self._instance_id:
+                try:
+                    vi_result = self._run_vastai(
+                        "show", "instance", self._instance_id, "--raw", check=False
+                    )
+                    vi_info = self._parse_json(vi_result.stdout)
+                    self.logger.info(
+                        "  vastai show instance %s: %s",
+                        self._instance_id,
+                        json.dumps(vi_info, default=str, separators=(",", ":")),
+                    )
+                except (RuntimeError, OSError) as exc:
+                    self.logger.debug("  vastai show instance poll error: %s", exc)
             time.sleep(poll_interval)
             elapsed += poll_interval
 
