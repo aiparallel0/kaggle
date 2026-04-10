@@ -1,4 +1,4 @@
-# GPU-only optional accelerators.
+# GPU-only optional dependencies that require special install order.
 #
 # flash-attn's setup.py does `import torch` at build time.  It MUST be
 # installed AFTER torch — never via a flat `pip install -r` alongside torch.

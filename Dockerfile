@@ -29,7 +29,7 @@ WORKDIR /app
 RUN pip install --upgrade pip && \
     pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
 
-# STEP 2: install all remaining deps — flash-attn is NOT in requirements.txt
+# STEP 2: install all core deps — flash-attn is NOT in requirements.txt
 COPY requirements.txt requirements-gpu-optional.txt ./
 RUN pip install -r requirements.txt
 
