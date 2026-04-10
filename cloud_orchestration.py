@@ -2728,6 +2728,11 @@ chown -R runner:runner /workspace/repo
 cd /workspace/repo
 echo '[remote] Installing Python dependencies...'
 pip install --quiet -r requirements.txt || true
+# flash-attn is optional (GPU accelerator); lives in a separate file
+if [ -f requirements-gpu-optional.txt ]; then
+    pip install --quiet -r requirements-gpu-optional.txt --no-build-isolation || \
+        echo '[remote] WARNING: flash-attn install failed (non-fatal; SDPA fallback used)'
+fi
 pip install --quiet ruff pyyaml
 for pkg in torch transformers; do
     python3 -c "import $pkg" 2>/dev/null || \
