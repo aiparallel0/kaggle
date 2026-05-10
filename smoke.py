@@ -37,9 +37,9 @@ def _check_token_logic_offline() -> None:
 
     assert isinstance(NEW_TOKENS, list) and NEW_TOKENS, "NEW_TOKENS must be a non-empty list"
     assert "<s_sroie>" in NEW_TOKENS, "<s_sroie> missing from NEW_TOKENS (GP-3 prereq)"
-    assert all(
-        isinstance(t, str) and t.startswith("<") and t.endswith(">") for t in NEW_TOKENS
-    ), "every NEW_TOKEN must be a <tag>-form string"
+    assert all(isinstance(t, str) and t.startswith("<") and t.endswith(">") for t in NEW_TOKENS), (
+        "every NEW_TOKEN must be a <tag>-form string"
+    )
 
 
 def _run_full() -> bool:
